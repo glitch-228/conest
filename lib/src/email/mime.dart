@@ -10,6 +10,8 @@ import 'dart:typed_data';
 /// Header fields in their order, names compared without case.
 class MimeHeaders {
   const MimeHeaders(this.fields);
+  static const maxFields = 256;
+  static const maxLines = 16384;
 
   /// Name (as written) and unfolded value, encoded words left as they are.
   final List<(String, String)> fields;
@@ -34,17 +36,29 @@ class MimeHeaders {
 
   /// Reads a header block (no blank line).
   static MimeHeaders parse(String block) {
+    if (block.length > 512 * 1024) {
+      throw const FormatException('MIME headers too large.');
+    }
     final fields = <(String, String)>[];
     String? name;
     final value = StringBuffer();
     void flush() {
       final current = name;
-      if (current != null) fields.add((current, value.toString().trim()));
+      if (current != null) {
+        if (fields.length >= maxFields) {
+          throw const FormatException('Too many MIME header fields.');
+        }
+        fields.add((current, value.toString().trim()));
+      }
       name = null;
       value.clear();
     }
 
-    for (final line in block.split(RegExp(r'\r?\n'))) {
+    var lines = 0;
+    for (final line in LineSplitter.split(block)) {
+      if (++lines > maxLines) {
+        throw const FormatException('Too many MIME header lines.');
+      }
       if (line.startsWith(' ') || line.startsWith('\t')) {
         if (name != null) value.write(' ${line.trim()}');
         continue;
@@ -118,15 +132,43 @@ class MimeEntity {
   /// Most nested multiparts read, and most parts in all.
   static const int maxDepth = 8;
   static const int maxParts = 200;
+  static const int maxHeaderBytes = 1024 * 1024;
+  static const int maxHeaderFields = 4096;
 
   /// Reads a message or body part. Throws [FormatException] when it is not
   /// MIME at all; damaged parts read as best they can.
-  static MimeEntity parse(Uint8List data) {
+  static MimeEntity parse(
+    Uint8List data, {
+    int maxDecodedBytes = 8 * 1024 * 1024,
+  }) {
     var budget = maxParts;
-    return _parse(data, 0, () => budget-- > 0);
+    var decoded = 0;
+    var headerBytes = 0;
+    var headerFields = 0;
+    void countHeaders(int bytes, int fields) {
+      headerBytes += bytes;
+      headerFields += fields;
+      if (headerBytes > maxHeaderBytes || headerFields > maxHeaderFields) {
+        throw const FormatException('MIME header budget exceeded.');
+      }
+    }
+    void count(int size) {
+      decoded += size;
+      if (decoded > maxDecodedBytes) {
+        throw const FormatException('MIME decoded size exceeded.');
+      }
+    }
+
+    return _parse(data, 0, () => budget-- > 0, count, countHeaders);
   }
 
-  static MimeEntity _parse(Uint8List data, int depth, bool Function() take) {
+  static MimeEntity _parse(
+    Uint8List data,
+    int depth,
+    bool Function() take,
+    void Function(int) count,
+    void Function(int, int) countHeaders,
+  ) {
     if (!take()) throw const FormatException('Too many MIME parts.');
     final text = latin1.decode(data);
     if (text.startsWith('\r\n') || text.startsWith('\n')) {
@@ -137,6 +179,8 @@ class MimeEntity {
         text.substring(text.startsWith('\r\n') ? 2 : 1),
         depth,
         take,
+        count,
+        countHeaders,
       );
     }
     var split = text.indexOf('\r\n\r\n');
@@ -146,12 +190,21 @@ class MimeEntity {
       split = lf;
       bodyStart = lf + 2;
     }
+    if ((split < 0 ? text.length : split) > 512 * 1024) {
+      throw const FormatException('MIME headers too large.');
+    }
+    final block = split < 0 ? text : text.substring(0, split);
+    countHeaders(block.length, 0);
+    final headers = MimeHeaders.parse(block);
+    countHeaders(0, headers.fields.length);
     return _entity(
       data,
-      MimeHeaders.parse(split < 0 ? text : text.substring(0, split)),
+      headers,
       split < 0 ? '' : text.substring(bodyStart),
       depth,
       take,
+      count,
+      countHeaders,
     );
   }
 
@@ -161,6 +214,8 @@ class MimeEntity {
     String bodyText,
     int depth,
     bool Function() take,
+    void Function(int) count,
+    void Function(int, int) countHeaders,
   ) {
     final (type, parameters) = parseMimeParameters(
       headers.raw('content-type').firstOrNull ?? 'text/plain',
@@ -173,7 +228,7 @@ class MimeEntity {
         depth < maxDepth) {
       return MimeEntity._(headers, mimeType, parameters, Uint8List(0), [
         for (final part in _splitParts(bodyText, boundary))
-          _parse(latin1.encode(part), depth + 1, take),
+          _parse(latin1.encode(part), depth + 1, take, count, countHeaders),
       ], data);
     }
     final encoding = (headers['content-transfer-encoding'] ?? '')
@@ -184,6 +239,7 @@ class MimeEntity {
       'quoted-printable' => decodeQuotedPrintable(bodyText),
       _ => latin1.encode(bodyText),
     };
+    count(body.length);
     return MimeEntity._(headers, mimeType, parameters, body, const [], data);
   }
 
@@ -196,6 +252,9 @@ class MimeEntity {
         : _delimiterAt(body, delimiter, 0);
     if (index < 0) return parts;
     while (true) {
+      if (parts.length >= maxParts) {
+        throw const FormatException('Too many MIME parts.');
+      }
       final lineEnd = body.indexOf('\n', index);
       final afterDelimiter = body.substring(
         index + delimiter.length,

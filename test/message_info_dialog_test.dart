@@ -74,6 +74,27 @@ void main() {
     );
   });
 
+  testWidgets('a message from a device its account lost touch with says '
+      'so, in every mode', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageInfoDialog(
+            message: message(outbound: false),
+            timestamp: time,
+            showRoutes: false,
+            senderOutOfTouchSince: DateTime(2026, 10, 1),
+          ),
+        ),
+      ),
+    );
+    expect(
+      find.byKey(const ValueKey('message-info-out-of-touch')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('2026-10-01'), findsOneWidget);
+  });
+
   testWidgets('an incoming message lists every route it arrived by', (
     tester,
   ) async {

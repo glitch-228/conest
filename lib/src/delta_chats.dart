@@ -6,6 +6,11 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'email/delta_content.dart';
+import 'models.dart' show AttachmentDescriptor;
+
+part 'delta_avatar_store.dart';
+
 /// Someone on Delta Chat, known by their key.
 class DeltaPeer {
   const DeltaPeer({
@@ -14,6 +19,8 @@ class DeltaPeer {
     this.key,
     this.name,
     this.verified = false,
+    this.avatar,
+    this.avatarAt,
   });
 
   /// Upper-case hex: who this is.
@@ -28,18 +35,25 @@ class DeltaPeer {
 
   /// The key was checked against an invite (Securejoin).
   final bool verified;
+  final Uint8List? avatar;
+  final DateTime? avatarAt;
 
   DeltaPeer copyWith({
     String? addr,
     Uint8List? key,
     String? name,
     bool? verified,
+    Uint8List? avatar,
+    DateTime? avatarAt,
+    bool clearAvatar = false,
   }) => DeltaPeer(
     fingerprint: fingerprint,
     addr: addr ?? this.addr,
     key: key ?? this.key,
     name: name ?? this.name,
     verified: verified ?? this.verified,
+    avatar: clearAvatar ? null : avatar ?? this.avatar,
+    avatarAt: avatarAt ?? this.avatarAt,
   );
 
   Map<String, dynamic> toJson() => {
@@ -48,9 +62,11 @@ class DeltaPeer {
     if (key != null) 'key': base64.encode(key!),
     if (name != null) 'name': name,
     if (verified) 'verified': true,
+    if (avatar != null) 'avatar': base64.encode(avatar!),
+    if (avatarAt != null) 'avatarAt': avatarAt!.toUtc().toIso8601String(),
   };
 
-  static DeltaPeer? fromJson(Object? json) {
+  static DeltaPeer? fromJson(Object? json, {bool loadAvatar = true}) {
     if (json is! Map<String, dynamic>) return null;
     final fingerprint = json['fingerprint'];
     final addr = json['addr'];
@@ -69,11 +85,73 @@ class DeltaPeer {
       key: key,
       name: json['name'] as String?,
       verified: json['verified'] == true,
+      avatarAt: DateTime.tryParse(json['avatarAt'] as String? ?? ''),
+      avatar: !loadAvatar
+          ? null
+          : deltaAvatar(
+              json['avatar'] is String ? 'base64:${json['avatar']}' : null,
+            ),
     );
   }
 }
 
 enum DeltaMessageState { sent, read, failed }
+
+/// Bounded controls for a target whose original mail has not arrived yet.
+class DeltaPendingControl {
+  const DeltaPendingControl({
+    required this.id,
+    required this.author,
+    required this.date,
+    required this.expires,
+    required this.kind,
+    this.text = '',
+    this.chatKey = '',
+  });
+  final String id;
+  final String author;
+  final DateTime date;
+  final DateTime expires;
+  final String kind;
+  final String text;
+  final String chatKey;
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'author': author,
+    'date': date.toUtc().toIso8601String(),
+    'expires': expires.toUtc().toIso8601String(),
+    'kind': kind,
+    if (text.isNotEmpty) 'text': text,
+    if (chatKey.isNotEmpty) 'chatKey': chatKey,
+  };
+  static DeltaPendingControl? fromJson(Object? value) {
+    if (value is! Map<String, dynamic>) return null;
+    final id = deltaMessageId(value['id'] is String ? value['id'] : null);
+    final author = value['author'];
+    final date = DateTime.tryParse(value['date'] as String? ?? '');
+    final expires = DateTime.tryParse(value['expires'] as String? ?? '');
+    final chatKey = value['chatKey'] ?? '';
+    if (id == null ||
+        author is! String ||
+        !RegExp(r'^[0-9A-F]{40}$').hasMatch(author) ||
+        date == null ||
+        expires == null ||
+        chatKey is! String ||
+        chatKey.length > 130 ||
+        !const {'delete', 'reaction'}.contains(value['kind'])) {
+      return null;
+    }
+    return DeltaPendingControl(
+      id: id,
+      author: author,
+      date: date,
+      expires: expires,
+      kind: value['kind'],
+      text: deltaReaction(value['text'] as String? ?? ''),
+      chatKey: chatKey,
+    );
+  }
+}
 
 class DeltaChatMessage {
   const DeltaChatMessage({
@@ -85,6 +163,14 @@ class DeltaChatMessage {
     this.state = DeltaMessageState.sent,
     this.wantsReceipt = false,
     this.info = false,
+    this.attachments = const [],
+    this.pending,
+    this.pendingUntil,
+    this.preMessageId,
+    this.editedAt,
+    this.deleted = false,
+    this.reactions = const {},
+    this.reactionDates = const {},
   });
 
   /// The Message-ID.
@@ -102,18 +188,63 @@ class DeltaChatMessage {
 
   /// A note about the chat (someone joined, verified…), not a message.
   final bool info;
+  final List<AttachmentDescriptor> attachments;
+  final DeltaPendingFile? pending;
+  final DateTime? pendingUntil;
+  final String? preMessageId;
+  final DateTime? editedAt;
+  final bool deleted;
 
-  DeltaChatMessage copyWith({DeltaMessageState? state, bool? wantsReceipt}) =>
-      DeltaChatMessage(
-        id: id,
-        author: author,
-        text: text,
-        at: at,
-        outgoing: outgoing,
-        state: state ?? this.state,
-        wantsReceipt: wantsReceipt ?? this.wantsReceipt,
-        info: info,
-      );
+  /// Fingerprint to canonical reaction (including empty retractions).
+  final Map<String, String> reactions;
+  final Map<String, DateTime> reactionDates;
+
+  bool pendingExpired(DateTime now) =>
+      pending != null && pendingUntil != null && !now.isBefore(pendingUntil!);
+
+  String preview(DateTime now) => deleted
+      ? 'Message deleted'
+      : text.isNotEmpty
+      ? text
+      : attachments.isNotEmpty
+      ? attachments.first.voiceMetadata != null
+            ? 'Voice message'
+            : attachments.first.fileName
+      : pending != null
+      ? '${pending!.name}, ${pendingExpired(now) ? 'not received' : 'downloading…'}'
+      : '';
+
+  DeltaChatMessage copyWith({
+    DeltaMessageState? state,
+    bool? wantsReceipt,
+    String? text,
+    List<AttachmentDescriptor>? attachments,
+    DeltaPendingFile? pending,
+    DateTime? pendingUntil,
+    String? preMessageId,
+    DateTime? editedAt,
+    bool? deleted,
+    bool clearPending = false,
+    Map<String, String>? reactions,
+    Map<String, DateTime>? reactionDates,
+  }) => DeltaChatMessage(
+    id: id,
+    author: author,
+    text: text ?? this.text,
+    at: at,
+    outgoing: outgoing,
+    state: state ?? this.state,
+    wantsReceipt: wantsReceipt ?? this.wantsReceipt,
+    info: info,
+    attachments: attachments ?? this.attachments,
+    pending: clearPending ? null : pending ?? this.pending,
+    pendingUntil: clearPending ? null : pendingUntil ?? this.pendingUntil,
+    preMessageId: preMessageId ?? this.preMessageId,
+    editedAt: editedAt ?? this.editedAt,
+    deleted: deleted ?? this.deleted,
+    reactions: reactions ?? this.reactions,
+    reactionDates: reactionDates ?? this.reactionDates,
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -124,6 +255,20 @@ class DeltaChatMessage {
     if (state != DeltaMessageState.sent) 'state': state.name,
     if (wantsReceipt) 'wantsReceipt': true,
     if (info) 'info': true,
+    if (attachments.isNotEmpty)
+      'attachments': [for (final a in attachments) a.toJson()],
+    if (pending != null) 'pending': pending!.toJson(),
+    if (pendingUntil != null)
+      'pendingUntil': pendingUntil!.toUtc().toIso8601String(),
+    if (preMessageId != null) 'preMessageId': preMessageId,
+    if (editedAt != null) 'editedAt': editedAt!.toUtc().toIso8601String(),
+    if (deleted) 'deleted': true,
+    if (reactions.isNotEmpty) 'reactions': reactions,
+    if (reactionDates.isNotEmpty)
+      'reactionDates': {
+        for (final e in reactionDates.entries)
+          e.key: e.value.toUtc().toIso8601String(),
+      },
   };
 
   static DeltaChatMessage? fromJson(Object? json) {
@@ -146,6 +291,24 @@ class DeltaChatMessage {
           DeltaMessageState.sent,
       wantsReceipt: json['wantsReceipt'] == true,
       info: json['info'] == true,
+      attachments: [
+        for (final a in (json['attachments'] as List? ?? const []).take(
+          DeltaLimits.attachments,
+        ))
+          if (a is Map<String, dynamic>) AttachmentDescriptor.fromJson(a),
+      ],
+      pending: DeltaPendingFile.fromJson(json['pending']),
+      pendingUntil: DateTime.tryParse(json['pendingUntil'] as String? ?? ''),
+      preMessageId: json['preMessageId'] as String?,
+      editedAt: DateTime.tryParse(json['editedAt'] as String? ?? ''),
+      deleted: json['deleted'] == true,
+      reactions: {
+        for (final e
+            in (json['reactions'] as Map<String, dynamic>? ?? const {}).entries
+                .take(DeltaLimits.members + 1))
+          if (e.value is String) e.key: deltaReaction(e.value),
+      },
+      reactionDates: _dates(json['reactionDates']),
     );
   }
 }
@@ -161,6 +324,12 @@ class DeltaChat {
     this.kept = false,
     this.left = false,
     this.membersAt,
+    this.memberAdded = const {},
+    this.memberRemoved = const {},
+    this.pastAddresses = const {},
+    this.avatar,
+    this.avatarAt,
+    this.pendingControls = const [],
   });
 
   /// A peer's fingerprint for a one-to-one chat, `g:<id>` for a group.
@@ -186,6 +355,20 @@ class DeltaChat {
   /// When the member list was last set: older messages do not change it.
   final DateTime? membersAt;
 
+  /// Addition/removal clocks include this account's fingerprint.
+  final Map<String, DateTime> memberAdded;
+  final Map<String, DateTime> memberRemoved;
+  final Map<String, String> pastAddresses;
+  final Uint8List? avatar;
+  final DateTime? avatarAt;
+  final List<DeltaPendingControl> pendingControls;
+
+  Map<String, DateTime> get additionDates => {
+    for (final m in members)
+      m: membersAt ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    ...memberAdded,
+  };
+
   bool get isGroup => groupId != null;
 
   static String groupKey(String groupId) => 'g:$groupId';
@@ -198,6 +381,13 @@ class DeltaChat {
     bool? kept,
     bool? left,
     DateTime? membersAt,
+    Map<String, DateTime>? memberAdded,
+    Map<String, DateTime>? memberRemoved,
+    Map<String, String>? pastAddresses,
+    Uint8List? avatar,
+    DateTime? avatarAt,
+    bool clearAvatar = false,
+    List<DeltaPendingControl>? pendingControls,
   }) => DeltaChat(
     key: key,
     members: members ?? this.members,
@@ -208,6 +398,12 @@ class DeltaChat {
     kept: kept ?? this.kept,
     left: left ?? this.left,
     membersAt: membersAt ?? this.membersAt,
+    memberAdded: memberAdded ?? this.memberAdded,
+    memberRemoved: memberRemoved ?? this.memberRemoved,
+    pastAddresses: pastAddresses ?? this.pastAddresses,
+    avatar: clearAvatar ? null : avatar ?? this.avatar,
+    avatarAt: avatarAt ?? this.avatarAt,
+    pendingControls: pendingControls ?? this.pendingControls,
   );
 
   Map<String, dynamic> toJson() => {
@@ -220,9 +416,24 @@ class DeltaChat {
     if (kept) 'kept': true,
     if (left) 'left': true,
     if (membersAt != null) 'membersAt': membersAt!.toUtc().toIso8601String(),
+    if (memberAdded.isNotEmpty)
+      'memberAdded': {
+        for (final e in memberAdded.entries)
+          e.key: e.value.toUtc().toIso8601String(),
+      },
+    if (memberRemoved.isNotEmpty)
+      'memberRemoved': {
+        for (final e in memberRemoved.entries)
+          e.key: e.value.toUtc().toIso8601String(),
+      },
+    if (pastAddresses.isNotEmpty) 'pastAddresses': pastAddresses,
+    if (avatar != null) 'avatar': base64.encode(avatar!),
+    if (avatarAt != null) 'avatarAt': avatarAt!.toUtc().toIso8601String(),
+    if (pendingControls.isNotEmpty)
+      'pendingControls': [for (final c in pendingControls) c.toJson()],
   };
 
-  static DeltaChat? fromJson(Object? json) {
+  static DeltaChat? fromJson(Object? json, {bool loadAvatar = true}) {
     if (json is! Map<String, dynamic>) return null;
     final key = json['key'];
     if (key is! String) return null;
@@ -242,6 +453,27 @@ class DeltaChat {
       kept: json['kept'] == true,
       left: json['left'] == true,
       membersAt: DateTime.tryParse(json['membersAt'] as String? ?? '')?.toUtc(),
+      memberAdded: _dates(json['memberAdded']),
+      memberRemoved: _dates(json['memberRemoved']),
+      pastAddresses: {
+        for (final e
+            in (json['pastAddresses'] as Map<String, dynamic>? ?? const {})
+                .entries
+                .take(DeltaLimits.members))
+          if (e.value is String) e.key: e.value,
+      },
+      pendingControls: [
+        for (final c in (json['pendingControls'] as List? ?? const []).take(
+          128,
+        ))
+          ?DeltaPendingControl.fromJson(c),
+      ],
+      avatarAt: DateTime.tryParse(json['avatarAt'] as String? ?? ''),
+      avatar: !loadAvatar
+          ? null
+          : deltaAvatar(
+              json['avatar'] is String ? 'base64:${json['avatar']}' : null,
+            ),
     );
   }
 }
@@ -304,6 +536,7 @@ class DeltaChats {
     this.chats = const {},
     this.joins = const [],
     this.deleted = const {},
+    this.detachedControls = const [],
   });
 
   static const int maxMessagesPerChat = 500;
@@ -312,11 +545,19 @@ class DeltaChats {
   static const int maxPeers = 2000;
   static const int maxJoins = 20;
   static const int maxDeleted = 500;
+  static const int maxChats = 500;
+
+  /// Shared by peer and group avatars, including their base64 vault cost.
+  static const int maxAvatarEncodedBytes = 8 * 1024 * 1024;
+  static const int maxAvatars = 128;
 
   /// By fingerprint.
   final Map<String, DeltaPeer> peers;
   final Map<String, DeltaChat> chats;
   final List<DeltaJoin> joins;
+
+  /// Authored deletions received before their chat's first original mail.
+  final List<DeltaPendingControl> detachedControls;
 
   /// Deleted chats, by key, with when: older messages do not bring them
   /// back.
@@ -331,11 +572,15 @@ class DeltaChats {
     Map<String, DeltaChat>? chats,
     List<DeltaJoin>? joins,
     Map<String, DateTime>? deleted,
-  }) => DeltaChats(
-    peers: peers ?? this.peers,
-    chats: chats ?? this.chats,
-    joins: joins ?? this.joins,
-    deleted: deleted ?? this.deleted,
+    List<DeltaPendingControl>? detachedControls,
+  }) => _boundedDeltaAvatars(
+    DeltaChats(
+      peers: peers ?? this.peers,
+      chats: chats ?? this.chats,
+      joins: joins ?? this.joins,
+      deleted: deleted ?? this.deleted,
+      detachedControls: detachedControls ?? this.detachedControls,
+    ),
   );
 
   /// [peer] remembered (merged with what was known).
@@ -348,6 +593,8 @@ class DeltaChats {
             key: peer.key,
             name: peer.name,
             verified: known.verified || peer.verified,
+            avatar: peer.avatar,
+            avatarAt: peer.avatarAt,
           );
     final next = {...peers, peer.fingerprint: merged};
     if (next.length > maxPeers) {
@@ -363,12 +610,27 @@ class DeltaChats {
         }
       }
     }
+    if (next.length > maxPeers && known == null) next.remove(peer.fingerprint);
     return copyWith(peers: next);
   }
 
   /// [chat] in place of the chat with its key.
-  DeltaChats withChat(DeltaChat chat) =>
-      copyWith(chats: {...chats, chat.key: chat});
+  DeltaChats withChat(DeltaChat chat) {
+    if (!chats.containsKey(chat.key) && chats.length >= maxChats) return this;
+    final next = {...chats, chat.key: chat};
+    final requests = next.values.where((c) => !c.kept).toList();
+    if (requests.length > maxRequests) {
+      requests.sort(
+        (a, b) => (a.messages.lastOrNull?.at ?? DateTime(0)).compareTo(
+          b.messages.lastOrNull?.at ?? DateTime(0),
+        ),
+      );
+      for (final old in requests.take(requests.length - maxRequests)) {
+        next.remove(old.key);
+      }
+    }
+    return copyWith(chats: next);
+  }
 
   /// [message] added to the chat [key] (made from [create] when new),
   /// unless it is there already or older than the chat's deletion.
@@ -377,6 +639,7 @@ class DeltaChats {
     DeltaChatMessage message, {
     required DeltaChat Function() create,
   }) {
+    if (!chats.containsKey(key) && chats.length >= maxChats) return this;
     final chat = chats[key] ?? create();
     final deletedAt = deleted[key];
     if ((deletedAt != null && !message.at.isAfter(deletedAt)) ||
@@ -412,6 +675,23 @@ class DeltaChats {
     return copyWith(chats: next);
   }
 
+  DeltaChats updateMessage(
+    String chatKey,
+    String id,
+    DeltaChatMessage Function(DeltaChatMessage) change,
+  ) {
+    final chat = chats[chatKey];
+    if (chat == null) return this;
+    return withChat(
+      chat.copyWith(
+        messages: [
+          for (final m in chat.messages)
+            m.id == id || m.preMessageId == id ? change(m) : m,
+        ],
+      ),
+    );
+  }
+
   /// Our message [id] was read by someone in chat [key].
   DeltaChats markReadBy(String key, String id) {
     final chat = chats[key];
@@ -420,7 +700,7 @@ class DeltaChats {
     final messages = [
       for (final message in chat.messages)
         if (message.outgoing &&
-            message.id == id &&
+            (message.id == id || message.preMessageId == id) &&
             message.state != DeltaMessageState.read)
           (() {
             changed = true;
@@ -508,6 +788,10 @@ class DeltaChats {
     if (chats.isNotEmpty)
       'chats': [for (final chat in chats.values) chat.toJson()],
     if (joins.isNotEmpty) 'joins': [for (final join in joins) join.toJson()],
+    if (detachedControls.isNotEmpty)
+      'detachedControls': [
+        for (final control in detachedControls) control.toJson(),
+      ],
     if (deleted.isNotEmpty)
       'deleted': {
         for (final MapEntry(:key, :value) in deleted.entries)
@@ -518,31 +802,61 @@ class DeltaChats {
   static DeltaChats fromJson(Object? json) {
     if (json is! Map<String, dynamic>) return const DeltaChats();
     final deleted = json['deleted'];
-    return DeltaChats(
-      peers: {
-        for (final peer in [
-          for (final json in json['peers'] as List? ?? const [])
-            ?DeltaPeer.fromJson(json),
-        ])
-          peer.fingerprint: peer,
-      },
-      chats: {
-        for (final chat in [
-          for (final json in json['chats'] as List? ?? const [])
-            ?DeltaChat.fromJson(json),
-        ])
-          chat.key: chat,
-      },
-      joins: [
-        for (final join in json['joins'] as List? ?? const [])
-          ?DeltaJoin.fromJson(join),
-      ],
-      deleted: {
-        if (deleted is Map<String, dynamic>)
-          for (final MapEntry(:key, :value) in deleted.entries)
-            if (DateTime.tryParse(value is String ? value : '') case final at?)
-              key: at.toUtc(),
-      },
+    final peerRows = {
+      for (final row in json['peers'] as List? ?? const [])
+        if (row is Map<String, dynamic> && row['fingerprint'] is String)
+          row['fingerprint'] as String: row,
+    };
+    final chatRows = {
+      for (final row in json['chats'] as List? ?? const [])
+        if (row is Map<String, dynamic> && row['key'] is String)
+          row['key'] as String: row,
+    };
+    return _boundedDeltaAvatars(
+      DeltaChats(
+        peers: {
+          for (final peer in [
+            for (final row in peerRows.values)
+              ?DeltaPeer.fromJson(row, loadAvatar: false),
+          ])
+            peer.fingerprint: peer,
+        },
+        chats: {
+          for (final chat in [
+            for (final row in chatRows.values)
+              ?DeltaChat.fromJson(row, loadAvatar: false),
+          ])
+            chat.key: chat,
+        },
+        joins: [
+          for (final join in json['joins'] as List? ?? const [])
+            ?DeltaJoin.fromJson(join),
+        ],
+        detachedControls: [
+          for (final c in (json['detachedControls'] as List? ?? const []).take(
+            128,
+          ))
+            if (DeltaPendingControl.fromJson(c) case final control?)
+              if (control.kind == 'delete' && control.chatKey.isNotEmpty)
+                control,
+        ],
+        deleted: {
+          if (deleted is Map<String, dynamic>)
+            for (final MapEntry(:key, :value) in deleted.entries)
+              if (DateTime.tryParse(value is String ? value : '')
+                  case final at?)
+                key: at.toUtc(),
+        },
+      ),
+      peerRows: peerRows,
+      chatRows: chatRows,
     );
   }
 }
+
+Map<String, DateTime> _dates(Object? value) => {
+  if (value is Map<String, dynamic>)
+    for (final e in value.entries.take(DeltaLimits.members * 2))
+      if (DateTime.tryParse(e.value is String ? e.value : '') case final date?)
+        e.key: date.toUtc(),
+};

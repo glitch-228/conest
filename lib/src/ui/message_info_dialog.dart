@@ -15,7 +15,12 @@ class MessageInfoDialog extends StatelessWidget {
     this.timestamp,
     this.showRoutes = true,
     this.senderClockOffset,
+    this.senderOutOfTouchSince,
   });
+
+  /// When the sender's account's other devices last heard of the device
+  /// it came from, if that was too long ago (it may be lost or stolen).
+  final DateTime? senderOutOfTouchSince;
 
   /// How far the sender's clock is behind ours (negative: ahead), when it
   /// is noticeably off; times shown are by our clock.
@@ -40,6 +45,7 @@ class MessageInfoDialog extends StatelessWidget {
     String Function(DateTime time)? timestamp,
     bool showRoutes = true,
     Duration? senderClockOffset,
+    DateTime? senderOutOfTouchSince,
   }) => showDialog<void>(
     context: context,
     builder: (context) => MessageInfoDialog(
@@ -48,6 +54,7 @@ class MessageInfoDialog extends StatelessWidget {
       timestamp: timestamp,
       showRoutes: showRoutes,
       senderClockOffset: senderClockOffset,
+      senderOutOfTouchSince: senderOutOfTouchSince,
     ),
   );
 
@@ -57,6 +64,13 @@ class MessageInfoDialog extends StatelessWidget {
     final local = time.toLocal();
     String two(int value) => value.toString().padLeft(2, '0');
     return '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
+  }
+
+  static String outOfTouchLabel(DateTime since) {
+    final local = since.toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return 'Not recently confirmed: their other devices last counted this '
+        'one as theirs on ${local.year}-${two(local.month)}-${two(local.day)}.';
   }
 
   /// "Their clock is about 2 h behind; times here are by this device."
@@ -130,6 +144,18 @@ class MessageInfoDialog extends StatelessWidget {
             : l10n.messageReceivedAt(_time(message.createdAt)),
         key: const ValueKey('message-info-time'),
       ),
+      if (!outbound)
+        if (senderOutOfTouchSince case final since?)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              outOfTouchLabel(since),
+              key: const ValueKey('message-info-out-of-touch'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
+          ),
       if (showRoutes && !outbound)
         if (senderClockOffset case final offset?)
           Padding(

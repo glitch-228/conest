@@ -13,7 +13,7 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
-import 'package:conest/main.dart' show sniffImageMimeType;
+import 'package:conest/main.dart' show sniffImageMimeType, buildDeltaAttachment;
 import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat/gateway.dart';
 import 'package:conest/src/bitchat/geo_relays.g.dart';
@@ -29,8 +29,10 @@ import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
+import 'package:conest/src/connection_map.dart';
 import 'package:conest/src/debug_auto_run.dart';
 import 'package:conest/src/transport_exchange_test.dart';
+import 'package:conest/src/ui/connections_screen.dart';
 import 'package:conest/src/ui/error_history_screen.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/group_file_crypto.dart';
@@ -53,6 +55,10 @@ import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/delta_chats.dart';
+import 'package:conest/src/email/delta_mail.dart';
+import 'package:conest/src/email/carrier_mail.dart' show maxCarrierMailBytes;
+import 'package:conest/src/email/delta_content.dart';
+import 'package:conest/src/email/pgp.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
 import 'package:conest/src/nostr/event.dart';
@@ -91,6 +97,8 @@ import 'support/fake_ratchet_engine.dart';
 import 'support/observing_ratchet_store.dart';
 import 'support/fake_rns_bus.dart';
 import 'support/fake_tor.dart';
+
+part 'delta_controller_content_tests.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -1396,6 +1404,7 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 );
 
 void main() {
+  deltaContentControllerTests();
   test('chat folders move later and persist their final order', () async {
     final vault = _MemoryVaultStore();
     final controller = await _createController(
@@ -10293,6 +10302,9 @@ void main() {
         relayClient: relayClient,
         displayName: 'Alice',
         nowProvider: () => now,
+        // On mains power: background upkeep is not slowed (see the energy
+        // test for that).
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
       );
       addTearDown(controller.dispose);
 
@@ -16705,6 +16717,149 @@ void main() {
       },
     );
 
+    test('a contact device its account lost touch with is flagged', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      now = now.add(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final phoneId = phone.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return phone.linkState == LinkState.linked &&
+            bob.linkedDevicesOf(aliceId).isNotEmpty;
+      });
+      ContactRecord bobAt(MessengerController device) =>
+          device.contacts.firstWhere((c) => c.deviceId == bobId);
+      Future<void> bobReads() async {
+        for (var i = 0; i < 10; i++) {
+          await bob.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      }
+
+      // The laptop tells Bob it counts the phone as Alice's.
+      await alice.checkContactRoutes(bobAt(alice));
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).single.siblingsHeardAt != null;
+      }, reason: 'Bob never heard the laptop vouch for the phone');
+      expect(bob.contactDeviceOutOfTouchSince(phoneId), isNull);
+
+      // Nine days later the laptop no longer counts the phone (they have
+      // not been in touch): the phone is flagged.
+      now = now.add(const Duration(days: 9));
+      await alice.checkContactRoutes(bobAt(alice));
+      await bobReads();
+      expect(bob.contactDeviceOutOfTouchSince(phoneId), isNotNull);
+
+      // Then the laptop goes in a drawer (gone from the network) and only
+      // the phone talks: the laptop is flagged, the active phone (which no
+      // other device has reported on lately) is not.
+      final laptopIroh = alice.identity!.irohEndpointId!;
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.senderDeviceId == aliceId;
+      for (final other in [bob, phone]) {
+        network.blockedPairs
+          ..add((laptopIroh, other.identity!.irohEndpointId!))
+          ..add((other.identity!.irohEndpointId!, laptopIroh));
+      }
+      now = now.add(const Duration(days: 3));
+      await phone.checkContactRoutes(bobAt(phone));
+      await bobReads();
+      expect(bob.contactDeviceOutOfTouchSince(aliceId), isNotNull);
+      expect(bob.contactDeviceOutOfTouchSince(phoneId), isNull);
+    });
+
+    test('own devices carry for each other: a message the laptop cannot '
+        'deliver goes through the phone', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      var now = DateTime.now().toUtc();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      now = now.add(const Duration(hours: 25));
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      final phoneId = phone.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        unawaited(bob.pollNow());
+        return phone.linkState == LinkState.linked &&
+            alice.ownDevices.any(
+              (d) =>
+                  d.deviceId == phoneId &&
+                  d.featureCapabilities.contains(
+                    ApplicationCapability.forwardForContactsV1,
+                  ),
+            ) &&
+            bob.linkedDevicesOf(alice.identity!.deviceId).isNotEmpty;
+      }, reason: 'the phone never offered to carry');
+      // The laptop reaches neither Bob nor any relay; the phone reaches Bob.
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      network.blockedPairs
+        ..add((alice.identity!.irohEndpointId!, bob.identity!.irohEndpointId!))
+        ..add((bob.identity!.irohEndpointId!, alice.identity!.irohEndpointId!));
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'via my phone',
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        unawaited(bob.pollNow());
+        return bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'via my phone');
+      }, reason: 'the phone did not carry it');
+    });
+
     test('a device removed on one device is removed on the others', () async {
       var now = DateTime.now().toUtc();
       final network = _InProcessIrohNetwork();
@@ -17609,6 +17764,151 @@ void main() {
       expect(report['errorHistory'], isA<String>());
     },
   );
+
+  test(
+    'background upkeep slows down on battery and more in battery saver',
+    () async {
+      Future<MessengerController> device(EnergyMode mode) async {
+        final controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: mode.name,
+          energyPolicy: EnergyPolicy.fixed(mode),
+        );
+        addTearDown(controller.dispose);
+        controller.setAppForegroundState(false);
+        return controller;
+      }
+
+      final mains = await device(EnergyMode.unconstrained);
+      final battery = await device(EnergyMode.limited);
+      final saver = await device(EnergyMode.saver);
+      expect(
+        battery.heartbeatIntervalForTesting(),
+        mains.heartbeatIntervalForTesting() * 2,
+      );
+      expect(
+        saver.heartbeatIntervalForTesting(),
+        mains.heartbeatIntervalForTesting() * 4,
+      );
+      final mainsPoll = mains.pollIntervalForTesting;
+      if (mainsPoll != null) {
+        expect(saver.pollIntervalForTesting, mainsPoll * 4);
+      }
+      // In the foreground nothing slows down.
+      saver.setAppForegroundState(true);
+      mains.setAppForegroundState(true);
+      expect(saver.pollIntervalForTesting, mains.pollIntervalForTesting);
+      expect(
+        saver.heartbeatIntervalForTesting(),
+        mains.heartbeatIntervalForTesting(),
+      );
+    },
+  );
+
+  test('after a network change the usual contacts are re-checked, not in '
+      'battery saver', () async {
+    final relay = _FakeRelayClient();
+    Future<MessengerController> device(String name, EnergyMode mode) async {
+      final controller = await _createController(
+        relayClient: relay,
+        displayName: name,
+        energyPolicy: EnergyPolicy.fixed(mode),
+      );
+      addTearDown(controller.dispose);
+      return controller;
+    }
+
+    final alice = await device('Alice', EnergyMode.limited);
+    final saver = await device('Saver', EnergyMode.saver);
+    final bob = await device('Bob', EnergyMode.limited);
+    await _pairControllers(alice, bob);
+    await _pairControllers(saver, bob);
+    for (final sender in [alice, saver]) {
+      await sender.sendMessage(contact: sender.contacts.single, body: 'hello');
+    }
+    alice.onConnectivityChanged(interfaceLabel: 'wifi');
+    saver.onConnectivityChanged(interfaceLabel: 'wifi');
+    await Future<void>.delayed(const Duration(seconds: 7));
+    expect(alice.quietlyRecheckedForTesting, {bob.identity!.deviceId});
+    expect(saver.quietlyRecheckedForTesting, isEmpty);
+  });
+
+  testWidgets('the connection map shows links reported by group mates, and '
+      'nobody else', (tester) async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    final (alice, bob, carol, dan, group) = (await tester.runAsync(() async {
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        transportRegistryFactory: network.registry,
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      final carol = await device('Carol');
+      final dan = await device('Dan');
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await _pairControllers(alice, dan);
+      final group = await alice.createGroup(
+        title: 'Map',
+        members: alice.contacts
+            .where((c) => c.deviceId != dan.identity!.deviceId)
+            .toList(),
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        unawaited(carol.pollNow());
+        return bob.visibleGroups.isNotEmpty && carol.visibleGroups.isNotEmpty;
+      });
+      // Alice hears from everyone, then tells Bob how her links fare.
+      for (final contact in alice.contacts) {
+        await alice.checkContactRoutes(contact);
+      }
+      await Future.wait([bob.pollNow(), carol.pollNow(), dan.pollNow()]);
+      await alice.pollNow();
+      await alice.checkContactRoutes(
+        alice.contacts.firstWhere((c) => c.deviceId == bob.identity!.deviceId),
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob
+                .connectionMap
+                .reported[alice.identity!.deviceId]
+                ?.isNotEmpty ??
+            false;
+      }, reason: 'Bob never heard how Alice is linked');
+      return (alice, bob, carol, dan, group);
+    }))!;
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+    addTearDown(dan.dispose);
+    expect(group.groupId, isNotEmpty);
+    // What Alice would tell Bob names only devices Bob knows from their
+    // group (never Dan, whom she talks to as well).
+    final shared = alice.linksToShareWithForTesting(
+      alice.contacts.firstWhere((c) => c.deviceId == bob.identity!.deviceId),
+    )!;
+    expect(shared.keys, contains(carol.identity!.deviceId));
+    expect(shared.keys, isNot(contains(dan.identity!.deviceId)));
+    final reported = bob.connectionMap.reported[alice.identity!.deviceId]!;
+    expect(reported.keys, contains(carol.identity!.deviceId));
+    expect(reported.keys, isNot(contains(dan.identity!.deviceId)));
+    // Whatever Alice sends, Bob keeps nothing about devices he does not
+    // share a group with her (Dan): a report naming him is dropped.
+    bob.receiveLinksForTesting(alice.identity!.deviceId, {
+      dan.identity!.deviceId: 'twoWay',
+      carol.identity!.deviceId: 'failing',
+    });
+    final kept = bob.connectionMap.reported[alice.identity!.deviceId]!;
+    expect(kept.keys, isNot(contains(dan.identity!.deviceId)));
+    expect(kept[carol.identity!.deviceId]?.status, LinkStatus.failing);
+    await tester.pumpWidget(
+      MaterialApp(home: ConnectionsScreen(controller: bob)),
+    );
+    expect(find.text('As Alice sees it'), findsOneWidget);
+  });
 
   group('Clocks that are off', () {
     Future<(MessengerController, MessengerController, MessengerController)>

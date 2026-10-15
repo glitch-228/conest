@@ -173,6 +173,11 @@ class EmailCarrierConfig {
   String toString() => 'EmailCarrierConfig($mail via $imapHost/$smtpHost)';
 }
 
+/// Recognized external mail could not yet be durably saved. Keep its UID.
+class OtherMailRetryException implements Exception {
+  const OtherMailRetryException();
+}
+
 enum EmailCarrierState { stopped, connecting, connected, failed }
 
 /// The email side of the carrier: reads carrier mail from the account's
@@ -186,6 +191,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.onCursor,
     this.onStatusChanged,
     this.onOtherMail,
+    this.otherMailMaxBytes,
     MailConnector? connector,
     this.tls = true,
     this.idleTimeout = const Duration(minutes: 25),
@@ -214,6 +220,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// Mail that is not carrier mail (Delta Chat's, say): true when it was
   /// handled and may be deleted. Without it such mail is left alone.
   final Future<bool> Function(Uint8List raw)? onOtherMail;
+
+  /// Explicit larger budget for enabled external chats; carrier cap is unchanged.
+  final int Function()? otherMailMaxBytes;
 
   EmailCarrierState _state = EmailCarrierState.stopped;
   String? _lastError;
@@ -339,8 +348,21 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         _lastError = null;
         _setState(EmailCarrierState.connected);
         backoff = const Duration(seconds: 2);
+        var storageBackoff = const Duration(seconds: 2);
         while (current()) {
-          await _readNew(client, generation);
+          if (await _readNew(client, generation)) {
+            final wake = Completer<void>();
+            _wake = wake;
+            await Future.any([
+              wake.future,
+              Future<void>.delayed(storageBackoff),
+            ]);
+            storageBackoff = storageBackoff * 2 > const Duration(minutes: 5)
+                ? const Duration(minutes: 5)
+                : storageBackoff * 2;
+            continue;
+          }
+          storageBackoff = const Duration(seconds: 2);
           if (!current()) break;
           // Mail announced while reading: read again before waiting.
           if (client.takeNewMail()) continue;
@@ -368,18 +390,21 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     }
   }
 
-  Future<void> _readNew(ImapClient client, int generation) async {
+  Future<bool> _readNew(ImapClient client, int generation) async {
     bool current() => _started && generation == _generation;
     final uids = await client.uidsAfter(_config.lastUid);
     for (final uid in uids) {
-      if (!current()) return;
+      if (!current()) return false;
       final size = await client.size(uid);
-      if (size != null && size <= maxCarrierMailBytes) {
-        final raw = await client.fetch(
-          uid,
-          maxBytes: maxCarrierMailBytes + 64 * 1024,
-        );
-        if (!current()) return;
+      final maxBytes = onOtherMail == null
+          ? maxCarrierMailBytes
+          : (otherMailMaxBytes?.call() ?? maxCarrierMailBytes).clamp(
+              maxCarrierMailBytes,
+              42 * 1024 * 1024,
+            );
+      if (size != null && size >= 0 && size <= maxBytes) {
+        final raw = await client.fetch(uid, maxBytes: maxBytes);
+        if (!current()) return false;
         final mail = raw == null
             ? null
             : CarrierMail.read(raw, _config.mailboxKey);
@@ -392,10 +417,13 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         } else if (raw != null && onOtherMail != null) {
           try {
             handled = await onOtherMail!(raw);
+          } on OtherMailRetryException {
+            // Do not advance the durable watermark past an unsaved message.
+            return true;
           } catch (_) {
             // Not read: left on the server.
           }
-          if (!current()) return;
+          if (!current()) return false;
         }
         if (handled) {
           try {
@@ -405,10 +433,11 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           }
         }
       }
-      if (!current()) return;
+      if (!current()) return false;
       _config = _config.copyWith(lastUid: uid);
       onCursor?.call(_config.uidValidity!, uid);
     }
+    return false;
   }
 
   void _setState(EmailCarrierState state) {

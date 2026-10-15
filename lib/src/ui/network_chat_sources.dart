@@ -187,7 +187,8 @@ class DeltaChatSource extends NetworkChatSource {
           network: id,
           id: chat.key,
           title: deltaChatTitle(controller, chat),
-          preview: chat.messages.lastOrNull?.text ?? localizedUiText(context, 'New chat'),
+          preview:
+              chat.messages.lastOrNull?.preview(DateTime.now()) ?? 'New chat',
           at: chat.messages.lastOrNull?.at.toLocal(),
           unread: chat.unread,
           isGroup: chat.isGroup,

@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../main.dart' show buildDeltaAttachment;
 import '../delta_chats.dart';
+import 'delta_content_widgets.dart';
 import '../messenger_controller.dart';
 
 /// Delta Chat in Settings → Connectivity: on or off, this account's
@@ -269,14 +271,15 @@ class DeltaChatsScreen extends StatelessWidget {
                   children: [
                     for (final chat in chats)
                       ListTile(
-                        leading: Icon(
-                          chat.isGroup ? Icons.group_outlined : Icons.person,
-                        ),
+                        leading: deltaChatAvatar(controller, chat),
                         title: Text(deltaChatTitle(controller, chat)),
                         subtitle: Text(
                           chat.kept
-                              ? (chat.messages.lastOrNull?.text ?? '')
-                              : localizedUiText(context, 'Request: ${chat.messages.lastOrNull?.text ?? ''}'),
+                              ? (chat.messages.lastOrNull?.preview(
+                                      DateTime.now(),
+                                    ) ??
+                                    '')
+                              : 'Request: ${chat.messages.lastOrNull?.preview(DateTime.now()) ?? ''}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -390,16 +393,27 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
   final _composer = TextEditingController();
   String? _error;
   bool _sending = false;
+  Timer? _expiryTimer;
 
   @override
   void initState() {
     super.initState();
+    _expiryTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
     widget.controller.addListener(_markRead);
     _markRead();
   }
 
   @override
   void dispose() {
+    _expiryTimer?.cancel();
+    unawaited(
+      interruptDeltaVoiceOnClose(
+        widget.controller.voiceMessageService,
+        widget.chatKey,
+      ).catchError((_) {}),
+    );
     widget.controller.removeListener(_markRead);
     _composer.dispose();
     super.dispose();
@@ -541,6 +555,8 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
           appBar: AppBar(
             title: Row(
               children: [
+                deltaChatAvatar(controller, chat, radius: 16),
+                const SizedBox(width: 8),
                 Flexible(
                   child: Text(
                     deltaChatTitle(controller, chat),
@@ -654,12 +670,53 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                                   controller.deltaName(message.author),
                                   style: theme.textTheme.labelMedium,
                                 ),
-                              Text(message.text),
+                              if (message.deleted)
+                                const Text('Message deleted')
+                              else ...[
+                                if (message.text.isNotEmpty) Text(message.text),
+                                if (message.pending != null)
+                                  Text(
+                                    '${message.pending!.name}, ${(message.pending!.size / (1024 * 1024)).toStringAsFixed(1)} MB, '
+                                    '${message.pendingExpired(DateTime.now()) ? 'not received' : 'downloading…'}',
+                                  ),
+                                for (final attachment in message.attachments)
+                                  buildDeltaAttachment(
+                                    context,
+                                    controller,
+                                    attachment,
+                                    message.outgoing,
+                                  ),
+                                if (message.reactions.values.any(
+                                  (v) => v.isNotEmpty,
+                                ))
+                                  Wrap(
+                                    spacing: 4,
+                                    children: [
+                                      for (final emoji
+                                          in message.reactions.values
+                                              .where((v) => v.isNotEmpty)
+                                              .toSet())
+                                        Chip(
+                                          label: Text(
+                                            '$emoji ${message.reactions.values.where((v) => v == emoji).length}',
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                if (!chat.left)
+                                  DeltaMessageMenu(
+                                    controller: controller,
+                                    chat: chat,
+                                    message: message,
+                                    act: _act,
+                                  ),
+                              ],
                               Text(
                                 [
                                   TimeOfDay.fromDateTime(
                                     message.at.toLocal(),
                                   ).format(context),
+                                  if (message.editedAt != null) 'edited',
                                   if (message.outgoing)
                                     switch (message.state) {
                                       DeltaMessageState.read => localizedUiText(context, 'read'),
@@ -691,6 +748,35 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                   padding: const EdgeInsets.all(8),
                   child: Row(
                     children: [
+                      PopupMenuButton<bool>(
+                        tooltip: 'Attach',
+                        enabled: !chat.left && !_sending,
+                        icon: const Icon(Icons.attach_file),
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                            value: false,
+                            child: Text('File'),
+                          ),
+                          const PopupMenuItem(
+                            value: true,
+                            child: Text('Photo or video'),
+                          ),
+                        ],
+                        onSelected: (photos) => _act(() async {
+                          setState(() => _sending = true);
+                          try {
+                            await pickDeltaFiles(
+                              context,
+                              controller,
+                              chat.key,
+                              photos: photos,
+                              caption: _composer.text,
+                            );
+                          } finally {
+                            if (mounted) setState(() => _sending = false);
+                          }
+                        }),
+                      ),
                       Expanded(
                         child: TextField(
                           key: const ValueKey('delta-composer'),
@@ -705,6 +791,12 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                           ),
                           onSubmitted: (_) => _send(),
                         ),
+                      ),
+                      DeltaVoiceComposer(
+                        controller: controller,
+                        chatKey: chat.key,
+                        enabled: !chat.left && !_sending,
+                        act: _act,
                       ),
                       IconButton(
                         tooltip: localizedUiText(context, 'Send'),
