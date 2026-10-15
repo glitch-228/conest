@@ -178,6 +178,9 @@ With the Delta Chat apps (Android, iOS, desktop), both ways, 1:1 and group:
 - New focused regressions: all 81 passed. Nine additional sabotage checks each caused assertion failures and restored their sources: pre+file preservation, text bytes, flowed lines/delsp, reaction bytes, shared avatar bytes/count, trusted-avatar priority, and restoration budgets. Total: 70 completed sabotage checks; latest evidence /tmp/conest-m24b-sabotage-last-results.json.
 - Full merged suite at d9409bd finished: 1,181 passed, 18 skipped, only the documented local native-Iroh failure. Rust CI 38705747727 is green. Debug run 38705750661 passed verification and real Nostr/email/RNS/Meshtastic checks, then was cancelled deliberately before completion to replace it with final reviewed code. Shared base still 2e34eb8 (confirmed remote). Final full suite, analysis, independent delta review and replacement debug run follow.
 
+- Independent final delta review at b965e8e: all three remaining mechanisms closed; no further material findings. Review was read-only (no independent test execution); physical interoperability, native media handlers, measured peak memory and power-loss durability remain device/manual checks.
+- Latest shared base distinguishes partially cleaned files in metadata consent. Delta now passes that flag to the existing dialog through a small reusable send/consent helper. All six composer widget tests passed, including four complete/partial × Cancel/Send cases; two further sabotage checks caught loss of the flag and bypassed consent, restoring sources. Total: 72 sabotage checks. An initial picker-test double could not override an extension method; replaced it with direct coverage of the real consent helper and dialog, without native picker I/O. Early debug run 38707823322 was superseded for this integration correction; replacement qualification follows.
+
 ## Handoff
 
 

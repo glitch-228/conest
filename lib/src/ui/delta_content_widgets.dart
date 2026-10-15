@@ -50,6 +50,26 @@ Widget deltaChatAvatar(
   );
 }
 
+Future<void> sendDeltaFileAsking(
+  BuildContext context,
+  String fileName,
+  Future<void> Function(bool keepMetadata) send,
+) async {
+  try {
+    await send(false);
+  } on FileMetadataException catch (error) {
+    if (!context.mounted ||
+        !await confirmSendingMetadata(
+          context,
+          fileName,
+          partial: error.partial,
+        )) {
+      return;
+    }
+    await send(true);
+  }
+}
+
 Future<void> pickDeltaFiles(
   BuildContext context,
   MessengerController controller,
@@ -57,22 +77,17 @@ Future<void> pickDeltaFiles(
   bool photos = false,
   String caption = '',
 }) async {
-  Future<void> send(StagedAttachment source, String text) async {
-    try {
-      await controller.sendDeltaAttachment(chatKey, source, caption: text);
-    } on FileMetadataException {
-      if (!context.mounted ||
-          !await confirmSendingMetadata(context, source.fileName)) {
-        return;
-      }
-      await controller.sendDeltaAttachment(
-        chatKey,
-        source,
-        caption: text,
-        keepMetadata: true,
+  Future<void> send(StagedAttachment source, String text) =>
+      sendDeltaFileAsking(
+        context,
+        source.fileName,
+        (keepMetadata) => controller.sendDeltaAttachment(
+          chatKey,
+          source,
+          caption: text,
+          keepMetadata: keepMetadata,
+        ),
       );
-    }
-  }
 
   if (photos) {
     final result = await showMediaPickerSheet(

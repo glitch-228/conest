@@ -1,5 +1,6 @@
 import 'package:conest/src/ui/delta_content_widgets.dart';
 import 'package:conest/src/messenger_controller.dart';
+import 'package:conest/src/file_metadata_consent.dart';
 import 'package:conest/src/voice_message_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,6 +42,52 @@ class _VoiceController implements MessengerController {
 }
 
 void main() {
+  for (final partial in [false, true]) {
+    for (final allow in [false, true]) {
+      testWidgets(
+        'Delta file consent preserves partial=$partial and allow=$allow',
+        (tester) async {
+          final attempts = <bool>[];
+          late Future<void> pending;
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: Builder(
+                  builder: (context) => TextButton(
+                    onPressed: () {
+                      pending = sendDeltaFileAsking(context, 'video.mp4', (
+                        keepMetadata,
+                      ) async {
+                        attempts.add(keepMetadata);
+                        if (!keepMetadata) {
+                          throw FileMetadataException(
+                            'video.mp4',
+                            partial: partial,
+                          );
+                        }
+                      });
+                    },
+                    child: const Text('Attach'),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.tap(find.text('Attach'));
+          await tester.pumpAndSettle();
+          expect(
+            find.text(fileMetadataConsentText('video.mp4', partial: partial)),
+            findsOneWidget,
+          );
+          expect(attempts, [false]);
+          await tester.tap(find.text(allow ? 'Send anyway' : 'Cancel'));
+          await tester.pumpAndSettle();
+          await pending;
+          expect(attempts, allow ? [false, true] : [false]);
+        },
+      );
+    }
+  }
   test('closing a Delta chat interrupts pending microphone startup', () async {
     final service = _PendingVoice(VoiceRecordingState.starting, 'delta:chat');
     await interruptDeltaVoiceOnClose(service, 'chat');
