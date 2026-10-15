@@ -36,6 +36,7 @@ class FakeMailServer {
   /// UIDs whose bodies were downloaded.
   final List<int> fetched = [];
   final List<int> fetchedSizes = [];
+  Future<void> Function(FakeMail mail)? beforeBodyFetch;
 
   /// Tests can announce hostile sizes without allocating oversized bodies.
   final Map<int, int> reportedSizes = {};
@@ -226,7 +227,7 @@ class FakeMailServer {
     bool unannounced() => box().any((mail) => mail.uid > reported);
     reply('* OK fake IMAP ready');
     _lines(socket).listen(
-      (line) {
+      (line) async {
         if (idleTag != null) {
           if (line.toUpperCase() == 'DONE') {
             unawaited(idleWatch?.cancel());
@@ -296,6 +297,7 @@ class FakeMailServer {
                 '* ${index + 1} FETCH (UID $uid RFC822.SIZE ${reportedSizes[uid] ?? mail.raw.length})',
               );
             } else {
+              await beforeBodyFetch?.call(mail);
               socket.write(
                 '* ${index + 1} FETCH (UID $uid BODY[] {${mail.raw.length}}\r\n',
               );

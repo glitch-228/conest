@@ -30,16 +30,14 @@ Uint8List? deltaAvatar(String? header) {
       final checked = _staticWebp(bytes);
       if (checked == null) return null;
       bytes = checked;
-    } else if (!_prefix(bytes, ascii.encode('GIF8')) &&
-        !(_prefix(bytes, ascii.encode('RIFF')) &&
-            _prefix(bytes, ascii.encode('WEBP'), 8))) {
+    } else {
       return null;
     }
     final decoder = img.findDecoderForData(bytes);
     final info = decoder?.startDecode(bytes);
     if (info == null ||
         !_small(info.width, info.height) ||
-        info.numFrames != 1) {
+        info.numFrames > 1) {
       return null;
     }
     final decoded = decoder!.decodeFrame(0);
@@ -281,20 +279,23 @@ Uint8List? _staticWebp(Uint8List bytes) {
     final type = ascii.decode(Uint8List.sublistView(bytes, offset, offset + 4));
     final size = data.getUint32(offset + 4, Endian.little);
     if (size > bytes.length - offset - 8) return null;
-    if (type == 'ANIM' || type == 'ANMF') return null;
+    // The library's lossless Huffman decoder has no allocation budget.
+    if (type == 'ANIM' || type == 'ANMF' || type == 'VP8L' || type == 'ALPH') {
+      return null;
+    }
     if (type == 'VP8X') {
-      if (extended || size != 10 || bytes[offset + 8] & 2 != 0) return null;
+      if (extended || size != 10 || bytes[offset + 8] & 0x12 != 0) return null;
       extended = true;
     }
-    if (type == 'VP8 ' || type == 'VP8L') {
+    if (type == 'VP8 ') {
       if (image) return null;
       image = true;
     }
-    if (const {'VP8X', 'ALPH', 'VP8 ', 'VP8L'}.contains(type)) {
+    if (const {'VP8X', 'VP8 '}.contains(type)) {
       final chunk = Uint8List.fromList(
         bytes.sublist(offset, offset + 8 + size + (size & 1)),
       );
-      if (type == 'VP8X') chunk[8] &= 0x10;
+      if (type == 'VP8X') chunk[8] = 0;
       clean.add(chunk);
     }
     offset += 8 + size + (size & 1);

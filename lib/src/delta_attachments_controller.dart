@@ -3,6 +3,13 @@ part of 'messenger_controller.dart';
 /// Delta files share Conest's descriptor, cache, privacy settings and voice
 /// service. No file bytes are persisted inside the chat vault.
 extension DeltaAttachmentsController on MessengerController {
+  bool deltaAttachmentAvailableLocally(AttachmentDescriptor descriptor) {
+    final stored = _deltaAttachmentDescriptorFor(descriptor.id);
+    return stored != null &&
+        jsonEncode(stored.toJson()) == jsonEncode(descriptor.toJson()) &&
+        attachmentAvailableLocally(descriptor.id);
+  }
+
   Iterable<AttachmentDescriptor> get _deltaAttachments sync* {
     for (final chat in deltaChats.chats.values) {
       for (final message in chat.messages) {

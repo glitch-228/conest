@@ -716,7 +716,7 @@ abstract final class DeltaMail {
       }
     }
 
-    if (receiptsFor.isEmpty) walk(content);
+    walk(content);
     if (invalidFiles || (raw.length > maxBytes && files.isEmpty)) return null;
 
     final messageId = _bareMessageId(headers['message-id']);

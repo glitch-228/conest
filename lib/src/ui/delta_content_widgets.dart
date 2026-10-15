@@ -199,6 +199,7 @@ class DeltaVoiceComposer extends StatelessWidget {
                 onPressed:
                     !enabled ||
                         (service.state != VoiceRecordingState.idle &&
+                            service.state != VoiceRecordingState.error &&
                             !recording)
                     ? null
                     : () => act(() async {

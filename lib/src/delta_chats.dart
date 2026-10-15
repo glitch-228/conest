@@ -102,6 +102,7 @@ class DeltaPendingControl {
     required this.expires,
     required this.kind,
     this.text = '',
+    this.chatKey = '',
   });
   final String id;
   final String author;
@@ -109,6 +110,7 @@ class DeltaPendingControl {
   final DateTime expires;
   final String kind;
   final String text;
+  final String chatKey;
   Map<String, dynamic> toJson() => {
     'id': id,
     'author': author,
@@ -116,6 +118,7 @@ class DeltaPendingControl {
     'expires': expires.toUtc().toIso8601String(),
     'kind': kind,
     if (text.isNotEmpty) 'text': text,
+    if (chatKey.isNotEmpty) 'chatKey': chatKey,
   };
   static DeltaPendingControl? fromJson(Object? value) {
     if (value is! Map<String, dynamic>) return null;
@@ -123,11 +126,14 @@ class DeltaPendingControl {
     final author = value['author'];
     final date = DateTime.tryParse(value['date'] as String? ?? '');
     final expires = DateTime.tryParse(value['expires'] as String? ?? '');
+    final chatKey = value['chatKey'] ?? '';
     if (id == null ||
         author is! String ||
         !RegExp(r'^[0-9A-F]{40}$').hasMatch(author) ||
         date == null ||
         expires == null ||
+        chatKey is! String ||
+        chatKey.length > 130 ||
         !const {'delete', 'reaction'}.contains(value['kind'])) {
       return null;
     }
@@ -138,6 +144,7 @@ class DeltaPendingControl {
       expires: expires,
       kind: value['kind'],
       text: deltaReaction(value['text'] as String? ?? ''),
+      chatKey: chatKey,
     );
   }
 }
@@ -523,6 +530,7 @@ class DeltaChats {
     this.chats = const {},
     this.joins = const [],
     this.deleted = const {},
+    this.detachedControls = const [],
   });
 
   static const int maxMessagesPerChat = 500;
@@ -531,11 +539,15 @@ class DeltaChats {
   static const int maxPeers = 2000;
   static const int maxJoins = 20;
   static const int maxDeleted = 500;
+  static const int maxChats = 500;
 
   /// By fingerprint.
   final Map<String, DeltaPeer> peers;
   final Map<String, DeltaChat> chats;
   final List<DeltaJoin> joins;
+
+  /// Authored deletions received before their chat's first original mail.
+  final List<DeltaPendingControl> detachedControls;
 
   /// Deleted chats, by key, with when: older messages do not bring them
   /// back.
@@ -550,11 +562,13 @@ class DeltaChats {
     Map<String, DeltaChat>? chats,
     List<DeltaJoin>? joins,
     Map<String, DateTime>? deleted,
+    List<DeltaPendingControl>? detachedControls,
   }) => DeltaChats(
     peers: peers ?? this.peers,
     chats: chats ?? this.chats,
     joins: joins ?? this.joins,
     deleted: deleted ?? this.deleted,
+    detachedControls: detachedControls ?? this.detachedControls,
   );
 
   /// [peer] remembered (merged with what was known).
@@ -590,6 +604,7 @@ class DeltaChats {
 
   /// [chat] in place of the chat with its key.
   DeltaChats withChat(DeltaChat chat) {
+    if (!chats.containsKey(chat.key) && chats.length >= maxChats) return this;
     final next = {...chats, chat.key: chat};
     final requests = next.values.where((c) => !c.kept).toList();
     if (requests.length > maxRequests) {
@@ -612,6 +627,7 @@ class DeltaChats {
     DeltaChatMessage message, {
     required DeltaChat Function() create,
   }) {
+    if (!chats.containsKey(key) && chats.length >= maxChats) return this;
     final chat = chats[key] ?? create();
     final deletedAt = deleted[key];
     if ((deletedAt != null && !message.at.isAfter(deletedAt)) ||
@@ -760,6 +776,10 @@ class DeltaChats {
     if (chats.isNotEmpty)
       'chats': [for (final chat in chats.values) chat.toJson()],
     if (joins.isNotEmpty) 'joins': [for (final join in joins) join.toJson()],
+    if (detachedControls.isNotEmpty)
+      'detachedControls': [
+        for (final control in detachedControls) control.toJson(),
+      ],
     if (deleted.isNotEmpty)
       'deleted': {
         for (final MapEntry(:key, :value) in deleted.entries)
@@ -788,6 +808,13 @@ class DeltaChats {
       joins: [
         for (final join in json['joins'] as List? ?? const [])
           ?DeltaJoin.fromJson(join),
+      ],
+      detachedControls: [
+        for (final c in (json['detachedControls'] as List? ?? const []).take(
+          128,
+        ))
+          if (DeltaPendingControl.fromJson(c) case final control?)
+            if (control.kind == 'delete' && control.chatKey.isNotEmpty) control,
       ],
       deleted: {
         if (deleted is Map<String, dynamic>)

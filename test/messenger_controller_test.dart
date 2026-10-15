@@ -11,7 +11,7 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
-import 'package:conest/main.dart' show sniffImageMimeType;
+import 'package:conest/main.dart' show sniffImageMimeType, buildDeltaAttachment;
 import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat/gateway.dart';
 import 'package:conest/src/bitchat/geo_relays.g.dart';

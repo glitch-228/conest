@@ -390,6 +390,20 @@ class DeltaProtocol {
       now: _now(),
     );
     if (read == null || read.from == self) return DeltaStep(chats);
+    // Unsupported mixed control/file mail stays on the server intact.
+    if (read.files.isNotEmpty &&
+        (read.reaction ||
+            read.receiptsFor.isNotEmpty ||
+            read.secureJoin != null ||
+            const [
+              'chat-edit',
+              'chat-delete',
+              'chat-group-member-added',
+              'chat-group-member-removed',
+              'chat-group-member-removed-fpr',
+            ].any((h) => read.header(h) != null))) {
+      return DeltaStep(chats);
+    }
     final step = read.secureJoin;
     if (step != null && step != 'vg-member-added') {
       return _handshake(chats, read, step);
@@ -523,6 +537,12 @@ class DeltaProtocol {
         existing == null || existing.members.contains(sender);
     final control = _receiveControl(chats, read, signer, chatKey);
     if (control != null) return control;
+    if (existing == null && chats.chats.length >= DeltaChats.maxChats) {
+      return DeltaStep(
+        chats,
+        retry: read.files.isNotEmpty || read.postMessageId != null,
+      );
+    }
     // Finish an already accepted file even when membership changed in transit.
     // Its signed author can complete that placeholder, without changing the group.
     if (existing != null &&
@@ -598,7 +618,9 @@ class DeltaProtocol {
               (addedAt == null || removedAt.isAfter(addedAt))) {
             members.remove(gone);
           }
-          if (gone != null) {
+          if (gone != null &&
+              !members.contains(gone) &&
+              (gone != fingerprint || left)) {
             notes.add('${_nameOf(next, gone)} left the group.');
           }
         }
@@ -1228,6 +1250,9 @@ class DeltaProtocol {
     String name,
     List<String> members,
   ) async {
+    if (chats.chats.length >= DeltaChats.maxChats) {
+      throw StateError('Chat limit reached. Delete an old chat first.');
+    }
     if (members.length > DeltaLimits.members - 1) {
       throw ArgumentError('Too many group members.');
     }
@@ -1292,7 +1317,7 @@ class DeltaProtocol {
             : addedAt,
       },
       members: {...chat.members, member}.toList()..sort(),
-      membersAt: _now().toUtc(),
+      membersAt: addedAt,
     );
     final next = chats.withChat(updated);
     return _systemMessage(

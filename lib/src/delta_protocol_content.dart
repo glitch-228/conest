@@ -10,17 +10,28 @@ extension DeltaProtocolContent on DeltaProtocol {
     String kind,
     String text,
   ) {
-    final chat = chats.chats[chatKey]!;
-    final live = chat.pendingControls
+    final chat = chats.chats[chatKey];
+    final targetChat = chat == null ? chatKey : '';
+    final live = (chat?.pendingControls ?? chats.detachedControls)
         .where((c) => c.expires.isAfter(_now()))
         .toList();
     final old = live
-        .where((c) => c.id == id && c.author == author && c.kind == kind)
+        .where(
+          (c) =>
+              c.id == id &&
+              c.author == author &&
+              c.kind == kind &&
+              c.chatKey == targetChat,
+        )
         .firstOrNull;
     if (old != null && old.date.isAfter(date)) return chats;
     final next = [
       for (final c in live)
-        if (c.id != id || c.author != author || c.kind != kind) c,
+        if (c.id != id ||
+            c.author != author ||
+            c.kind != kind ||
+            c.chatKey != targetChat)
+          c,
       DeltaPendingControl(
         id: id,
         author: author,
@@ -28,15 +39,13 @@ extension DeltaProtocolContent on DeltaProtocol {
         expires: _now().toUtc().add(DeltaLimits.pendingLifetime),
         kind: kind,
         text: text,
+        chatKey: targetChat,
       ),
     ];
-    return chats.withChat(
-      chat.copyWith(
-        pendingControls: next.length > 128
-            ? next.sublist(next.length - 128)
-            : next,
-      ),
-    );
+    final bounded = next.length > 128 ? next.sublist(next.length - 128) : next;
+    return chat == null
+        ? chats.copyWith(detachedControls: bounded)
+        : chats.withChat(chat.copyWith(pendingControls: bounded));
   }
 
   DeltaStep? _receiveControl(
@@ -51,7 +60,24 @@ extension DeltaProtocolContent on DeltaProtocol {
     final chat = chats.chats[chatKey];
     final author = signer.fingerprintHex;
     if (chat == null) {
-      return DeltaStep(chats, consumed: true);
+      var next = chats;
+      if (!read.reaction && edit == null && deletion != null) {
+        for (final raw in deletion.split(RegExp(r'\s+')).take(100)) {
+          final target = deltaMessageId(raw);
+          if (target != null) {
+            next = _rememberControl(
+              next,
+              chatKey,
+              target,
+              author,
+              _clamp(read.date),
+              'delete',
+              '',
+            );
+          }
+        }
+      }
+      return DeltaStep(next, consumed: true);
     }
     final activeMember = !chat.left && chat.members.contains(author);
     var next = chats;
@@ -170,6 +196,10 @@ extension DeltaProtocolContent on DeltaProtocol {
     String chatKey,
     DeltaChat Function() create,
   ) async {
+    if (!chats.chats.containsKey(chatKey) &&
+        chats.chats.length >= DeltaChats.maxChats) {
+      return DeltaStep(chats, retry: read.files.isNotEmpty || read.postMessageId != null);
+    }
     final chat = chats.chats[chatKey] ?? create();
     final postId = read.postMessageId;
     final id = postId ?? read.messageId;
@@ -180,13 +210,18 @@ extension DeltaProtocolContent on DeltaProtocol {
         (existing.author != signer.fingerprintHex || existing.deleted)) {
       return DeltaStep(chats, consumed: true);
     }
-    final controls = chat.pendingControls
-        .where(
-          (c) =>
-              c.expires.isAfter(_now()) &&
-              (c.id == id || c.id == read.messageId),
-        )
-        .toList();
+    final controls =
+        [
+              ...chat.pendingControls,
+              for (final c in chats.detachedControls)
+                if (c.chatKey == chatKey) c,
+            ]
+            .where(
+              (c) =>
+                  c.expires.isAfter(_now()) &&
+                  (c.id == id || c.id == read.messageId),
+            )
+            .toList();
     if (controls.any(
       (c) => c.kind == 'delete' && c.author == signer.fingerprintHex,
     )) {

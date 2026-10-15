@@ -51,6 +51,7 @@ import 'src/ui/meshtastic_carrier_panel.dart';
 import 'src/ui/nostr_carrier_panel.dart';
 import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
+import 'src/ui/delta_attachment_card.dart';
 import 'src/ui/message_info_dialog.dart';
 import 'l10n/app_localizations.dart';
 import 'src/app_locales.dart';
@@ -18712,14 +18713,39 @@ Widget buildDeltaAttachment(
   bool outgoing,
 ) {
   final palette = ConestPalette(brightness: Theme.of(context).brightness);
-  return _AttachmentRow(
+  final row = _AttachmentRow(
     descriptor: descriptor,
     outbound: outgoing,
     palette: palette,
     controller: controller,
     messageState: DeliveryState.delivered,
+    localContent: true,
     onForward: () =>
         _forwardAttachment(context, controller, palette, descriptor),
+  );
+  return DeltaAttachmentCard(
+    controller: controller,
+    descriptor: descriptor,
+    save: row._saveLocalFileToDisk,
+    forward: () => _forwardAttachment(context, controller, palette, descriptor),
+    open: () async {
+      if (descriptor.voiceMetadata != null) {
+        final path = await controller.attachmentCachePathFor(descriptor.id);
+        if (path != null) {
+          await controller.voiceMessageService.togglePlayback(
+            path,
+            itemId: descriptor.id,
+          );
+        }
+      } else if (row._isImage) {
+        await row._openPathImage(context);
+      } else if (row._isVideo) {
+        await row._openVideoPlayer(context);
+      } else {
+        await openDeltaCachedFile(controller, descriptor);
+      }
+    },
+    child: row,
   );
 }
 
@@ -18733,6 +18759,7 @@ class _AttachmentRow extends StatelessWidget {
     this.conversationPeerDeviceId,
     this.onForward,
     this.onDelete,
+    this.localContent = false,
   });
 
   final AttachmentDescriptor descriptor;
@@ -18740,6 +18767,7 @@ class _AttachmentRow extends StatelessWidget {
   final ConestPalette palette;
   final MessengerController controller;
   final DeliveryState messageState;
+  final bool localContent;
 
   /// Set on 1:1 chat bubbles so the full-screen viewer can list every
   /// other image in the same conversation for swipe navigation. Null
@@ -19246,9 +19274,11 @@ class _AttachmentRow extends StatelessWidget {
     // attachment bubble. Reject early so the user sees an explicit error
     // rather than an empty card.
     if (descriptor.fileName.isEmpty ||
-        descriptor.effectiveChunkCount <= 0 ||
         descriptor.fileHashBase64.isEmpty ||
-        descriptor.encryptionKeyBase64.isEmpty) {
+        (localContent
+            ? !controller.deltaAttachmentAvailableLocally(descriptor)
+            : descriptor.effectiveChunkCount <= 0 ||
+                  descriptor.encryptionKeyBase64.isEmpty)) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
@@ -19261,9 +19291,11 @@ class _AttachmentRow extends StatelessWidget {
           children: [
             Icon(Icons.error_outline, size: 18, color: palette.danger),
             const SizedBox(width: 8),
-            Text(
-              'Attachment metadata unavailable',
-              style: TextStyle(color: palette.danger),
+            Flexible(
+              child: Text(
+                'Attachment metadata unavailable',
+                style: TextStyle(color: palette.danger),
+              ),
             ),
           ],
         ),
@@ -19686,9 +19718,10 @@ class _AttachmentRow extends StatelessWidget {
               builder: (context, snapshot) {
                 final service = controller.voiceMessageService;
                 final isCurrent = service.playingItemId == descriptor.id;
-                final fraction =
-                    ((snapshot.data?.inMilliseconds ?? 0) / voice.durationMs)
-                        .clamp(0.0, 1.0);
+                final fraction = voice.durationMs <= 0
+                    ? 0.0
+                    : ((snapshot.data?.inMilliseconds ?? 0) / voice.durationMs)
+                          .clamp(0.0, 1.0);
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [

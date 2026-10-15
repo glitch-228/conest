@@ -2,8 +2,17 @@ part of 'messenger_controller_test.dart';
 
 class _DeltaPersistenceVault extends _MemoryVaultStore {
   bool failDeltaSaves = false;
+  Completer<void>? blockedWrite;
+  Completer<void>? writeStarted;
   @override
   Future<void> save(VaultSnapshot snapshot) async {
+    final blocked = blockedWrite;
+    if (blocked != null) {
+      blockedWrite = null;
+      writeStarted?.complete();
+      await blocked.future;
+      throw const FileSystemException('simulated earlier vault write failure');
+    }
     final delta = snapshot.networkChats['deltaChat'];
     if (failDeltaSaves &&
         delta is Map<String, dynamic> &&
@@ -190,6 +199,182 @@ void deltaContentControllerTests() {
       );
       expect(bob.attachmentAvailableLocally(cached.id), isTrue);
     });
+
+    testWidgets(
+      'Delta managed photo, file and voice render through the shared viewer with file actions',
+      (tester) async {
+        late List<AttachmentDescriptor> files;
+        await tester.runAsync(() async {
+          final photo = Uint8List.fromList(
+            img.encodePng(img.Image(width: 4, height: 2)),
+          );
+          for (final item in [
+            (
+              'photo-ui@example.org',
+              DeltaFile(name: 'photo.png', bytes: photo),
+              false,
+            ),
+            (
+              'file-ui@example.org',
+              DeltaFile(
+                name: 'document.bin',
+                bytes: Uint8List.fromList([1, 2, 3, 4]),
+              ),
+              false,
+            ),
+            (
+              'voice-ui@example.org',
+              DeltaFile(
+                name: 'voice.ogg',
+                bytes: Uint8List.fromList(ascii.encode('OggSfixture')),
+              ),
+              true,
+            ),
+          ]) {
+            server.deliver(
+              bobMail,
+              await fixture(
+                id: item.$1,
+                files: [item.$2],
+                headers: item.$3
+                    ? [('Chat-Voice-Message', '1'), ('Chat-Duration', '3200')]
+                    : const [],
+              ),
+            );
+          }
+          await until(
+            () =>
+                bob.deltaChats.chats[aliceFp]!.messages
+                    .where((m) => m.attachments.isNotEmpty)
+                    .length ==
+                3,
+          );
+          files = [
+            for (final m in bob.deltaChats.chats[aliceFp]!.messages)
+              ...m.attachments,
+          ];
+          for (final file in files.where(
+            (f) => f.mimeType.startsWith('image/'),
+          )) {
+            bob.attachmentBytesFor(file.id);
+            await until(() => bob.attachmentBytesFor(file.id) != null);
+          }
+        });
+        for (final file in files) {
+          expect(file.encryptionKeyBase64, isEmpty);
+          expect(file.effectiveChunkCount, 0);
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: Center(
+                  child: SizedBox(
+                    width: 420,
+                    child: Builder(
+                      builder: (context) =>
+                          buildDeltaAttachment(context, bob, file, false),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 80)),
+          );
+          await tester.pump();
+          expect(find.text('Attachment metadata unavailable'), findsNothing);
+          if (file.voiceMetadata != null) {
+            expect(find.text('Voice message'), findsOneWidget);
+            expect(find.byIcon(Icons.play_circle_outline), findsOneWidget);
+            expect(find.byTooltip('Playback speed'), findsOneWidget);
+          } else if (file.mimeType.startsWith('image/')) {
+            expect(find.byType(Image), findsWidgets);
+          } else {
+            expect(find.text('document.bin'), findsOneWidget);
+          }
+          await tester.tap(find.byTooltip('File actions'));
+          await tester.pumpAndSettle();
+          for (final label in ['Open', 'Save', 'Forward']) {
+            final item = tester.widget<PopupMenuItem<String>>(
+              find.widgetWithText(PopupMenuItem<String>, label),
+            );
+            expect(item.enabled, isTrue);
+          }
+          if (file.mimeType.startsWith('image/')) {
+            await tester.tap(find.text('Open'));
+            await tester.pumpAndSettle();
+            // Each filesystem await returns through the widget test's fake
+            // clock; drain the cache lookup's I/O stages before navigation.
+            for (var i = 0; i < 8; i++) {
+              await tester.runAsync(
+                () => Future<void>.delayed(const Duration(milliseconds: 20)),
+              );
+              await tester.pump();
+            }
+            await tester.pumpAndSettle();
+            expect(
+              find.text('photo.png'),
+              findsOneWidget,
+              reason:
+                  'status=${bob.statusMessage}; managed=${bob.deltaAttachmentAvailableLocally(file)}; texts=${tester.widgetList<Text>(find.byType(Text)).map((t) => t.data).toList()}',
+            );
+            expect(find.byTooltip('Save'), findsOneWidget);
+            await tester.pageBack();
+          } else {
+            await tester.tapAt(const Offset(5, 5));
+          }
+          await tester.pumpAndSettle();
+        }
+        final forged = AttachmentDescriptor(
+          id: 'delta:unmanaged',
+          fileName: 'forged.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: 4,
+          chunkSize: 65536,
+          chunkHashes: const [],
+          encryptionKeyBase64: '',
+          fileHashBase64: files.first.fileHashBase64,
+          createdAt: clock,
+        );
+        final mismatched = AttachmentDescriptor(
+          id: files.first.id,
+          fileName: 'forged.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: 4,
+          chunkSize: 65536,
+          chunkHashes: const [],
+          encryptionKeyBase64: '',
+          fileHashBase64: files.first.fileHashBase64,
+          createdAt: clock,
+        );
+        expect(bob.deltaAttachmentAvailableLocally(mismatched), isFalse);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 420,
+                child: Builder(
+                  builder: (context) =>
+                      buildDeltaAttachment(context, bob, forged, false),
+                ),
+              ),
+            ),
+          ),
+        );
+        expect(find.text('Attachment metadata unavailable'), findsOneWidget);
+        await tester.tap(find.byTooltip('File actions'));
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<PopupMenuItem<String>>(
+                find.widgetWithText(PopupMenuItem<String>, 'Open'),
+              )
+              .enabled,
+          isFalse,
+        );
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
 
     test(
       'pre post replacing, expiry and post first all travel through IMAP',
@@ -428,6 +613,65 @@ void deltaContentControllerTests() {
           persisted.chats[aliceFp]!.messages.single.attachments.single.id,
         );
         expect(await File(path!).readAsBytes(), photo);
+      },
+    );
+
+    test(
+      'an earlier active vault write failure preserves the incoming file UID',
+      () async {
+        final vault = bobVault as _DeltaPersistenceVault;
+        final release = Completer<void>();
+        addTearDown(() {
+          if (!release.isCompleted) release.complete();
+        });
+        Future<void>? failedSetting;
+        const id = 'active-write@example.org';
+        bool isFile(FakeMail m) =>
+            latin1.decode(m.raw).contains('Message-ID: <$id>');
+        server.beforeBodyFetch = (mail) async {
+          if (!isFile(mail) || failedSetting != null) return;
+          await bob.flushPendingChanges();
+          vault.blockedWrite = release;
+          vault.writeStarted = Completer<void>();
+          failedSetting = expectLater(
+            bob.setRandomizesFileNames(true),
+            throwsA(isA<FileSystemException>()),
+          );
+          await vault.writeStarted!.future;
+        };
+        storageFails = true;
+        final photo = Uint8List.fromList(
+          img.encodePng(img.Image(width: 2, height: 2)),
+        );
+        server.deliver(
+          bobMail,
+          await fixture(
+            id: id,
+            files: [DeltaFile(name: 'pending-write.png', bytes: photo)],
+          ),
+        );
+        final target = server.mailboxes[bobMail]!.firstWhere(isFile);
+        final uid = target.uid;
+        await until(
+          () => server.fetched.contains(uid) && failedSetting != null,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        release.complete();
+        await failedSetting!;
+        await until(
+          () => server.fetched.where((value) => value == uid).length >= 2,
+        );
+        expect(bob.emailCarrierConfig!.lastUid, lessThan(uid));
+        expect(target.deleted, isFalse);
+        storageFails = false;
+        await until(() => target.deleted);
+        final persisted = DeltaChats.fromJson(
+          vault._snapshot.networkChats['deltaChat'],
+        );
+        expect(
+          persisted.chats[aliceFp]!.messages.single.attachments,
+          hasLength(1),
+        );
       },
     );
 

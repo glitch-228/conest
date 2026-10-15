@@ -181,7 +181,8 @@ abstract final class OpenPgpSymmetric {
 
   /// Reads new- and old-format packets with definite lengths, and new-format
   /// partial lengths (gpg writes those for data it streams).
-  static const maxPackets = 1024;
+  // Preserve bounded handling of older messages with many certifications.
+  static const maxPackets = 4096;
   static const maxPartialChunks = 65536;
 
   static List<(int, Uint8List)> readPackets(Uint8List data) {
@@ -281,6 +282,8 @@ class _DigestSink implements Sink<Digest> {
 abstract final class OpenPgpArmor {
   static const _begin = '-----BEGIN PGP MESSAGE-----';
   static const _end = '-----END PGP MESSAGE-----';
+  static const maxLines = 1000000;
+  static const maxDecodedBytes = 32 * 1024 * 1024;
 
   static String encode(Uint8List data) {
     final body = base64Encode(data);
@@ -298,29 +301,81 @@ abstract final class OpenPgpArmor {
     return lines.toString();
   }
 
-  static Uint8List decode(String armored) {
-    final lines = armored.replaceAll('\r', '').split('\n');
-    final start = lines.indexWhere((line) => line.trim() == _begin);
-    final end = lines.indexWhere((line) => line.trim() == _end);
-    if (start < 0 || end <= start) {
-      throw const FormatException('No armored OpenPGP message.');
+  static Uint8List decode(
+    String armored, {
+    int decodedLimit = maxDecodedBytes,
+  }) {
+    if (armored.length > 48 * 1024 * 1024 ||
+        decodedLimit < 0 ||
+        decodedLimit > maxDecodedBytes) {
+      throw const FormatException('OpenPGP armor too large.');
     }
-    var index = start + 1;
-    // Skip armor headers up to the blank line.
-    while (index < end && lines[index].trim().isNotEmpty) {
-      index++;
+    final bytes = _ArmorBytesSink(decodedLimit);
+    final decoder = base64.decoder.startChunkedConversion(bytes);
+    var buffer = StringBuffer();
+    var buffered = 0;
+    void flush() {
+      if (buffered == 0) return;
+      decoder.add(buffer.toString());
+      buffer = StringBuffer();
+      buffered = 0;
     }
-    final body = StringBuffer();
+
+    var begin = false;
+    var body = false;
+    var end = false;
+    var lines = 0;
+    var headers = 0;
     String? checksum;
-    for (index++; index < end; index++) {
-      final line = lines[index].trim();
+    var offset = 0;
+    while (offset < armored.length) {
+      if (++lines > maxLines) {
+        throw const FormatException('Too many armor lines.');
+      }
+      final lf = armored.indexOf('\n', offset);
+      final last = lf < 0 ? armored.length : lf;
+      if (last - offset > 1024) {
+        throw const FormatException('Armor line too long.');
+      }
+      final line = armored.substring(offset, last).trim();
+      offset = lf < 0 ? armored.length : lf + 1;
+      if (!begin) {
+        if (line == _begin) begin = true;
+        continue;
+      }
+      if (!body) {
+        if (line.isEmpty) {
+          body = true;
+        } else if (++headers > 64) {
+          throw const FormatException('Too many armor headers.');
+        }
+        continue;
+      }
+      if (line == _end) {
+        end = true;
+        break;
+      }
+      if (line.isEmpty) continue;
       if (line.startsWith('=')) {
+        if (checksum != null || line.length != 5) {
+          throw const FormatException('Invalid armor checksum.');
+        }
         checksum = line.substring(1);
       } else {
-        body.write(line);
+        if (checksum != null) {
+          throw const FormatException('Data after armor checksum.');
+        }
+        buffer.write(line);
+        buffered += line.length;
+        if (buffered >= 65536) flush();
       }
     }
-    final data = base64Decode(body.toString());
+    if (!begin || !body || !end) {
+      throw const FormatException('No armored OpenPGP message.');
+    }
+    flush();
+    decoder.close();
+    final data = bytes.takeBytes();
     if (checksum != null) {
       final crc = base64Decode(checksum);
       final expected = _crc24(data);
@@ -343,4 +398,23 @@ abstract final class OpenPgpArmor {
     }
     return crc & 0xffffff;
   }
+}
+
+class _ArmorBytesSink implements Sink<List<int>> {
+  _ArmorBytesSink(this.limit);
+  final int limit;
+  final _bytes = BytesBuilder(copy: false);
+  var length = 0;
+  @override
+  void add(List<int> bytes) {
+    if (bytes.length > limit - length) {
+      throw const FormatException('Decoded armor too large.');
+    }
+    length += bytes.length;
+    _bytes.add(bytes);
+  }
+
+  @override
+  void close() {}
+  Uint8List takeBytes() => _bytes.takeBytes();
 }

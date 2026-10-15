@@ -4497,16 +4497,22 @@ class MessengerController extends ChangeNotifier {
     bool retryMailOnSaveFailure = false,
   }) {
     final result = _deltaQueue.then((_) async {
-      final protocol = await _startDeltaChat();
+      final DeltaProtocol? protocol;
+      try {
+        protocol = await _startDeltaChat();
+        await flushPendingChanges();
+      } catch (_) {
+        if (retryMailOnSaveFailure) throw const OtherMailRetryException();
+        rethrow;
+      }
       if (protocol == null) return null;
-      await flushPendingChanges();
       final tokens = protocol.tokens;
       final step = await change(protocol, deltaChats);
       try {
-      await _saveDeltaChats(
-        step.chats,
-        tokens: protocol.tokens == tokens ? null : protocol.tokens,
-      );
+        await _saveDeltaChats(
+          step.chats,
+          tokens: protocol.tokens == tokens ? null : protocol.tokens,
+        );
       } catch (_) {
         if (retryMailOnSaveFailure && (step.consumed || step.retry)) {
           throw const OtherMailRetryException();
