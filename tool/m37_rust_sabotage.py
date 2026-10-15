@@ -49,3 +49,5 @@ check("if wanted.is_some_and(|wanted| wanted != key)", "if false",
       "ble::callbacks::tests::first_write_never_waits_for_unrelated_slow_subscribers", callbacks)
 check("let mut complete = wanted.is_none();", "let mut complete = true;",
       "ble::callbacks::tests::first_write_never_waits_for_unrelated_slow_subscribers", callbacks)
+check("self.next = (index + 1) % count;", "self.next = 0;",
+      "ble::callbacks::tests::periodic_refresh_progresses_past_a_permanently_slow_first_peer", callbacks)

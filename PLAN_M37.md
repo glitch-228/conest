@@ -124,6 +124,7 @@ The Bluetooth mesh (bitchat-compatible) should work on desktops and laptops too,
 - Final reviewer found a P2 cancellation issue: a ready link could be cached while its returned writer was still waiting behind another peer's lookup, then lose that writer on timeout. Admission now synchronously starts each writer before the next await. Added a stalled-peer cancellation regression and a tenth Rust sabotage mutation. Final reviewer recheck and latest-base verification pending.
 - Merged latest base `b6a23c2` cleanly into `74d4638`. Post-merge analyzer still reports only the same 29 baseline issues; full Flutter tests are running again.
 - Reviewer verified cancellation fix, then identified a residual first-write delay behind unrelated subscriber lookups. First-write inspection now focuses on that session only and preserves unrelated cached links; periodic full inspection is capped at two seconds. Added a stalled-before-and-after-target regression plus two sabotage checks (focused admission and partial-snapshot retention), bringing Rust negative checks to twelve. Final review and CI pending.
+- Added a bounded rotating cursor for periodic subscriber inspection, advanced before each lookup, so a permanently slow first peer cannot starve later receive-only subscribers across two-second cancellations. Added a regression with two cancelled passes and a thirteenth Rust sabotage check. No changes to radio packet format or Dart behavior.
 
 ## Handoff
 

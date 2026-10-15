@@ -21,11 +21,14 @@ pub trait PeripheralAdapter {
 }
 
 #[derive(Default)]
-pub struct Subscribers(BTreeMap<String, u64>);
+pub struct Subscribers {
+    links: BTreeMap<String, u64>,
+    next: usize,
+}
 
 impl Subscribers {
     pub fn id(&self, shared: &Shared, key: &str) -> Option<u64> {
-        self.0
+        self.links
             .get(key)
             .copied()
             .filter(|id| shared.core.lock().unwrap().contains(*id))
@@ -53,12 +56,23 @@ impl Subscribers {
         mut admit: F,
     ) -> Result<usize, A::Error> {
         let count = adapter.count()?.min(MAX_LINKS);
-        self.0
+        self.links
             .retain(|_, id| shared.core.lock().unwrap().contains(*id));
         let mut seen = BTreeSet::new();
         let mut complete = wanted.is_none();
         let mut added = 0;
-        for index in 0..count {
+        let start = if wanted.is_none() && count > 0 {
+            self.next % count
+        } else {
+            0
+        };
+        for offset in 0..count {
+            let index = (start + offset) % count;
+            // Advance before the cancellable lookup so the next periodic
+            // pass can reach other peers when this one always stalls.
+            if wanted.is_none() {
+                self.next = (index + 1) % count;
+            }
             let mut requested = false;
             let result: Result<(), A::Error> = async {
                 let client = adapter.client(index)?;
@@ -76,7 +90,7 @@ impl Subscribers {
                     shared.core.lock().unwrap().ready(id, limit);
                     return Ok(());
                 }
-                if added >= available_workers.min(MAX_LINKS) || self.0.len() >= MAX_LINKS {
+                if added >= available_workers.min(MAX_LINKS) || self.links.len() >= MAX_LINKS {
                     return Ok(());
                 }
                 let peer = adapter.peer(&client, &key).await?;
@@ -92,7 +106,7 @@ impl Subscribers {
                         })
                 };
                 if let Some(id) = id {
-                    self.0.insert(key, id);
+                    self.links.insert(key, id);
                     added += 1;
                     // Start the writer synchronously with admission. A later
                     // peer lookup may time out or cancel this entire refresh.
@@ -110,7 +124,7 @@ impl Subscribers {
             }
         }
         if complete {
-            self.0.retain(|key, id| {
+            self.links.retain(|key, id| {
                 if seen.contains(key) {
                     return true;
                 }
@@ -313,6 +327,28 @@ mod tests {
         assert_eq!(admitted, 1);
         assert_eq!(writers, vec![subscribers.id(&shared, "fast").unwrap()]);
         assert_eq!(subscribers.id(&shared, "healthy"), Some(healthy));
+    }
+
+    #[tokio::test]
+    async fn periodic_refresh_progresses_past_a_permanently_slow_first_peer() {
+        let shared = shared();
+        let mut subscribers = Subscribers::default();
+        let adapter = MockAdapter(vec![
+            Ok(("stall".into(), 1, 182)),
+            Ok(("healthy".into(), 2, 182)),
+        ]);
+        let mut writers = Vec::new();
+        for _ in 0..2 {
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(10),
+                    subscribers.refresh(&shared, &adapter, 8, |id, _| writers.push(id))
+                )
+                .await
+                .is_err()
+            );
+        }
+        assert_eq!(writers, vec![subscribers.id(&shared, "healthy").unwrap()]);
     }
 
     #[tokio::test]
