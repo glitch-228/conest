@@ -59,6 +59,7 @@ import 'l10n/app_localizations.dart';
 import 'src/app_locales.dart';
 import 'src/ui/calls_list.dart';
 import 'src/ui/devices_panel.dart';
+import 'src/ui/connections_screen.dart';
 import 'src/ui/error_history_screen.dart';
 import 'src/debug_auto_run.dart';
 import 'src/ui/route_test_panel.dart';
@@ -14566,6 +14567,21 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            if (widget.controller.userMode.showsNetworkDetail)
+                              ListTile(
+                                key: const ValueKey('open-connections'),
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.hub_outlined),
+                                title: const Text('Connections'),
+                                subtitle: const Text(
+                                  'Which devices reach which, both ways or '
+                                  'one way.',
+                                ),
+                                onTap: () => ConnectionsScreen.show(
+                                  context,
+                                  widget.controller,
+                                ),
+                              ),
                             SwitchListTile.adaptive(
                               value: identity.connectivity.lanEnabled,
                               contentPadding: EdgeInsets.zero,

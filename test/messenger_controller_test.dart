@@ -31,6 +31,7 @@ import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
 import 'package:conest/src/debug_auto_run.dart';
 import 'package:conest/src/transport_exchange_test.dart';
+import 'package:conest/src/ui/connections_screen.dart';
 import 'package:conest/src/ui/error_history_screen.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/group_file_crypto.dart';
@@ -17779,6 +17780,74 @@ void main() {
     await Future<void>.delayed(const Duration(seconds: 7));
     expect(alice.quietlyRecheckedForTesting, {bob.identity!.deviceId});
     expect(saver.quietlyRecheckedForTesting, isEmpty);
+  });
+
+  testWidgets('the connection map shows links reported by group mates, and '
+      'nobody else', (tester) async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    final (alice, bob, carol, dan, group) = (await tester.runAsync(() async {
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        transportRegistryFactory: network.registry,
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      final carol = await device('Carol');
+      final dan = await device('Dan');
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      await _pairControllers(alice, dan);
+      final group = await alice.createGroup(
+        title: 'Map',
+        members: alice.contacts
+            .where((c) => c.deviceId != dan.identity!.deviceId)
+            .toList(),
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        unawaited(carol.pollNow());
+        return bob.visibleGroups.isNotEmpty && carol.visibleGroups.isNotEmpty;
+      });
+      // Alice hears from everyone, then tells Bob how her links fare.
+      for (final contact in alice.contacts) {
+        await alice.checkContactRoutes(contact);
+      }
+      await Future.wait([bob.pollNow(), carol.pollNow(), dan.pollNow()]);
+      await alice.pollNow();
+      await alice.checkContactRoutes(
+        alice.contacts.firstWhere((c) => c.deviceId == bob.identity!.deviceId),
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob
+                .connectionMap
+                .reported[alice.identity!.deviceId]
+                ?.isNotEmpty ??
+            false;
+      }, reason: 'Bob never heard how Alice is linked');
+      return (alice, bob, carol, dan, group);
+    }))!;
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+    addTearDown(dan.dispose);
+    expect(group.groupId, isNotEmpty);
+    // What Alice would tell Bob names only devices Bob knows from their
+    // group (never Dan, whom she talks to as well).
+    final shared = alice.linksToShareWithForTesting(
+      alice.contacts.firstWhere((c) => c.deviceId == bob.identity!.deviceId),
+    )!;
+    expect(shared.keys, contains(carol.identity!.deviceId));
+    expect(shared.keys, isNot(contains(dan.identity!.deviceId)));
+    final reported = bob.connectionMap.reported[alice.identity!.deviceId]!;
+    expect(reported.keys, contains(carol.identity!.deviceId));
+    expect(reported.keys, isNot(contains(dan.identity!.deviceId)));
+    await tester.pumpWidget(
+      MaterialApp(home: ConnectionsScreen(controller: bob)),
+    );
+    expect(find.text('As Alice sees it'), findsOneWidget);
   });
 
   group('Clocks that are off', () {

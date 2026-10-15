@@ -78,6 +78,7 @@ import 'account/account_contacts.dart';
 import 'account/account_link.dart';
 import 'account/account_model.dart';
 import 'energy_policy.dart';
+import 'connection_map.dart';
 import 'error_history.dart';
 import 'transport_exchange_test.dart';
 import 'route_test.dart';
@@ -3816,6 +3817,110 @@ class MessengerController extends ChangeNotifier {
   /// Contacts whose routes were re-checked quietly (for tests).
   @visibleForTesting
   Set<String> get quietlyRecheckedForTesting => _quietRecheckAt.keys.toSet();
+
+  // The connection map (M42): how this device's links fare, and what other
+  // devices report of theirs.
+
+  /// How this device's link to [deviceId] fares now.
+  LinkStatus linkStatusFor(String deviceId) {
+    final record = _reachability.recordByDeviceId(deviceId);
+    if (record == null) return LinkStatus.unknown;
+    final now = _now().toUtc();
+    bool recent(DateTime? at) =>
+        at != null && now.difference(at.toUtc()) < const Duration(minutes: 30);
+    final twoWay = record.lastTwoWaySuccessAt;
+    final failure = record.lastFailureAt;
+    if (recent(failure) && (twoWay == null || failure!.isAfter(twoWay))) {
+      return recent(record.lastAnySignalAt)
+          ? LinkStatus.inboundOnly
+          : LinkStatus.failing;
+    }
+    if (recent(twoWay)) return LinkStatus.twoWay;
+    if (recent(record.lastAnySignalAt)) return LinkStatus.inboundOnly;
+    return LinkStatus.unknown;
+  }
+
+  /// Devices [contact] knows too: members of groups shared with it, and
+  /// this account's other devices (which it knows as this person's).
+  Set<String> _devicesKnownTo(ContactRecord contact) {
+    final me = identity;
+    return {
+      for (final group in groups)
+        if (group.hasActiveMember(contact.deviceId))
+          ...group.activeMemberDeviceIds,
+      for (final device in ownDevices) device.deviceId,
+    }..removeAll({contact.deviceId, ?me?.deviceId});
+  }
+
+  Map<String, String>? _linksToShareWith(ContactRecord contact) {
+    final links = <String, String>{
+      for (final deviceId in _devicesKnownTo(contact).take(32))
+        if (linkStatusFor(deviceId) case final status
+            when status != LinkStatus.unknown)
+          deviceId: status.name,
+    };
+    return links.isEmpty ? null : links;
+  }
+
+  @visibleForTesting
+  Map<String, String>? linksToShareWithForTesting(ContactRecord contact) =>
+      _linksToShareWith(contact);
+
+  /// Reporter → device → what it said (recent only; in memory).
+  final Map<String, Map<String, ReportedLink>> _reportedLinks = {};
+
+  void _applyReportedLinks(ContactRecord sender, Object? links) {
+    if (links is! Map || links.length > 32) return;
+    final known = {..._devicesKnownTo(sender), ?identity?.deviceId};
+    final now = _now().toUtc();
+    final kept = <String, ReportedLink>{};
+    for (final MapEntry(key: id, value: status) in links.entries) {
+      final parsed = LinkStatus.tryParse(status);
+      // Only devices this device knows too, as the sender should share.
+      if (id is! String || parsed == null || !known.contains(id)) continue;
+      kept[id] = ReportedLink(status: parsed, at: now);
+    }
+    if (kept.isEmpty) {
+      _reportedLinks.remove(sender.deviceId);
+    } else {
+      _reportedLinks[sender.deviceId] = kept;
+    }
+  }
+
+  /// Who reaches whom, as far as this device knows.
+  ConnectionMap get connectionMap {
+    final me = _requireIdentity();
+    final now = _now().toUtc();
+    final peers = <String>{
+      for (final contact in contacts) contact.deviceId,
+      for (final device in ownDevices) device.deviceId,
+      for (final group in groups) ...group.activeMemberDeviceIds,
+    }..remove(me.deviceId);
+    final names = <String, String>{
+      for (final contact in _snapshot.contacts)
+        contact.deviceId: contact.ownDevice
+            ? (contact.deviceName ?? 'Your device')
+            : contact.isLinkedDevice
+            ? "${contact.alias} (${contact.deviceName ?? 'another device'})"
+            : contact.alias,
+    };
+    for (final peer in peers) {
+      names.putIfAbsent(peer, () => groupMemberLabel(peer));
+    }
+    return ConnectionMap(
+      self: me.deviceId,
+      mine: {for (final peer in peers) peer: linkStatusFor(peer)},
+      reported: {
+        for (final MapEntry(key: reporter, value: links)
+            in _reportedLinks.entries)
+          reporter: {
+            for (final MapEntry(key: id, value: link) in links.entries)
+              if (now.difference(link.at) < const Duration(hours: 2)) id: link,
+          },
+      },
+      names: names,
+    );
+  }
 
   /// When each group last pulled from a member at random.
   final Map<String, DateTime> _groupSlowCatchUpAt = {};
@@ -16074,6 +16179,10 @@ class MessengerController extends ChangeNotifier {
       // When this account's other devices were last in touch with this
       // one (by day): contacts can tell a device its account lost.
       'devicesInTouch': ?_ownDevicesInTouchReport(),
+      // How this device's links to devices the contact also knows fare
+      // (its group mates, this account's devices): for its Connections
+      // map. Nobody else is named.
+      'links': ?_linksToShareWith(contact),
       ..._localLanDirectHintPayload(),
     };
     if (effectiveProbeId != null) {
@@ -21375,6 +21484,7 @@ class MessengerController extends ChangeNotifier {
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
     _noteOwnDeviceInTouch(sender);
     _applySiblingTouchReport(sender, routePayload?['devicesInTouch']);
+    _applyReportedLinks(sender, routePayload?['links']);
     // Route updates are stamped when sent (never queued with an old time);
     // over a live route they arrive within moments. A reply echoes our own
     // time instead, so it says nothing about their clock.
