@@ -33,18 +33,19 @@ impl Subscribers {
 
     /// Errors from one disappearing peer never discard another's slot.
     /// Only a complete OS snapshot can remove missing subscriptions.
-    pub async fn refresh<A: PeripheralAdapter>(
+    pub async fn refresh<A: PeripheralAdapter, F: FnMut(u64, A::Client)>(
         &mut self,
         shared: &Shared,
         adapter: &A,
         available_workers: usize,
-    ) -> Result<Vec<(u64, A::Client)>, A::Error> {
+        mut admit: F,
+    ) -> Result<usize, A::Error> {
         let count = adapter.count()?.min(MAX_LINKS);
         self.0
             .retain(|_, id| shared.core.lock().unwrap().contains(*id));
         let mut seen = BTreeSet::new();
         let mut complete = true;
-        let mut added = Vec::new();
+        let mut added = 0;
         for index in 0..count {
             let result: Result<(), A::Error> = async {
                 let client = adapter.client(index)?;
@@ -58,18 +59,28 @@ impl Subscribers {
                     shared.core.lock().unwrap().ready(id, limit);
                     return Ok(());
                 }
-                if added.len() >= available_workers.min(MAX_LINKS) || self.0.len() >= MAX_LINKS {
+                if added >= available_workers.min(MAX_LINKS) || self.0.len() >= MAX_LINKS {
                     return Ok(());
                 }
                 let peer = adapter.peer(&client, &key).await?;
-                let mut core = shared.core.lock().unwrap();
-                if let Some(id) = core.reserve(peer, Role::Peripheral, shared.now()) {
-                    if core.ready(id, limit) {
-                        self.0.insert(key, id);
-                        added.push((id, client));
-                    } else {
-                        core.remove(id, false, shared.now());
-                    }
+                let id = {
+                    let mut core = shared.core.lock().unwrap();
+                    core.reserve(peer, Role::Peripheral, shared.now())
+                        .filter(|id| {
+                            if core.ready(*id, limit) {
+                                return true;
+                            }
+                            core.remove(*id, false, shared.now());
+                            false
+                        })
+                };
+                if let Some(id) = id {
+                    self.0.insert(key, id);
+                    added += 1;
+                    // Start the writer synchronously with admission. A later
+                    // peer lookup may time out or cancel this entire refresh.
+                    // No ready link can be left holding an unpumped queue.
+                    admit(id, client);
                 }
                 Ok(())
             }
@@ -91,17 +102,19 @@ impl Subscribers {
     }
 
     /// A first write may arrive before the periodic subscription snapshot.
-    pub async fn before_write<A: PeripheralAdapter>(
+    pub async fn before_write<A: PeripheralAdapter, F: FnMut(u64, A::Client)>(
         &mut self,
         shared: &Shared,
         adapter: &A,
         key: &str,
         available_workers: usize,
-    ) -> Result<Vec<(u64, A::Client)>, A::Error> {
+        admit: F,
+    ) -> Result<usize, A::Error> {
         if self.id(shared, key).is_some() {
-            return Ok(Vec::new());
+            return Ok(0);
         }
-        self.refresh(shared, adapter, available_workers).await
+        self.refresh(shared, adapter, available_workers, admit)
+            .await
     }
 }
 
@@ -152,7 +165,10 @@ mod tests {
         fn limit(&self, client: &usize) -> Result<usize, Self::Error> {
             self.0[*client].as_ref().map(|p| p.2).map_err(|e| *e)
         }
-        async fn peer(&self, client: &usize, _: &str) -> Result<u64, Self::Error> {
+        async fn peer(&self, client: &usize, key: &str) -> Result<u64, Self::Error> {
+            if key == "stall" {
+                return std::future::pending().await;
+            }
             self.0[*client].as_ref().map(|p| p.1).map_err(|e| *e)
         }
     }
@@ -171,22 +187,22 @@ mod tests {
         let mut subscribers = Subscribers::default();
         let adapter = MockAdapter(vec![Ok(("new".into(), 1, 182))]);
         let added = subscribers
-            .before_write(&shared, &adapter, "new", 8)
+            .before_write(&shared, &adapter, "new", 8, |_, _| {})
             .await
             .unwrap();
-        assert_eq!(added.len(), 1);
+        assert_eq!(added, 1);
         let id = subscribers.id(&shared, "new").unwrap();
         let packet = vec![
             1, 2, 7, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
         ];
         shared.core.lock().unwrap().receive(id, &packet, 0);
         assert_eq!(shared.core.lock().unwrap().poll().events.len(), 1);
-        assert!(
+        assert_eq!(
             subscribers
-                .before_write(&shared, &adapter, "new", 8)
+                .before_write(&shared, &adapter, "new", 8, |_, _| {})
                 .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            0
         );
     }
 
@@ -199,6 +215,7 @@ mod tests {
                 &shared,
                 &MockAdapter(vec![Ok(("healthy".into(), 1, 182))]),
                 8,
+                |_, _| {},
             )
             .await
             .unwrap();
@@ -207,16 +224,43 @@ mod tests {
             Err("vanished during inspection"),
             Ok(("another".into(), 2, 100)),
         ]);
-        let added = subscribers.refresh(&shared, &adapter, 8).await.unwrap();
-        assert_eq!(added.len(), 1);
+        let added = subscribers
+            .refresh(&shared, &adapter, 8, |_, _| {})
+            .await
+            .unwrap();
+        assert_eq!(added, 1);
         assert_eq!(subscribers.id(&shared, "healthy"), Some(healthy));
         assert!(subscribers.id(&shared, "another").is_some());
         assert_eq!(shared.core.lock().unwrap().limits().len(), 2);
         subscribers
-            .refresh(&shared, &MockAdapter(vec![]), 8)
+            .refresh(&shared, &MockAdapter(vec![]), 8, |_, _| {})
             .await
             .unwrap();
         assert!(shared.core.lock().unwrap().limits().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_refresh_never_leaves_a_ready_link_without_a_writer() {
+        let shared = shared();
+        let mut subscribers = Subscribers::default();
+        let adapter = MockAdapter(vec![
+            Ok(("fast".into(), 1, 182)),
+            Ok(("stall".into(), 2, 182)),
+        ]);
+        let mut writers = Vec::new();
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                subscribers.refresh(&shared, &adapter, 8, |id, _| writers.push(id))
+            )
+            .await
+            .is_err()
+        );
+        let id = subscribers.id(&shared, "fast").unwrap();
+        assert_eq!(writers, vec![id]);
+        let mut core = shared.core.lock().unwrap();
+        assert!(core.enqueue(id, &[1, 2, 3]));
+        assert_eq!(core.take_write(writers[0]), Some(vec![1, 2, 3]));
     }
 
     #[tokio::test]

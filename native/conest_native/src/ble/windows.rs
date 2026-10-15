@@ -341,15 +341,17 @@ async fn refresh_subscribers(
     }
     let adapter = WinSubscribers::new(characteristic)?;
     let available = (MAX_LINKS * 2).saturating_sub(tasks.len());
-    let added = if let Some(key) = first_write {
-        subscribers
-            .before_write(state, &adapter, key, available)
-            .await?
-    } else {
-        subscribers.refresh(state, &adapter, available).await?
-    };
-    for (id, client) in added {
+    let admit = |id, client| {
         tasks.spawn(notify(state.clone(), characteristic.clone(), client, id));
+    };
+    if let Some(key) = first_write {
+        subscribers
+            .before_write(state, &adapter, key, available, admit)
+            .await?;
+    } else {
+        subscribers
+            .refresh(state, &adapter, available, admit)
+            .await?;
     }
     Ok(())
 }
@@ -372,12 +374,11 @@ async fn notify(
                 core.take_write(id)
             };
             if let Some(bytes) = next {
-                let result = timeout(
-                    Duration::from_secs(2),
-                    characteristic
-                        .NotifyValueForSubscribedClientAsync(&buffer(&bytes)?, &client)?,
-                )
-                .await??;
+                let operation = {
+                    let value = buffer(&bytes)?;
+                    characteristic.NotifyValueForSubscribedClientAsync(&value, &client)?
+                };
+                let result = timeout(Duration::from_secs(2), operation).await??;
                 if result.Status()? != GattCommunicationStatus::Success {
                     break;
                 }
@@ -413,21 +414,23 @@ async fn central(state: Arc<Shared>, peer: u64, id: u64) {
         })
         .await??;
         let input_state = state.clone();
-        let handler = TypedEventHandler::<GattCharacteristic, GattValueChangedEventArgs>::new(
-            move |_, args| {
-                if let Some(args) = args.as_ref() {
-                    if let Some(value) = bytes(&args.CharacteristicValue()?)? {
-                        input_state
-                            .core
-                            .lock()
-                            .unwrap()
-                            .receive(id, &value, input_state.now());
+        let token = {
+            let handler = TypedEventHandler::<GattCharacteristic, GattValueChangedEventArgs>::new(
+                move |_, args| {
+                    if let Some(args) = args.as_ref() {
+                        if let Some(value) = bytes(&args.CharacteristicValue()?)? {
+                            input_state
+                                .core
+                                .lock()
+                                .unwrap()
+                                .receive(id, &value, input_state.now());
+                        }
                     }
-                }
-                Ok(())
-            },
-        );
-        let token = characteristic.ValueChanged(&handler)?;
+                    Ok(())
+                },
+            );
+            characteristic.ValueChanged(&handler)?
+        };
         let cleanup_char = characteristic.clone();
         let cleanup_service = service.clone();
         let cleanup_device = device.clone();
@@ -474,14 +477,12 @@ async fn central(state: Arc<Shared>, peer: u64, id: u64) {
                 core.take_write(id)
             };
             if let Some(bytes) = next {
-                let result = timeout(
-                    Duration::from_secs(5),
-                    characteristic.WriteValueWithOptionAsync(
-                        &buffer(&bytes)?,
-                        GattWriteOption::WriteWithResponse,
-                    )?,
-                )
-                .await??;
+                let operation = {
+                    let value = buffer(&bytes)?;
+                    characteristic
+                        .WriteValueWithOptionAsync(&value, GattWriteOption::WriteWithResponse)?
+                };
+                let result = timeout(Duration::from_secs(5), operation).await??;
                 if result != GattCommunicationStatus::Success {
                     bail!("Bluetooth write failed");
                 }
