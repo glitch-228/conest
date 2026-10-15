@@ -5,7 +5,7 @@ import subprocess
 path = Path("native/conest_native/src/ble/core.rs")
 
 
-def check(before, after, test):
+def check(before, after, test, path=path):
     original = path.read_text()
     assert original.count(before) == 1, f"Sabotage anchor changed: {before}"
     try:
@@ -35,3 +35,11 @@ check("link.packets > MAX_PACKETS_PER_SECOND", "false",
       "ble::core::tests::notification_flood_and_event_buffer_are_bounded")
 check("self.events.len() >= MAX_EVENTS", "false",
       "ble::core::tests::notification_flood_and_event_buffer_are_bounded")
+
+callbacks = Path("native/conest_native/src/ble/callbacks.rs")
+check("self.refresh(shared, adapter, available_workers).await", "Ok(Vec::new())",
+      "ble::callbacks::tests::first_write_refreshes_subscription_before_delivery", callbacks)
+check("complete = false;", "return Err(result.err().unwrap());",
+      "ble::callbacks::tests::vanished_subscriber_does_not_reset_healthy_links", callbacks)
+check("if !shared.core.lock().unwrap().ready(id, limit)", "if true",
+      "ble::callbacks::tests::callbacks_during_cccd_setup_can_deliver_the_first_packet", callbacks)

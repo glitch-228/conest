@@ -1,10 +1,6 @@
 //! WinRT GATT peripheral and central. Callbacks only touch bounded state or
 //! try a bounded channel; no task is spawned for an incoming notification.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, bail};
 use tokio::{
@@ -33,6 +29,7 @@ use windows::{
 
 use super::{
     CHARACTERISTIC_UUID, PERIPHERAL_WARNING, SERVICE_UUID, Shared,
+    callbacks::{self, PeripheralAdapter, Subscribers},
     core::{Core, MAX_LINKS, MAX_PACKET, Role},
 };
 
@@ -71,8 +68,6 @@ impl Drop for Deferred {
         let _ = self.0.Complete();
     }
 }
-
-type Subscribers = Arc<Mutex<BTreeMap<String, u64>>>;
 
 fn session_key(session: &GattSession) -> windows::core::Result<String> {
     let id = session.DeviceId()?.Id()?;
@@ -119,7 +114,6 @@ async fn adapter() -> anyhow::Result<BluetoothAdapter> {
 
 async fn peripheral(
     state: Arc<Shared>,
-    subscribers: Subscribers,
     requests: mpsc::Sender<(GattWriteRequestedEventArgs, Deferred)>,
 ) -> anyhow::Result<(GattLocalCharacteristic, GattServiceProvider, Cleanup)> {
     let result = GattServiceProvider::CreateAsync(SERVICE)?.await?;
@@ -148,13 +142,11 @@ async fn peripheral(
                 return Ok(());
             }
             if let Some(args) = args.as_ref() {
-                let key = session_key(&args.Session()?)?;
-                // Unsubscribed clients cannot consume the request queue.
-                if subscribers.lock().unwrap().contains_key(&key) {
-                    let deferred = Deferred(args.GetDeferral()?);
-                    // A full or closed queue immediately completes the deferral.
-                    let _ = requests.try_send((args.clone(), deferred));
-                }
+                let deferred = Deferred(args.GetDeferral()?);
+                // Include a newly subscribed client's very first write:
+                // the periodic session snapshot may not have run yet.
+                // The bounded queue completes rejected deferrals on drop.
+                let _ = requests.try_send((args.clone(), deferred));
             }
             Ok(())
         },
@@ -187,12 +179,12 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
         core.status.central = adapter.IsCentralRoleSupported()?;
         core.status.problem = None;
     }
-    let subscribers: Subscribers = Arc::new(Mutex::new(BTreeMap::new()));
+    let mut subscribers = Subscribers::default();
     let (requests_tx, mut requests) = mpsc::channel(16);
     let peripheral = if adapter.IsPeripheralRoleSupported().unwrap_or(false) {
         timeout(
             Duration::from_secs(15),
-            peripheral(state.clone(), subscribers.clone(), requests_tx),
+            peripheral(state.clone(), requests_tx),
         )
         .await
         .ok()
@@ -254,7 +246,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                         core.status.peripheral = advertising;
                         core.status.problem = if advertising { None } else { Some(PERIPHERAL_WARNING.into()) };
                     }
-                    refresh_subscribers(&state, characteristic, &subscribers, &mut tasks).await?;
+                    refresh_subscribers(&state, characteristic, &mut subscribers, &mut tasks, None).await?;
                 }
             }
             Some(peer) = found.recv() => {
@@ -264,7 +256,13 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
             }
             Some((args, _deferred)) = requests.recv() => {
                 // The deferral's guard runs on success, errors and cancellation.
-                let _ = timeout(Duration::from_secs(2), receive_write(&state, &subscribers, args)).await;
+                let _ = timeout(Duration::from_secs(3), async {
+                    let key = session_key(&args.Session()?)?;
+                    if let Some((characteristic, _, _)) = &peripheral {
+                        refresh_subscribers(&state, characteristic, &mut subscribers, &mut tasks, Some(&key)).await?;
+                    }
+                    receive_write(&state, &subscribers, args).await
+                }).await;
             }
             _ = tasks.join_next(), if !tasks.is_empty() => {}
         }
@@ -278,7 +276,7 @@ async fn receive_write(
 ) -> anyhow::Result<()> {
     let key = session_key(&args.Session()?)?;
     let request = args.GetRequestAsync()?.await?;
-    let id = subscribers.lock().unwrap().get(&key).copied();
+    let id = subscribers.id(state, &key);
     let value = bytes(&request.Value()?)?;
     if let (Some(id), Some(value), 0) = (id, value, request.Offset()?) {
         state.core.lock().unwrap().receive(id, &value, state.now());
@@ -291,65 +289,67 @@ async fn receive_write(
     Ok(())
 }
 
+struct WinSubscribers(Vec<windows::core::Result<GattSubscribedClient>>);
+
+impl WinSubscribers {
+    fn new(characteristic: &GattLocalCharacteristic) -> anyhow::Result<Self> {
+        let clients = characteristic.SubscribedClients()?;
+        Ok(Self(
+            (0..clients.Size()?.min(MAX_LINKS as u32))
+                .map(|i| clients.GetAt(i))
+                .collect(),
+        ))
+    }
+}
+
+impl PeripheralAdapter for WinSubscribers {
+    type Client = GattSubscribedClient;
+    type Error = anyhow::Error;
+    fn count(&self) -> anyhow::Result<usize> {
+        Ok(self.0.len())
+    }
+    fn client(&self, index: usize) -> anyhow::Result<Self::Client> {
+        Ok(self.0[index].clone()?)
+    }
+    fn key(&self, client: &Self::Client) -> anyhow::Result<String> {
+        Ok(session_key(&client.Session()?)?)
+    }
+    fn limit(&self, client: &Self::Client) -> anyhow::Result<usize> {
+        Ok(client.MaxNotificationSize()? as usize)
+    }
+    async fn peer(&self, _: &Self::Client, key: &str) -> anyhow::Result<u64> {
+        let device = timeout(
+            Duration::from_secs(2),
+            BluetoothLEDevice::FromIdAsync(&HSTRING::from(key))?,
+        )
+        .await??;
+        let peer = device.BluetoothAddress();
+        let _ = device.Close();
+        Ok(peer?)
+    }
+}
+
 async fn refresh_subscribers(
     state: &Arc<Shared>,
     characteristic: &GattLocalCharacteristic,
-    subscribers: &Subscribers,
+    subscribers: &mut Subscribers,
     tasks: &mut JoinSet<()>,
+    first_write: Option<&str>,
 ) -> anyhow::Result<()> {
-    let clients = characteristic.SubscribedClients()?;
-    let mut seen = BTreeSet::new();
-    for index in 0..clients.Size()?.min(MAX_LINKS as u32) {
-        let client = clients.GetAt(index)?;
-        let session = client.Session()?;
-        let key = session_key(&session)?;
-        seen.insert(key.clone());
-        let old = subscribers.lock().unwrap().get(&key).copied();
-        if let Some(id) = old {
-            if state.core.lock().unwrap().contains(id) {
-                state
-                    .core
-                    .lock()
-                    .unwrap()
-                    .ready(id, client.MaxNotificationSize()? as usize);
-                continue;
-            }
-            subscribers.lock().unwrap().remove(&key);
-        }
-        if tasks.len() >= MAX_LINKS * 2 {
-            continue;
-        }
-        let device = timeout(
-            Duration::from_secs(2),
-            BluetoothLEDevice::FromIdAsync(&HSTRING::from(key.as_str()))?,
-        )
-        .await??;
-        let peer = device.BluetoothAddress()?;
-        let _ = device.Close();
-        let id = state
-            .core
-            .lock()
-            .unwrap()
-            .reserve(peer, Role::Peripheral, state.now());
-        if let Some(id) = id {
-            state
-                .core
-                .lock()
-                .unwrap()
-                .ready(id, client.MaxNotificationSize()? as usize);
-            subscribers.lock().unwrap().insert(key, id);
-            tasks.spawn(notify(state.clone(), characteristic.clone(), client, id));
-        }
+    if first_write.is_some_and(|key| subscribers.id(state, key).is_some()) {
+        return Ok(());
     }
-    let removed: Vec<_> = subscribers
-        .lock()
-        .unwrap()
-        .iter()
-        .filter_map(|(key, &id)| (!seen.contains(key)).then_some((key.clone(), id)))
-        .collect();
-    for (key, id) in removed {
-        subscribers.lock().unwrap().remove(&key);
-        state.core.lock().unwrap().remove(id, false, state.now());
+    let adapter = WinSubscribers::new(characteristic)?;
+    let available = (MAX_LINKS * 2).saturating_sub(tasks.len());
+    let added = if let Some(key) = first_write {
+        subscribers
+            .before_write(state, &adapter, key, available)
+            .await?
+    } else {
+        subscribers.refresh(state, &adapter, available).await?
+    };
+    for (id, client) in added {
+        tasks.spawn(notify(state.clone(), characteristic.clone(), client, id));
     }
     Ok(())
 }
@@ -436,22 +436,26 @@ async fn central(state: Arc<Shared>, peer: u64, id: u64) {
             let _ = cleanup_service.Close();
             let _ = cleanup_device.Close();
         })));
-        let status = timeout(
-            Duration::from_secs(5),
-            characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
-                GattClientCharacteristicConfigurationDescriptorValue::Notify,
-            )?,
-        )
-        .await??;
-        if status != GattCommunicationStatus::Success {
-            bail!("Bluetooth notifications were refused");
-        }
         let session = service.Session()?;
-        if !state
-            .core
-            .lock()
-            .unwrap()
-            .ready(id, session.MaxPduSize()?.saturating_sub(3) as usize)
+        if !callbacks::enable_notifications(
+            &state,
+            id,
+            session.MaxPduSize()?.saturating_sub(3) as usize,
+            || async {
+                let status = timeout(
+                    Duration::from_secs(5),
+                    characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
+                        GattClientCharacteristicConfigurationDescriptorValue::Notify,
+                    )?,
+                )
+                .await??;
+                if status != GattCommunicationStatus::Success {
+                    bail!("Bluetooth notifications were refused");
+                }
+                Ok::<_, anyhow::Error>(())
+            },
+        )
+        .await?
         {
             return Ok(());
         }

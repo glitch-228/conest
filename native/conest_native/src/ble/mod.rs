@@ -1,5 +1,7 @@
 //! Desktop Bluetooth transport. All OS work lives on a dedicated runtime;
 //! FFI only copies bounded queues under a short-lived mutex.
+#[cfg(any(target_os = "windows", test))]
+mod callbacks;
 pub mod core;
 #[cfg(target_os = "linux")]
 mod linux;

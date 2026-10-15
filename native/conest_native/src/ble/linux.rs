@@ -171,7 +171,10 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                     // finish, so crossed connections cannot grow OS workers.
                     if tasks.len() >= MAX_LINKS * 2 { continue; }
                     let device = adapter.device(address)?;
-                    if !device.uuids().await?.unwrap_or_default().contains(&Uuid::from_u128(SERVICE_UUID)) { continue; }
+                    // A vanished or inaccessible candidate must not reset
+                    // established neighbours on the adapter.
+                    let Ok(Some(uuids)) = device.uuids().await else { continue; };
+                    if !uuids.contains(&Uuid::from_u128(SERVICE_UUID)) { continue; }
                     let id = state.core.lock().unwrap().reserve(peer(address), Role::Central, state.now());
                     if let Some(id) = id { tasks.spawn(central(state.clone(), device, id)); }
                 } else if event.is_none() {
