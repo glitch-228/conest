@@ -9,7 +9,10 @@ def check(before, after, test):
     original = path.read_text()
     assert original.count(before) == 1, f"Sabotage anchor changed: {before}"
     try:
-        path.write_text(original.replace(before, after))
+        broken = original.replace(before, after)
+        if before == "payload > MAX_PACKET":
+            broken = broken.replace("if size > MAX_PACKET {", "if false {")
+        path.write_text(broken)
         result = subprocess.run(
             ["cargo", "test", "-p", "conest_native", "--locked", test],
             capture_output=True, text=True)

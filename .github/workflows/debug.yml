@@ -85,6 +85,10 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
       - run: flutter pub get
+      - name: Verify desktop Bluetooth links and hostile-input negative checks
+        run: |
+          flutter test test/desktop_bitchat_links_test.dart
+          python3 tool/m37_dart_sabotage.py
       - name: Verify channel identity and automatic transfer handshake
         run: |
           flutter test test/build_info_test.dart test/transport_test.dart test/feature_models_test.dart test/voice_call_sound_cues_test.dart

@@ -26,7 +26,7 @@ import 'group_file_service.dart';
 import 'group_message_projection.dart';
 import 'group_membership_history.dart';
 import 'beam_protocol.dart';
-import 'bitchat/android_links.dart';
+import 'bitchat/platform_links.dart';
 import 'bitchat/direct.dart';
 import 'bitchat/gateway.dart';
 import 'bitchat/geo_relays.g.dart';
@@ -4853,10 +4853,11 @@ class MessengerController extends ChangeNotifier {
     _advertiseProfileToContacts();
   }
 
-  /// Whether this device can join the Bluetooth mesh (Android, or a test
-  /// link layer).
+  /// Whether this device can join the Bluetooth mesh.
   bool get bitchatAvailable =>
-      _bitchatConnector != null || (!kIsWeb && Platform.isAndroid);
+      _bitchatConnector != null ||
+      (!kIsWeb &&
+          (Platform.isAndroid || Platform.isLinux || Platform.isWindows));
 
   /// The Bluetooth mesh setup, if on.
   BitchatCarrierConfig? get bitchatCarrierConfig =>
@@ -4874,7 +4875,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> enableBitchatCarrier() async {
     _requireIdentity();
     if (!bitchatAvailable) {
-      throw StateError('The Bluetooth mesh needs Android for now.');
+      throw StateError('The Bluetooth mesh needs Android, Linux or Windows.');
     }
     final config = bitchatCarrierConfig ?? BitchatCarrierConfig.create();
     _snapshot = _snapshot.copyWith(
@@ -4914,7 +4915,7 @@ class MessengerController extends ChangeNotifier {
         createBitchatCarrierAdapter(sealer: carrierSealer, now: _now);
     final channel = BitchatCarrierChannel(
       config: config,
-      connector: _bitchatConnector ?? AndroidBitchatLinks.start,
+      connector: _bitchatConnector ?? openPlatformBitchatLinks,
       keyFor: _bitchatPairKeys,
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,

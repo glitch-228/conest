@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'package:conest/main.dart' as app;
 import 'package:conest/main.dart' show sniffImageMimeType;
 import 'package:conest/src/bitchat/direct.dart';
+import 'package:conest/src/bitchat/desktop_links.dart';
 import 'package:conest/src/bitchat/gateway.dart';
 import 'package:conest/src/bitchat/geo_relays.g.dart';
 import 'package:conest/src/bitchat/mesh.dart';
@@ -84,6 +85,7 @@ import 'package:conest/src/voice_call_service.dart';
 
 import 'support/fake_homeserver.dart';
 import 'support/fake_ble_mesh.dart';
+import 'support/fake_desktop_ble.dart';
 import 'support/fake_mail_server.dart';
 import 'support/fake_matrix_native.dart';
 import 'support/fake_meshcore.dart';
@@ -19001,6 +19003,49 @@ void main() {
   });
 
   group('Bluetooth mesh carrier', () {
+    test(
+      'desktop native connector drives the controller and adapter state',
+      () async {
+        final native = FakeDesktopBleNative();
+        native.status['peripheral'] = false;
+        native.status['problem'] = 'This Bluetooth adapter cannot advertise.';
+        late DesktopBitchatLinks desktop;
+        var starts = 0;
+        final controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Desktop',
+          bitchatConnector: () async {
+            starts++;
+            desktop = await DesktopBitchatLinks.start(native: native);
+            return desktop;
+          },
+        );
+        addTearDown(controller.dispose);
+        expect(controller.bitchatAvailable, isTrue);
+        await controller.enableBitchatCarrier();
+        final deadline = DateTime.now().add(const Duration(seconds: 3));
+        while (controller.bitchatChannel?.state !=
+                BitchatCarrierState.running &&
+            DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(starts, 1);
+        expect(native.opened, isTrue);
+        desktop.pollNow();
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          controller.bitchatChannel!.lastError,
+          contains('cannot advertise'),
+        );
+        expect(
+          controller.bitchatChannel!.adapterStatus,
+          contains('Mock adapter'),
+        );
+        await controller.disableBitchatCarrier();
+        expect(native.closes, 1);
+      },
+    );
+
     test('two devices talk through a relaying phone', () async {
       final area = FakeBleNeighbourhood()
         ..connect('alice', 'relay')
@@ -19304,64 +19349,85 @@ void main() {
       expect(alice.bitchatPeerId, isNot(second));
     });
 
-    test('group members who are not contacts talk over the mesh', () async {
-      final area = FakeBleNeighbourhood()..connect('bob', 'carol');
-      final relay = _FakeRelayClient();
-      final people = <MessengerController>[];
-      for (final name in ['alice', 'bob', 'carol']) {
-        final person = await _createController(
-          relayClient: relay,
-          displayName: name,
-          bitchatConnector: () async => area.node(name),
+    test(
+      'group members who are not contacts talk through a desktop mesh relay',
+      () async {
+        final area = FakeBleNeighbourhood()
+          ..connect('bob', 'desktop')
+          ..connect('desktop', 'carol');
+        final desktopNative = FakeDesktopBleNative(links: area.node('desktop'));
+        final desktop = await DesktopBitchatLinks.start(
+          native: desktopNative,
+          pollInterval: const Duration(milliseconds: 20),
         );
-        addTearDown(person.dispose);
-        people.add(person);
-      }
-      final [alice, bob, carol] = people;
-      await bob.enableBitchatCarrier();
-      await carol.enableBitchatCarrier();
-      await _pairControllers(alice, bob);
-      await _pairControllers(alice, carol);
-      Future<void> settle() async {
-        for (var round = 0; round < 4; round++) {
-          for (final person in people) {
-            await person.pollNow();
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 20));
+        desktop.pollNow();
+        final meshRelay = BitchatNode(
+          links: desktop,
+          onPrivate: (_, _) => BitchatPrivate.notMine,
+        );
+        addTearDown(() async {
+          await meshRelay.stop();
+          await desktop.close();
+        });
+        final relay = _FakeRelayClient();
+        final people = <MessengerController>[];
+        for (final name in ['alice', 'bob', 'carol']) {
+          final person = await _createController(
+            relayClient: relay,
+            displayName: name,
+            bitchatConnector: () async => area.node(name),
+          );
+          addTearDown(person.dispose);
+          people.add(person);
         }
-      }
+        final [alice, bob, carol] = people;
+        await bob.enableBitchatCarrier();
+        await carol.enableBitchatCarrier();
+        await _pairControllers(alice, bob);
+        await _pairControllers(alice, carol);
+        Future<void> settle() async {
+          for (var round = 0; round < 4; round++) {
+            for (final person in people) {
+              await person.pollNow();
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+        }
 
-      await settle();
-      final group = await alice.createGroup(
-        title: 'Three',
-        members: alice.contacts,
-      );
-      await settle();
-      final bobId = bob.identity!.deviceId;
-      final carolId = carol.identity!.deviceId;
-      expect(
-        bob.groups.single
-            .memberProfileFor(carolId)!
-            .carrierAddresses[TransportKind.bitchat],
-        carol.bitchatChannel!.localAddress,
-      );
-      // No relay between Bob and Carol, who only share the group.
-      relay.shouldFailStore = (_, _, _, recipient, envelope) =>
-          (envelope.senderDeviceId == carolId && recipient == bobId) ||
-          (envelope.senderDeviceId == bobId && recipient == carolId);
-      await carol.sendGroupMessage(groupId: group.groupId, body: 'nearby');
-      await until(
-        () =>
-            bob.messagesForGroup(group.groupId).any((m) => m.body == 'nearby'),
-      );
-      expect(
-        bob
-            .messagesForGroup(group.groupId)
-            .singleWhere((m) => m.body == 'nearby')
-            .route,
-        MessageRoute.bitchat,
-      );
-    });
+        await settle();
+        final group = await alice.createGroup(
+          title: 'Three',
+          members: alice.contacts,
+        );
+        await settle();
+        final bobId = bob.identity!.deviceId;
+        final carolId = carol.identity!.deviceId;
+        expect(
+          bob.groups.single
+              .memberProfileFor(carolId)!
+              .carrierAddresses[TransportKind.bitchat],
+          carol.bitchatChannel!.localAddress,
+        );
+        // No relay between Bob and Carol, who only share the group.
+        relay.shouldFailStore = (_, _, _, recipient, envelope) =>
+            (envelope.senderDeviceId == carolId && recipient == bobId) ||
+            (envelope.senderDeviceId == bobId && recipient == carolId);
+        await carol.sendGroupMessage(groupId: group.groupId, body: 'nearby');
+        await until(
+          () => bob
+              .messagesForGroup(group.groupId)
+              .any((m) => m.body == 'nearby'),
+        );
+        expect(
+          bob
+              .messagesForGroup(group.groupId)
+              .singleWhere((m) => m.body == 'nearby')
+              .route,
+          MessageRoute.bitchat,
+        );
+        expect(desktopNative.broadcasts, isNotEmpty);
+      },
+    );
   });
 
   testWidgets(

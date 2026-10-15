@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
 import 'bitchat/direct.dart';
+import 'bitchat/desktop_links.dart';
 import 'bitchat/gateway.dart';
 import 'bitchat/mesh.dart';
 import 'bitchat/packet.dart';
@@ -257,6 +258,9 @@ class BitchatCarrierChannel
 
   BitchatCarrierState get state => _state;
   String? get lastError => _lastError;
+  String? get adapterStatus => _links is DesktopBitchatLinks
+      ? (_links as DesktopBitchatLinks).adapterSummary
+      : null;
 
   @override
   String? get localAddress => config.address;

@@ -112,8 +112,8 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
           title: const Text('Bluetooth mesh'),
           subtitle: const Text(
             'Reach contacts nearby without any network: messages hop from '
-            'phone to phone over Bluetooth, through Conest and bitchat '
-            'users alike, and this phone relays for others. This phone does '
+            'device to device over Bluetooth, through Conest and bitchat '
+            'users alike, and this device relays for others. This device does '
             'not show up in bitchat, and what it sends looks like any '
             'bitchat private message, with ids that change every hour.',
           ),
@@ -137,12 +137,19 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
             title: Text(switch (channel?.state) {
               BitchatCarrierState.running when channel?.lastError == null =>
                 'Bluetooth mesh on',
+              BitchatCarrierState.running => 'Bluetooth mesh needs attention',
               BitchatCarrierState.starting => 'Starting Bluetooth',
               _ => 'Bluetooth unavailable',
             }),
-            subtitle: channel?.lastError == null
+            subtitle:
+                channel?.lastError == null && channel?.adapterStatus == null
                 ? null
-                : Text(channel!.lastError!, maxLines: 2),
+                : Text(
+                    [
+                      ?channel?.adapterStatus,
+                      ?channel?.lastError,
+                    ].join('\n'),
+                  ),
           ),
         if (config != null)
           SwitchListTile.adaptive(
@@ -156,7 +163,7 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
                         'range, and can write to you. The identity they see '
                         'is new every week and has nothing to do with your '
                         'Conest identity.'
-                  : 'Off: bitchat users do not see this phone. You can '
+                  : 'Off: bitchat users do not see this device. You can '
                         'still read the mesh chat.',
             ),
             value: controller.bitchatReachable,
@@ -172,8 +179,8 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
             subtitle: Text(
               controller.bitchatGateway
                   ? 'Phones nearby without internet can use bitchat\'s '
-                        'location channels through this phone. Only those '
-                        'public, signed messages pass. This phone connects '
+                        'location channels through this device. Only those '
+                        'public, signed messages pass. This device connects '
                         'to the relays of the areas they use'
                         '${controller.bitchatGatewayCells.isEmpty ? '' : ' (now ${controller.bitchatGatewayCells.length})'}'
                         ': those relays see your internet address and the '
