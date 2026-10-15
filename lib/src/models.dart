@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
 import 'feature_models.dart';
+import 'group_call/group_call_models.dart';
 
 export 'feature_models.dart';
+export 'group_call/group_call_models.dart' show GroupCallSummary;
 
 export 'transport_models.dart';
 
@@ -960,6 +962,7 @@ class IdentityRecord {
     // Calls exist only in builds compiled with call media (nightly/debug);
     // there they are on unless the user opts out.
     this.experimentalVoiceCallsEnabled = true,
+    this.voiceNoiseSuppressionEnabled = true,
     this.advertisedFeatureCapabilities,
     required this.suppressReadReceipts,
     this.connectivity = const GlobalConnectivityPreferences(),
@@ -991,6 +994,7 @@ class IdentityRecord {
   final bool androidBackgroundRuntimeEnabled;
   final bool androidBackgroundCallsEnabled;
   final bool experimentalVoiceCallsEnabled;
+  final bool voiceNoiseSuppressionEnabled;
 
   /// Capability names last sent to contacts. When this build's capabilities
   /// differ (an update added or removed one), contacts are told again.
@@ -1061,6 +1065,7 @@ class IdentityRecord {
     bool? androidBackgroundRuntimeEnabled,
     bool? androidBackgroundCallsEnabled,
     bool? experimentalVoiceCallsEnabled,
+    bool? voiceNoiseSuppressionEnabled,
     List<String>? advertisedFeatureCapabilities,
     bool? suppressReadReceipts,
     GlobalConnectivityPreferences? connectivity,
@@ -1094,6 +1099,8 @@ class IdentityRecord {
           androidBackgroundCallsEnabled ?? this.androidBackgroundCallsEnabled,
       experimentalVoiceCallsEnabled:
           experimentalVoiceCallsEnabled ?? this.experimentalVoiceCallsEnabled,
+      voiceNoiseSuppressionEnabled:
+          voiceNoiseSuppressionEnabled ?? this.voiceNoiseSuppressionEnabled,
       advertisedFeatureCapabilities:
           advertisedFeatureCapabilities ?? this.advertisedFeatureCapabilities,
       suppressReadReceipts: suppressReadReceipts ?? this.suppressReadReceipts,
@@ -1135,6 +1142,7 @@ class IdentityRecord {
       'androidBackgroundRuntimeEnabled': androidBackgroundRuntimeEnabled,
       'androidBackgroundCallsEnabled': androidBackgroundCallsEnabled,
       'experimentalVoiceCallsEnabled': experimentalVoiceCallsEnabled,
+      'voiceNoiseSuppressionEnabled': voiceNoiseSuppressionEnabled,
       if (advertisedFeatureCapabilities != null)
         'advertisedFeatureCapabilities': advertisedFeatureCapabilities,
       'suppressReadReceipts': suppressReadReceipts,
@@ -1209,6 +1217,8 @@ class IdentityRecord {
           json['androidBackgroundCallsEnabled'] as bool? ?? false,
       experimentalVoiceCallsEnabled:
           json['experimentalVoiceCallsEnabled'] as bool? ?? true,
+      voiceNoiseSuppressionEnabled:
+          json['voiceNoiseSuppressionEnabled'] as bool? ?? true,
       advertisedFeatureCapabilities:
           (json['advertisedFeatureCapabilities'] as List?)
               ?.whereType<String>()
@@ -2666,6 +2676,7 @@ class ChatMessage {
     this.groupHistoryAuthorDeviceId,
     this.groupHistorySequence,
     this.groupHistoryEventId,
+    this.groupHistoryClaimed = false,
     this.albumId,
     this.transportKind,
     this.transportPath,
@@ -2738,6 +2749,14 @@ class ChatMessage {
   final String? groupHistoryAuthorDeviceId;
   final int? groupHistorySequence;
   final String? groupHistoryEventId;
+
+  /// The group history fields are what a live copy claimed, not yet the
+  /// signed event's: they order the message, nothing else trusts them.
+  final bool groupHistoryClaimed;
+
+  /// The signed event this message is, once known (never a claim).
+  String? get verifiedGroupHistoryEventId =>
+      groupHistoryClaimed ? null : groupHistoryEventId;
 
   /// Telegram-style media-group id. Consecutive same-sender messages that
   /// share an `albumId` render as a single album bubble in the UI; null
@@ -2839,6 +2858,7 @@ class ChatMessage {
     String? groupHistoryAuthorDeviceId,
     int? groupHistorySequence,
     String? groupHistoryEventId,
+    bool? groupHistoryClaimed,
     String? albumId,
     TransportKind? transportKind,
     TransportPathKind? transportPath,
@@ -2880,6 +2900,7 @@ class ChatMessage {
           groupHistoryAuthorDeviceId ?? this.groupHistoryAuthorDeviceId,
       groupHistorySequence: groupHistorySequence ?? this.groupHistorySequence,
       groupHistoryEventId: groupHistoryEventId ?? this.groupHistoryEventId,
+      groupHistoryClaimed: groupHistoryClaimed ?? this.groupHistoryClaimed,
       albumId: albumId ?? this.albumId,
       transportKind: transportKind ?? this.transportKind,
       transportPath: transportPath ?? this.transportPath,
@@ -2926,6 +2947,7 @@ class ChatMessage {
         'groupHistorySequence': groupHistorySequence,
       if (groupHistoryEventId != null)
         'groupHistoryEventId': groupHistoryEventId,
+      if (groupHistoryClaimed) 'groupHistoryClaimed': true,
       if (albumId != null) 'albumId': albumId,
       if (transportKind != null) 'transportKind': transportKind!.name,
       if (transportPath != null) 'transportPath': transportPath!.name,
@@ -3011,6 +3033,7 @@ class ChatMessage {
       groupHistoryAuthorDeviceId: json['groupHistoryAuthorDeviceId'] as String?,
       groupHistorySequence: json['groupHistorySequence'] as int?,
       groupHistoryEventId: json['groupHistoryEventId'] as String?,
+      groupHistoryClaimed: json['groupHistoryClaimed'] == true,
       transportKind: TransportKind.values
           .where((entry) => entry.name == json['transportKind'])
           .firstOrNull,
@@ -4918,6 +4941,7 @@ class VaultSnapshot {
     this.chatFolders = const <ChatFolder>[],
     this.scheduledMessages = const <ScheduledMessage>[],
     this.voiceCallSummaries = const <VoiceCallSummary>[],
+    this.groupCallSummaries = const <GroupCallSummary>[],
     this.matrixSession,
     this.matrixSyncToken,
     this.appMode,
@@ -5017,6 +5041,7 @@ class VaultSnapshot {
   final List<ChatFolder> chatFolders;
   final List<ScheduledMessage> scheduledMessages;
   final List<VoiceCallSummary> voiceCallSummaries;
+  final List<GroupCallSummary> groupCallSummaries;
 
   /// The signed-in Conest Matrix device (`MatrixSession.toJson`), if any.
   final Map<String, dynamic>? matrixSession;
@@ -5116,6 +5141,7 @@ class VaultSnapshot {
     List<ChatFolder>? chatFolders,
     List<ScheduledMessage>? scheduledMessages,
     List<VoiceCallSummary>? voiceCallSummaries,
+    List<GroupCallSummary>? groupCallSummaries,
     Map<String, dynamic>? matrixSession,
     String? matrixSyncToken,
     AppMode? appMode,
@@ -5170,6 +5196,7 @@ class VaultSnapshot {
       chatFolders: chatFolders ?? this.chatFolders,
       scheduledMessages: scheduledMessages ?? this.scheduledMessages,
       voiceCallSummaries: voiceCallSummaries ?? this.voiceCallSummaries,
+      groupCallSummaries: groupCallSummaries ?? this.groupCallSummaries,
       matrixSession: clearMatrixSession
           ? null
           : matrixSession ?? this.matrixSession,
@@ -5248,6 +5275,10 @@ class VaultSnapshot {
       'scheduledMessages': scheduledMessages
           .map((entry) => entry.toJson())
           .toList(),
+      'groupCallSummaries': groupCallSummaries
+          .take(128)
+          .map((s) => s.toJson())
+          .toList(),
       'voiceCallSummaries': voiceCallSummaries
           .map((entry) => entry.toJson())
           .toList(),
@@ -5293,6 +5324,12 @@ class VaultSnapshot {
           (json['scheduledMessages'] as List<dynamic>? ?? const [])
               .whereType<Map<String, dynamic>>()
               .map(ScheduledMessage.fromJson)
+              .toList(),
+      groupCallSummaries:
+          (json['groupCallSummaries'] as List<dynamic>? ?? const [])
+              .take(128)
+              .whereType<Map<String, dynamic>>()
+              .map(GroupCallSummary.fromJson)
               .toList(),
       voiceCallSummaries:
           (json['voiceCallSummaries'] as List<dynamic>? ?? const [])

@@ -128,6 +128,8 @@ class ConestBackgroundService : Service() {
                 handle = handle,
                 pushCapture = ::nativeVoiceAudioPushCapture,
                 readPlayback = ::nativeVoiceAudioReadPlayback,
+                noiseEnabled = ::nativeVoiceAudioNoiseEnabled,
+                platformNoise = ::nativeVoiceAudioPlatformNoise,
                 markFailed = ::nativeVoiceAudioMarkFailed,
                 onFailure = MainActivity::reportVoiceCallAudioFailure,
             )
@@ -169,6 +171,9 @@ class ConestBackgroundService : Service() {
         output: ShortArray,
         count: Int,
     ): Int
+
+    private external fun nativeVoiceAudioNoiseEnabled(handle: Long): Boolean
+    private external fun nativeVoiceAudioPlatformNoise(handle: Long, enabled: Boolean)
 
     private external fun nativeVoiceAudioMarkFailed(handle: Long)
 

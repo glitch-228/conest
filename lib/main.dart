@@ -36,6 +36,7 @@ import 'src/lan_direct.dart';
 import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
+import 'src/ui/file_metadata_consent.dart';
 import 'src/network_errors.dart';
 import 'src/matrix_service.dart';
 import 'src/messenger_controller.dart';
@@ -43,6 +44,7 @@ import 'src/models.dart';
 import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
+import 'src/ui/group_call_screen.dart';
 import 'src/ui/matrix_account_panel.dart';
 import 'src/ui/bitchat_carrier_panel.dart';
 import 'src/ui/email_carrier_panel.dart';
@@ -2240,6 +2242,13 @@ class _HomeScreenState extends State<HomeScreen> {
     AttachmentSpoolException error,
   ) async {
     if (!mounted) return false;
+    if (error.partialMetadata) {
+      return confirmSendingMetadata(
+        context,
+        attachment.fileName,
+        partial: true,
+      );
+    }
     return await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
@@ -2720,6 +2729,13 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await widget.controller.scheduleGroupAttachment(
         groupId: group.groupId,
+        confirmKeepingMetadata: (error) async =>
+            mounted &&
+            await confirmSendingMetadata(
+              context,
+              error.fileName,
+              partial: error.partial,
+            ),
         source: StagedAttachment(
           id: 'scheduled-file-${DateTime.now().microsecondsSinceEpoch}',
           fileName: file.name,
@@ -3354,6 +3370,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
+              Positioned(
+                top: 4,
+                left: 12,
+                right: 12,
+                child: SafeArea(
+                  child: GroupCallBanner(controller: widget.controller),
+                ),
+              ),
               if (visibleCall != null && !_callScreenMinimized)
                 Positioned.fill(
                   child: _VoiceCallOverlay(
@@ -3548,6 +3572,21 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                               call.muted ? Icons.mic_off : Icons.mic,
                             ),
                             label: Text(call.muted ? 'Unmute' : 'Mute'),
+                          ),
+                        if (connected)
+                          FilterChip(
+                            label: const Text('Noise suppression'),
+                            selected:
+                                widget
+                                    .controller
+                                    .identity
+                                    ?.voiceNoiseSuppressionEnabled ??
+                                true,
+                            onSelected: (enabled) => _run(
+                              () => widget.controller.setVoiceNoiseSuppression(
+                                enabled,
+                              ),
+                            ),
                           ),
                         if (connected && !kIsWeb && Platform.isAndroid)
                           OutlinedButton.icon(
@@ -9094,6 +9133,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           memberLabel: controller.groupMemberLabel,
                           timestamp: formatTimestamp,
                           showRoutes: controller.userMode.showsNetworkDetail,
+                          senderClockOffset: controller.clockOffsetFor(
+                            message.senderDeviceId,
+                          ),
                         );
                       } else if (value == 'copy') {
                         await _copyMessage(message);
@@ -9297,6 +9339,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   @override
   Widget build(BuildContext context) {
     final messages = controller.messagesForGroup(group.groupId);
+    final callTimeline = groupCallChatTimeline(
+      messages,
+      controller.groupCallSummariesFor(group.groupId),
+    );
     _pruneMessageKeys(messages);
     _scheduleInitialPosition();
     _scheduleReadSweep();
@@ -9332,6 +9378,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 seed: group.groupId,
                 onBack: widget.onBack,
                 onDetails: widget.onShowDetails,
+                onCall: controller.groupVoiceCallsAvailable
+                    ? () => openGroupCallScreen(
+                        context,
+                        controller,
+                        group.groupId,
+                      )
+                    : null,
               )
             else
               Padding(
@@ -9369,6 +9422,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       icon: Icons.lock_outline,
                     ),
                     const SizedBox(width: 8),
+                    GroupCallButton(
+                      controller: controller,
+                      groupId: group.groupId,
+                    ),
                     IconButton(
                       onPressed: widget.onShowDetails,
                       icon: const Icon(Icons.groups_2_outlined),
@@ -9408,9 +9465,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       reverse: true,
                       controller: _scrollController,
                       padding: const EdgeInsets.all(18),
-                      itemCount: messages.length + (_historyExhausted ? 0 : 1),
+                      itemCount:
+                          callTimeline.length + (_historyExhausted ? 0 : 1),
                       itemBuilder: (context, index) {
-                        if (index == messages.length) {
+                        if (index == callTimeline.length) {
                           return Center(
                             child: TextButton.icon(
                               onPressed: _loadingHistory
@@ -9425,7 +9483,15 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                             ),
                           );
                         }
-                        final chronoIndex = messages.length - 1 - index;
+                        final entry =
+                            callTimeline[callTimeline.length - 1 - index];
+                        if (entry.summary != null) {
+                          return GroupCallSummaryTile(
+                            summary: entry.summary!,
+                            labelFor: controller.groupMemberLabel,
+                          );
+                        }
+                        final chronoIndex = entry.messageIndex!;
                         final message = messages[chronoIndex];
                         if (_isAlbumContinuation(messages, chronoIndex)) {
                           return const SizedBox.shrink();
@@ -10089,12 +10155,26 @@ class _ChatPanelState extends State<_ChatPanel> {
       time.minute,
     );
     if (staged case [final attachment]) {
-      await controller.scheduleAttachment(
-        contact: contact,
-        source: attachment,
-        scheduledAt: due,
-        caption: body,
-      );
+      try {
+        await controller.scheduleAttachment(
+          contact: contact,
+          confirmKeepingMetadata: (error) async =>
+              mounted &&
+              await confirmSendingMetadata(
+                context,
+                error.fileName,
+                partial: error.partial,
+              ),
+          source: attachment,
+          scheduledAt: due,
+          caption: body,
+        );
+      } catch (error) {
+        controller.setStatus(
+          'Could not schedule ${attachment.fileName}: $error',
+        );
+        return;
+      }
       controller.removeStaged(
         deviceId: contact.deviceId,
         stagedId: attachment.id,
@@ -10898,6 +10978,9 @@ class _ChatPanelState extends State<_ChatPanel> {
                             message: message,
                             timestamp: formatTimestamp,
                             showRoutes: controller.userMode.showsNetworkDetail,
+                            senderClockOffset: controller.clockOffsetFor(
+                              message.senderDeviceId,
+                            ),
                           );
                         } else if (value == 'forward') {
                           await _forwardTextMessage(
@@ -21466,8 +21549,13 @@ Future<bool> publishGroupFileAsking(
       caption: caption,
     );
     return true;
-  } on FileMetadataException {
-    if (!context.mounted || !await confirmSendingMetadata(context, fileName)) {
+  } on FileMetadataException catch (error) {
+    if (!context.mounted ||
+        !await confirmSendingMetadata(
+          context,
+          fileName,
+          partial: error.partial,
+        )) {
       return false;
     }
     await controller.publishGroupFile(
@@ -21486,29 +21574,9 @@ Future<bool> publishGroupFileAsking(
 /// removed.
 Future<bool> confirmSendingMetadata(
   BuildContext context,
-  String fileName,
-) async =>
-    await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Send with its details?'),
-        content: Text(
-          'The location, camera, author and date details of $fileName '
-          'could not be removed. Send it with them?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Send anyway'),
-          ),
-        ],
-      ),
-    ) ??
-    false;
+  String fileName, {
+  bool partial = false,
+}) => showFileMetadataConsent(context, fileName, partial: partial);
 
 /// Picks the chat to put something shared from another app into.
 class _ShareTargetDialog extends StatelessWidget {

@@ -20,6 +20,7 @@ const Set<String> ratchetedEnvelopeKinds = <String>{
   'direct_message',
   'group_message',
   'group_history',
+  'group_call_signal',
   'group_membership',
   'group_membership_ack',
   'group_leave',
@@ -720,6 +721,18 @@ class CryptoService {
       'replySnippet': message.replySnippet,
       'replySenderDeviceId': message.replySenderDeviceId,
       'replySenderDisplayName': message.replySenderDisplayName,
+      // Its place in the author's signed history, so every member orders it
+      // the same way whatever the author's clock says (checked when the
+      // signed event arrives).
+      if (message.groupHistoryLamport case final lamport?
+          when message.groupHistoryAuthorDeviceId == message.senderDeviceId &&
+              message.groupHistorySequence != null &&
+              message.groupHistoryEventId != null)
+        'historyOrder': {
+          'lamport': lamport,
+          'sequence': message.groupHistorySequence,
+          'eventId': message.groupHistoryEventId,
+        },
     });
   }
 
@@ -740,6 +753,19 @@ class CryptoService {
       replySnippet: decoded['replySnippet'] as String?,
       replySenderDeviceId: decoded['replySenderDeviceId'] as String?,
       replySenderDisplayName: decoded['replySenderDisplayName'] as String?,
+      historyOrder: switch (decoded['historyOrder']) {
+        {
+          'lamport': final int lamport,
+          'sequence': final int sequence,
+          'eventId': final String eventId,
+        }
+            when lamport >= 0 &&
+                sequence >= 0 &&
+                eventId.isNotEmpty &&
+                eventId.length <= 160 =>
+          (lamport: lamport, sequence: sequence, eventId: eventId),
+        _ => null,
+      },
     );
   }
 
@@ -822,6 +848,7 @@ class DecodedGroupMessage {
     required this.groupId,
     required this.membershipVersion,
     required this.body,
+    this.historyOrder,
     this.senderDisplayName,
     this.replyToMessageId,
     this.replySnippet,
@@ -831,6 +858,9 @@ class DecodedGroupMessage {
 
   final String groupId;
   final int membershipVersion;
+
+  /// The author's claimed place in its signed history.
+  final ({int lamport, int sequence, String eventId})? historyOrder;
   final String body;
   final String? senderDisplayName;
   final String? replyToMessageId;

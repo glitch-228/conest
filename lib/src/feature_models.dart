@@ -30,6 +30,9 @@ enum ApplicationCapability {
   /// Answers route probes (route_probe), so "Test routes" can time each
   /// route both ways.
   routeProbeV1,
+
+  /// Encrypted group voice calls over authenticated Iroh datagrams.
+  groupVoiceCallsV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise
@@ -128,6 +131,7 @@ class ScheduledMessage {
     this.attachmentFileName,
     this.attachmentMimeType,
     this.attachmentSizeBytes,
+    this.attachmentPrivacyPrepared = false,
     this.state = ScheduledMessageState.waiting,
     this.outgoingMessageId,
     this.failureReason,
@@ -147,6 +151,10 @@ class ScheduledMessage {
   final String? attachmentFileName;
   final String? attachmentMimeType;
   final int? attachmentSizeBytes;
+
+  /// Cleaning/consent and the outgoing name were decided at schedule time.
+  /// False for older vaults, so their files still take the normal privacy path.
+  final bool attachmentPrivacyPrepared;
   final ScheduledMessageState state;
   final String? outgoingMessageId;
   final String? failureReason;
@@ -174,6 +182,7 @@ class ScheduledMessage {
     attachmentFileName: attachmentFileName,
     attachmentMimeType: attachmentMimeType,
     attachmentSizeBytes: attachmentSizeBytes,
+    attachmentPrivacyPrepared: attachmentPrivacyPrepared,
     state: state ?? this.state,
     outgoingMessageId: outgoingMessageId ?? this.outgoingMessageId,
     failureReason: clearFailureReason
@@ -194,6 +203,7 @@ class ScheduledMessage {
     if (attachmentFileName != null) 'attachmentFileName': attachmentFileName,
     if (attachmentMimeType != null) 'attachmentMimeType': attachmentMimeType,
     if (attachmentSizeBytes != null) 'attachmentSizeBytes': attachmentSizeBytes,
+    if (attachmentPrivacyPrepared) 'attachmentPrivacyPrepared': true,
     'state': state.name,
     if (outgoingMessageId != null) 'outgoingMessageId': outgoingMessageId,
     if (failureReason != null) 'failureReason': failureReason,
@@ -218,6 +228,7 @@ class ScheduledMessage {
         attachmentFileName: json['attachmentFileName'] as String?,
         attachmentMimeType: json['attachmentMimeType'] as String?,
         attachmentSizeBytes: (json['attachmentSizeBytes'] as num?)?.toInt(),
+        attachmentPrivacyPrepared: json['attachmentPrivacyPrepared'] == true,
         state: ScheduledMessageState.values.firstWhere(
           (value) => value.name == json['state'],
           orElse: () => ScheduledMessageState.waiting,

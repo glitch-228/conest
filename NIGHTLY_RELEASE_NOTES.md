@@ -1,39 +1,53 @@
-## Conest 0.3.12 nightly (October 14, third)
+## Conest 0.3.12 nightly (October 15)
 
-Your devices now keep each other up to date. Everything from the earlier
-October nightlies (languages, linking devices, modes, messages on several
-routes, Delta Chat) is included.
+Group voice calls, noise suppression, better file privacy, and fixes from
+testing on phones and computers. Everything from the earlier October
+nightlies (your devices in step, languages, modes, messages on several
+routes) is included.
 
 ### Before you update
 
-- Update all your linked devices: syncing works only between devices that
-  both have this nightly.
+- Group calls work only between members who all have this nightly, with
+  experimental calls turned on in Settings.
 
-### Your devices stay in step (new)
+### Group calls (new)
 
-- A message you write on one of your devices shows on your other devices
-  too, in the same chat, with its delivered and read ticks.
-- Reading a chat on one device marks it read on the others.
-- Notes in Saved messages show on all your devices.
-- When you add or remove a device on one of your devices, your other
-  devices learn it too.
-- A device you remove can no longer sync with your others or speak for
-  your account.
-- If a device is away for a while, it catches up when it comes back (up to
-  two weeks).
-- Not yet: files, voice messages, polls and group chats sent from one
-  device do not show on the others; edits, deletions and reactions do not
-  sync; history from before a device was linked does not come over.
+- Start or join a voice call from a group chat. Small calls connect
+  members directly; larger ones let one member pass the encrypted audio
+  on to the others.
+- Mute, or hold to talk with the button or the Space key. See who is
+  speaking, how good the connection is, and a summary of the call in the
+  chat.
+- Noise suppression is on by default for all calls and can be turned off
+  during a call.
+
+### Files without metadata (better)
+
+- Videos and documents lose more location, author and date details:
+  phone video tracks with GPS, Word and other Office comments and tracked
+  changes, PDF details and pictures inside documents.
+- If some details may remain, Conest asks before sending.
+- Scheduled files are cleaned when you schedule them, so sending later
+  needs no second question.
+- On Android the file picker offers more storage places.
 
 ### Fixes
 
-- A device of yours that was linked less than a day ago cannot remove
-  your other devices, also when it tells them through another device.
-- A removed device that keeps announcing new device lists can no longer
-  hold back its removal from your contacts.
+- In a group, a message now reaches members its writer cannot reach
+  directly, through the other members.
+- A message from a device whose clock is wrong no longer shows up among
+  older messages, in groups and in chats.
+  In Advanced mode the message details say when a contact's clock is off.
+- "Route tests need a newer Conest" no longer shows for a contact on the
+  same version: Conest asks them again.
+- A scheduled note to Saved messages was never sent.
 
 ### Not tested on devices yet
 
-- Writing from a phone and seeing it on a linked desktop, and the other
-  way round, over the same Wi-Fi and over the internet.
-- A device that was off for a day catching up.
+- Group calls with 3, 6 and 10 people across Android, Linux and Windows,
+  and a member leaving during the call.
+- Noise suppression with a fan or keyboard nearby.
+- Sending photos and videos from Samsung and Pixel phones, and Office and
+  PDF files, then checking what details remain.
+- A group where two members cannot reach each other, over the same
+  Wi-Fi.

@@ -12,6 +12,11 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart' as path_provider;
 
 import 'crypto_service.dart';
+import 'group_call/group_call_service.dart';
+import 'group_call/group_call_models.dart';
+import 'group_call/group_call_crypto.dart';
+import 'group_call/group_call_media.dart';
+import 'group_call/group_call_policy.dart';
 import 'group_history_coordinator.dart';
 import 'group_history_event.dart';
 import 'group_file_manifest.dart';
@@ -42,6 +47,7 @@ import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
 import 'media_sanitizer.dart';
+import 'file_metadata_consent.dart';
 import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
 import 'lan_direct.dart';
@@ -100,6 +106,7 @@ import 'tor_carrier.dart';
 import 'transport.dart';
 
 part 'delta_attachments_controller.dart';
+part 'group_call/group_call_controller.dart';
 
 const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
   'CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME',
@@ -296,6 +303,7 @@ const String _ratchetBundleKind = 'ratchet_bundle';
 const Set<String> _v2PairwiseKinds = <String>{
   _ratchetBundleKind,
   'group_history',
+  'group_call_signal',
   'direct_message',
   'ack',
   'contact_exchange',
@@ -365,6 +373,7 @@ class AttachmentSpoolException implements Exception {
     this.message, {
     this.canUseOriginal = false,
     this.keepsMetadata = false,
+    this.partialMetadata = false,
   });
 
   final String message;
@@ -373,6 +382,7 @@ class AttachmentSpoolException implements Exception {
   /// Sending the original would send its metadata (location, camera,
   /// author), which the user asked to have removed.
   final bool keepsMetadata;
+  final bool partialMetadata;
 
   @override
   String toString() => message;
@@ -381,17 +391,18 @@ class AttachmentSpoolException implements Exception {
 /// Metadata could not be removed from a file the user asked to send
 /// without it; sending it anyway needs their consent.
 class FileMetadataException implements Exception {
-  const FileMetadataException(this.fileName);
+  const FileMetadataException(this.fileName, {this.partial = false});
 
   final String fileName;
+  final bool partial;
 
   @override
-  String toString() =>
-      'Location and other details could not be removed from $fileName.';
+  String toString() => fileMetadataConsentText(fileName, partial: partial);
 }
 
 class _MetadataNotRemoved implements Exception {
-  const _MetadataNotRemoved();
+  const _MetadataNotRemoved({this.partial = false});
+  final bool partial;
 }
 
 enum DefaultRelaysRefreshStatus { upToDate, updated, error }
@@ -534,6 +545,8 @@ class MessengerController extends ChangeNotifier {
     Future<TransportRegistry?> Function(IdentityRecord identity)?
     transportRegistryFactory,
     VoiceCallCuePlayer? voiceCallCuePlayer,
+    GroupCallMediaEngine? groupCallMedia,
+    GroupCallLinkPolicy? groupCallLinkPolicy,
     RatchetEngine? ratchetEngine,
     bool? matrixCarrierEnabled,
     MatrixHttp Function()? matrixHttpFactory,
@@ -547,7 +560,9 @@ class MessengerController extends ChangeNotifier {
     BitchatConnector? bitchatConnector,
     TorApi? torApi,
     EnergyPolicy? energyPolicy,
-  }) : _vaultStore = vaultStore,
+  }) : _groupCallMediaOverride = groupCallMedia,
+       _groupCallLinkPolicy = groupCallLinkPolicy,
+       _vaultStore = vaultStore,
        _injectedEnergyPolicy = energyPolicy,
        _torApi = torApi,
        _torApiResolved = torApi != null,
@@ -615,9 +630,14 @@ class MessengerController extends ChangeNotifier {
           if (!_disposed) unawaited(_pumpScheduledMessages());
         });
     _voiceCallAudioSubscription = _platformBridge.voiceCallAudioFrames.listen(
-      (frame) => unawaited(_sendVoiceCallAudioFrame(frame)),
+      (frame) => unawaited(
+        _groupCallService?.active != null
+            ? _groupCallService!.sendAudio(frame)
+            : _sendVoiceCallAudioFrame(frame),
+      ),
       onError: (Object error, StackTrace stackTrace) {
         appendDebugLog('Voice audio device stopped: $error');
+        unawaited(_groupCallService?.leave());
         unawaited(
           _voiceCallService?.end(reason: 'Voice audio device stopped.'),
         );
@@ -692,6 +712,7 @@ class MessengerController extends ChangeNotifier {
   /// entering Matrix-only mode stops it (an identity stays, dormant), and
   /// leaving it starts it again. Refused during a call.
   Future<void> setAppMode(AppMode mode) async {
+    if (mode == AppMode.matrixOnly) unawaited(_groupCallService?.leave());
     if (mode == AppMode.matrixOnly && _voiceCallService?.active != null) {
       throw StateError('End the call before switching to Matrix only.');
     }
@@ -848,7 +869,15 @@ class MessengerController extends ChangeNotifier {
   /// between contacts doesn't lose the staged items.
   final Map<String, List<StagedAttachment>> _stagedAttachments = {};
   VaultSnapshot _snapshot = VaultSnapshot.empty();
+  GroupCallService? _groupCallService;
+  StreamSubscription<void>? _groupCallChanges;
+  Future<void>? _groupCallTeardown;
+  final GroupCallMediaEngine? _groupCallMediaOverride;
+  final GroupCallLinkPolicy? _groupCallLinkPolicy;
+  final _groupOnlyRatchetRate = GroupCallRateLimit();
+  int _groupOnlyRatchetJobs = 0;
   VoiceCallService? _voiceCallService;
+  VoiceCallService? _retiredVoiceMedia;
   late final VoiceMessageService voiceMessageService;
   late final VoiceCallSoundCues _voiceCallSoundCues;
   StreamSubscription<VoiceCallSession?>? _voiceCallChanges;
@@ -1352,18 +1381,26 @@ class MessengerController extends ChangeNotifier {
   DateTime _now() => _nowProvider().toUtc();
 
   void _ensureVoiceCallService() {
+    _ensureGroupCallService();
     final me = _snapshot.identity;
     if (me == null) {
       unawaited(_voiceCallChanges?.cancel());
       _voiceCallChanges = null;
       if (_voiceCallService != null) _voiceCallSoundCues.reset();
+      if (_voiceCallService?.mediaBusy == true) {
+        _retiredVoiceMedia = _voiceCallService;
+      }
       unawaited(_voiceCallService?.dispose());
       _voiceCallService = null;
+      _disposeGroupCalls();
       return;
     }
     if (_voiceCallService?.localDeviceId == me.deviceId) return;
     unawaited(_voiceCallChanges?.cancel());
     if (_voiceCallService != null) _voiceCallSoundCues.reset();
+    if (_voiceCallService?.mediaBusy == true) {
+      _retiredVoiceMedia = _voiceCallService;
+    }
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = VoiceCallService(
       localDeviceId: me.deviceId,
@@ -1374,6 +1411,11 @@ class MessengerController extends ChangeNotifier {
         (summary) => summary.callId,
       ),
       onTerminal: _persistVoiceCallSummary,
+      noiseSuppressionEnabled: me.voiceNoiseSuppressionEnabled,
+      canOpenMedia: () =>
+          _groupCallService?.mediaBusy != true &&
+          _groupCallTeardown == null &&
+          _retiredVoiceMedia?.mediaBusy != true,
     );
     _voiceCallChanges = _voiceCallService!.changes.listen((session) {
       if (_disposed) return;
@@ -1416,6 +1458,17 @@ class MessengerController extends ChangeNotifier {
       }
       notifyListeners();
     });
+  }
+
+  Future<void> setVoiceNoiseSuppression(bool enabled) async {
+    final me = identity;
+    if (me == null) return;
+    await _voiceCallService?.setNoiseSuppression(enabled);
+    await _groupCallService?.setNoiseSuppression(enabled);
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(voiceNoiseSuppressionEnabled: enabled),
+    );
+    await _saveSnapshotSilently(notify: true);
   }
 
   Future<void> _persistVoiceCallSummary(VoiceCallSummary summary) async {
@@ -1659,6 +1712,11 @@ class MessengerController extends ChangeNotifier {
       );
 
   Future<void> _handleVoiceCallDatagram(IrohMediaDatagram datagram) async {
+    if (datagram.bytes.isNotEmpty &&
+        datagram.bytes.first == GroupCallCipher.marker) {
+      await _handleGroupCallDatagram(datagram);
+      return;
+    }
     final session = _voiceCallService?.active;
     final me = identity;
     if (_disposed ||
@@ -2440,8 +2498,16 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  void _scheduleGroupHistorySync(String groupId, String peer) {
+  /// [passOn]: what the pull brings is passed on to other members (a
+  /// pull after a notice or a catch-up; not one after a message that came
+  /// straight from its author, which everyone else got too).
+  void _scheduleGroupHistorySync(
+    String groupId,
+    String peer, {
+    bool passOn = true,
+  }) {
     final key = jsonEncode([groupId, peer]);
+    if (passOn) _groupHistoryPassOn.add(key);
     if (_disposed || _groupHistoryTimers.containsKey(key)) return;
     final elapsed = _now().difference(
       _groupHistoryLastSync[key] ?? DateTime.fromMillisecondsSinceEpoch(0),
@@ -2462,8 +2528,13 @@ class MessengerController extends ChangeNotifier {
         return;
       }
       _groupHistoryLastSync[key] = _now();
+      final passOn = _groupHistoryPassOn.remove(key);
       try {
-        await synchronizeGroupHistory(groupId: groupId, peerDeviceId: peer);
+        await synchronizeGroupHistory(
+          groupId: groupId,
+          peerDeviceId: peer,
+          passOn: passOn,
+        );
       } catch (error) {
         if (!_disposed) appendDebugLog('Group catch-up waiting: $error');
       }
@@ -2486,6 +2557,15 @@ class MessengerController extends ChangeNotifier {
               contact == null) {
             throw StateError('Group history peer is not authorized.');
           }
+          // A notice is worth something only while both are online: none
+          // waits on a relay or a carrier (a member back later catches up).
+          // Notices someone asked for (a member that cannot be reached
+          // otherwise) may take any route; others only live ones.
+          final notice =
+              payload['type'] == 'changed' &&
+              payload['passTo'] == null &&
+              payload['asked'] != true;
+          if (payload['type'] == 'changed') groupNoticesSent++;
           final envelope = await _crypto.encryptPayloadEnvelope(
             kind: 'group_history',
             messageId: _randomId('ghist'),
@@ -2501,6 +2581,11 @@ class MessengerController extends ChangeNotifier {
             contact: contact,
             recipientDeviceId: peer,
             envelope: envelope,
+            skipLegacyKinds: notice
+                ? const {PeerRouteKind.relay}
+                : const <PeerRouteKind>{},
+            allowedUnifiedKinds: notice ? const {TransportKind.iroh} : null,
+            allowForwarding: !notice,
           );
         },
         onMessage: _projectGroupHistoryMessage,
@@ -3050,6 +3135,7 @@ class MessengerController extends ChangeNotifier {
     if (existing != null) {
       final hasStableOrder =
           existing.body == manifest.caption &&
+          !existing.groupHistoryClaimed &&
           existing.groupHistoryEventId == event.eventId &&
           existing.groupHistoryLamport == event.lamport &&
           existing.groupHistoryAuthorDeviceId == event.authorDeviceId &&
@@ -3076,6 +3162,7 @@ class MessengerController extends ChangeNotifier {
             groupHistoryAuthorDeviceId: event.authorDeviceId,
             groupHistorySequence: event.sequence,
             groupHistoryEventId: event.eventId,
+            groupHistoryClaimed: false,
           ),
         );
       }
@@ -3124,8 +3211,10 @@ class MessengerController extends ChangeNotifier {
     if (id is! String || id.isEmpty || id.length > 160 || created is! String) {
       return;
     }
-    final at = DateTime.tryParse(created);
-    if (at == null) return;
+    final signedAt = DateTime.tryParse(created);
+    if (signedAt == null) return;
+    // By our clock, as a live copy from that author would be.
+    final at = _localTimeOf(event.authorDeviceId, signedAt);
     PollDefinition? poll;
     PollVote? pollVote;
     Map<String, String>? pollClosedCheckpoint;
@@ -3224,6 +3313,7 @@ class MessengerController extends ChangeNotifier {
       if (existing.id != id) continue;
       if (existing.senderDeviceId == event.authorDeviceId) {
         final hasStableOrder =
+            !existing.groupHistoryClaimed &&
             existing.groupHistoryEventId == event.eventId &&
             existing.groupHistoryLamport == event.lamport &&
             existing.groupHistoryAuthorDeviceId == event.authorDeviceId &&
@@ -3255,6 +3345,7 @@ class MessengerController extends ChangeNotifier {
             groupHistoryAuthorDeviceId: event.authorDeviceId,
             groupHistorySequence: event.sequence,
             groupHistoryEventId: event.eventId,
+            groupHistoryClaimed: false,
           ),
         );
         return;
@@ -3267,6 +3358,7 @@ class MessengerController extends ChangeNotifier {
     if (retained != null) {
       if (retained.senderDeviceId == event.authorDeviceId) {
         final hasStableOrder =
+            !retained.groupHistoryClaimed &&
             retained.groupHistoryEventId == event.eventId &&
             retained.groupHistoryLamport == event.lamport &&
             retained.groupHistoryAuthorDeviceId == event.authorDeviceId &&
@@ -3298,6 +3390,7 @@ class MessengerController extends ChangeNotifier {
             groupHistoryAuthorDeviceId: event.authorDeviceId,
             groupHistorySequence: event.sequence,
             groupHistoryEventId: event.eventId,
+            groupHistoryClaimed: false,
           ),
         );
       }
@@ -3336,6 +3429,41 @@ class MessengerController extends ChangeNotifier {
         replySenderDisplayName: optional('replySenderDisplayName'),
       ),
     );
+    // Came through another member, not from its author: tell the author it
+    // arrived, so it stops resending (recent messages only, a few per
+    // catch-up).
+    final me = _requireIdentity();
+    if (event.authorDeviceId != me.deviceId &&
+        _now().toUtc().difference(at.toUtc()).abs() < const Duration(days: 1) &&
+        _takeHistoryReceipt(groupId)) {
+      _enqueuePendingAckDelivery(
+        PendingAckDelivery(
+          targetDeviceId: event.authorDeviceId,
+          acknowledgedMessageId: projectedId,
+          conversationId: groupId,
+          kind: PendingAckKind.delivered,
+          lastAttemptedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+          attempts: 0,
+        ),
+      );
+    }
+  }
+
+  /// Receipts for messages that came through history, per group and
+  /// minute (a catch-up pulls from every member at once).
+  final Map<String, (DateTime, int)> _historyReceiptsQueued = {};
+  static const int _maxHistoryReceiptsPerMinute = 64;
+
+  bool _takeHistoryReceipt(String groupId) {
+    final now = _now();
+    final (since, count) = _historyReceiptsQueued[groupId] ?? (now, 0);
+    if (now.difference(since) > const Duration(minutes: 1)) {
+      _historyReceiptsQueued[groupId] = (now, 1);
+      return true;
+    }
+    if (count >= _maxHistoryReceiptsPerMinute) return false;
+    _historyReceiptsQueued[groupId] = (since, count + 1);
+    return true;
   }
 
   bool _sameGroupReactions(
@@ -3357,10 +3485,168 @@ class MessengerController extends ChangeNotifier {
   Future<int> synchronizeGroupHistory({
     required String groupId,
     required String peerDeviceId,
+    bool passOn = true,
   }) async {
     final count = await _groupHistory.synchronize(groupId, peerDeviceId);
     await _saveSnapshotSilently();
+    // New to this device: other members may not have it either (their
+    // author may not reach them). Tell them it changed; each pulls only
+    // what it lacks, so this ends once everyone has it.
+    if (count > 0 && passOn) {
+      _announceGroupChangeSoon(groupId, except: peerDeviceId);
+    }
     return count;
+  }
+
+  /// Whether an announcement naming [heads] would make this device pull.
+  @visibleForTesting
+  Future<bool> groupAnnouncementHasNewerForTesting(
+    String groupId,
+    Object? heads,
+  ) => _groupHistory.hasNewerThanHeld(groupId, heads);
+
+  /// This device's newest sequence per member of [groupId].
+  @visibleForTesting
+  Future<Map<String, int>> groupHeadsForTesting(String groupId) => _groupHistory
+      .authorHeads(groupId, _requireGroup(groupId).activeMemberDeviceIds);
+
+  /// "Group history changed" notices this device sent (for tests).
+  @visibleForTesting
+  int groupNoticesSent = 0;
+
+  /// When each group last pulled from a member at random.
+  final Map<String, DateTime> _groupSlowCatchUpAt = {};
+  static const Duration _groupSlowCatchUpInterval = Duration(minutes: 20);
+
+  /// Every 20 minutes (not in battery saver), each group pulls from the
+  /// member heard from last: a message the author could not get to this device,
+  /// and could not ask anyone to pass on (it went offline), still comes.
+  void _catchUpGroupsNow() {
+    final me = _snapshot.identity;
+    if (me == null ||
+        _disposed ||
+        _energyPolicy.modeFor(_networkCostClass) == EnergyMode.saver) {
+      return;
+    }
+    final now = _now();
+    for (final group in visibleGroups) {
+      if (!group.hasActiveMember(me.deviceId)) continue;
+      final last = _groupSlowCatchUpAt[group.groupId];
+      if (last == null) {
+        // Start-up already catches up.
+        _groupSlowCatchUpAt[group.groupId] = now;
+        continue;
+      }
+      if (now.difference(last) < _groupSlowCatchUpInterval) continue;
+      _groupSlowCatchUpAt[group.groupId] = now;
+      final peers = [
+        for (final peer in group.activeMemberDeviceIds)
+          if (peer != me.deviceId &&
+              group.memberProfileFor(peer)?.signingPublicKeyBase64 != null)
+            peer,
+      ];
+      if (peers.isEmpty) continue;
+      // The member heard from last is the likeliest to answer.
+      DateTime heard(String peer) =>
+          _reachability.recordByDeviceId(peer)?.lastAnySignalAt ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      peers.sort((a, b) => heard(b).compareTo(heard(a)));
+      _scheduleGroupHistorySync(group.groupId, peers.first);
+    }
+  }
+
+  /// Pulls whose result is to be passed on (keyed as the timers are).
+  final Set<String> _groupHistoryPassOn = <String>{};
+
+  /// Members a group's next announcement must reach (another member asked
+  /// for them), besides the usual ones.
+  final Map<String, Set<String>> _groupPassOnTargets = {};
+
+  /// When this device last told each member of each group, by
+  /// "groupId|member": at most every 20 s, so a member asking it to pass
+  /// things on cannot make it flood someone.
+  final Map<String, DateTime> _groupAnnouncedAt = {};
+
+  /// Members not to tell, per group, while an announcement waits.
+  final Map<String, Set<String>> _groupAnnounceSkip = {};
+  final Map<String, Timer> _groupAnnounceTimers = {};
+
+  /// Tells the group's other members, within 2 s (several pulls at once
+  /// make one announcement), that this device has history they may lack.
+  void _announceGroupChangeSoon(String groupId, {required String except}) {
+    if (_disposed) return;
+    _groupAnnounceSkip.putIfAbsent(groupId, () => <String>{}).add(except);
+    _groupAnnounceTimers[groupId] ??= Timer(const Duration(seconds: 2), () {
+      _groupAnnounceTimers.remove(groupId);
+      final skip = _groupAnnounceSkip.remove(groupId) ?? const <String>{};
+      unawaited(
+        _announceGroupChange(groupId, skip).catchError((Object error) {
+          if (!_disposed) appendDebugLog('Group announcement waiting: $error');
+        }),
+      );
+    });
+  }
+
+  /// In a small group everyone hears of a change; in a larger one, a few
+  /// members at random, each of whom passes it on once it pulled (so it
+  /// spreads without everyone telling everyone).
+  static const int _groupAnnounceAllUpTo = 6;
+  static const int _groupAnnounceFanout = 6;
+
+  Future<void> _announceGroupChange(String groupId, Set<String> skip) async {
+    final group = _groupById(groupId);
+    final me = _snapshot.identity;
+    if (_disposed ||
+        group == null ||
+        me == null ||
+        group.localRemovedAt != null ||
+        !group.hasActiveMember(me.deviceId)) {
+      return;
+    }
+    final members = group.activeMemberDeviceIds;
+    final peers = [
+      for (final peer in members)
+        if (peer != me.deviceId && !skip.contains(peer)) peer,
+    ];
+    if (peers.length > _groupAnnounceAllUpTo) {
+      peers
+        ..shuffle(Random.secure())
+        ..length = _groupAnnounceFanout;
+    }
+    final asked = _groupPassOnTargets.remove(groupId) ?? const <String>{};
+    for (final target in asked) {
+      if (!peers.contains(target) &&
+          target != me.deviceId &&
+          group.hasActiveMember(target)) {
+        peers.add(target);
+      }
+    }
+    final now = _now();
+    peers.removeWhere((peer) {
+      final last = _groupAnnouncedAt['$groupId|$peer'];
+      return last != null && now.difference(last) < const Duration(seconds: 20);
+    });
+    if (_groupAnnouncedAt.length > 4096) _groupAnnouncedAt.clear();
+    for (final peer in peers) {
+      _groupAnnouncedAt['$groupId|$peer'] = now;
+    }
+    final heads = await _groupHistory.authorHeads(groupId, members);
+    for (final peer in peers) {
+      unawaited(
+        _groupHistory
+            .announceChange(
+              groupId,
+              peer,
+              heads: heads,
+              asked: asked.contains(peer),
+            )
+            .catchError((Object error) {
+              if (!_disposed) {
+                appendDebugLog('Group announcement waiting: $error');
+              }
+            }),
+      );
+    }
   }
 
   /// Returns a stable signed-event cursor; null means the retained journal has
@@ -3396,7 +3682,32 @@ class MessengerController extends ChangeNotifier {
       if (decoded['version'] == 1 &&
           decoded['groupId'] == group.groupId &&
           decoded['type'] == 'changed') {
-        _scheduleGroupHistorySync(group.groupId, sender.deviceId);
+        // Members the sender cannot reach, whom it asks this device to
+        // tell (bounded; only active members other than the two of us).
+        final passTo = <String>[
+          if (decoded['passTo'] case final List raw)
+            for (final member in raw.take(8))
+              if (member is String &&
+                  member != me.deviceId &&
+                  member != sender.deviceId &&
+                  group.hasActiveMember(member))
+                member,
+        ];
+        // Nothing to pull when this device already holds what they hold.
+        if (await _groupHistory.hasNewerThanHeld(
+          group.groupId,
+          decoded['heads'],
+        )) {
+          _groupPassOnTargets
+              .putIfAbsent(group.groupId, () => <String>{})
+              .addAll(passTo);
+          _scheduleGroupHistorySync(group.groupId, sender.deviceId);
+        } else if (passTo.isNotEmpty) {
+          _groupPassOnTargets
+              .putIfAbsent(group.groupId, () => <String>{})
+              .addAll(passTo);
+          _announceGroupChangeSoon(group.groupId, except: sender.deviceId);
+        }
         return;
       }
       await _groupHistory.handle(group.groupId, sender.deviceId, decoded);
@@ -3696,17 +4007,98 @@ class MessengerController extends ChangeNotifier {
   /// match (say a carrier kind it does not know) is asked about only once.
   final Map<String, String> _carrierRefreshAskedDigest = {};
 
-  /// [contact]'s carrier digest differs from what this device holds for it:
-  /// it enabled or dropped a route since; ask for a fresh exchange.
-  void _refreshCarriersIfStale(ContactRecord contact, Object? digest) {
-    if (digest is! String || !contact.canSendOutbound) return;
-    final held = _carrierDigest({
-      for (final entry in contact.carrierAddresses.entries)
-        if (entry.value.value case final address?
-            when entry.key != TransportKind.matrix)
-          entry.key.name: address,
-    }, contact.matrixAddress);
-    if (held == digest) return;
+  // Clocks that are off: each route update that came over a live route
+  // gives how far its sender's clock is from ours, plus however long it
+  // travelled. The smallest gaps of the last day estimate the offset; it is
+  // used only when several agree (a delay varies, a wrong clock does not).
+
+  /// How far ahead of the newest known Lamport a live claim may be.
+  static const int _maxLamportLead = 1024;
+
+  /// (when received, our time − their time) per sender, newest last.
+  final Map<String, List<(DateTime, Duration)>> _clockSamples = {};
+  static const int _maxClockSamples = 16;
+  static const Duration _clockSampleWindow = Duration(days: 1);
+
+  /// Offsets smaller than this are left alone (ordinary drift).
+  static const Duration _clockTolerance = Duration(minutes: 1);
+
+  void _noteClock(String deviceId, DateTime sentAt) {
+    final now = _now().toUtc();
+    final samples = _clockSamples.putIfAbsent(deviceId, () => []);
+    samples
+      ..add((now, now.difference(sentAt.toUtc())))
+      ..removeWhere((sample) => now.difference(sample.$1) > _clockSampleWindow);
+    if (samples.length > _maxClockSamples) {
+      samples.removeRange(0, samples.length - _maxClockSamples);
+    }
+  }
+
+  /// How far [deviceId]'s clock is behind ours (negative: ahead), when the
+  /// recent samples agree on it and it is more than a minute; else null.
+  Duration? clockOffsetFor(String deviceId) {
+    final samples = _clockSamples[deviceId];
+    if (samples == null || samples.length < 3) return null;
+    // The three newest (a clock set right takes effect at once), only
+    // when they agree: a delayed copy differs, a wrong clock does not.
+    final gaps = [
+      for (final sample in samples.skip(samples.length - 3)) sample.$2,
+    ]..sort();
+    if (gaps[2] - gaps[0] > const Duration(seconds: 30)) return null;
+    final offset = gaps[0];
+    return offset.abs() < _clockTolerance ? null : offset;
+  }
+
+  /// [sentAt] by [senderDeviceId]'s clock, as our clock would have said.
+  DateTime _localTimeOf(String senderDeviceId, DateTime sentAt) {
+    final offset = clockOffsetFor(senderDeviceId);
+    return offset == null ? sentAt : sentAt.add(offset);
+  }
+
+  /// The capability names this device tells [contact] (what it tells
+  /// in an exchange, and digests in route updates).
+  List<String> _capabilityNamesFor(ContactRecord contact) => [
+    ..._localApplicationCapabilities().map((capability) => capability.name),
+    // Only the contacts this device carries for learn that it does.
+    if (contact.routing.carryForContact)
+      ApplicationCapability.forwardForContactsV1.name,
+  ];
+
+  /// A short digest of a capability list (names, in any order).
+  static String _capabilityDigest(List<String> names) => base64Encode(
+    dart_crypto.sha256
+        .convert(utf8.encode((List.of(names)..sort()).join('\n')))
+        .bytes
+        .sublist(0, 9),
+  );
+
+  /// [contact]'s carrier digest (or capability digest) differs from what
+  /// this device holds for it: it enabled or dropped a route, or updated,
+  /// since; ask for a fresh exchange.
+  void _refreshCarriersIfStale(
+    ContactRecord contact,
+    Object? carrierDigest, {
+    Object? capabilityDigest,
+  }) {
+    if (!contact.canSendOutbound) return;
+    final carriersStale =
+        carrierDigest is String &&
+        carrierDigest !=
+            _carrierDigest({
+              for (final entry in contact.carrierAddresses.entries)
+                if (entry.value.value case final address?
+                    when entry.key != TransportKind.matrix)
+                  entry.key.name: address,
+            }, contact.matrixAddress);
+    final capabilitiesStale =
+        capabilityDigest is String &&
+        capabilityDigest !=
+            _capabilityDigest([
+              for (final capability in contact.featureCapabilities)
+                capability.name,
+            ]);
+    if (!carriersStale && !capabilitiesStale) return;
+    final digest = '$carrierDigest|$capabilityDigest';
     final now = _now();
     final last = _carrierRefreshAskedAt[contact.deviceId];
     if (last != null && now.difference(last) < const Duration(minutes: 10)) {
@@ -3719,7 +4111,11 @@ class MessengerController extends ChangeNotifier {
     }
     _carrierRefreshAskedAt[contact.deviceId] = now;
     _carrierRefreshAskedDigest[contact.deviceId] = digest;
-    appendDebugLog('${contact.alias} has new routes; asking for them.');
+    appendDebugLog(
+      capabilitiesStale
+          ? '${contact.alias} updated; asking what it can do.'
+          : '${contact.alias} has new routes; asking for them.',
+    );
     unawaited(
       _sendReciprocalContactExchange(
         contact,
@@ -4741,6 +5137,8 @@ class MessengerController extends ChangeNotifier {
           return copy.path;
         case SanitizeStatus.failed:
           throw FileMetadataException(fileName);
+        case SanitizeStatus.partial:
+          throw FileMetadataException(fileName, partial: true);
         case SanitizeStatus.clean || SanitizeStatus.unsupported:
           break;
       }
@@ -6293,7 +6691,11 @@ class MessengerController extends ChangeNotifier {
         final decoded = jsonDecode(utf8.decode(inbound.bytes));
         if (decoded is Map<String, dynamic>) {
           final envelope = RelayEnvelope.fromJson(decoded);
-          if (_groupOnlyKinds.contains(envelope.kind)) groupEnvelope = envelope;
+          if (_groupOnlyKinds.contains(envelope.kind) ||
+              _groupOnlyRatchetPeer(envelope)?.publicKeyBase64 ==
+                  groupPeer.publicKeyBase64) {
+            groupEnvelope = envelope;
+          }
         }
       } catch (_) {}
     }
@@ -6310,6 +6712,10 @@ class MessengerController extends ChangeNotifier {
             envelope.recipientDeviceId != _snapshot.identity?.deviceId ||
             groupPeer.routing.effectivePolicy(kind, global) ==
                 TransportPolicy.disabled) {
+          return;
+        }
+        if (!_groupOnlyKinds.contains(envelope.kind)) {
+          await _handleGroupOnlyRatchetInbound(inbound, envelope);
           return;
         }
         await _processEnvelopes(
@@ -6557,6 +6963,7 @@ class MessengerController extends ChangeNotifier {
   /// What a member of a shared group who is not a contact may send us.
   static const Set<String> _groupOnlyKinds = {
     'group_history',
+    'group_call_signal',
     'group_message',
     'group_membership',
     'group_membership_ack',
@@ -6575,6 +6982,9 @@ class MessengerController extends ChangeNotifier {
     final decoded = jsonDecode(utf8.decode(inbound.bytes));
     if (decoded is! Map<String, dynamic>) return false;
     final envelope = RelayEnvelope.fromJson(decoded);
+    if (await _handleGroupOnlyRatchetInbound(inbound, envelope)) {
+      return true;
+    }
     if (!_groupOnlyKinds.contains(envelope.kind)) {
       return false;
     }
@@ -8477,6 +8887,7 @@ class MessengerController extends ChangeNotifier {
     if (enabled && !_platformBridge.supportsVoiceCallMedia) {
       throw StateError('Voice-call audio is unavailable in this build.');
     }
+    if (!enabled) await _groupCallService?.leave();
     if (!enabled && _voiceCallService?.active != null) {
       await _voiceCallService!.end(reason: 'Voice calls were disabled.');
     }
@@ -9162,6 +9573,11 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _groupHistoryTimers.clear();
+    for (final timer in _groupAnnounceTimers.values) {
+      timer.cancel();
+    }
+    _groupAnnounceTimers.clear();
+    _groupAnnounceSkip.clear();
     _groupHistoryLastSync.clear();
     _groupProjectionRestores.clear();
     await _groupHistoryService?.close();
@@ -9196,8 +9612,12 @@ class MessengerController extends ChangeNotifier {
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     _voiceCallSoundCues.reset();
+    if (_voiceCallService?.mediaBusy == true) {
+      _retiredVoiceMedia = _voiceCallService;
+    }
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = null;
+    _disposeGroupCalls();
     _rebuildSeenEnvelopeIdSet();
     _pairingSessionActiveUntil = null;
     _lastPairingBeaconSentAt = null;
@@ -10674,6 +11094,8 @@ class MessengerController extends ChangeNotifier {
     String caption = '',
     String? albumId,
     bool allowOriginalFallback = false,
+    bool cleanMetadata = true,
+    bool randomizeFileName = true,
     bool forceLanOnly = false,
     DebugAttachmentTestSpec? debugTest,
     bool debugUseSourceInPlace = false,
@@ -10733,7 +11155,11 @@ class MessengerController extends ChangeNotifier {
     final createdAt = DateTime.now().toUtc();
     final provisionalDescriptor = AttachmentDescriptor(
       id: attachmentId,
-      fileName: sanitizeAttachmentFileName(_outgoingFileName(source.fileName)),
+      fileName: sanitizeAttachmentFileName(
+        randomizeFileName
+            ? _outgoingFileName(source.fileName)
+            : source.fileName,
+      ),
       mimeType: sanitizeAttachmentMimeType(source.mimeType),
       sizeBytes: source.sizeBytes,
       chunkSize: chunkSize,
@@ -10789,6 +11215,7 @@ class MessengerController extends ChangeNotifier {
     final _PreparedAttachmentSource prepared;
     try {
       prepared = await _prepareOutboundAttachmentSource(
+        cleanMetadata: cleanMetadata,
         attachmentId: attachmentId,
         source: source,
         allowOriginalFallback: allowOriginalFallback,
@@ -11233,6 +11660,8 @@ class MessengerController extends ChangeNotifier {
             case SanitizeStatus.failed:
               // Never sent with its metadata without the user's say.
               throw const _MetadataNotRemoved();
+            case SanitizeStatus.partial:
+              throw const _MetadataNotRemoved(partial: true);
             case SanitizeStatus.clean || SanitizeStatus.unsupported:
               break;
           }
@@ -11254,6 +11683,8 @@ class MessengerController extends ChangeNotifier {
       }
     }
     final metadataFailed = spoolError is _MetadataNotRemoved;
+    final metadataPartial =
+        spoolError is _MetadataNotRemoved && spoolError.partial;
     // The original goes as it is: with its metadata, if it has any to
     // remove.
     final keepsMetadata =
@@ -11264,8 +11695,7 @@ class MessengerController extends ChangeNotifier {
     if (!allowOriginalFallback || originalPath == null) {
       throw AttachmentSpoolException(
         metadataFailed
-            ? 'Location and other details could not be removed from this '
-                  'file.'
+            ? fileMetadataConsentText(source.fileName, partial: metadataPartial)
             : canSpool
             ? 'Could not create a private attachment spool: $spoolError'
             : _storageReserveFraction > 0
@@ -11273,6 +11703,7 @@ class MessengerController extends ChangeNotifier {
             : 'Not enough free storage to prepare this file.',
         canUseOriginal: originalPath != null,
         keepsMetadata: keepsMetadata,
+        partialMetadata: metadataPartial,
       );
     }
     final original = File(originalPath);
@@ -13271,13 +13702,29 @@ class MessengerController extends ChangeNotifier {
     _upsertGroupMessage(profiledGroup.groupId, message);
     _markRuntimeActivity();
     await _persist('Sending group message to ${profiledGroup.title}.');
+    _groupMessagesBeingRecorded.add(message.id);
     try {
-      final event = await _groupHistory.recordOutgoing(profiledGroup, message);
+      // A stuck journal must not hold the message back from everyone:
+      // after a while it goes without its place (retries stop waiting).
+      final event = await _groupHistory
+          .recordOutgoing(
+            profiledGroup,
+            message,
+            seenLamport: _groupConversation(profiledGroup.groupId).messages
+                .fold<int>(
+                  0,
+                  (latest, other) =>
+                      max(latest, other.groupHistoryLamport ?? 0),
+                ),
+          )
+          .timeout(const Duration(seconds: 10));
       if (event != null) {
         _attachGroupHistoryOrder(profiledGroup.groupId, message.id, event);
       }
     } catch (error) {
       appendDebugLog('Group history archive pending: $error');
+    } finally {
+      _groupMessagesBeingRecorded.remove(message.id);
     }
     // Members in parallel: one offline member must not hold the message
     // back from everyone listed after them.
@@ -13415,8 +13862,8 @@ class MessengerController extends ChangeNotifier {
     }
     final checkpoint = <String, String>{
       for (final entry in latestVotes.entries)
-        if (entry.value.groupHistoryEventId != null)
-          entry.key: entry.value.groupHistoryEventId!,
+        if (entry.value.verifiedGroupHistoryEventId case final eventId?)
+          entry.key: eventId,
     };
     await sendGroupMessage(
       groupId: groupId,
@@ -13483,7 +13930,7 @@ class MessengerController extends ChangeNotifier {
       if (vote?.pollId != pollId) continue;
       final currentVote = vote!;
       if (!(message.pollClosed && currentVote.optionIndexes.isEmpty)) {
-        final eventId = message.groupHistoryEventId;
+        final eventId = message.verifiedGroupHistoryEventId;
         if (eventId != null) voteMessagesByEventId[eventId] = message;
         final old = latestVoteMessages[currentVote.voterDeviceId];
         if (old == null || _comparePollEventOrder(message, old) > 0) {
@@ -13526,7 +13973,8 @@ class MessengerController extends ChangeNotifier {
         : messages
               .where(
                 (message) =>
-                    message.groupHistoryEventId == closedCheckpointEventId,
+                    message.verifiedGroupHistoryEventId ==
+                    closedCheckpointEventId,
               )
               .firstOrNull;
     final checkpoint =
@@ -13548,7 +13996,7 @@ class MessengerController extends ChangeNotifier {
       final vote = message.pollVote!;
       if (closedAt == null) {
         votes[entry.key] = vote;
-      } else if (checkpoint[entry.key] != message.groupHistoryEventId) {
+      } else if (checkpoint[entry.key] != message.verifiedGroupHistoryEventId) {
         // An empty checkpoint means zero confirmed votes. Any vote outside the
         // exact event set remains visible as unconfirmed, regardless of clock
         // or Lamport ordering.
@@ -13614,6 +14062,20 @@ class MessengerController extends ChangeNotifier {
         (deviceId) => _groupMemberSupportsFeature(group, deviceId, feature),
       );
 
+  /// The newest place in [groupId]'s signed history this device holds
+  /// (claims of live copies not counted).
+  int _verifiedGroupLamport(String groupId) =>
+      _groupConversation(groupId).messages.fold<int>(
+        0,
+        (latest, message) => message.groupHistoryClaimed
+            ? latest
+            : max(latest, message.groupHistoryLamport ?? 0),
+      );
+
+  /// Own group messages being signed into the history: retries wait for
+  /// them, so every copy carries its place.
+  final Set<String> _groupMessagesBeingRecorded = <String>{};
+
   void _attachGroupHistoryOrder(
     String groupId,
     String messageId,
@@ -13676,6 +14138,7 @@ class MessengerController extends ChangeNotifier {
     String? scheduledOperationId,
     VoiceMessageMetadata? voiceMetadata,
     bool keepMetadata = false,
+    bool randomizeFileName = true,
   }) async {
     final group = _requireGroup(groupId);
     final captionSupported = _groupSupportsFeatureForAllOtherMembers(
@@ -13702,7 +14165,7 @@ class MessengerController extends ChangeNotifier {
         groupId: groupId,
         group: group,
         path: cleaned ?? path,
-        fileName: _outgoingFileName(fileName),
+        fileName: randomizeFileName ? _outgoingFileName(fileName) : fileName,
         mimeType: mimeType,
         caption: caption,
         scheduledOperationId: scheduledOperationId,
@@ -14790,12 +15253,7 @@ class MessengerController extends ChangeNotifier {
         'carrierInvite': carrierInvite.encodePayload(),
       if (requestId != null) 'pairingRequestId': requestId,
       'featureCapabilityVersion': 1,
-      'featureCapabilities': [
-        ..._localApplicationCapabilities().map((capability) => capability.name),
-        // Only the contacts this device carries for learn that it does.
-        if (contact.routing.carryForContact)
-          ApplicationCapability.forwardForContactsV1.name,
-      ],
+      'featureCapabilities': _capabilityNamesFor(contact),
       'requestPeerCapabilities': requestPeerCapabilities,
       if (pairingResponse != null) 'pairingResponse': pairingResponse,
       // Only peers that already know this identity read it (authenticated).
@@ -15278,6 +15736,9 @@ class MessengerController extends ChangeNotifier {
         _ownCarrierAddressesFor(contact, me.connectivity),
         _ownMatrixAddressFor(contact, me),
       ),
+      // What this build can do: a contact holding an older list (one sent
+      // when it could not be reached was lost) asks again.
+      'capabilityDigest': _capabilityDigest(_capabilityNamesFor(contact)),
       ..._localLanDirectHintPayload(),
     };
     if (effectiveProbeId != null) {
@@ -15483,6 +15944,7 @@ class MessengerController extends ChangeNotifier {
       processed += lobbyProcessed;
       displayableProcessed += lobbyProcessed;
       await _retryUnacknowledgedMessages();
+      _catchUpGroupsNow();
       final heartbeatResult = await _runHeartbeatPass();
 
       _lastRelayStatus = _networkSummary(
@@ -15844,7 +16306,11 @@ class MessengerController extends ChangeNotifier {
   /// schedule is confirmed. The original picker path is never retained, so
   /// dispatch remains safe after restart or source removal.
   Future<({String id, String path, String relativePath})>
-  _stageScheduledAttachmentSource(StagedAttachment source) async {
+  _stageScheduledAttachmentSource(
+    StagedAttachment source, {
+    bool cleanMetadata = true,
+    Future<bool> Function(FileMetadataException)? confirmKeepingMetadata,
+  }) async {
     final id = _randomId('scheduled');
     final root = await _attachmentRoot();
     final capacity = await _storageCapacityProvider(root.path);
@@ -15864,6 +16330,25 @@ class MessengerController extends ChangeNotifier {
       await temporary.create(recursive: true);
       await restrictFileToOwner(temporary);
       await copyAndHashAttachment(source, temporary.path);
+      if (cleanMetadata && removesFileMetadata) {
+        final status = await MediaSanitizer.sanitizeFile(temporary.path);
+        if (status == SanitizeStatus.failed ||
+            status == SanitizeStatus.partial) {
+          final error = FileMetadataException(
+            source.fileName,
+            partial: status == SanitizeStatus.partial,
+          );
+          if (confirmKeepingMetadata == null ||
+              !await confirmKeepingMetadata(error)) {
+            throw error;
+          }
+          if (status == SanitizeStatus.failed) {
+            // An I/O failure may have left a partly written candidate.
+            // Consent authorizes the intact source, never that candidate.
+            await copyAndHashAttachment(source, temporary.path);
+          }
+        }
+      }
       await temporary.rename(target.path);
     } catch (_) {
       try {
@@ -15879,6 +16364,7 @@ class MessengerController extends ChangeNotifier {
     required StagedAttachment source,
     required DateTime scheduledAt,
     String caption = '',
+    Future<bool> Function(FileMetadataException)? confirmKeepingMetadata,
   }) async {
     if (!contact.canSendOutbound) {
       throw StateError('This contact is not approved for scheduled delivery.');
@@ -15887,7 +16373,11 @@ class MessengerController extends ChangeNotifier {
     if (trimmedCaption.length > 4096) {
       throw ArgumentError('Scheduled captions are limited to 4096 characters.');
     }
-    final staged = await _stageScheduledAttachmentSource(source);
+    final staged = await _stageScheduledAttachmentSource(
+      source,
+      cleanMetadata: contact.deviceId != identity?.deviceId,
+      confirmKeepingMetadata: confirmKeepingMetadata,
+    );
     final id = staged.id;
     final entry = ScheduledMessage(
       id: id,
@@ -15898,9 +16388,12 @@ class MessengerController extends ChangeNotifier {
       createdAt: _now().toUtc(),
       attachmentId: id,
       attachmentPath: staged.relativePath,
-      attachmentFileName: source.fileName,
+      attachmentFileName: contact.deviceId == identity?.deviceId
+          ? source.fileName
+          : _outgoingFileName(source.fileName),
       attachmentMimeType: source.mimeType,
-      attachmentSizeBytes: source.sizeBytes,
+      attachmentSizeBytes: await File(staged.path).length(),
+      attachmentPrivacyPrepared: true,
     );
     try {
       _snapshot = _snapshot.copyWith(
@@ -15921,6 +16414,7 @@ class MessengerController extends ChangeNotifier {
     required String groupId,
     required StagedAttachment source,
     required DateTime scheduledAt,
+    Future<bool> Function(FileMetadataException)? confirmKeepingMetadata,
   }) async {
     final group = _requireGroup(groupId);
     final me = _requireIdentity();
@@ -15930,7 +16424,10 @@ class MessengerController extends ChangeNotifier {
     if (group.activeMemberDeviceIds.length < 2) {
       throw StateError('A group file needs at least one other member.');
     }
-    final staged = await _stageScheduledAttachmentSource(source);
+    final staged = await _stageScheduledAttachmentSource(
+      source,
+      confirmKeepingMetadata: confirmKeepingMetadata,
+    );
     final entry = ScheduledMessage(
       id: staged.id,
       conversationId: groupId,
@@ -15940,9 +16437,10 @@ class MessengerController extends ChangeNotifier {
       createdAt: _now().toUtc(),
       attachmentId: staged.id,
       attachmentPath: staged.relativePath,
-      attachmentFileName: source.fileName,
+      attachmentFileName: _outgoingFileName(source.fileName),
       attachmentMimeType: source.mimeType,
-      attachmentSizeBytes: source.sizeBytes,
+      attachmentSizeBytes: await File(staged.path).length(),
+      attachmentPrivacyPrepared: true,
     );
     try {
       _snapshot = _snapshot.copyWith(
@@ -16137,6 +16635,8 @@ class MessengerController extends ChangeNotifier {
             mimeType: entry.attachmentMimeType ?? 'application/octet-stream',
             caption: captionSupported ? entry.body : '',
             scheduledOperationId: entry.id,
+            keepMetadata: entry.attachmentPrivacyPrepared,
+            randomizeFileName: !entry.attachmentPrivacyPrepared,
           );
           if (!captionSupported) {
             await sendGroupMessage(
@@ -16152,7 +16652,10 @@ class MessengerController extends ChangeNotifier {
           );
         }
       } else {
-        final contact = _contactByDeviceId(entry.conversationId);
+        // Saved messages are this device's own chat, not a contact.
+        final contact = entry.conversationId == identity?.deviceId
+            ? savedMessagesContact
+            : _contactByDeviceId(entry.conversationId);
         if (contact == null) {
           throw StateError('Contact is no longer available.');
         }
@@ -16177,6 +16680,8 @@ class MessengerController extends ChangeNotifier {
             ),
             caption: entry.body,
             outgoingMessageId: entry.id,
+            cleanMetadata: !entry.attachmentPrivacyPrepared,
+            randomizeFileName: !entry.attachmentPrivacyPrepared,
           );
         } else {
           await sendMessage(
@@ -17213,6 +17718,12 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        if (envelope.kind == 'group_call_signal') {
+          await _handleGroupCallSignal(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
         if (envelope.kind == 'group_history') {
           await _handleGroupHistory(envelope);
           _markSeen(envelope.messageId);
@@ -17381,7 +17892,10 @@ class MessengerController extends ChangeNotifier {
             body: decodedMessage.body,
             outbound: false,
             state: DeliveryState.delivered,
-            createdAt: envelope.createdAt,
+            createdAt: _localTimeOf(
+              envelope.senderDeviceId,
+              envelope.createdAt,
+            ),
             replyToMessageId: decodedMessage.replyToMessageId,
             replySnippet: decodedMessage.replySnippet,
             replySenderDeviceId: decodedMessage.replySenderDeviceId,
@@ -17405,7 +17919,7 @@ class MessengerController extends ChangeNotifier {
         failed++;
         appendDebugLog(
           'Dropped envelope ${_boundedLogValue(envelope.messageId)} after '
-          'processing error: ${_boundedLogValue(error.toString(), 180)}',
+          'processing error: ${_envelopeProcessingError(envelope.kind, error)}',
         );
       } finally {
         _inFlightEnvelopeIds.remove(envelope.messageId);
@@ -17975,7 +18489,7 @@ class MessengerController extends ChangeNotifier {
       body: rawCaption,
       outbound: false,
       state: DeliveryState.pending,
-      createdAt: envelope.createdAt,
+      createdAt: _localTimeOf(sender.deviceId, envelope.createdAt),
       senderDisplayName: sender.alias,
       attachment: descriptor,
       albumId: rawAlbumId as String?,
@@ -20507,7 +21021,25 @@ class MessengerController extends ChangeNotifier {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
     }
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
-    _refreshCarriersIfStale(sender, routePayload?['carrierDigest']);
+    // Route updates are stamped when sent (never queued with an old time);
+    // over a live route they arrive within moments. A reply echoes our own
+    // time instead, so it says nothing about their clock.
+    final echoesOurTime = !requestReply && probeId != null;
+    final live = switch (_ingressRoute?.family) {
+      MessageRoute.lanDirect ||
+      MessageRoute.internetDirect ||
+      MessageRoute.irohDirect ||
+      MessageRoute.irohRelay => true,
+      _ => false,
+    };
+    if (live && !echoesOurTime) {
+      _noteClock(sender.deviceId, sentAt ?? envelope.createdAt);
+    }
+    _refreshCarriersIfStale(
+      sender,
+      routePayload?['carrierDigest'],
+      capabilityDigest: routePayload?['capabilityDigest'],
+    );
     _reachability.noteAnySignal(
       sender.deviceId,
       at: sentAt ?? envelope.createdAt,
@@ -20811,7 +21343,7 @@ class MessengerController extends ChangeNotifier {
       } catch (error) {
         appendDebugLog('Group history membership needs catch-up: $error');
       }
-      _scheduleGroupHistorySync(merged.groupId, sender.deviceId);
+      _scheduleGroupHistorySync(merged.groupId, sender.deviceId, passOn: false);
     }
     // Tell the sender we applied their version so they can drop the
     // pending-retry entry. Best-effort; the sender will retry on miss.
@@ -20934,10 +21466,38 @@ class MessengerController extends ChangeNotifier {
     )) {
       return;
     }
-    final alreadyKnown = existingConversation.messages.any(
-      (message) => message.id == envelope.messageId,
-    );
+    final known = existingConversation.messages
+        .where((message) => message.id == envelope.messageId)
+        .firstOrNull;
+    final alreadyKnown = known != null;
+    // A copy sent before the author's history had it placed may have come
+    // first: a later copy brings the place.
+    // Claims are bounded by what the signed history says (never by other
+    // claims, which a member could raise without end).
+    final verifiedLamport = _verifiedGroupLamport(group.groupId);
+    final laterOrder = payload.historyOrder;
+    if (known != null &&
+        known.groupHistoryLamport == null &&
+        laterOrder != null &&
+        laterOrder.lamport <= verifiedLamport + _maxLamportLead) {
+      _upsertGroupMessage(
+        group.groupId,
+        known.copyWith(
+          groupHistoryLamport: laterOrder.lamport,
+          groupHistoryAuthorDeviceId: envelope.senderDeviceId,
+          groupHistorySequence: laterOrder.sequence,
+          groupHistoryEventId: laterOrder.eventId,
+          groupHistoryClaimed: true,
+        ),
+      );
+    }
     if (!alreadyKnown) {
+      // The author's place in its history orders the message until the
+      // signed event replaces it; a claim far past anything seen is ignored
+      // (it would pin the message to the end).
+      final order = payload.historyOrder;
+      final ordered =
+          order != null && order.lamport <= verifiedLamport + _maxLamportLead;
       _upsertGroupMessage(
         group.groupId,
         ChatMessage(
@@ -20948,7 +21508,12 @@ class MessengerController extends ChangeNotifier {
           body: payload.body,
           outbound: false,
           state: DeliveryState.delivered,
-          createdAt: envelope.createdAt,
+          createdAt: _localTimeOf(envelope.senderDeviceId, envelope.createdAt),
+          groupHistoryLamport: ordered ? order.lamport : null,
+          groupHistoryAuthorDeviceId: ordered ? envelope.senderDeviceId : null,
+          groupHistorySequence: ordered ? order.sequence : null,
+          groupHistoryEventId: ordered ? order.eventId : null,
+          groupHistoryClaimed: ordered,
           senderDisplayName: payload.senderDisplayName ?? sender.alias,
           route: _ingressRoute,
           replyToMessageId: payload.replyToMessageId,
@@ -20966,7 +21531,9 @@ class MessengerController extends ChangeNotifier {
     _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _sendAck(contact: sender, envelope: envelope);
     if (historySupported) {
-      _scheduleGroupHistorySync(group.groupId, sender.deviceId);
+      // Everyone else got it from its author too: nothing to pass on
+      // (unless the author asks, see _askMemberToPassOn).
+      _scheduleGroupHistorySync(group.groupId, sender.deviceId, passOn: false);
     }
   }
 
@@ -22226,6 +22793,17 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       if (!sync && entry.attempts >= maxAttempts) {
+        // A receipt that never got through after this many tries is
+        // given up (it only stops the sender's resends); kept, it would
+        // stay in the vault for good.
+        if (entry.kind == PendingAckKind.delivered ||
+            entry.kind == PendingAckKind.read) {
+          _clearPendingAckDelivery(
+            targetDeviceId: entry.targetDeviceId,
+            acknowledgedMessageId: entry.acknowledgedMessageId,
+            kind: entry.kind,
+          );
+        }
         continue;
       }
       if (!force) {
@@ -23366,7 +23944,12 @@ class MessengerController extends ChangeNotifier {
         !group.hasActiveMember(contact.deviceId)) {
       return true;
     }
+    // Still being signed: the send that follows carries its place.
+    if (_groupMessagesBeingRecorded.contains(message.id)) return false;
     _noteOutboundAttempt(contact.deviceId, message.id);
+    // As stored now: its place in the signed history was added after the
+    // caller took its copy.
+    message = _groupMessageById(group.groupId, message.id) ?? message;
     try {
       final envelope = await _outboxEnvelope(
         contact,
@@ -23515,17 +24098,70 @@ class MessengerController extends ChangeNotifier {
           }
           due.add(contact);
         }
-        await _forEachBounded(
-          due,
-          (contact) => _tryDeliverExistingGroupMessage(
+        await _forEachBounded(due, (contact) async {
+          final delivered = await _tryDeliverExistingGroupMessage(
             group: group,
             contact: contact,
             message: message,
             background: !force,
-          ),
-        );
+          );
+          // Not reachable from here: a member who has it may reach them.
+          if (!delivered && !_groupMessagesBeingRecorded.contains(message.id)) {
+            _askMemberToPassOn(group, message, contact.deviceId);
+          }
+        });
       }
     }
+  }
+
+  /// When this device last asked someone to pass a group's history on to
+  /// [target], by "groupId|target".
+  final Map<String, DateTime> _passOnAskedAt = {};
+
+  /// [message] cannot reach [target] from here: ask up to two members who
+  /// received it to tell [target] the group history changed (at most once
+  /// a minute per member and group). [target] then pulls it from them.
+  void _askMemberToPassOn(
+    GroupRecord group,
+    ChatMessage message,
+    String target,
+  ) {
+    final me = identity;
+    if (me == null || _disposed) return;
+    final key = '${group.groupId}|$target';
+    final now = _now();
+    final last = _passOnAskedAt[key];
+    if (last != null && now.difference(last) < const Duration(minutes: 1)) {
+      return;
+    }
+    final helpers = [
+      for (final MapEntry(key: member, value: state)
+          in message.recipientStates.entries)
+        if (member != target &&
+            member != me.deviceId &&
+            !state.awaitsRecipientAck &&
+            group.hasActiveMember(member))
+          member,
+    ].take(2).toList();
+    if (helpers.isEmpty) return;
+    _passOnAskedAt[key] = now;
+    unawaited(() async {
+      try {
+        final heads = await _groupHistory.authorHeads(group.groupId, [
+          me.deviceId,
+        ]);
+        for (final helper in helpers) {
+          await _groupHistory.announceChange(
+            group.groupId,
+            helper,
+            heads: heads,
+            passTo: [target],
+          );
+        }
+      } catch (error) {
+        if (!_disposed) appendDebugLog('Asking to pass on waiting: $error');
+      }
+    }());
   }
 
   /// Acknowledges an identical copy of a membership update already handled,
@@ -23979,7 +24615,36 @@ class MessengerController extends ChangeNotifier {
 
   /// Whether [contact]'s app answers route tests.
   bool canTestRoutes(ContactRecord contact) =>
-      contact.featureCapabilities.contains(ApplicationCapability.routeProbeV1);
+      (_contactByDeviceId(contact.deviceId) ?? contact).featureCapabilities
+          .contains(ApplicationCapability.routeProbeV1);
+
+  /// When this device last asked [deviceId] what it can do, from a screen.
+  final Map<String, DateTime> _capabilitiesAskedAt = {};
+
+  /// Asks [contact] what its app can do (at most once a minute): a list
+  /// sent while this device could not be reached may have been lost.
+  /// True while an answer may still come.
+  bool askContactCapabilities(ContactRecord contact) {
+    final current = _contactByDeviceId(contact.deviceId);
+    if (current == null || !current.canSendOutbound) return false;
+    final now = _now();
+    final last = _capabilitiesAskedAt[current.deviceId];
+    if (last != null && now.difference(last) < const Duration(minutes: 1)) {
+      return now.difference(last) < const Duration(seconds: 20);
+    }
+    _capabilitiesAskedAt[current.deviceId] = now;
+    unawaited(
+      _sendReciprocalContactExchange(
+        current,
+        recipientKnowsIdentity: true,
+        requestPeerCapabilities: true,
+      ).catchError((Object error) {
+        appendDebugLog('Asking ${current.alias} what it can do failed: $error');
+        return false;
+      }),
+    );
+    return true;
+  }
 
   /// Sends a small probe on each route to [contact] in turn and times the
   /// answer. A route that takes probes but never answers goes last for
@@ -30121,7 +30786,10 @@ class MessengerController extends ChangeNotifier {
             changed = true;
           }
         case 'read':
-          final at = DateTime.tryParse(event['at'] as String? ?? '')?.toUtc();
+          final through = id is String ? _messageById(chat, id) : null;
+          final at =
+              through?.createdAt.toUtc() ??
+              DateTime.tryParse(event['at'] as String? ?? '')?.toUtc();
           if (at == null) continue;
           final now = _now().toUtc();
           await _markConversationReadWhere(
@@ -30129,6 +30797,7 @@ class MessengerController extends ChangeNotifier {
                 conversation.kind == ConversationKind.direct &&
                 conversation.peerDeviceId == chat,
             readThroughAt: at.isAfter(now) ? now : at,
+            readThroughMessageId: through?.id,
             fromOwnDevice: true,
           );
       }
@@ -30666,6 +31335,11 @@ class MessengerController extends ChangeNotifier {
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
+      if (_ratchet != null &&
+          (_groupCallMediaOverride?.available ??
+              _platformBridge.supportsVoiceCallMedia) &&
+          me?.experimentalVoiceCallsEnabled == true)
+        ApplicationCapability.groupVoiceCallsV1,
       if (_ratchet != null) ApplicationCapability.ratchetV1,
     };
     return ApplicationCapability.values
@@ -30989,6 +31663,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   ContactRecord? _groupMemberContact(GroupRecord group, String deviceId) {
+    if (_isRevokedGroupMember(group, deviceId)) return null;
     final contact = _contactByDeviceId(deviceId);
     final profile = group.memberProfileFor(deviceId);
     // A contact that removed us, or one not (or no longer) accepted, is
@@ -31020,6 +31695,8 @@ class MessengerController extends ChangeNotifier {
       signingPublicKeyBase64: profile.signingPublicKeyBase64,
       irohEndpointId: profile.irohEndpointId,
       capabilities: profile.capabilities,
+      featureCapabilities: profile.featureCapabilities,
+      featureCapabilityVersion: profile.featureCapabilityVersion,
       routeHints: profile.routeHints,
       safetyNumber: 'group-${_shortId(profile.publicKeyBase64)}',
       trustedAt: group.createdAt,
@@ -31231,6 +31908,11 @@ class MessengerController extends ChangeNotifier {
         'type': 'read',
         'chat': conversation.peerDeviceId,
         'at': latestCreatedAt.toUtc().toIso8601String(),
+        // Times differ between devices (each corrects clocks on its own):
+        // the message itself is what both hold.
+        'id':
+            ?(readThroughMessageId ??
+            _latestInboundMessageAtOrBefore(conversation, latestCreatedAt)?.id),
       });
     }
     final contact = _contactByDeviceId(conversation.peerDeviceId);
@@ -32122,8 +32804,12 @@ class MessengerController extends ChangeNotifier {
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());
+    if (_voiceCallService?.mediaBusy == true) {
+      _retiredVoiceMedia = _voiceCallService;
+    }
     unawaited(_voiceCallService?.dispose());
     _voiceCallService = null;
+    _disposeGroupCalls();
     unawaited(_voiceCallAudioSubscription?.cancel());
     _voiceCallAudioSubscription = null;
     unawaited(voiceMessageService.dispose());
@@ -32135,6 +32821,11 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _groupHistoryTimers.clear();
+    for (final timer in _groupAnnounceTimers.values) {
+      timer.cancel();
+    }
+    _groupAnnounceTimers.clear();
+    _groupAnnounceSkip.clear();
     unawaited(_groupHistoryService?.close());
     _attachmentBlockWorker.close();
     _transferProgressUiTimer?.cancel();

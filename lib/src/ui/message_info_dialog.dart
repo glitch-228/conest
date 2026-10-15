@@ -13,7 +13,12 @@ class MessageInfoDialog extends StatelessWidget {
     this.memberLabel,
     this.timestamp,
     this.showRoutes = true,
+    this.senderClockOffset,
   });
+
+  /// How far the sender's clock is behind ours (negative: ahead), when it
+  /// is noticeably off; times shown are by our clock.
+  final Duration? senderClockOffset;
 
   /// Routes and transports show only in advanced mode; otherwise the
   /// details are times and states.
@@ -33,6 +38,7 @@ class MessageInfoDialog extends StatelessWidget {
     String Function(String deviceId)? memberLabel,
     String Function(DateTime time)? timestamp,
     bool showRoutes = true,
+    Duration? senderClockOffset,
   }) => showDialog<void>(
     context: context,
     builder: (context) => MessageInfoDialog(
@@ -40,6 +46,7 @@ class MessageInfoDialog extends StatelessWidget {
       memberLabel: memberLabel,
       timestamp: timestamp,
       showRoutes: showRoutes,
+      senderClockOffset: senderClockOffset,
     ),
   );
 
@@ -49,6 +56,17 @@ class MessageInfoDialog extends StatelessWidget {
     final local = time.toLocal();
     String two(int value) => value.toString().padLeft(2, '0');
     return '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
+  }
+
+  /// "Their clock is about 2 h behind; times here are by this device."
+  static String clockOffsetLabel(Duration offset) {
+    final size = offset.abs();
+    final amount = size >= const Duration(hours: 1)
+        ? '${(size.inMinutes / 60).toStringAsFixed(size.inMinutes % 60 == 0 ? 0 : 1)} h'
+        : '${size.inMinutes} min';
+    return 'Their clock is about $amount '
+        '${offset.isNegative ? 'ahead' : 'behind'}; times here are by '
+        'this device.';
   }
 
   static String sizeLabel(int bytes) {
@@ -113,6 +131,18 @@ class MessageInfoDialog extends StatelessWidget {
             : l10n.messageReceivedAt(_time(message.createdAt)),
         key: const ValueKey('message-info-time'),
       ),
+      if (showRoutes && !outbound)
+        if (senderClockOffset case final offset?)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              clockOffsetLabel(offset),
+              key: const ValueKey('message-info-clock'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
     ];
     if (members == null || !outbound) {
       children.add(const SizedBox(height: 8));

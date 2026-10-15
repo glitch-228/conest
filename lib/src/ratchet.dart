@@ -395,16 +395,19 @@ class RatchetSessions {
     return (result['account'] as String, result['fallbackKey'] as String);
   });
 
-  Future<bool> hasSession(String peerDeviceId) async =>
-      (await _readPeer(peerDeviceId))?.sessions.isNotEmpty ?? false;
+  Future<bool> hasSession(String peerDeviceId) =>
+      _withPeer(peerDeviceId, () async {
+        return (await _readPeer(peerDeviceId))?.sessions.isNotEmpty ?? false;
+      });
 
   /// When a ratcheted message from this peer first decrypted, if ever.
-  Future<DateTime?> confirmedAt(String peerDeviceId) async {
-    final ms = (await _readPeer(peerDeviceId))?.confirmedAtMs;
-    return ms == null
-        ? null
-        : DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
-  }
+  Future<DateTime?> confirmedAt(String peerDeviceId) =>
+      _withPeer(peerDeviceId, () async {
+        final ms = (await _readPeer(peerDeviceId))?.confirmedAtMs;
+        return ms == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
+      });
 
   /// Records a peer's Olm identity from an authenticated bundle. A changed
   /// identity means the peer replaced its ratchet account, so every old
@@ -627,20 +630,22 @@ class RatchetSessions {
   });
 
   /// A received bulk key by id, if it is still retained.
-  Future<List<int>?> receivedBulkKey(String peerDeviceId, String id) async {
-    final ring = await _readBulkRing(
-      peerDeviceId,
-      await _readPeer(peerDeviceId),
-    );
-    final nowMs = _nowMs();
-    for (final key in ring.received) {
-      if (key.id == id &&
-          nowMs - key.createdAtMs < receivedBulkKeyRetention.inMilliseconds) {
-        return key.key;
-      }
-    }
-    return null;
-  }
+  Future<List<int>?> receivedBulkKey(String peerDeviceId, String id) =>
+      _withPeer(peerDeviceId, () async {
+        final ring = await _readBulkRing(
+          peerDeviceId,
+          await _readPeer(peerDeviceId),
+        );
+        final nowMs = _nowMs();
+        for (final key in ring.received) {
+          if (key.id == id &&
+              nowMs - key.createdAtMs <
+                  receivedBulkKeyRetention.inMilliseconds) {
+            return key.key;
+          }
+        }
+        return null;
+      });
 
   Future<({List<RatchetBulkKey> sent, List<RatchetBulkKey> received})>
   _readBulkRing(String peerDeviceId, RatchetPeerState? state) async {
@@ -704,8 +709,9 @@ class RatchetSessions {
   Future<void> forget(String peerDeviceId) =>
       _withPeer(peerDeviceId, () => _deletePeer(peerDeviceId));
 
-  // Write-through cache: every store access goes through these, so periodic
-  // checks over many peers do not reread files.
+  // Every peer read, including status and bulk-key lookups, holds the peer
+  // lock. A late store read must never restore a pre-write send counter.
+  // This write-through cache avoids repeated file reads for periodic checks.
   final Map<String, RatchetPeerState?> _peerCache = {};
 
   Future<RatchetPeerState?> _readPeer(String peerId) async {

@@ -30,6 +30,11 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
+    override fun startActivityForResult(intent: Intent, requestCode: Int) {
+        FilePickerVisibility.prepare(intent)
+        super.startActivityForResult(intent, requestCode)
+    }
+
     private var systemChannel: MethodChannel? = null
 
     /// What another app shared, copied into the cache, until Dart takes it.

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
 
@@ -231,6 +232,7 @@ class GroupHistoryCoordinator {
     required String membershipId,
     required GroupEventKind kind,
     required Map<String, Object?> payload,
+    int seenLamport = 0,
   }) async {
     final me = identity();
     final previous = await journal.authorHead(me.deviceId);
@@ -253,7 +255,7 @@ class GroupHistoryCoordinator {
       ),
       sequence: (previous?.sequence ?? 0) + 1,
       previousEventId: previous?.eventId,
-      lamport: (latest.isEmpty ? 0 : latest.first.lamport) + 1,
+      lamport: max(latest.isEmpty ? 0 : latest.first.lamport, seenLamport) + 1,
       membershipId: membershipId,
       kind: kind,
       payload: payload,
@@ -387,10 +389,14 @@ class GroupHistoryCoordinator {
         }
       });
 
+  /// [seenLamport]: the highest place this device has seen in the group
+  /// from live messages not yet in its journal; the new event goes after
+  /// it, so a reply orders after what it answers.
   Future<GroupHistoryEvent?> recordOutgoing(
     GroupRecord snapshot,
-    ChatMessage message,
-  ) async {
+    ChatMessage message, {
+    int seenLamport = 0,
+  }) async {
     await prepareMembership(snapshot);
     return _write(snapshot.groupId, () async {
       final replica = await _replica(snapshot.groupId);
@@ -416,6 +422,7 @@ class GroupHistoryCoordinator {
         groupId: snapshot.groupId,
         membershipId: membership.id,
         kind: GroupEventKind.message,
+        seenLamport: seenLamport,
         payload: {
           'messageId': message.id,
           'body': message.body,
@@ -627,8 +634,59 @@ class GroupHistoryCoordinator {
     await projectPage(snapshot.groupId);
   }
 
-  Future<void> announceChange(String id, String peer) =>
-      send(id, peer, {'version': 1, 'groupId': id, 'type': 'changed'});
+  /// Tells [peer] this device's history of [id] changed. [heads] (author
+  /// → newest sequence held here) lets a peer that has them all skip the
+  /// pull.
+  ///
+  /// [passTo]: members this device cannot reach, whom [peer] is asked to
+  /// tell in turn.
+  Future<void> announceChange(
+    String id,
+    String peer, {
+    Map<String, int> heads = const {},
+    List<String> passTo = const [],
+    // Sent because another member asked (it cannot reach [peer]).
+    bool asked = false,
+  }) => send(id, peer, {
+    'version': 1,
+    'groupId': id,
+    'type': 'changed',
+    if (heads.isNotEmpty) 'heads': heads,
+    if (passTo.isNotEmpty) 'passTo': passTo,
+    if (asked) 'asked': true,
+  });
+
+  /// Most authors named in one announcement.
+  static const int maxAnnouncedHeads = 64;
+
+  /// The newest sequence this device holds from each of [authors].
+  Future<Map<String, int>> authorHeads(
+    String id,
+    Iterable<String> authors,
+  ) async {
+    final replica = await _replica(id);
+    final heads = <String, int>{};
+    for (final author in authors.take(maxAnnouncedHeads)) {
+      final head = await replica.journal.authorHead(author);
+      if (head != null) heads[author] = head.sequence;
+    }
+    return heads;
+  }
+
+  /// Whether [heads] (from an announcement) name anything this device does
+  /// not hold yet. Malformed ones count as new, so the pull decides.
+  Future<bool> hasNewerThanHeld(String id, Object? heads) async {
+    if (heads is! Map || heads.isEmpty || heads.length > maxAnnouncedHeads) {
+      return true;
+    }
+    final replica = await _replica(id);
+    for (final MapEntry(key: author, value: sequence) in heads.entries) {
+      if (author is! String || sequence is! int) return true;
+      final held = await replica.journal.authorHead(author);
+      if ((held?.sequence ?? 0) < sequence) return true;
+    }
+    return false;
+  }
 
   Future<bool> handle(String id, String peer, Map<String, Object?> payload) {
     final snapshot = group(id);

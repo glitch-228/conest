@@ -45,6 +45,35 @@ void main() {
     );
   }
 
+  testWidgets('a sender whose clock is off is named, in advanced details '
+      'only', (tester) async {
+    Future<void> showWith({required bool routes}) => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageInfoDialog(
+            message: message(outbound: false),
+            timestamp: time,
+            showRoutes: routes,
+            senderClockOffset: const Duration(hours: 2),
+          ),
+        ),
+      ),
+    );
+    await showWith(routes: true);
+    expect(
+      find.text(
+        'Their clock is about 2 h behind; times here are by this device.',
+      ),
+      findsOneWidget,
+    );
+    await showWith(routes: false);
+    expect(find.byKey(const ValueKey('message-info-clock')), findsNothing);
+    expect(
+      MessageInfoDialog.clockOffsetLabel(const Duration(minutes: -5)),
+      'Their clock is about 5 min ahead; times here are by this device.',
+    );
+  });
+
   testWidgets('an incoming message lists every route it arrived by', (
     tester,
   ) async {

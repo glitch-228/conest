@@ -4,7 +4,7 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
@@ -20,7 +20,11 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crossbeam_queue::ArrayQueue;
-use opus::{Application, Channels, Decoder, Encoder};
+use opus::{Application, Channels, Encoder};
+
+#[path = "audio_remote.rs"]
+mod remote;
+use remote::RemoteMixer;
 
 const VOICE_RATE: u32 = 48_000;
 const FRAME_SAMPLES: usize = 960; // 20 ms, mono, 48 kHz.
@@ -29,7 +33,6 @@ const CAPTURE_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 6;
 const PLAYBACK_QUEUE_SAMPLES: usize = FRAME_SAMPLES * 8;
 const OPUS_PACKET_QUEUE: usize = 12;
 const ECHO_REFERENCE_QUEUE_SAMPLES: usize = VOICE_RATE as usize;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 const APM_FRAME_SAMPLES: usize = VOICE_RATE as usize / 100; // AEC3 runs on 10 ms.
 const FRAME_PERIOD_NANOS: i128 = 20_000_000;
 const MIN_JITTER_WAIT: Duration = Duration::from_millis(20);
@@ -87,7 +90,6 @@ impl AdaptiveBitrate {
 /// WebRTC-based voice stacks such as Discord's and Telegram's. AEC3 estimates
 /// the speaker-to-microphone delay itself and handles double-talk, so device
 /// latency does not need to match a fixed constant.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 struct EchoProcessor {
     apm: sonora::AudioProcessing,
     render: Vec<f32>,
@@ -95,11 +97,12 @@ struct EchoProcessor {
     capture_out: Vec<f32>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl EchoProcessor {
     fn new() -> Self {
         let config = sonora::Config {
-            echo_canceller: Some(sonora::config::EchoCanceller::default()),
+            echo_canceller: if cfg!(target_os = "android") { None } else {
+                Some(sonora::config::EchoCanceller::default())
+            },
             ..Default::default()
         };
         let stream = sonora::StreamConfig::new(VOICE_RATE, 1);
@@ -113,6 +116,19 @@ impl EchoProcessor {
             render_out: vec![0.0; APM_FRAME_SAMPLES],
             capture_out: vec![0.0; APM_FRAME_SAMPLES],
         }
+    }
+
+    fn set_noise_suppression(&mut self, enabled: bool) {
+        if self.apm.config().noise_suppression.is_some() == enabled {
+            return;
+        }
+        let mut config = self.apm.config().clone();
+        config.noise_suppression = enabled.then(|| sonora::config::NoiseSuppression {
+            level: sonora::config::NoiseSuppressionLevel::High,
+            ..Default::default()
+        });
+        // Changing only NS keeps the echo canceller's convergence state.
+        self.apm.apply_config(config);
     }
 
     /// Cancels echo in one capture frame in place. Every rendered sample is
@@ -156,31 +172,6 @@ impl EchoProcessor {
     }
 }
 
-/// Android captures with `VOICE_COMMUNICATION`, which enables the platform
-/// echo canceller. Like WebRTC on Android, skip software AEC on top of it.
-#[cfg(target_os = "android")]
-struct EchoProcessor;
-
-#[cfg(target_os = "android")]
-impl EchoProcessor {
-    fn new() -> Self {
-        Self
-    }
-
-    fn process_frame(
-        &mut self,
-        frame: &mut [f32],
-        render_reference: &ArrayQueue<f32>,
-        _capture_backlog_samples: usize,
-        muted: bool,
-    ) {
-        while render_reference.pop().is_some() {}
-        if muted {
-            frame.fill(0.0);
-        }
-    }
-}
-
 fn push_render_reference(queue: &ArrayQueue<f32>, sample: f32) {
     if queue.push(sample).is_err() {
         let _ = queue.pop();
@@ -192,9 +183,11 @@ pub struct VoiceAudioSession {
     running: Arc<AtomicBool>,
     muted: Arc<AtomicBool>,
     network_congested: Arc<AtomicBool>,
+    noise_suppression: Arc<AtomicBool>,
+    platform_noise_suppression: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     encoded: Arc<ArrayQueue<Vec<u8>>>,
-    incoming: Arc<ArrayQueue<(u64, Vec<u8>, Instant)>>,
+    incoming: Arc<Mutex<RemoteMixer>>,
     capture: Arc<ArrayQueue<f32>>,
     playback: Arc<ArrayQueue<f32>>,
     render_reference: Arc<ArrayQueue<f32>>,
@@ -310,19 +303,20 @@ impl VoiceAudioSession {
         let running = Arc::new(AtomicBool::new(true));
         let muted = Arc::new(AtomicBool::new(false));
         let network_congested = Arc::new(AtomicBool::new(false));
+        let noise_suppression = Arc::new(AtomicBool::new(true));
+        let platform_noise_suppression = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
         let capture = Arc::new(ArrayQueue::new(CAPTURE_QUEUE_SAMPLES));
         let playback = Arc::new(ArrayQueue::new(PLAYBACK_QUEUE_SAMPLES));
         let render_reference = Arc::new(ArrayQueue::new(ECHO_REFERENCE_QUEUE_SAMPLES));
         let encoded = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
-        let incoming = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
+        let incoming = Arc::new(Mutex::new(RemoteMixer::new()
+            .context("Could not initialize the remote audio mixer")?));
         let mut encoder = Encoder::new(VOICE_RATE, Channels::Mono, Application::Voip)
             .context("Could not initialize the Opus encoder")?;
         encoder
             .set_bitrate(opus::Bitrate::Bits(32_000))
             .context("Could not configure the Opus voice bitrate")?;
-        let decoder = Decoder::new(VOICE_RATE, Channels::Mono)
-            .context("Could not initialize the Opus decoder")?;
 
         let encode_worker = thread::Builder::new()
             .name("conest-call-encoder".into())
@@ -333,6 +327,8 @@ impl VoiceAudioSession {
                 let render_reference = render_reference.clone();
                 let muted = muted.clone();
                 let network_congested = network_congested.clone();
+                let noise_suppression = noise_suppression.clone();
+                let platform_noise_suppression = platform_noise_suppression.clone();
                 move || {
                     encode_loop(
                         running,
@@ -342,6 +338,8 @@ impl VoiceAudioSession {
                         muted,
                         encoder,
                         network_congested,
+                        noise_suppression,
+                        platform_noise_suppression,
                     )
                 }
             })
@@ -352,7 +350,7 @@ impl VoiceAudioSession {
                 let running = running.clone();
                 let incoming = incoming.clone();
                 let playback = playback.clone();
-                move || decode_loop(running, incoming, playback, decoder)
+                move || decode_loop(running, incoming, playback)
             }) {
             Ok(worker) => worker,
             Err(error) => {
@@ -366,6 +364,8 @@ impl VoiceAudioSession {
             running,
             muted,
             network_congested,
+            noise_suppression,
+            platform_noise_suppression,
             failed,
             encoded,
             incoming,
@@ -384,6 +384,20 @@ impl VoiceAudioSession {
         self.muted.store(muted, Ordering::Relaxed);
     }
 
+    pub fn set_noise_suppression(&self, enabled: bool) {
+        self.noise_suppression.store(enabled, Ordering::Relaxed);
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn noise_suppression_enabled(&self) -> bool {
+        self.noise_suppression.load(Ordering::Relaxed)
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn set_platform_noise_suppression(&self, enabled: bool) {
+        self.platform_noise_suppression.store(enabled, Ordering::Relaxed);
+    }
+
     pub fn set_network_congested(&self, congested: bool) {
         self.network_congested.store(congested, Ordering::Relaxed);
     }
@@ -397,20 +411,21 @@ impl VoiceAudioSession {
     }
 
     pub fn push_packet(&self, sequence: u64, packet: &[u8]) -> bool {
-        if sequence == 0 || packet.is_empty() || packet.len() > MAX_OPUS_PACKET {
-            return false;
-        }
-        let incoming = (sequence, packet.to_vec(), Instant::now());
-        if self.incoming.push(incoming).is_err() {
-            // The audio path is lossy by design. Replace stale queued audio
-            // with the freshest packet instead of building latency.
-            let _ = self.incoming.pop();
-            self.incoming
-                .push((sequence, packet.to_vec(), Instant::now()))
-                .is_ok()
-        } else {
-            true
-        }
+        self.push_participant_packet(0, sequence, packet)
+    }
+
+    pub fn set_participant_active(&self, participant: u16, active: bool) -> bool {
+        self.incoming.lock().ok().and_then(|mut mixer|
+            mixer.set_active(participant, active).ok()).unwrap_or(false)
+    }
+
+    pub fn push_participant_packet(&self, participant: u16, sequence: u64, packet: &[u8]) -> bool {
+        self.incoming.lock().ok().map(|mut mixer|
+            mixer.push(participant, sequence, packet, Instant::now())).unwrap_or(false)
+    }
+
+    pub fn participant_level(&self, participant: u16) -> f32 {
+        self.incoming.lock().ok().map_or(0.0, |mixer| mixer.level(participant))
     }
 
     /// Supplies one bounded mono PCM capture slice from Android's audio thread.
@@ -707,6 +722,8 @@ fn encode_loop(
     muted: Arc<AtomicBool>,
     mut encoder: Encoder,
     network_congested: Arc<AtomicBool>,
+    noise_suppression: Arc<AtomicBool>,
+    platform_noise_suppression: Arc<AtomicBool>,
 ) {
     let mut frame = vec![0.0_f32; FRAME_SAMPLES];
     let mut bitrate = AdaptiveBitrate::default();
@@ -724,6 +741,8 @@ fn encode_loop(
                 }
             }
         }
+        echo.set_noise_suppression(noise_suppression.load(Ordering::Relaxed)
+            && !platform_noise_suppression.load(Ordering::Relaxed));
         echo.process_frame(
             &mut frame,
             &render_reference,
@@ -749,31 +768,28 @@ fn encode_loop(
 
 fn decode_loop(
     running: Arc<AtomicBool>,
-    incoming: Arc<ArrayQueue<(u64, Vec<u8>, Instant)>>,
+    incoming: Arc<Mutex<RemoteMixer>>,
     playback: Arc<ArrayQueue<f32>>,
-    mut decoder: Decoder,
 ) {
-    let mut pcm = vec![0.0_f32; FRAME_SAMPLES * 6];
-    let mut jitter = PacketJitterBuffer::new(1);
+    let mut next_playout = Instant::now();
     while running.load(Ordering::Relaxed) {
-        while let Some((sequence, packet, arrived_at)) = incoming.pop() {
-            jitter.insert(sequence, packet, arrived_at);
+        let now = Instant::now();
+        if now < next_playout {
+            thread::sleep(Duration::from_millis(2));
+            continue;
         }
-        let Some(packet) = jitter.pop_ready(Instant::now()) else {
+        let frame = incoming.lock().ok().and_then(|mut mixer| mixer.render(now));
+        let Some(frame) = frame else {
             thread::sleep(Duration::from_millis(2));
             continue;
         };
-        let Ok(samples) = decoder.decode_float(&packet, &mut pcm, false) else {
-            continue;
-        };
-        if playback.len().saturating_add(samples) > PLAYBACK_QUEUE_SAMPLES * 3 / 4 {
+        next_playout = now + Duration::from_millis(20);
+        if playback.len().saturating_add(frame.len()) > PLAYBACK_QUEUE_SAMPLES * 3 / 4 {
             while playback.len() > PLAYBACK_QUEUE_SAMPLES / 4 {
                 let _ = playback.pop();
             }
         }
-        for sample in pcm.iter().take(samples) {
-            let _ = playback.push(*sample);
-        }
+        for sample in frame { let _ = playback.push(sample); }
     }
 }
 
@@ -860,9 +876,10 @@ impl PacketJitterBuffer {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveBitrate, Application, Channels, Decoder, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
+        AdaptiveBitrate, Application, Channels, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
         PacketJitterBuffer,
     };
+    use opus::Decoder;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -884,6 +901,39 @@ mod tests {
             .map(|sample| sample * sample)
             .sum::<f32>();
         assert!(signal_energy > 0.01);
+    }
+
+    #[test]
+    fn noise_suppression_reduces_noise_and_preserves_changing_voiced_signal() {
+        use super::{EchoProcessor, FRAME_SAMPLES, VOICE_RATE};
+        use crossbeam_queue::ArrayQueue;
+        let render = ArrayQueue::new(FRAME_SAMPLES);
+        let mut processor = EchoProcessor::new();
+        processor.set_noise_suppression(true);
+        let mut seed = 0x193a_b723_u32;
+        let (mut input_noise, mut output_noise) = (0.0_f64, 0.0_f64);
+        let (mut input_voice, mut output_voice) = (0.0_f64, 0.0_f64);
+        for frame_number in 0..500 {
+            let voiced = frame_number >= 250;
+            let mut frame: Vec<f32> = (0..FRAME_SAMPLES).map(|i| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let noise = ((seed >> 8) as f32 / 16777215.0 - 0.5) * 0.04;
+                let t = (frame_number * FRAME_SAMPLES + i) as f32 / VOICE_RATE as f32;
+                let frequency = 140.0 + 30.0 * (t * 2.3).sin();
+                let voice = (std::f32::consts::TAU * frequency * t).sin() * 0.25
+                    + (std::f32::consts::TAU * frequency * 2.0 * t).sin() * 0.08;
+                noise + if voiced { voice * (0.7 + 0.3 * (t * 6.0).sin()) } else { 0.0 }
+            }).collect();
+            let input = frame.iter().map(|x| f64::from(x * x)).sum::<f64>();
+            processor.process_frame(&mut frame, &render, 0, false);
+            let output = frame.iter().map(|x| f64::from(x * x)).sum::<f64>();
+            if (150..250).contains(&frame_number) { input_noise += input; output_noise += output; }
+            if frame_number >= 350 { input_voice += input; output_voice += output; }
+        }
+        assert!(output_noise < input_noise * 0.1, "noise {output_noise}/{input_noise}");
+        assert!(output_voice > input_voice * 0.5, "voice {output_voice}/{input_voice}");
+        processor.set_noise_suppression(false);
+        assert!(processor.apm.config().noise_suppression.is_none());
     }
 
     #[test]
