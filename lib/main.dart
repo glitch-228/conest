@@ -9182,6 +9182,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           senderClockOffset: controller.clockOffsetFor(
                             message.senderDeviceId,
                           ),
+                          senderOutOfTouchSince: controller
+                              .contactDeviceOutOfTouchSince(
+                                message.senderDeviceId,
+                              ),
                         );
                       } else if (value == 'copy') {
                         await _copyMessage(message);
@@ -11027,6 +11031,10 @@ class _ChatPanelState extends State<_ChatPanel> {
                             senderClockOffset: controller.clockOffsetFor(
                               message.senderDeviceId,
                             ),
+                            senderOutOfTouchSince: controller
+                                .contactDeviceOutOfTouchSince(
+                                  message.senderDeviceId,
+                                ),
                           );
                         } else if (value == 'forward') {
                           await _forwardTextMessage(

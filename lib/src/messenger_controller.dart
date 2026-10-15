@@ -15974,6 +15974,9 @@ class MessengerController extends ChangeNotifier {
       // What this build can do: a contact holding an older list (one sent
       // when it could not be reached was lost) asks again.
       'capabilityDigest': _capabilityDigest(_capabilityNamesFor(contact)),
+      // When this account's other devices were last in touch with this
+      // one (by day): contacts can tell a device its account lost.
+      'devicesInTouch': ?_ownDevicesInTouchReport(),
       ..._localLanDirectHintPayload(),
     };
     if (effectiveProbeId != null) {
@@ -21273,6 +21276,7 @@ class MessengerController extends ChangeNotifier {
     }
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
     _noteOwnDeviceInTouch(sender);
+    _applySiblingTouchReport(sender, routePayload?['devicesInTouch']);
     // Route updates are stamped when sent (never queued with an old time);
     // over a live route they arrive within moments. A reply echoes our own
     // time instead, so it says nothing about their clock.
@@ -30517,6 +30521,63 @@ class MessengerController extends ChangeNotifier {
       if (isOwnDeviceUnconfirmed(device)) device,
   ];
 
+  /// Own devices still confirmed, and the day each was last in touch.
+  Map<String, String>? _ownDevicesInTouchReport() {
+    final report = <String, String>{
+      for (final device in ownDevices.take(16))
+        if (!isOwnDeviceUnconfirmed(device))
+          device.deviceId: (device.inTouchAt ?? device.trustedAt)
+              .toUtc()
+              .toIso8601String()
+              .substring(0, 10),
+    };
+    return report.isEmpty ? null : report;
+  }
+
+  /// [sender] (one of a contact's devices) says when its account's other
+  /// devices were last in touch with it; a device's own word about itself
+  /// does not count.
+  void _applySiblingTouchReport(ContactRecord sender, Object? report) {
+    if (report is! Map || report.length > 16 || sender.ownDevice) return;
+    final anchorId = sender.accountAnchorDeviceId ?? sender.deviceId;
+    final now = _now().toUtc();
+    var changed = false;
+    for (final MapEntry(key: id, value: day) in report.entries) {
+      if (id is! String || day is! String || id == sender.deviceId) continue;
+      final record = _contactByDeviceId(id);
+      // Only the same account's devices (its main record or a linked one).
+      if (record == null ||
+          record.ownDevice ||
+          (record.deviceId != anchorId &&
+              record.accountAnchorDeviceId != anchorId)) {
+        continue;
+      }
+      var at = DateTime.tryParse(day)?.toUtc();
+      if (at == null) continue;
+      if (at.isAfter(now)) at = now;
+      final held = record.siblingsHeardAt;
+      if (held != null && !at.isAfter(held)) continue;
+      _replaceContactRecord(record.copyWith(siblingsHeardAt: at));
+      changed = true;
+    }
+    if (changed) unawaited(_saveSnapshotSilently(debounce: true));
+  }
+
+  /// When [deviceId] (a contact's device) was last heard of by its
+  /// account's other devices, if longer ago than the limit; else null.
+  DateTime? contactDeviceOutOfTouchSince(String deviceId) {
+    final record = _contactByDeviceId(deviceId);
+    final heard = record?.siblingsHeardAt;
+    if (record == null || record.ownDevice || heard == null) return null;
+    final days =
+        identity?.ownDeviceTouchDays ??
+        IdentityRecord.defaultOwnDeviceTouchDays;
+    // A day of slack: reports are by day.
+    return _now().toUtc().difference(heard) > Duration(days: days + 1)
+        ? heard
+        : null;
+  }
+
   /// [device] (an own device, still confirmed) was heard from: in touch.
   void _noteOwnDeviceInTouch(ContactRecord device) {
     if (!device.ownDevice || isOwnDeviceUnconfirmed(device)) return;
@@ -30558,8 +30619,22 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// Tells the user once when one of their devices has gone quiet.
+  /// Tells the user once when one of their devices has gone quiet, or a
+  /// contact's device has (its account's other devices lost touch).
   void _noticeUnconfirmedOwnDevices() {
+    for (final record in _snapshot.contacts) {
+      if (record.ownDevice || record.isArchived) continue;
+      if (contactDeviceOutOfTouchSince(record.deviceId) == null) {
+        _unconfirmedNoticed.remove('contact|${record.deviceId}');
+        continue;
+      }
+      if (!_unconfirmedNoticed.add('contact|${record.deviceId}')) continue;
+      final name = record.deviceName ?? 'one of their devices';
+      setStatus(
+        "${record.alias}'s other devices have not heard from $name for a "
+        'while: messages from it may not be theirs.',
+      );
+    }
     for (final device in unconfirmedOwnDevices) {
       if (!_unconfirmedNoticed.add(device.deviceId)) continue;
       setStatus(
@@ -31334,6 +31409,8 @@ class MessengerController extends ChangeNotifier {
         'featureCapabilityVersion': existing.featureCapabilityVersion,
         if (existing.toJson()['carrierAddresses'] != null)
           'carrierAddresses': existing.toJson()['carrierAddresses'],
+        if (existing.toJson()['siblingsHeardAt'] != null)
+          'siblingsHeardAt': existing.toJson()['siblingsHeardAt'],
       },
     };
     try {

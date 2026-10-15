@@ -16705,6 +16705,49 @@ void main() {
       },
     );
 
+    test('a contact device its account lost touch with is flagged', () async {
+      final (alice, bob, phone, advance) = await threeDevices();
+      advance(const Duration(hours: 25));
+      final aliceId = alice.identity!.deviceId;
+      final phoneId = phone.identity!.deviceId;
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            alice.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return phone.linkState == LinkState.linked &&
+            bob.linkedDevicesOf(aliceId).isNotEmpty;
+      });
+      // Alice's laptop tells Bob it is in touch with her phone.
+      await alice.checkContactRoutes(
+        alice.contacts.firstWhere((c) => c.deviceId == bob.identity!.deviceId),
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).single.siblingsHeardAt != null;
+      }, reason: 'Bob never heard how the phone is doing');
+      expect(bob.contactDeviceOutOfTouchSince(phoneId), isNull);
+
+      // Nine days of silence from the phone; the laptop still talks to Bob.
+      advance(const Duration(days: 9));
+      await alice.checkContactRoutes(
+        alice.contacts.firstWhere((c) => c.deviceId == bob.identity!.deviceId),
+      );
+      for (var i = 0; i < 10; i++) {
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(bob.contactDeviceOutOfTouchSince(phoneId), isNotNull);
+      // The laptop itself is not flagged (nobody reported on it).
+      expect(bob.contactDeviceOutOfTouchSince(aliceId), isNull);
+    });
+
     test('a device removed on one device is removed on the others', () async {
       var now = DateTime.now().toUtc();
       final network = _InProcessIrohNetwork();

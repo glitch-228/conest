@@ -1842,6 +1842,7 @@ class ContactRecord {
     this.deviceName,
     this.ownDevice = false,
     this.inTouchAt,
+    this.siblingsHeardAt,
     this.routing = const ContactRoutingPreferences(),
     this.signingPublicKeyBase64,
     this.irohEndpointId,
@@ -1973,6 +1974,10 @@ class ContactRecord {
   /// confirmed by the user). Long out of touch, it is unconfirmed.
   final DateTime? inTouchAt;
 
+  /// For a contact's device: the latest time its account's other devices
+  /// said they were in touch with it (null until any reported).
+  final DateTime? siblingsHeardAt;
+
   /// Another device of a contact's account, not the contact as listed.
   bool get isLinkedDevice => accountAnchorDeviceId != null;
 
@@ -2021,6 +2026,7 @@ class ContactRecord {
     String? deviceName,
     bool? ownDevice,
     DateTime? inTouchAt,
+    DateTime? siblingsHeardAt,
     bool clearRemoteRemovedAt = false,
     ContactRoutingPreferences? routing,
     String? signingPublicKeyBase64,
@@ -2078,6 +2084,7 @@ class ContactRecord {
       deviceName: deviceName ?? this.deviceName,
       ownDevice: ownDevice ?? this.ownDevice,
       inTouchAt: inTouchAt ?? this.inTouchAt,
+      siblingsHeardAt: siblingsHeardAt ?? this.siblingsHeardAt,
       routing: routing ?? this.routing,
       signingPublicKeyBase64:
           signingPublicKeyBase64 ?? this.signingPublicKeyBase64,
@@ -2198,6 +2205,8 @@ class ContactRecord {
       if (deviceName != null) 'deviceName': deviceName,
       if (ownDevice) 'ownDevice': true,
       if (inTouchAt != null) 'inTouchAt': inTouchAt!.toUtc().toIso8601String(),
+      if (siblingsHeardAt != null)
+        'siblingsHeardAt': siblingsHeardAt!.toUtc().toIso8601String(),
       'routing': routing.toJson(),
       if (signingPublicKeyBase64 != null)
         'signingPublicKeyBase64': signingPublicKeyBase64,
@@ -2317,6 +2326,9 @@ class ContactRecord {
           : null,
       ownDevice: json['ownDevice'] == true,
       inTouchAt: DateTime.tryParse(json['inTouchAt'] as String? ?? '')?.toUtc(),
+      siblingsHeardAt: DateTime.tryParse(
+        json['siblingsHeardAt'] as String? ?? '',
+      )?.toUtc(),
       routing: json['routing'] is Map<String, dynamic>
           ? ContactRoutingPreferences.fromJson(
               json['routing'] as Map<String, dynamic>,
