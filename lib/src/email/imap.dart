@@ -219,8 +219,9 @@ class ImapClient {
     int maxLiteral = 64 * 1024,
   }) async {
     final responses = <ImapResponse>[];
+    final budget = _ImapReadBudget(maxLiteral);
     while (true) {
-      final response = await _readResponse(maxLiteral);
+      final response = await _readResponse(budget);
       if (response.text.startsWith('$tag ')) {
         final status = response.text.substring(tag.length + 1);
         if (!status.startsWith('OK')) throw ImapException(status);
@@ -240,18 +241,17 @@ class ImapClient {
 
   /// A full response: a line plus any `{n}` literals and their
   /// continuations.
-  Future<ImapResponse> _readResponse(int maxLiteral) async {
+  Future<ImapResponse> _readResponse(_ImapReadBudget budget) async {
     final text = StringBuffer();
     final literals = <Uint8List>[];
     while (true) {
       final line = await _reader.readLine();
+      budget.line(line.length);
       text.write(line);
       final literal = RegExp(r'\{(\d+)\}$').firstMatch(line);
       if (literal == null) break;
       final length = int.parse(literal.group(1)!);
-      if (length > maxLiteral) {
-        throw const ImapException('literal too large');
-      }
+      budget.literal(length);
       literals.add(await _reader.readBytes(length));
     }
     return ImapResponse(text.toString(), literals);
@@ -264,4 +264,26 @@ class ImapClient {
 
   static String _quote(String value) =>
       '"${value.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"';
+}
+
+class _ImapReadBudget {
+  _ImapReadBudget(this.literalLimit);
+  final int literalLimit;
+  var literalBytes = 0;
+  var literalCount = 0;
+  var textBytes = 0;
+
+  void line(int length) {
+    textBytes += length;
+    if (textBytes > 1024 * 1024) {
+      throw const ImapException('response text too large');
+    }
+  }
+
+  void literal(int length) {
+    if (++literalCount > 16 || length > literalLimit - literalBytes) {
+      throw const ImapException('literal budget exceeded');
+    }
+    literalBytes += length;
+  }
 }

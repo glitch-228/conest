@@ -54,6 +54,7 @@ class PgpCheckBudget {
 
 /// Most a decrypted message may expand to (compressed data included).
 const int maxPgpPlaintextBytes = 8 * 1024 * 1024;
+const int maxPgpFilePlaintextBytes = 30 * 1024 * 1024;
 
 /// A Cv25519 encryption subkey of a [PgpPublicKey].
 class PgpEncryptionSubkey {
@@ -632,7 +633,13 @@ abstract final class Pgp {
     PgpSecretKey key, {
     List<PgpPublicKey> senders = const [],
     DateTime? now,
+    int maxPlaintextBytes = maxPgpPlaintextBytes,
   }) async {
+    if (maxPlaintextBytes < 0 ||
+        maxPlaintextBytes > maxPgpFilePlaintextBytes ||
+        message.length > maxPlaintextBytes + 1024 * 1024) {
+      throw const FormatException('OpenPGP message too large.');
+    }
     final packets = OpenPgpSymmetric.readPackets(message);
     final subkey = key.publicKey.encryptionSubkey;
     (int, Uint8List)? session;
@@ -667,8 +674,14 @@ abstract final class Pgp {
     if (data == null) {
       throw const FormatException('The OpenPGP message holds no data.');
     }
-    final inner = _decryptSeipd(data, session.$2);
-    return _readSigned(inner, senders, now ?? DateTime.now(), depth: 0);
+    final inner = _decryptSeipd(data, session.$2, maxPlaintextBytes);
+    return _readSigned(
+      inner,
+      senders,
+      now ?? DateTime.now(),
+      depth: 0,
+      limit: maxPlaintextBytes,
+    );
   }
 
   static Future<List<int>> _wrapSessionKey(
@@ -765,7 +778,11 @@ abstract final class Pgp {
     }
   }
 
-  static Uint8List _decryptSeipd(Uint8List data, Uint8List sessionKey) {
+  static Uint8List _decryptSeipd(
+    Uint8List data,
+    Uint8List sessionKey,
+    int limit,
+  ) {
     if (data.isEmpty || data[0] != 1 || data.length < 1 + 18 + 22) {
       throw const FormatException('Unsupported OpenPGP data packet.');
     }
@@ -795,17 +812,22 @@ abstract final class Pgp {
     List<PgpPublicKey> senders,
     DateTime now, {
     required int depth,
+    int limit = maxPgpPlaintextBytes,
   }) async {
+    if (data.length > limit + 1024) {
+      throw const FormatException('OpenPGP plaintext too large.');
+    }
     final packets = OpenPgpSymmetric.readPackets(data);
     if (packets.length == 1 && packets.single.$1 == 8) {
       if (depth > 0) {
         throw const FormatException('Nested OpenPGP compression.');
       }
       return _readSigned(
-        _decompress(packets.single.$2),
+        _decompress(packets.single.$2, limit),
         senders,
         now,
         depth: depth + 1,
+        limit: limit,
       );
     }
     Uint8List? content;
@@ -845,7 +867,7 @@ abstract final class Pgp {
     return decrypted;
   }
 
-  static Uint8List _decompress(Uint8List body) {
+  static Uint8List _decompress(Uint8List body, int limit) {
     if (body.isEmpty) throw const FormatException('Empty compressed packet.');
     final input = Uint8List.sublistView(body, 1);
     switch (body[0]) {
@@ -853,7 +875,7 @@ abstract final class Pgp {
         return input;
       case 1:
       case 2:
-        final sink = _LimitedSink(maxPgpPlaintextBytes);
+        final sink = _LimitedSink(limit);
         final decoder = ZLibDecoder(
           raw: body[0] == 1,
         ).startChunkedConversion(sink);

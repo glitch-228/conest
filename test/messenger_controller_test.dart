@@ -13,7 +13,7 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
-import 'package:conest/main.dart' show sniffImageMimeType;
+import 'package:conest/main.dart' show sniffImageMimeType, buildDeltaAttachment;
 import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat/desktop_links.dart';
 import 'package:conest/src/bitchat/gateway.dart';
@@ -56,6 +56,10 @@ import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/delta_chats.dart';
+import 'package:conest/src/email/delta_mail.dart';
+import 'package:conest/src/email/carrier_mail.dart' show maxCarrierMailBytes;
+import 'package:conest/src/email/delta_content.dart';
+import 'package:conest/src/email/pgp.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
 import 'package:conest/src/nostr/event.dart';
@@ -95,6 +99,8 @@ import 'support/fake_ratchet_engine.dart';
 import 'support/observing_ratchet_store.dart';
 import 'support/fake_rns_bus.dart';
 import 'support/fake_tor.dart';
+
+part 'delta_controller_content_tests.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -1400,6 +1406,7 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 );
 
 void main() {
+  deltaContentControllerTests();
   test('chat folders move later and persist their final order', () async {
     final vault = _MemoryVaultStore();
     final controller = await _createController(
