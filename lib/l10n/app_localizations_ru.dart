@@ -5300,4 +5300,29 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get crashReportClose => 'Закрыть';
+
+  @override
+  String get connectionsNetworks => 'Сети, в которых было это устройство';
+
+  @override
+  String get connectionsNetworkNow => 'Используется сейчас';
+
+  @override
+  String connectionsNetworkLastSeen(String date) {
+    return 'Последний раз: $date';
+  }
+
+  @override
+  String get connectionsRouteWorks => 'работает';
+
+  @override
+  String get connectionsRouteBlocked => 'заблокировано в этой сети';
+
+  @override
+  String get connectionsRouteFailing => 'сбои';
+
+  @override
+  String connectionsAsOf(String when) {
+    return 'на $when';
+  }
 }

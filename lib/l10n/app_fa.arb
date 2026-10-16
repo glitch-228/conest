@@ -1343,5 +1343,12 @@
   "crashNoticeDismiss": "بستن پیام",
   "crashReportTitle": "چه اتفاقی افتاد",
   "crashReportCopy": "کپی",
-  "crashReportClose": "بستن"
+  "crashReportClose": "بستن",
+  "connectionsNetworks": "شبکه‌هایی که این دستگاه به آن‌ها وصل بوده",
+  "connectionsNetworkNow": "اکنون در حال استفاده",
+  "connectionsNetworkLastSeen": "آخرین بار {date}",
+  "connectionsRouteWorks": "کار می‌کند",
+  "connectionsRouteBlocked": "در این شبکه مسدود است",
+  "connectionsRouteFailing": "خطا دارد",
+  "connectionsAsOf": "تا {when}"
 }

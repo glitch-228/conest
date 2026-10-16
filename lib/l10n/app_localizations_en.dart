@@ -5185,4 +5185,29 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get crashReportClose => 'Close';
+
+  @override
+  String get connectionsNetworks => 'Networks this device has been on';
+
+  @override
+  String get connectionsNetworkNow => 'In use now';
+
+  @override
+  String connectionsNetworkLastSeen(String date) {
+    return 'Last seen $date';
+  }
+
+  @override
+  String get connectionsRouteWorks => 'works';
+
+  @override
+  String get connectionsRouteBlocked => 'blocked on this network';
+
+  @override
+  String get connectionsRouteFailing => 'failing';
+
+  @override
+  String connectionsAsOf(String when) {
+    return 'as of $when';
+  }
 }

@@ -1343,5 +1343,12 @@
   "crashNoticeDismiss": "忽略",
   "crashReportTitle": "发生了什么",
   "crashReportCopy": "复制",
-  "crashReportClose": "关闭"
+  "crashReportClose": "关闭",
+  "connectionsNetworks": "此设备用过的网络",
+  "connectionsNetworkNow": "正在使用",
+  "connectionsNetworkLastSeen": "上次出现 {date}",
+  "connectionsRouteWorks": "可用",
+  "connectionsRouteBlocked": "在此网络上被屏蔽",
+  "connectionsRouteFailing": "失败",
+  "connectionsAsOf": "截至 {when}"
 }

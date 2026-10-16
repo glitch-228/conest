@@ -5302,4 +5302,29 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get crashReportClose => 'إغلاق';
+
+  @override
+  String get connectionsNetworks => 'الشبكات التي اتصل بها هذا الجهاز';
+
+  @override
+  String get connectionsNetworkNow => 'قيد الاستخدام الآن';
+
+  @override
+  String connectionsNetworkLastSeen(String date) {
+    return 'آخر ظهور $date';
+  }
+
+  @override
+  String get connectionsRouteWorks => 'يعمل';
+
+  @override
+  String get connectionsRouteBlocked => 'محجوب على هذه الشبكة';
+
+  @override
+  String get connectionsRouteFailing => 'يفشل';
+
+  @override
+  String connectionsAsOf(String when) {
+    return 'حتى $when';
+  }
 }

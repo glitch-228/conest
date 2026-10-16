@@ -70,6 +70,7 @@ import 'nostr/secp256k1.dart';
 import 'nostr_carrier.dart';
 import 'native_attachment_crypto.dart';
 import 'network_errors.dart';
+import 'network_history.dart';
 import 'platform_bridge.dart';
 import 'radio/byte_link.dart';
 import 'ratchet.dart';
@@ -658,7 +659,9 @@ class MessengerController extends ChangeNotifier {
           _snapshot = _snapshot.copyWith(reachabilityRecords: records),
       nowProvider: _now,
     );
-    _routeHealthTracker = RouteHealthTracker(nowProvider: _now);
+    _routeHealthTracker = RouteHealthTracker(nowProvider: _now)
+      ..onOutcome = (route, ok, error) =>
+          _noteRouteOutcome(_historyRouteOf(route), ok, error);
     _localRelayNode.onEnvelopeStored = _handleLocalEnvelopeStored;
   }
 
@@ -3901,8 +3904,36 @@ class MessengerController extends ChangeNotifier {
         sentAt: _now(),
       );
 
-  /// Reporter → device → what it said (recent only; in memory).
+  /// Reporter → device → what it said, kept a week (and across restarts)
+  /// so the map shows links fading rather than vanishing.
   final Map<String, Map<String, ReportedLink>> _reportedLinks = {};
+  static const _reportedLinksKept = Duration(days: 7);
+
+  void _loadReportedLinks() {
+    _reportedLinks.clear();
+    for (final MapEntry(key: reporter, value: links)
+        in _snapshot.reportedLinks.entries.take(64)) {
+      if (links is! Map) continue;
+      final kept = <String, ReportedLink>{};
+      for (final MapEntry(key: id, value: entry) in links.entries.take(32)) {
+        if (id is! String || entry is! List || entry.length != 2) continue;
+        final status = LinkStatus.tryParse(entry[0]);
+        final at = DateTime.tryParse(entry[1] is String ? entry[1] : '');
+        if (status != null && at != null) {
+          kept[id] = ReportedLink(status: status, at: at);
+        }
+      }
+      if (kept.isNotEmpty) _reportedLinks[reporter] = kept;
+    }
+  }
+
+  Map<String, Object?> _reportedLinksJson() => {
+    for (final MapEntry(key: reporter, value: links) in _reportedLinks.entries)
+      reporter: {
+        for (final MapEntry(key: id, value: link) in links.entries)
+          id: [link.status.name, link.at.toUtc().toIso8601String()],
+      },
+  };
 
   void _applyReportedLinks(
     ContactRecord sender,
@@ -3914,18 +3945,36 @@ class MessengerController extends ChangeNotifier {
     // As of when they sent it (a copy that waited on a relay is older).
     final current = _now().toUtc();
     final now = sentAt.toUtc().isAfter(current) ? current : sentAt.toUtc();
-    final kept = <String, ReportedLink>{};
+    // What it said before stays, at its time, until a week has passed.
+    final kept = <String, ReportedLink>{
+      for (final MapEntry(key: id, value: link)
+          in (_reportedLinks[sender.deviceId] ?? const {}).entries)
+        if (known.contains(id) &&
+            current.difference(link.at) < _reportedLinksKept)
+          id: link,
+    };
     for (final MapEntry(key: id, value: status) in links.entries) {
       final parsed = LinkStatus.tryParse(status);
       // Only devices this device knows too, as the sender should share.
       if (id is! String || parsed == null || !known.contains(id)) continue;
       kept[id] = ReportedLink(status: parsed, at: now);
     }
+    while (kept.length > 32) {
+      kept.remove(
+        kept.entries
+            .reduce((a, b) => a.value.at.isBefore(b.value.at) ? a : b)
+            .key,
+      );
+    }
     if (kept.isEmpty) {
       _reportedLinks.remove(sender.deviceId);
     } else {
       _reportedLinks[sender.deviceId] = kept;
     }
+    while (_reportedLinks.length > 64) {
+      _reportedLinks.remove(_reportedLinks.keys.first);
+    }
+    _networkHistoryChanged = true;
   }
 
   /// Who reaches whom, as far as this device knows.
@@ -3959,7 +4008,7 @@ class MessengerController extends ChangeNotifier {
             in _reportedLinks.entries)
           reporter: {
             for (final MapEntry(key: id, value: link) in links.entries)
-              if (now.difference(link.at) < const Duration(hours: 2)) id: link,
+              if (now.difference(link.at) < _reportedLinksKept) id: link,
           },
       },
       names: names,
@@ -4201,9 +4250,77 @@ class MessengerController extends ChangeNotifier {
 
   String? _lastCallForeground;
 
+  NetworkHistory _networkHistory = NetworkHistory();
+  bool _networkHistoryChanged = false;
+
+  /// What each network this device has been on let through.
+  NetworkHistory get networkHistory => _networkHistory;
+
+  static String _historyRouteOf(PeerEndpoint route) => switch (route.kind) {
+    PeerRouteKind.lan => 'lan',
+    PeerRouteKind.directInternet => 'direct',
+    PeerRouteKind.relay => 'relay:${route.host}:${route.port}',
+  };
+
+  void _noteTransportOutcome(TransportKind kind, bool ok, Object? error) =>
+      _noteRouteOutcome(kind.name, ok, error?.toString());
+
+  void _noteRouteOutcome(String route, bool ok, String? error) {
+    final now = _now();
+    if (ok) {
+      _networkHistory.worked(route, now);
+    } else {
+      _networkHistory.failed(route, routeFailureKindOf(error), now);
+    }
+    _networkHistoryChanged = true;
+  }
+
+  /// The network now in use ([label]: connectivity_plus's names, such as
+  /// "wifi,vpn"), told apart by its kind and this device's LAN subnets.
+  Future<void> noteNetwork(String label) async {
+    final lower = label.toLowerCase();
+    if (lower.contains('none')) return;
+    List<String> addresses;
+    try {
+      addresses = await _lanAddressProvider();
+    } catch (_) {
+      addresses = const [];
+    }
+    final subnets = [
+      for (final address in addresses)
+        if (RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(address))
+          address.substring(0, address.lastIndexOf('.')),
+    ];
+    final kind = lower.contains('wifi')
+        ? 'wifi'
+        : lower.contains('ethernet')
+        ? 'ethernet'
+        : lower.contains('mobile')
+        ? 'mobile'
+        : lower.contains('bluetooth')
+        ? 'bluetooth'
+        : lower.contains('vpn')
+        ? 'vpn'
+        : subnets.isNotEmpty
+        ? 'wifi'
+        : 'other';
+    _networkHistory.enter(
+      kind: kind,
+      lanSubnets: kind == 'mobile' ? const [] : subnets,
+      vpn: lower.contains('vpn'),
+      cost: _networkCostClass,
+      now: _now(),
+    );
+    _networkHistoryChanged = true;
+    if (_disposed) return;
+    unawaited(_saveSnapshotSilently(debounce: true).catchError((Object _) {}));
+  }
+
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      _networkHistory = NetworkHistory.fromJson(_snapshot.networkHistory);
+      _loadReportedLinks();
       await _openErrorHistory();
       _clampFutureReadMarks();
       // Devices linked before own-device records existed get them now, at
@@ -4377,7 +4494,7 @@ class MessengerController extends ChangeNotifier {
           in carrierOnly?.adapters ?? const <TransportAdapter>[]) {
         registry.register(adapter);
       }
-      _transportRegistry = registry;
+      _transportRegistry = registry..onOutcome = _noteTransportOutcome;
       for (final adapter in registry.adapters.where(
         (adapter) => !adapter.kind.isCarrier,
       )) {
@@ -7132,7 +7249,7 @@ class MessengerController extends ChangeNotifier {
     }
     final registry = _transportRegistry ??= TransportRegistry(
       const <TransportAdapter>[],
-    );
+    )..onOutcome = _noteTransportOutcome;
     if (registry.adapterFor(kind) == null) registry.register(carrier);
     _carrierInboundSubscriptions[kind] ??= carrier.inboundEnvelopes.listen(
       _handleTransportInbound,
@@ -7169,7 +7286,7 @@ class MessengerController extends ChangeNotifier {
     }
     final registry = _transportRegistry ??= TransportRegistry(
       const <TransportAdapter>[],
-    );
+    )..onOutcome = _noteTransportOutcome;
     if (registry.adapterFor(TransportKind.matrix) == null) {
       registry.register(matrix);
     }
@@ -15329,6 +15446,7 @@ class MessengerController extends ChangeNotifier {
     appendDebugLog(
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
+    unawaited(noteNetwork(label));
     _routeHealthTracker.clearBackoffWindows();
     _irohSkipUntil.clear();
     if (_transportRegistry?.adapterFor(TransportKind.iroh)
@@ -25869,7 +25987,13 @@ class MessengerController extends ChangeNotifier {
     final attemptedRouteKeys = <String>{...excludeRouteKeys};
     // Routes that took messages no receipt confirmed (a one-way link: a
     // firewall dropping what arrives, say) go last, after every other.
-    final suspects = _suspectRoutes(contact.deviceId);
+    // Routes this network blocks (as far as its history tells) go last too.
+    final blockedHere = _networkHistory.blockedHere();
+    final suspects = {
+      ..._suspectRoutes(contact.deviceId),
+      for (final route in candidateRoutes)
+        if (blockedHere.contains(_historyRouteOf(route))) route.routeKey,
+    };
     final skippedSuspects = <PeerEndpoint>[];
 
     Future<void> tryLegacy(
@@ -33492,6 +33616,13 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _writeCurrentSnapshot() async {
+    if (_networkHistoryChanged) {
+      _networkHistoryChanged = false;
+      _snapshot = _snapshot.copyWith(
+        networkHistory: _networkHistory.toJson(),
+        reportedLinks: _reportedLinksJson(),
+      );
+    }
     final write = _vaultStore.save(_snapshot);
     _activeSnapshotWrites.add(write);
     try {

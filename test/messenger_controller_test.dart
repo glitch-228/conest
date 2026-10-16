@@ -63,6 +63,7 @@ import 'package:conest/src/email/carrier_mail.dart' show maxCarrierMailBytes;
 import 'package:conest/src/email/delta_content.dart';
 import 'package:conest/src/email/pgp.dart';
 import 'package:conest/src/models.dart';
+import 'package:conest/src/network_history.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
 import 'package:conest/src/nostr/event.dart';
 import 'package:conest/src/nostr/relay.dart';
@@ -470,6 +471,9 @@ class _FakeRelayClient extends RelayClient {
   )?
   shouldFailStore;
   final List<String> storeAttempts = <String>[];
+
+  /// An error to throw for stores to [host] (a network's own error).
+  Object? Function(String host)? storeErrorFor;
   final List<String> fetchAttempts = <String>[];
 
   /// Hosts asked with a wait (long polls).
@@ -676,6 +680,7 @@ class _FakeRelayClient extends RelayClient {
     if (!_isRouteAllowed(_storeAllowedHosts, host, port, protocol)) {
       throw StateError('Route unavailable for $key');
     }
+    if (storeErrorFor?.call(host) case final error?) throw error;
     if (_containsRoute(_storeFailingHosts, host, port, protocol)) {
       throw StateError('Route unavailable for $key');
     }
@@ -761,6 +766,7 @@ class _FakeRelayClient extends RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) async {
     inspectHealthAttempts.add('$host:$port');
+    if (storeErrorFor?.call(host) case final error?) throw error;
     final ok = await health(
       host: host,
       port: port,
@@ -10449,6 +10455,77 @@ void main() {
     );
   });
 
+  test('what a network cuts is remembered, judged blocked there, and kept '
+      'across a restart', () async {
+    var now = DateTime.now().toUtc();
+    final relay = _FakeRelayClient();
+    final aliceVault = _MemoryVaultStore();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      lanAddresses: const ['192.168.3.20'],
+      nowProvider: () => now,
+      vaultStore: aliceVault,
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      lanAddresses: const [],
+      internetRelayHost: null,
+    );
+    addTearDown(bob.dispose);
+    // One protocol each, so both fit in the invite's relay hints.
+    await bob.addRelay(host: 'tcp://relay.ok', port: 7667);
+    await bob.addRelay(host: 'tcp://relay.cut', port: 7667);
+    await _pairControllers(alice, bob);
+    await alice.noteNetwork('wifi');
+    relay.storeErrorFor = (host) => host == 'relay.cut'
+        ? const SocketException('Connection reset by peer')
+        : null;
+    for (var i = 0; i < 3; i++) {
+      // Route checks try every relay (and messages, when it is their turn).
+      await alice.checkContactRoutes(alice.contacts.single);
+      await alice.sendMessage(contact: alice.contacts.single, body: 'm$i');
+      // Past any backoff, so each round tries it again.
+      now = now.add(const Duration(hours: 1));
+    }
+    final here = alice.networkHistory.current!;
+    expect(
+      here.routes['relay:relay.cut:7667']!.failures[RouteFailureKind.reset],
+      greaterThanOrEqualTo(3),
+    );
+    expect(
+      alice.networkHistory.blockedHere(),
+      contains('relay:relay.cut:7667'),
+    );
+    // Elsewhere it is not judged.
+    await alice.noteNetwork('mobile');
+    expect(alice.networkHistory.blockedHere(), isEmpty);
+    await alice.noteNetwork('wifi');
+
+    // What Bob reports of his links is kept too, to fade on the map.
+    final aliceId = alice.identity!.deviceId;
+    final bobId = bob.identity!.deviceId;
+    alice.receiveLinksForTesting(bobId, {aliceId: 'twoWay'});
+
+    await alice.flushPendingChanges();
+    alice.dispose();
+    final restarted = await _createController(
+      relayClient: relay,
+      displayName: 'unused',
+      createIdentity: false,
+      vaultStore: aliceVault,
+      nowProvider: () => now,
+    );
+    addTearDown(restarted.dispose);
+    final labels = restarted.networkHistory.networks.map((n) => n.label);
+    expect(labels, containsAll(['Wi-Fi 192.168.3.x', 'Mobile data']));
+    expect(
+      restarted.connectionMap.reported[bobId]?[aliceId]?.status,
+      LinkStatus.twoWay,
+    );
+  });
+
   test('debug self test reports runnable checks', () async {
     final relayClient = _FakeRelayClient();
     final controller = await _createController(
@@ -18561,10 +18638,16 @@ void main() {
     final kept = bob.connectionMap.reported[alice.identity!.deviceId]!;
     expect(kept.keys, isNot(contains(dan.identity!.deviceId)));
     expect(kept[carol.identity!.deviceId]?.status, LinkStatus.failing);
+    await tester.runAsync(() => bob.noteNetwork('wifi'));
     await tester.pumpWidget(
       MaterialApp(home: ConnectionsScreen(controller: bob)),
     );
     expect(find.text('As Alice sees it'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('connections-networks')),
+      200,
+    );
+    expect(find.text('In use now'), findsOneWidget);
   });
 
   group('Clocks that are off', () {

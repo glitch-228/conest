@@ -5184,4 +5184,29 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get crashReportClose => 'بستن';
+
+  @override
+  String get connectionsNetworks => 'شبکه‌هایی که این دستگاه به آن‌ها وصل بوده';
+
+  @override
+  String get connectionsNetworkNow => 'اکنون در حال استفاده';
+
+  @override
+  String connectionsNetworkLastSeen(String date) {
+    return 'آخرین بار $date';
+  }
+
+  @override
+  String get connectionsRouteWorks => 'کار می‌کند';
+
+  @override
+  String get connectionsRouteBlocked => 'در این شبکه مسدود است';
+
+  @override
+  String get connectionsRouteFailing => 'خطا دارد';
+
+  @override
+  String connectionsAsOf(String when) {
+    return 'تا $when';
+  }
 }

@@ -219,6 +219,9 @@ class TransportRegistry {
        _now = now ?? DateTime.now;
 
   final Map<TransportKind, TransportAdapter> _adapters;
+
+  /// Told of every send's outcome (for the network history).
+  void Function(TransportKind kind, bool ok, Object? error)? onOutcome;
   final DateTime Function() _now;
 
   /// Route statistics by `deviceId|transport`, oldest first.
@@ -367,12 +370,12 @@ class TransportRegistry {
           );
         }
         lastError = receipt.detail ?? 'Transport rejected the envelope.';
-        _recordFailure(peer.deviceId, route.transport);
+        _recordFailure(peer.deviceId, route.transport, lastError);
       } on TransportSendCancelled {
         rethrow;
       } catch (error) {
         lastError = error;
-        _recordFailure(peer.deviceId, route.transport);
+        _recordFailure(peer.deviceId, route.transport, error);
         attempts.add(
           DeliveryAttempt(
             route: route,
@@ -395,6 +398,7 @@ class TransportRegistry {
       _recordSuccess(deviceId, kind, took);
 
   void _recordSuccess(String deviceId, TransportKind kind, Duration? took) {
+    onOutcome?.call(kind, true, null);
     final stats = _statsEntry(deviceId, kind)
       ..failureStreak = 0
       ..lastSuccessAt = _now();
@@ -404,7 +408,8 @@ class TransportRegistry {
     stats.latencyMs = previous == null ? sample : previous * 0.7 + sample * 0.3;
   }
 
-  void _recordFailure(String deviceId, TransportKind kind) {
+  void _recordFailure(String deviceId, TransportKind kind, [Object? error]) {
+    onOutcome?.call(kind, false, error);
     _statsEntry(deviceId, kind)
       ..failureStreak += 1
       ..lastFailureAt = _now();

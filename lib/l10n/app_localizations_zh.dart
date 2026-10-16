@@ -4956,4 +4956,29 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get crashReportClose => '关闭';
+
+  @override
+  String get connectionsNetworks => '此设备用过的网络';
+
+  @override
+  String get connectionsNetworkNow => '正在使用';
+
+  @override
+  String connectionsNetworkLastSeen(String date) {
+    return '上次出现 $date';
+  }
+
+  @override
+  String get connectionsRouteWorks => '可用';
+
+  @override
+  String get connectionsRouteBlocked => '在此网络上被屏蔽';
+
+  @override
+  String get connectionsRouteFailing => '失败';
+
+  @override
+  String connectionsAsOf(String when) {
+    return '截至 $when';
+  }
 }

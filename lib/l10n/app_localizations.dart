@@ -8224,6 +8224,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Close'**
   String get crashReportClose;
+
+  /// Connections screen: heading of the list of networks (Wi-Fi, mobile…) this device remembers
+  ///
+  /// In en, this message translates to:
+  /// **'Networks this device has been on'**
+  String get connectionsNetworks;
+
+  /// Connections screen: the network in use right now
+  ///
+  /// In en, this message translates to:
+  /// **'In use now'**
+  String get connectionsNetworkNow;
+
+  /// Connections screen: when a remembered network was last in use
+  ///
+  /// In en, this message translates to:
+  /// **'Last seen {date}'**
+  String connectionsNetworkLastSeen(String date);
+
+  /// Connections screen: a route (relay, Iroh, Nostr…) that worked on this network
+  ///
+  /// In en, this message translates to:
+  /// **'works'**
+  String get connectionsRouteWorks;
+
+  /// Connections screen: a route this network seems to block
+  ///
+  /// In en, this message translates to:
+  /// **'blocked on this network'**
+  String get connectionsRouteBlocked;
+
+  /// Connections screen: a route that failed lately on this network
+  ///
+  /// In en, this message translates to:
+  /// **'failing'**
+  String get connectionsRouteFailing;
+
+  /// Connections screen: how old another device's report about a link is
+  ///
+  /// In en, this message translates to:
+  /// **'as of {when}'**
+  String connectionsAsOf(String when);
 }
 
 class _AppLocalizationsDelegate

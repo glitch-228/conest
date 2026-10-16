@@ -1343,5 +1343,12 @@
   "crashNoticeDismiss": "تجاهل",
   "crashReportTitle": "ما الذي حدث",
   "crashReportCopy": "نسخ",
-  "crashReportClose": "إغلاق"
+  "crashReportClose": "إغلاق",
+  "connectionsNetworks": "الشبكات التي اتصل بها هذا الجهاز",
+  "connectionsNetworkNow": "قيد الاستخدام الآن",
+  "connectionsNetworkLastSeen": "آخر ظهور {date}",
+  "connectionsRouteWorks": "يعمل",
+  "connectionsRouteBlocked": "محجوب على هذه الشبكة",
+  "connectionsRouteFailing": "يفشل",
+  "connectionsAsOf": "حتى {when}"
 }

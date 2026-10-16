@@ -347,6 +347,14 @@ Future<void> _runConestWithProfile(
       final label = results.map((r) => r.name).join(',');
       controller.onConnectivityChanged(interfaceLabel: label);
     });
+    // The network in use at start, for its history (no change handling).
+    unawaited(
+      Connectivity().checkConnectivity().then(
+        (results) =>
+            controller.noteNetwork(results.map((r) => r.name).join(',')),
+        onError: (Object _) {},
+      ),
+    );
   } catch (error) {
     controller.appendDebugLog('connectivity_plus listener unavailable: $error');
   }

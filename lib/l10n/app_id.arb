@@ -1343,5 +1343,12 @@
   "crashNoticeDismiss": "Tutup pesan",
   "crashReportTitle": "Apa yang terjadi",
   "crashReportCopy": "Salin",
-  "crashReportClose": "Tutup"
+  "crashReportClose": "Tutup",
+  "connectionsNetworks": "Jaringan yang pernah dipakai perangkat ini",
+  "connectionsNetworkNow": "Sedang dipakai",
+  "connectionsNetworkLastSeen": "Terakhir terlihat {date}",
+  "connectionsRouteWorks": "berfungsi",
+  "connectionsRouteBlocked": "diblokir di jaringan ini",
+  "connectionsRouteFailing": "gagal",
+  "connectionsAsOf": "per {when}"
 }

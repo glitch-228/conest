@@ -5,6 +5,21 @@ import 'package:flutter/material.dart';
 
 import '../connection_map.dart';
 import '../messenger_controller.dart';
+import '../network_history.dart';
+
+/// How much a report's age fades it: fully seen when fresh, faint after
+/// a week (when it is dropped).
+double _ageOpacity(DateTime at, DateTime now) {
+  final hours = now.difference(at).inMinutes / 60;
+  return (1 - hours / (7 * 24)).clamp(0.25, 1.0);
+}
+
+String _when(DateTime at) {
+  final local = at.toLocal();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}';
+}
 
 /// Settings → Connectivity → Connections (Advanced): who reaches whom —
 /// this device's links, and what the devices it knows report of theirs.
@@ -99,20 +114,98 @@ class ConnectionsScreen extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                   for (final MapEntry(key: id, value: link) in links.entries)
-                    ListTile(
-                      dense: true,
-                      leading: Icon(
-                        Icons.circle,
-                        color: colorOf(link.status, scheme),
+                    Opacity(
+                      opacity: _ageOpacity(link.at, DateTime.now()),
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(
+                          Icons.circle,
+                          color: colorOf(link.status, scheme),
+                        ),
+                        title: Text(map.nameOf(id)),
+                        subtitle: Text(
+                          l10nOf(context).connectionsAsOf(_when(link.at)),
+                        ),
+                        trailing: Text(label(link.status, context)),
                       ),
-                      title: Text(map.nameOf(id)),
-                      trailing: Text(label(link.status, context)),
                     ),
                 ],
+              _NetworksSection(history: controller.networkHistory),
             ],
           );
         },
       ),
+    );
+  }
+}
+
+/// Every network this device remembers, and how each route fared there.
+class _NetworksSection extends StatelessWidget {
+  const _NetworksSection({required this.history});
+
+  final NetworkHistory history;
+
+  @override
+  Widget build(BuildContext context) {
+    final networks = history.networks;
+    if (networks.isEmpty) return const SizedBox.shrink();
+    final strings = l10nOf(context);
+    final scheme = Theme.of(context).colorScheme;
+    final current = history.current;
+    final blocked = history.blockedHere();
+    return Column(
+      key: const ValueKey('connections-networks'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 16),
+        Text(
+          strings.connectionsNetworks,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        for (final network in networks)
+          ExpansionTile(
+            initiallyExpanded: identical(network, current),
+            leading: Icon(switch (network.kind) {
+              'wifi' => Icons.wifi,
+              'ethernet' => Icons.settings_ethernet,
+              'mobile' => Icons.signal_cellular_alt,
+              'bluetooth' => Icons.bluetooth,
+              'vpn' => Icons.vpn_lock,
+              _ => Icons.lan_outlined,
+            }),
+            title: Text(network.label),
+            subtitle: Text(
+              identical(network, current)
+                  ? strings.connectionsNetworkNow
+                  : strings.connectionsNetworkLastSeen(_when(network.lastSeen)),
+            ),
+            children: [
+              for (final MapEntry(key: route, value: outcome)
+                  in network.routes.entries)
+                ListTile(
+                  dense: true,
+                  title: Text(route),
+                  trailing: Text(
+                    identical(network, current) && blocked.contains(route)
+                        ? strings.connectionsRouteBlocked
+                        : outcome.lastWorked != null &&
+                              (outcome.lastFailed == null ||
+                                  outcome.lastWorked!.isAfter(
+                                    outcome.lastFailed!,
+                                  ))
+                        ? strings.connectionsRouteWorks
+                        : strings.connectionsRouteFailing,
+                    style: TextStyle(
+                      color:
+                          identical(network, current) && blocked.contains(route)
+                          ? scheme.error
+                          : null,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+      ],
     );
   }
 }
@@ -139,6 +232,7 @@ class _MapPainter extends CustomPainter {
       String to,
       LinkStatus status, {
       bool dashed = false,
+      double fade = 1,
     }) {
       final a = at[from], b = at[to];
       if (a == null || b == null) return;
@@ -146,14 +240,20 @@ class _MapPainter extends CustomPainter {
         ..color = ConnectionsScreen.colorOf(
           status,
           scheme,
-        ).withValues(alpha: dashed ? 0.5 : 0.9)
+        ).withValues(alpha: (dashed ? 0.5 : 0.9) * fade)
         ..strokeWidth = dashed ? 1.5 : 3;
       canvas.drawLine(a, b, paint);
     }
 
     for (final MapEntry(key: reporter, value: links) in map.reported.entries) {
       for (final MapEntry(key: id, value: link) in links.entries) {
-        line(reporter, id, link.status, dashed: true);
+        line(
+          reporter,
+          id,
+          link.status,
+          dashed: true,
+          fade: _ageOpacity(link.at, DateTime.now()),
+        );
       }
     }
     for (final MapEntry(key: id, value: status) in map.mine.entries) {

@@ -4998,6 +4998,8 @@ class VaultSnapshot {
     this.carrierAccounts = const <String, Map<String, dynamic>>{},
     this.networkChats = const <String, Map<String, dynamic>>{},
     this.hiddenChatNetworks = const <String>[],
+    this.networkHistory = const <Object?>[],
+    this.reportedLinks = const <String, Object?>{},
     this.keepFileMetadata = false,
     this.randomFileNames = false,
     this.userMode,
@@ -5109,6 +5111,12 @@ class VaultSnapshot {
   /// Networks whose chats the chat list leaves out (for example "bitchat").
   final List<String> hiddenChatNetworks;
 
+  /// What each network let through (network_history.dart), as JSON.
+  final List<Object?> networkHistory;
+
+  /// Links other devices reported (reporter → device → [status, at]).
+  final Map<String, Object?> reportedLinks;
+
   /// Send files with their metadata (EXIF, location, authors). Off: it is
   /// removed before sending.
   final bool keepFileMetadata;
@@ -5198,6 +5206,8 @@ class VaultSnapshot {
     Map<String, Map<String, dynamic>>? carrierAccounts,
     Map<String, Map<String, dynamic>>? networkChats,
     List<String>? hiddenChatNetworks,
+    List<Object?>? networkHistory,
+    Map<String, Object?>? reportedLinks,
     bool? keepFileMetadata,
     bool? randomFileNames,
     UserMode? userMode,
@@ -5257,6 +5267,8 @@ class VaultSnapshot {
       carrierAccounts: carrierAccounts ?? this.carrierAccounts,
       networkChats: networkChats ?? this.networkChats,
       hiddenChatNetworks: hiddenChatNetworks ?? this.hiddenChatNetworks,
+      networkHistory: networkHistory ?? this.networkHistory,
+      reportedLinks: reportedLinks ?? this.reportedLinks,
       keepFileMetadata: keepFileMetadata ?? this.keepFileMetadata,
       randomFileNames: randomFileNames ?? this.randomFileNames,
       userMode: userMode ?? this.userMode,
@@ -5339,6 +5351,8 @@ class VaultSnapshot {
       if (networkChats.isNotEmpty) 'networkChats': networkChats,
       if (hiddenChatNetworks.isNotEmpty)
         'hiddenChatNetworks': hiddenChatNetworks,
+      if (networkHistory.isNotEmpty) 'networkHistory': networkHistory,
+      if (reportedLinks.isNotEmpty) 'reportedLinks': reportedLinks,
       if (keepFileMetadata) 'keepFileMetadata': true,
       if (randomFileNames) 'randomFileNames': true,
       if (userMode != null) 'userMode': userMode!.name,
@@ -5403,6 +5417,8 @@ class VaultSnapshot {
           if (entry.value case final Map<String, dynamic> chats)
             entry.key: chats,
       },
+      networkHistory: json['networkHistory'] as List<dynamic>? ?? const [],
+      reportedLinks: json['reportedLinks'] as Map<String, dynamic>? ?? const {},
       hiddenChatNetworks: [
         for (final network
             in json['hiddenChatNetworks'] as List<dynamic>? ?? const [])

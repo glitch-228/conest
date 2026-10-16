@@ -5172,4 +5172,30 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get crashReportClose => 'Tutup';
+
+  @override
+  String get connectionsNetworks =>
+      'Jaringan yang pernah dipakai perangkat ini';
+
+  @override
+  String get connectionsNetworkNow => 'Sedang dipakai';
+
+  @override
+  String connectionsNetworkLastSeen(String date) {
+    return 'Terakhir terlihat $date';
+  }
+
+  @override
+  String get connectionsRouteWorks => 'berfungsi';
+
+  @override
+  String get connectionsRouteBlocked => 'diblokir di jaringan ini';
+
+  @override
+  String get connectionsRouteFailing => 'gagal';
+
+  @override
+  String connectionsAsOf(String when) {
+    return 'per $when';
+  }
 }

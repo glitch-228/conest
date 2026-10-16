@@ -39,6 +39,9 @@ class RouteHealthTracker {
     : _nowProvider = nowProvider;
 
   final DateTime Function() _nowProvider;
+
+  /// Told of every outcome (for the network history).
+  void Function(PeerEndpoint route, bool ok, String? error)? onOutcome;
   final Map<String, PeerRouteHealth> _health = <String, PeerRouteHealth>{};
   final Map<String, RouteRuntimeState> _runtime = <String, RouteRuntimeState>{};
 
@@ -188,6 +191,7 @@ class RouteHealthTracker {
     DateTime? at,
   }) {
     final timestamp = (at ?? _nowProvider()).toUtc();
+    onOutcome?.call(route, true, null);
     final state = ensureRuntime(route.routeKey);
     if (fetch != null) {
       if (fetch) {
@@ -211,6 +215,7 @@ class RouteHealthTracker {
 
   void recordFailure(PeerEndpoint route, {DateTime? at, String? error}) {
     final timestamp = (at ?? _nowProvider()).toUtc();
+    onOutcome?.call(route, false, error);
     final relayInstanceId = _health[route.routeKey]?.relayInstanceId;
     final state = ensureRuntime(route.routeKey);
     state.lastFailureAt = timestamp;

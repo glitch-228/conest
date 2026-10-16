@@ -1343,5 +1343,12 @@
   "crashNoticeDismiss": "Скрыть",
   "crashReportTitle": "Что произошло",
   "crashReportCopy": "Копировать",
-  "crashReportClose": "Закрыть"
+  "crashReportClose": "Закрыть",
+  "connectionsNetworks": "Сети, в которых было это устройство",
+  "connectionsNetworkNow": "Используется сейчас",
+  "connectionsNetworkLastSeen": "Последний раз: {date}",
+  "connectionsRouteWorks": "работает",
+  "connectionsRouteBlocked": "заблокировано в этой сети",
+  "connectionsRouteFailing": "сбои",
+  "connectionsAsOf": "на {when}"
 }

@@ -7851,5 +7851,43 @@
   "crashReportClose": "Close",
   "@crashReportClose": {
     "description": "Crash details dialog: close it"
+  },
+  "connectionsNetworks": "Networks this device has been on",
+  "@connectionsNetworks": {
+    "description": "Connections screen: heading of the list of networks (Wi-Fi, mobile…) this device remembers"
+  },
+  "connectionsNetworkNow": "In use now",
+  "@connectionsNetworkNow": {
+    "description": "Connections screen: the network in use right now"
+  },
+  "connectionsNetworkLastSeen": "Last seen {date}",
+  "@connectionsNetworkLastSeen": {
+    "description": "Connections screen: when a remembered network was last in use",
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "connectionsRouteWorks": "works",
+  "@connectionsRouteWorks": {
+    "description": "Connections screen: a route (relay, Iroh, Nostr…) that worked on this network"
+  },
+  "connectionsRouteBlocked": "blocked on this network",
+  "@connectionsRouteBlocked": {
+    "description": "Connections screen: a route this network seems to block"
+  },
+  "connectionsRouteFailing": "failing",
+  "@connectionsRouteFailing": {
+    "description": "Connections screen: a route that failed lately on this network"
+  },
+  "connectionsAsOf": "as of {when}",
+  "@connectionsAsOf": {
+    "description": "Connections screen: how old another device's report about a link is",
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
   }
 }
