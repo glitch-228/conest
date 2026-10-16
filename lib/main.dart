@@ -205,20 +205,27 @@ Future<void> _main(List<String> args, CrashCatcher crashes) async {
   final storageResolver = AppStorageResolver();
   var storageResolution = await storageResolver.resolve();
   _debugRequest = await _readDebugRequest(args);
-  if (_debugRequest?.setsUp == true &&
-      storageResolution.status == AppStorageResolutionStatus.needsSetup) {
-    // A lab device sets itself up: beside the app on desktops (with its key
-    // file), in the app's own storage on Android.
-    storageResolution = AppStorageResolution.ready(
-      await storageResolver.createProfile(
-        mode: Platform.isAndroid
-            ? AppStorageMode.device
-            : AppStorageMode.portable,
-        unlockMode: Platform.isAndroid
-            ? VaultUnlockMode.secureStorage
-            : VaultUnlockMode.keyFile,
-      ),
-    );
+  if (_debugRequest?.setsUp == true) {
+    // A lab device keeps its own data: beside the app on desktops (with its
+    // key file), never a profile the user's own Conest uses there; in the
+    // debug package's own storage on Android.
+    if (Platform.isAndroid) {
+      if (storageResolution.status == AppStorageResolutionStatus.needsSetup) {
+        storageResolution = AppStorageResolution.ready(
+          await storageResolver.createProfile(
+            mode: AppStorageMode.device,
+            unlockMode: VaultUnlockMode.secureStorage,
+          ),
+        );
+      }
+    } else if (storageResolution.profile?.mode != AppStorageMode.portable) {
+      storageResolution = AppStorageResolution.ready(
+        await storageResolver.createProfile(
+          mode: AppStorageMode.portable,
+          unlockMode: VaultUnlockMode.keyFile,
+        ),
+      );
+    }
   }
   await _startCrashRecords(
     crashes,

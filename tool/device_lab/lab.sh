@@ -47,8 +47,11 @@ wait_for() { # description, command that succeeds when ready, tries
   return 1
 }
 
-# --- A: Android ---------------------------------------------------------------
+# --- A: Android (ANDROID=0 leaves it out) ---------------------------------------
+ANDROID=${ANDROID:-1}
 android_report=files/conest-debug-report.json
+invite_args=()
+if [ "$ANDROID" = 1 ]; then
 adb shell am force-stop "$PACKAGE"
 adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
 args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-serve=300 --debug-wait=$WAIT ${relay_arg[*]:-}"
@@ -56,12 +59,14 @@ adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
   --es conestDebugArgs "'$args_a'" >/dev/null
 wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite"
 invite_a=$(adb exec-out run-as "$PACKAGE" cat "$android_report.invite")
+invite_args=("--debug-accept-invite=$invite_a")
 echo "Android is up."
+fi
 
 # --- B: Linux -------------------------------------------------------------------
 linux_report="$PWD/$out/linux.json"
 "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
-  --debug-accept-invite="$invite_a" --debug-approve --debug-serve=240 \
+  "${invite_args[@]}" --debug-approve --debug-serve=240 \
   --debug-wait="$WAIT" "${relay_arg[@]}" --debug-report="$linux_report" \
   --debug-exit >"$out/linux.log" 2>&1 &
 linux_pid=$!
@@ -76,7 +81,7 @@ win_report="$WINDOWS_DIR\\lab-report.json"
 win "if exist \"$win_report\" del \"$win_report\""
 cat >"$out/start-windows.cmd" <<EOF
 @echo off
-"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows --debug-accept-invite=$invite_a --debug-accept-invite=$invite_b --debug-serve=30 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} --debug-report="$win_report" --debug-exit
+"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows ${invite_args[*]:-} --debug-accept-invite=$invite_b --debug-serve=30 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} --debug-report="$win_report" --debug-exit
 EOF
 sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
 # LAN tests need inbound connections to the lab exe (only it, and only
@@ -92,8 +97,10 @@ wait "$linux_pid" || echo "Linux run ended with an error (see linux.log)."
 wait_for "the Windows report" "win \"if exist \\\"$win_report\\\" (exit 0) else (exit 1)\"" 300
 sshpass -e scp -q "$WINDOWS:conest-lab/conest-debug-windows-x64/lab-report.json" "$out/windows.json" ||
   win "type \"$win_report\"" >"$out/windows.json"
-wait_for "the Android report" "adb shell run-as $PACKAGE test -s $android_report" 300
-adb exec-out run-as "$PACKAGE" cat "$android_report" >"$out/android.json"
+if [ "$ANDROID" = 1 ]; then
+  wait_for "the Android report" "adb shell run-as $PACKAGE test -s $android_report" 300
+  adb exec-out run-as "$PACKAGE" cat "$android_report" >"$out/android.json"
+fi
 win "schtasks /Delete /F /TN ConestLab" >/dev/null || true
 win "netsh advfirewall firewall delete rule name=ConestLab" >/dev/null || true
 echo "Reports in $out"
