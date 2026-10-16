@@ -8,6 +8,8 @@
 ///          [--debug-approve]              approve contact requests
 ///          [--debug-serve=SECONDS]        wait this long for the others
 ///          [--debug-group=TITLE]          then make a group of everyone
+///          [--debug-no-reserve]           files even on a nearly full disk
+///          [--debug-linger=SECONDS]       stay online after the tests
 ///          [--debug-report=PATH] [--debug-wait=20] [--debug-exit]
 ///   adb shell am start -n dev.conest.conest.debug/dev.conest.conest.MainActivity \
 ///       --es conestDebugArgs "--debug-run=all --debug-name=phone --debug-approve"
@@ -39,6 +41,8 @@ class DebugRunRequest {
     this.approve = false,
     this.serve = Duration.zero,
     this.group,
+    this.noReserve = false,
+    this.linger = Duration.zero,
   });
 
   /// 'routes', 'messages', 'files', 'all', or 'none' (only set up).
@@ -64,6 +68,14 @@ class DebugRunRequest {
 
   /// Make a group of every contact under this title (lab-…) after serving.
   final String? group;
+
+  /// Turn off this (lab) identity's free-space reserve, so files can be
+  /// tested on a disk that is nearly full.
+  final bool noReserve;
+
+  /// Stay online after the tests (answering the others, taking their late
+  /// receipts) before the report is written.
+  final Duration linger;
 
   static const Set<String> kinds = {
     'routes',
@@ -112,6 +124,8 @@ class DebugRunRequest {
       group: group != null && group.startsWith('lab-') && group.length <= 64
           ? group
           : null,
+      noReserve: args.contains('--debug-no-reserve'),
+      linger: seconds('debug-linger', Duration.zero, 3600),
     );
   }
 
@@ -165,6 +179,12 @@ Future<String> runDebugRequest(
       final code = (await controller.buildInvite()).encodePayload();
       await _writeWhole('$path.invite', code);
       return code;
+    });
+  }
+  if (request.noReserve && controller.hasIdentity) {
+    await step('no-reserve', () async {
+      await controller.updateStorageReserveEnabled(false);
+      return null;
     });
   }
   final relay = request.relay;
@@ -245,6 +265,7 @@ Future<String> runDebugRequest(
     // Time for receipts (and files) to come back.
     await Future<void>.delayed(request.wait * 3);
   }
+  await Future<void>.delayed(request.linger);
   final report = {
     'kind': what,
     'build': controller.debugBuildId,

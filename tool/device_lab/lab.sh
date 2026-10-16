@@ -26,6 +26,8 @@ set -euo pipefail
 RELAY=${RELAY:-}
 RUN=${RUN:-all}
 WAIT=${WAIT:-20}
+# How long each device stays online after its own tests, for the others.
+LINGER=${LINGER:-300}
 PACKAGE=${PACKAGE:-dev.conest.conest.debug}
 win_user=${WINDOWS%@*}
 WINDOWS_DIR=${WINDOWS_DIR:-C:\\Users\\$win_user\\conest-lab\\conest-debug-windows-x64}
@@ -54,7 +56,7 @@ invite_args=()
 if [ "$ANDROID" = 1 ]; then
 adb shell am force-stop "$PACKAGE"
 adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
-args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-serve=300 --debug-wait=$WAIT ${relay_arg[*]:-}"
+args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=300 --debug-wait=$WAIT ${relay_arg[*]:-}"
 adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
   --es conestDebugArgs "'$args_a'" >/dev/null
 wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite"
@@ -66,7 +68,7 @@ fi
 # --- B: Linux -------------------------------------------------------------------
 linux_report="$PWD/$out/linux.json"
 "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
-  "${invite_args[@]}" --debug-approve --debug-serve=240 \
+  "${invite_args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-serve=240 \
   --debug-wait="$WAIT" "${relay_arg[@]}" --debug-report="$linux_report" \
   --debug-exit >"$out/linux.log" 2>&1 &
 linux_pid=$!
@@ -79,17 +81,30 @@ echo "Linux is up."
 # ssh session.
 win_report="$WINDOWS_DIR\\lab-report.json"
 win "if exist \"$win_report\" del \"$win_report\""
+# Invites hold | and other characters cmd reads: each is quoted.
+win_invites=""
+[ "$ANDROID" = 1 ] && win_invites="\"--debug-accept-invite=$invite_a\" "
+win_invites="$win_invites\"--debug-accept-invite=$invite_b\""
 cat >"$out/start-windows.cmd" <<EOF
 @echo off
-"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows ${invite_args[*]:-} --debug-accept-invite=$invite_b --debug-serve=30 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} --debug-report="$win_report" --debug-exit
+"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $win_invites --debug-no-reserve --debug-linger=$LINGER --debug-serve=30 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} --debug-report="$win_report" --debug-exit
 EOF
 sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
 # LAN tests need inbound connections to the lab exe (only it, and only
 # for the run).
 win "netsh advfirewall firewall add rule name=ConestLab dir=in action=allow program=\"$WINDOWS_DIR\\conest.exe\" enable=yes" >/dev/null ||
   echo "Could not add the Windows firewall rule (LAN may be one-way)."
-win "schtasks /Create /F /TN ConestLab /SC ONCE /ST 23:59 /IT /TR \"%USERPROFILE%\\conest-lab\\start-lab.cmd\"" >/dev/null
-win "schtasks /Run /TN ConestLab" >/dev/null
+# A task, so it runs on the user's desktop; allowed on battery (a laptop
+# on battery otherwise leaves it queued).
+cat >"$out/lab-task.ps1" <<'PS1'
+$a = New-ScheduledTaskAction -Execute "$env:USERPROFILE\conest-lab\start-lab.cmd"
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+$p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+Register-ScheduledTask -TaskName ConestLab -Action $a -Settings $s -Principal $p -Force | Out-Null
+Start-ScheduledTask -TaskName ConestLab
+PS1
+sshpass -e scp -q "$out/lab-task.ps1" "$WINDOWS:conest-lab/lab-task.ps1"
+win "powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\\conest-lab\\lab-task.ps1" >/dev/null
 echo "Windows started."
 
 # --- Reports ------------------------------------------------------------------------

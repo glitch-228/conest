@@ -18488,8 +18488,11 @@ void main() {
     final parsed = DebugRunRequest.fromExtra(
       'args:--debug-run=messages --debug-name=phone --debug-approve '
       '--debug-serve=5 --debug-group=lab-all --debug-relay=1.2.3.4:7667 '
-      '--debug-accept-invite=AAA --debug-accept-invite=BBB',
+      '--debug-accept-invite=AAA --debug-accept-invite=BBB '
+      '--debug-no-reserve --debug-linger=90',
     )!;
+    expect(parsed.noReserve, isTrue);
+    expect(parsed.linger, const Duration(seconds: 90));
     expect(parsed.what, 'messages');
     expect(parsed.name, 'phone');
     expect(parsed.approve, isTrue);
