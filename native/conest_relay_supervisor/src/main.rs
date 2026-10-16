@@ -712,6 +712,7 @@ fn install_service(config: &Config) -> Result<(), String> {
 /// The service unit: as its own account when one is given, with the
 /// filesystem closed to it except its data and bundle (it updates the
 /// relay binary there).
+#[cfg(target_os = "linux")]
 fn systemd_unit(config: &Config, exec_start: &str) -> String {
     let mut service = vec![
         format!("ExecStart={exec_start}"),
@@ -1089,6 +1090,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_service_runs_as_its_own_account_when_given_one() {
         let mut config = test_config();
