@@ -1,7 +1,7 @@
 /// Automatic tests a debug build runs when started for them (Q6), so a
 /// device can be tested from a shell over adb or ssh:
 ///
-///   conest --debug-run=routes|messages|files|all|none
+///   conest --debug-run=routes|messages|files|interactions|all|none
 ///          [--debug-name=NAME]            set up storage and an identity
 ///          [--debug-relay=HOST:PORT]      add a relay
 ///          [--debug-accept-invite=CODE]   add a contact (repeatable)
@@ -45,7 +45,8 @@ class DebugRunRequest {
     this.linger = Duration.zero,
   });
 
-  /// 'routes', 'messages', 'files', 'all', or 'none' (only set up).
+  /// 'routes', 'messages', 'files', 'interactions', 'all', or 'none'
+  /// (only set up).
   final String what;
   final String? reportPath;
   final bool exitAfter;
@@ -81,6 +82,7 @@ class DebugRunRequest {
     'routes',
     'messages',
     'files',
+    'interactions',
     'all',
     'none',
   };
@@ -265,6 +267,26 @@ Future<String> runDebugRequest(
     // Time for receipts (and files) to come back.
     await Future<void>.delayed(request.wait * 3);
   }
+  if (what == 'interactions' || what == 'all') {
+    await _interact(controller, step, request.wait);
+    await Future<void>.delayed(request.wait * 2);
+    // And what the others did meanwhile, so their read marks show too.
+    await step('read everything', () async {
+      for (final contact in _contacts(controller)) {
+        await controller.markConversationRead(contact.deviceId);
+      }
+      for (final group in _labGroups(controller)) {
+        final last = controller
+            .messagesForGroup(group.groupId)
+            .where((m) => !m.outbound)
+            .lastOrNull;
+        if (last != null) {
+          await controller.markGroupReadThroughMessage(group.groupId, last);
+        }
+      }
+      return null;
+    });
+  }
   await Future<void>.delayed(request.linger);
   final report = {
     'kind': what,
@@ -361,6 +383,172 @@ Future<void> _sendFiles(MessengerController controller, _Step step) async {
   }
 }
 
+/// What people do with messages, in every chat and lab group: read what
+/// came, reply, react, edit, delete for everyone, and cancel a file
+/// transfer. Each other device's report shows whether it arrived.
+Future<void> _interact(
+  MessengerController controller,
+  _Step step,
+  Duration wait,
+) async {
+  final me = controller.identity?.displayName ?? 'lab';
+  bool inboundLab(ChatMessage message) =>
+      !message.outbound && message.body.startsWith('lab ');
+  // Until [ready] holds, at most [limit].
+  Future<void> until(bool Function() ready, Duration limit) async {
+    final end = DateTime.now().add(limit);
+    while (!ready() && DateTime.now().isBefore(end)) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+  }
+
+  bool sent(ChatMessage? message) =>
+      message != null && message.state != DeliveryState.pending;
+
+  for (final contact in _contacts(controller)) {
+    final peer = contact.deviceId;
+    ChatMessage? mine(String body) => controller
+        .messagesFor(peer)
+        .where((m) => m.outbound && m.body == body)
+        .lastOrNull;
+    await step('read ${contact.alias}', () async {
+      await controller.markConversationRead(peer);
+      return null;
+    });
+    final first = controller.messagesFor(peer).where(inboundLab).firstOrNull;
+    if (first != null) {
+      await step('reply ${contact.alias}', () async {
+        await controller.sendMessage(
+          contact: contact,
+          body: 'lab reply from $me',
+          replyTo: first,
+        );
+        return null;
+      });
+      await step('react ${contact.alias}', () async {
+        await controller.toggleMessageReaction(
+          contact: contact,
+          messageId: first.id,
+          emoji: '👍',
+        );
+        return null;
+      });
+    }
+    await step('edit ${contact.alias}', () async {
+      await controller.sendMessage(
+        contact: contact,
+        body: 'lab edit-me from $me',
+      );
+      final message = mine('lab edit-me from $me')!;
+      await controller.editMessage(
+        contact: contact,
+        messageId: message.id,
+        body: 'lab edited from $me',
+      );
+      return null;
+    });
+    await step('delete ${contact.alias}', () async {
+      final body = 'lab delete-me from $me';
+      await controller.sendMessage(contact: contact, body: body);
+      // Deleting for everyone needs it sent.
+      await until(() => sent(mine(body)), wait);
+      await controller.deleteMessage(
+        contact: contact,
+        messageId: mine(body)!.id,
+      );
+      return null;
+    });
+    await step('cancel file ${contact.alias}', () async {
+      // Big enough to be still on its way a moment later, even on LAN.
+      const size = 128 * 1024 * 1024;
+      final folder = await Directory.systemTemp.createTemp('conest-lab-');
+      final file = File('${folder.path}/lab-cancel.bin');
+      final out = await file.open(mode: FileMode.write);
+      final chunk = Uint8List(1024 * 1024);
+      for (var i = 0; i < size ~/ chunk.length; i++) {
+        await out.writeFrom(chunk);
+      }
+      await out.close();
+      await controller.sendAttachmentSource(
+        contact: contact,
+        source: StagedAttachment(
+          id: 'lab-cancel',
+          fileName: 'lab-cancel.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: size,
+          filePath: file.path,
+          presentation: AttachmentPresentation.file,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final message = controller
+          .messagesFor(peer)
+          .where(
+            (m) => m.outbound && m.attachment?.fileName == 'lab-cancel.bin',
+          )
+          .last;
+      await controller.cancelAttachmentById(message.attachment!.id);
+      await folder.delete(recursive: true);
+      return message.state.name;
+    });
+  }
+  for (final group in _labGroups(controller)) {
+    final id = group.groupId;
+    ChatMessage? mine(String body) => controller
+        .messagesForGroup(id)
+        .where((m) => m.outbound && m.body == body)
+        .lastOrNull;
+    final inbound = controller.messagesForGroup(id).where(inboundLab).toList();
+    await step('read ${group.title}', () async {
+      if (inbound.isNotEmpty) {
+        await controller.markGroupReadThroughMessage(id, inbound.last);
+      }
+      return inbound.length;
+    });
+    if (inbound.isNotEmpty) {
+      await step('reply ${group.title}', () async {
+        await controller.sendGroupMessage(
+          groupId: id,
+          body: 'lab reply from $me',
+          replyTo: inbound.first,
+        );
+        return null;
+      });
+      await step('react ${group.title}', () async {
+        await controller.toggleGroupReaction(
+          groupId: id,
+          messageId: inbound.first.id,
+          emoji: '👍',
+        );
+        return null;
+      });
+    }
+    await step('edit ${group.title}', () async {
+      await controller.sendGroupMessage(
+        groupId: id,
+        body: 'lab edit-me from $me',
+      );
+      await controller.changeGroupMessage(
+        groupId: id,
+        messageId: mine('lab edit-me from $me')!.id,
+        body: 'lab edited from $me',
+      );
+      return null;
+    });
+    await step('delete ${group.title}', () async {
+      final body = 'lab delete-me from $me';
+      await controller.sendGroupMessage(groupId: id, body: body);
+      await until(() => sent(mine(body)), wait);
+      await controller.changeGroupMessage(
+        groupId: id,
+        messageId: mine(body)!.id,
+        delete: true,
+      );
+      return null;
+    });
+  }
+}
+
 /// What came of every lab message and file, per chat.
 List<Map<String, Object?>> _chatReport(MessengerController controller) {
   Map<String, Object?> describe(ChatMessage message) => {
@@ -378,6 +566,13 @@ List<Map<String, Object?>> _chatReport(MessengerController controller) {
       for (final entry in message.recipientStates.entries)
         entry.key: entry.value.name,
     },
+    if (message.isEdited) 'edited': true,
+    if (message.replyToMessageId != null) 'replyTo': message.replyToMessageId,
+    if (message.reactions.isNotEmpty)
+      'reactions': {
+        for (final entry in message.reactions.entries)
+          entry.key: entry.value.length,
+      },
     'at': message.createdAt.toUtc().toIso8601String(),
   };
   bool isLab(ChatMessage message) =>

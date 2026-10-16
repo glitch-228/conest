@@ -17,7 +17,8 @@
 # Pairing, so that every device is every other's contact:
 #   A (Android) waits and approves; B (Linux) takes A's invite and
 #   approves; C (Windows) takes both and makes the group lab-all.
-# Reports land in ./device-lab-reports/<run>/.
+# Reports land in ./device-lab-reports/<run>/, summarised at the end
+# (tool/device_lab/summarize.py).
 set -euo pipefail
 
 : "${WINDOWS:?user@host of the Windows PC}"
@@ -27,7 +28,7 @@ RELAY=${RELAY:-}
 RUN=${RUN:-all}
 WAIT=${WAIT:-20}
 # How long each device stays online after its own tests, for the others.
-LINGER=${LINGER:-300}
+LINGER=${LINGER:-600}
 PACKAGE=${PACKAGE:-dev.conest.conest.debug}
 win_user=${WINDOWS%@*}
 WINDOWS_DIR=${WINDOWS_DIR:-C:\\Users\\$win_user\\conest-lab\\conest-debug-windows-x64}
@@ -119,3 +120,4 @@ fi
 win "schtasks /Delete /F /TN ConestLab" >/dev/null || true
 win "netsh advfirewall firewall delete rule name=ConestLab" >/dev/null || true
 echo "Reports in $out"
+python3 "$(dirname "$0")/summarize.py" "$out" || true

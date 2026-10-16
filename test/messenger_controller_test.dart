@@ -18750,6 +18750,127 @@ void main() {
   });
 
   test(
+    'lab interactions reach the other device, in chats and groups',
+    () async {
+      final relay = _FakeRelayClient();
+      final root = Directory.systemTemp.createTempSync('conest_lab_do_');
+      addTearDown(() => root.deleteSync(recursive: true));
+      Future<MessengerController> device(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          debugBuildId: 'test@abc',
+          keepErrorHistory: true,
+          attachmentRootProvider: () async =>
+              Directory('${root.path}/$name')..createSync(recursive: true),
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      await _pairControllers(alice, bob);
+      var polling = true;
+      addTearDown(() => polling = false);
+      unawaited(() async {
+        while (polling) {
+          await Future.wait([
+            alice.pollNow(),
+            bob.pollNow(),
+          ]).catchError((_) => const <void>[]);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }());
+      Future<void> until(bool Function() ready, String what) async {
+        for (var i = 0; i < 200 && !ready(); i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(ready(), isTrue, reason: what);
+      }
+
+      await alice.createGroup(
+        title: 'lab-all',
+        members: [alice.contacts.single],
+      );
+      await until(() => bob.groups.isNotEmpty, 'Bob is in the group');
+      final groupId = bob.groups.single.groupId;
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      await bob.sendMessage(
+        contact: bob.contacts.single,
+        body: 'lab 1 from Bob',
+      );
+      await bob.sendGroupMessage(groupId: groupId, body: 'lab 1 from Bob to g');
+      await until(
+        () =>
+            alice.messagesFor(bobId).any((m) => m.body == 'lab 1 from Bob') &&
+            alice
+                .messagesForGroup(groupId)
+                .any((m) => m.body == 'lab 1 from Bob to g'),
+        'Alice has both',
+      );
+
+      final path = await runDebugRequest(
+        alice,
+        const DebugRunRequest(what: 'interactions', wait: Duration(seconds: 1)),
+        defaultReportPath: () async => '${root.path}/alice.json',
+      );
+      final report = jsonDecode(File(path).readAsStringSync()) as Map;
+      final failed = [
+        for (final step in report['steps'] as List)
+          if (step['ok'] != true) step,
+      ];
+      expect(failed, isEmpty);
+
+      ChatMessage? bobSees(Iterable<ChatMessage> messages, String body) =>
+          messages.where((m) => m.body == body).firstOrNull;
+      List<ChatMessage> direct() => bob.messagesFor(aliceId);
+      List<ChatMessage> group() => bob.messagesForGroup(groupId);
+      for (final (where, messages) in [('chat', direct), ('group', group)]) {
+        await until(
+          () => bobSees(messages(), 'lab edited from Alice')?.isEdited == true,
+          'the edit reaches Bob ($where)',
+        );
+        await until(
+          () => bobSees(messages(), 'lab delete-me from Alice') == null,
+          'the deletion reaches Bob ($where)',
+        );
+        final mine = messages().firstWhere(
+          (m) => m.outbound && m.body.startsWith('lab 1 from Bob'),
+        );
+        expect(
+          bobSees(messages(), 'lab reply from Alice')?.replyToMessageId,
+          mine.id,
+          reason: 'the reply quotes Bob ($where)',
+        );
+        await until(
+          () => messages()
+              .firstWhere((m) => m.id == mine.id)
+              .reactions
+              .containsKey('👍'),
+          'the reaction reaches Bob ($where)',
+        );
+      }
+      await until(
+        () =>
+            bob
+                .messagesFor(aliceId)
+                .firstWhere((m) => m.body == 'lab 1 from Bob')
+                .state ==
+            DeliveryState.read,
+        'Bob sees his message read',
+      );
+      final cancelled = alice
+          .messagesFor(bobId)
+          .lastWhere((m) => m.attachment?.fileName == 'lab-cancel.bin');
+      expect(cancelled.state, DeliveryState.canceled);
+      expect(bob.attachmentAvailableLocally(cancelled.attachment!.id), isFalse);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
     'background upkeep slows down on battery and more in battery saver',
     () async {
       Future<MessengerController> device(EnergyMode mode) async {
