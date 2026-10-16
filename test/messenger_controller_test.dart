@@ -10418,6 +10418,32 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
+  test('a relay added from its installer link has its key pinned', () async {
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+    final key = base64Encode(List<int>.filled(32, 7));
+    final other = base64Encode(List<int>.filled(32, 9));
+    String link(String k) =>
+        'conest-relay://relay.link.test:7667?id=relay-1&key='
+        '${Uri.encodeQueryComponent(k)}';
+
+    await alice.addRelayFromLink(link(key));
+    expect(alice.pinnedRelayIdentityKeys['relay-1'], key);
+    expect(
+      alice.identity!.configuredRelays.map((r) => r.host),
+      contains('relay.link.test'),
+    );
+    await expectLater(alice.addRelayFromLink(link(other)), throwsStateError);
+    expect(alice.pinnedRelayIdentityKeys['relay-1'], key);
+    await expectLater(
+      alice.addRelayFromLink('https://relay.link.test'),
+      throwsArgumentError,
+    );
+  });
+
   test('debug self test reports runnable checks', () async {
     final relayClient = _FakeRelayClient();
     final controller = await _createController(

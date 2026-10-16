@@ -101,6 +101,7 @@ export 'beam_protocol.dart'
         PreparedBeamTransfer,
         conestBeamMaximumPayloadBytes;
 import 'relay_client.dart';
+import 'relay_link.dart';
 import 'relay_defaults.dart';
 import 'route_health_tracker.dart';
 import 'storage.dart';
@@ -9796,6 +9797,29 @@ class MessengerController extends ChangeNotifier {
           ? 'Relay ${relays.first.label} added.'
           : 'Relay ${relays.first.host}:${relays.first.port} added for ${_protocolSummary(relays)}.',
     );
+  }
+
+  /// Adds a relay from its installer's link, with its identity key pinned
+  /// before the first answer (no trust on first use).
+  Future<void> addRelayFromLink(String text) async {
+    final link = RelayLink.tryParse(text);
+    if (link == null) {
+      throw ArgumentError('Not a Conest relay link.');
+    }
+    final pinned = _snapshot.pinnedRelayIdentityKeys[link.relayId];
+    if (pinned != null && pinned != link.identityKeyBase64) {
+      throw StateError(
+        'This relay is known with a different identity key. Check the link '
+        'with its operator.',
+      );
+    }
+    _snapshot = _snapshot.copyWith(
+      pinnedRelayIdentityKeys: {
+        ..._snapshot.pinnedRelayIdentityKeys,
+        link.relayId: link.identityKeyBase64,
+      },
+    );
+    await addRelay(host: link.host, port: link.port);
   }
 
   Future<List<PeerEndpoint>> _relayRoutesFromInput({

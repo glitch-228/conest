@@ -20,6 +20,7 @@ const MAX_MANIFEST_BYTES: usize = 512 * 1024;
 const MAX_SIGNATURE_BYTES: usize = 4096;
 const MAX_RELAY_BYTES: usize = 256 * 1024 * 1024;
 const HEALTH_DEADLINE: Duration = Duration::from_secs(30);
+const MAX_RELEASE_LISTING_BYTES: usize = 2 * 1024 * 1024;
 
 fn main() {
     if let Err(error) = run() {
@@ -29,6 +30,9 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
+    if env::args().nth(1).as_deref() == Some("verify-manifest") {
+        return verify_manifest_command(env::args().skip(2));
+    }
     let (command, config) = Config::from_args()?;
     match command.as_str() {
         "install" => install_service(&config),
@@ -61,6 +65,8 @@ struct Config {
     manifest_url: Option<String>,
     release_public_key: Option<String>,
     maintenance_start_hour: u8,
+    /// The account the service runs as (Linux), instead of root.
+    service_user: Option<String>,
 }
 
 impl Config {
@@ -85,6 +91,7 @@ impl Config {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(3);
+        let mut service_user = env::var("CONEST_RELAY_SERVICE_USER").ok();
         while let Some(option) = args.next() {
             let value = match option.as_str() {
                 "--data-dir"
@@ -93,7 +100,8 @@ impl Config {
                 | "--channel"
                 | "--manifest-url"
                 | "--release-public-key"
-                | "--maintenance-hour" => args
+                | "--maintenance-hour"
+                | "--service-user" => args
                     .next()
                     .ok_or_else(|| format!("{option} requires a value"))?,
                 _ => return Err(format!("unknown option {option}\n\n{}", usage())),
@@ -110,6 +118,7 @@ impl Config {
                         .parse()
                         .map_err(|_| "maintenance hour must be 0..23".to_owned())?
                 }
+                "--service-user" => service_user = Some(value),
                 _ => unreachable!(),
             }
         }
@@ -118,6 +127,15 @@ impl Config {
         }
         if maintenance_start_hour > 23 {
             return Err("maintenance hour must be 0..23".to_owned());
+        }
+        if let Some(user) = &service_user
+            && (user.is_empty()
+                || user.len() > 32
+                || !user
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        {
+            return Err("service user must be a plain account name".to_owned());
         }
         Ok((
             command,
@@ -129,6 +147,7 @@ impl Config {
                 manifest_url,
                 release_public_key,
                 maintenance_start_hour,
+                service_user,
             },
         ))
     }
@@ -325,10 +344,12 @@ fn apply_staged_and_verify(config: &Config, state: &mut SupervisorState) -> Resu
 }
 
 fn check_and_stage_update(config: &Config) -> Result<Option<String>, String> {
-    let manifest_url = config
+    let configured = config
         .manifest_url
         .as_deref()
         .ok_or_else(|| "manifest URL is not configured".to_owned())?;
+    let resolved = resolve_manifest_url(configured, &config.channel)?;
+    let manifest_url = resolved.as_str();
     let key_text = config
         .release_public_key
         .as_deref()
@@ -386,6 +407,65 @@ fn check_and_stage_update(config: &Config) -> Result<Option<String>, String> {
     Ok(Some(manifest.release_version))
 }
 
+/// `github:<owner>/<repo>` follows a channel on GitHub releases: stable
+/// through `releases/latest` (which skips pre-releases), nightly through the
+/// newest pre-release carrying a manifest. Any other value is the manifest's
+/// own URL. The manifest is verified against the release key either way.
+fn resolve_manifest_url(configured: &str, channel: &str) -> Result<String, String> {
+    let Some(repo) = configured.strip_prefix("github:") else {
+        return Ok(configured.to_owned());
+    };
+    let valid = repo.split('/').count() == 2
+        && repo.split('/').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        });
+    if !valid {
+        return Err("github manifest source must be github:<owner>/<repo>".to_owned());
+    }
+    if channel == "stable" {
+        return Ok(format!(
+            "https://github.com/{repo}/releases/latest/download/RELEASE-MANIFEST.json"
+        ));
+    }
+    let listing = download_bounded(
+        &format!("https://api.github.com/repos/{repo}/releases?per_page=20"),
+        MAX_RELEASE_LISTING_BYTES,
+    )?;
+    newest_prerelease_manifest(&listing, repo)
+}
+
+fn newest_prerelease_manifest(listing: &[u8], repo: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Release {
+        draft: bool,
+        prerelease: bool,
+        assets: Vec<Asset>,
+    }
+    #[derive(Deserialize)]
+    struct Asset {
+        name: String,
+        browser_download_url: String,
+    }
+    let releases: Vec<Release> =
+        serde_json::from_slice(listing).map_err(|error| format!("release listing: {error}"))?;
+    let prefix = format!("https://github.com/{repo}/releases/download/");
+    releases
+        .into_iter()
+        .filter(|release| release.prerelease && !release.draft)
+        .find_map(|release| {
+            release
+                .assets
+                .into_iter()
+                .find(|asset| asset.name == "RELEASE-MANIFEST.json")
+                .map(|asset| asset.browser_download_url)
+        })
+        .filter(|url| url.starts_with(&prefix))
+        .ok_or_else(|| "no nightly release with a manifest was found".to_owned())
+}
+
 fn validate_manifest(config: &Config, manifest: &ReleaseManifest) -> Result<(), String> {
     // Version 1 remains the rollout wire format so supervisors shipped before
     // the additive relay metadata was introduced can still consume the first
@@ -412,6 +492,44 @@ fn validate_manifest(config: &Config, manifest: &ReleaseManifest) -> Result<(), 
     }
     Version::parse(&manifest.release_version)
         .map_err(|error| format!("invalid release version: {error}"))?;
+    Ok(())
+}
+
+/// `verify-manifest --manifest FILE --signature FILE --release-public-key
+/// BASE64`: checks a downloaded release manifest (the relay installer uses
+/// it where openssl cannot).
+fn verify_manifest_command(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    let (mut manifest, mut signature, mut key) = (None, None, None);
+    while let Some(option) = args.next() {
+        let value = args
+            .next()
+            .ok_or_else(|| format!("{option} requires a value"))?;
+        match option.as_str() {
+            "--manifest" => manifest = Some(value),
+            "--signature" => signature = Some(value),
+            "--release-public-key" => key = Some(value),
+            _ => return Err(format!("unknown option {option}")),
+        }
+    }
+    let read = |path: Option<String>, limit: usize| -> Result<Vec<u8>, String> {
+        let path = path.ok_or_else(|| "verify-manifest needs --manifest and --signature".to_owned())?;
+        let mut bytes = Vec::new();
+        File::open(&path)
+            .map_err(|error| format!("{path}: {error}"))?
+            .take((limit + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("{path}: {error}"))?;
+        if bytes.len() > limit {
+            return Err(format!("{path} is too large"));
+        }
+        Ok(bytes)
+    };
+    let manifest = read(manifest, MAX_MANIFEST_BYTES)?;
+    let signature = String::from_utf8(read(signature, MAX_SIGNATURE_BYTES)?)
+        .map_err(|_| "release signature is not UTF-8".to_owned())?;
+    let key = key.ok_or_else(|| "verify-manifest needs --release-public-key".to_owned())?;
+    verify_manifest_signature(&manifest, signature.trim(), &key)?;
+    println!("release manifest signature is valid");
     Ok(())
 }
 
@@ -442,6 +560,8 @@ fn spawn_relay(config: &Config) -> Result<Child, String> {
     }
     Command::new(binary)
         .arg(&config.relay_bind)
+        .arg("--relay-id")
+        .arg(relay_id(config)?)
         .arg("--identity-seed-path")
         .arg(config.data_dir.join("relay-identity.seed"))
         .arg("--database-path")
@@ -557,9 +677,7 @@ fn install_service(config: &Config) -> Result<(), String> {
             .map(|value| shell_escape_value(&value))
             .collect::<Vec<_>>()
             .join(" ");
-        let unit = format!(
-            "[Unit]\nDescription=Conest Relay Supervisor\nAfter=network-online.target\n\n[Service]\nExecStart={exec_start}\nRestart=always\nRestartSec=3\n\n[Install]\nWantedBy=multi-user.target\n",
-        );
+        let unit = systemd_unit(config, &exec_start);
         let path = PathBuf::from("/etc/systemd/system/conest-relay.service");
         fs::write(&path, unit).map_err(|error| format!("writing {}: {error}", path.display()))?;
         command_ok("systemctl", &["daemon-reload"])?;
@@ -587,6 +705,52 @@ fn install_service(config: &Config) -> Result<(), String> {
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     Err("service installation is supported on Linux and Windows".to_owned())
+}
+
+/// The service unit: as its own account when one is given, with the
+/// filesystem closed to it except its data and bundle (it updates the
+/// relay binary there).
+fn systemd_unit(config: &Config, exec_start: &str) -> String {
+    let mut service = vec![
+        format!("ExecStart={exec_start}"),
+        "Restart=always".to_owned(),
+        "RestartSec=3".to_owned(),
+    ];
+    if let Some(user) = &config.service_user {
+        service.push(format!("User={user}"));
+        service.push(format!("Group={user}"));
+        service.extend(
+            [
+                "NoNewPrivileges=yes",
+                "ProtectSystem=strict",
+                "ProtectHome=yes",
+                "PrivateTmp=yes",
+                "PrivateDevices=yes",
+                "ProtectKernelTunables=yes",
+                "ProtectKernelModules=yes",
+                "ProtectControlGroups=yes",
+                "RestrictSUIDSGID=yes",
+                "LockPersonality=yes",
+            ]
+            .map(str::to_owned),
+        );
+        service.push(format!(
+            "ReadWritePaths={} {}",
+            shell_escape_value(&config.data_dir.to_string_lossy()),
+            shell_escape_value(&config.bundle_dir.to_string_lossy())
+        ));
+        let port = config
+            .relay_bind
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse::<u16>().ok());
+        if port.is_some_and(|port| port < 1024) {
+            service.push("AmbientCapabilities=CAP_NET_BIND_SERVICE".to_owned());
+        }
+    }
+    format!(
+        "[Unit]\nDescription=Conest Relay Supervisor\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\n{}\n\n[Install]\nWantedBy=multi-user.target\n",
+        service.join("\n")
+    )
 }
 
 fn serve_arguments(config: &Config) -> Vec<String> {
@@ -718,6 +882,28 @@ fn print_status(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
+/// One id for the life of the relay: apps tell relays apart by it, and a
+/// new one at every start looked like a different relay each time.
+fn relay_id(config: &Config) -> Result<String, String> {
+    let path = config.data_dir.join("relay-id");
+    if let Ok(text) = fs::read_to_string(&path) {
+        let id = text.trim();
+        if !id.is_empty()
+            && id.len() <= 64
+            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Ok(id.to_owned());
+        }
+    }
+    let random: [u8; 8] = rand::thread_rng().r#gen();
+    let id = format!(
+        "relay-{}",
+        random.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    );
+    atomic_write(&path, id.as_bytes())?;
+    Ok(id)
+}
+
 fn prepare_directories(config: &Config) -> Result<(), String> {
     fs::create_dir_all(&config.data_dir).map_err(|error| error.to_string())?;
     fs::create_dir_all(&config.bundle_dir).map_err(|error| error.to_string())
@@ -758,6 +944,8 @@ fn download_bounded(url: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
     }
     let response = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
+        // GitHub's API refuses requests without one.
+        .user_agent(concat!("conest-relay-supervisor/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| error.to_string())?
         .get(url)
@@ -879,7 +1067,7 @@ fn now_millis() -> u64 {
 }
 
 fn usage() -> String {
-    "usage: conest_relay_supervisor <install|uninstall|start|stop|status|update-now|rollback|serve> [--data-dir PATH] [--bundle-dir PATH] [--bind HOST:PORT] [--channel stable|nightly] [--manifest-url HTTPS_URL] [--release-public-key BASE64] [--maintenance-hour 0..23]".to_owned()
+    "usage: conest_relay_supervisor <install|uninstall|start|stop|status|update-now|rollback|serve> [--data-dir PATH] [--bundle-dir PATH] [--bind HOST:PORT] [--channel stable|nightly] [--manifest-url HTTPS_URL|github:OWNER/REPO] [--release-public-key BASE64] [--maintenance-hour 0..23] [--service-user NAME]".to_owned()
 }
 
 #[cfg(test)]
@@ -895,7 +1083,59 @@ mod tests {
             manifest_url: Some("https://example.com/nightly/RELEASE-MANIFEST.json".to_owned()),
             release_public_key: Some("cHVibGljLWtleQ==".to_owned()),
             maintenance_start_hour: 4,
+            service_user: None,
         }
+    }
+
+    #[test]
+    fn the_service_runs_as_its_own_account_when_given_one() {
+        let mut config = test_config();
+        assert!(!systemd_unit(&config, "/x serve").contains("User="));
+        config.service_user = Some("conest-relay".to_owned());
+        let unit = systemd_unit(&config, "/x serve");
+        assert!(unit.contains("User=conest-relay"));
+        assert!(unit.contains("ProtectSystem=strict"));
+        assert!(unit.contains("ReadWritePaths='/var/lib/conest relay' '/opt/conest relay'"));
+        assert!(!unit.contains("CAP_NET_BIND_SERVICE"));
+        config.relay_bind = "0.0.0.0:443".to_owned();
+        assert!(systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+    }
+
+    #[test]
+    fn the_relay_id_stays_the_same() {
+        let mut config = test_config();
+        config.data_dir = env::temp_dir().join(format!("conest-relay-id-{}", std::process::id()));
+        fs::create_dir_all(&config.data_dir).unwrap();
+        let first = relay_id(&config).unwrap();
+        assert!(first.starts_with("relay-"));
+        assert_eq!(relay_id(&config).unwrap(), first);
+        let _ = fs::remove_dir_all(&config.data_dir);
+    }
+
+    #[test]
+    fn nightly_follows_the_newest_prerelease_with_a_manifest() {
+        let listing = br#"[
+          {"draft": true, "prerelease": true, "assets": [{"name": "RELEASE-MANIFEST.json",
+            "browser_download_url": "https://github.com/o/r/releases/download/draft/RELEASE-MANIFEST.json"}]},
+          {"draft": false, "prerelease": false, "assets": [{"name": "RELEASE-MANIFEST.json",
+            "browser_download_url": "https://github.com/o/r/releases/download/v1/RELEASE-MANIFEST.json"}]},
+          {"draft": false, "prerelease": true, "assets": [{"name": "app.zip",
+            "browser_download_url": "https://github.com/o/r/releases/download/n2/app.zip"}]},
+          {"draft": false, "prerelease": true, "assets": [{"name": "RELEASE-MANIFEST.json",
+            "browser_download_url": "https://github.com/o/r/releases/download/n1/RELEASE-MANIFEST.json"}]}
+        ]"#;
+        assert_eq!(
+            newest_prerelease_manifest(listing, "o/r").unwrap(),
+            "https://github.com/o/r/releases/download/n1/RELEASE-MANIFEST.json"
+        );
+        let elsewhere = br#"[{"draft": false, "prerelease": true, "assets": [{"name": "RELEASE-MANIFEST.json",
+            "browser_download_url": "https://evil.example/RELEASE-MANIFEST.json"}]}]"#;
+        assert!(newest_prerelease_manifest(elsewhere, "o/r").is_err());
+        assert_eq!(
+            resolve_manifest_url("github:o/r", "stable").unwrap(),
+            "https://github.com/o/r/releases/latest/download/RELEASE-MANIFEST.json"
+        );
+        assert!(resolve_manifest_url("github:../x", "stable").is_err());
     }
 
     #[test]

@@ -48,6 +48,7 @@ import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
 import 'src/ui/group_call_screen.dart';
 import 'src/ui/read_sweep.dart';
+import 'src/relay_link.dart';
 import 'src/ui/crash_notice.dart';
 import 'src/crash_catcher.dart';
 import 'src/native_crash_reports.dart';
@@ -15135,8 +15136,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   child: TextField(
                                     controller: _relayHostController,
                                     decoration: const InputDecoration(
-                                      labelText: 'Relay host / URL',
-                                      hintText: 'udp://host:port forces UDP',
+                                      labelText: 'Relay host, URL or link',
+                                      hintText:
+                                          'conest-relay://… from its installer',
                                     ),
                                   ),
                                 ),
@@ -15154,6 +15156,19 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   onPressed: _busy
                                       ? null
                                       : () => _run(() async {
+                                          // A link from the relay installer
+                                          // carries the relay's key too.
+                                          final input = _relayHostController
+                                              .text
+                                              .trim();
+                                          if (input.startsWith(
+                                            '${RelayLink.scheme}://',
+                                          )) {
+                                            await widget.controller
+                                                .addRelayFromLink(input);
+                                            _relayHostController.clear();
+                                            return;
+                                          }
                                           final port = int.tryParse(
                                             _relayPortController.text.trim(),
                                           );
