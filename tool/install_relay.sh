@@ -245,7 +245,8 @@ say "Release: $TAG_NAME"
 
 # asset_hash NAME -> its sha256 in the manifest
 asset_hash() {
-  tr '{' '\n' <"$WORK/RELEASE-MANIFEST.json" |
+  # One asset per line (the manifest is pretty-printed).
+  tr -d '\n\r' <"$WORK/RELEASE-MANIFEST.json" | tr '{' '\n' |
     grep "\"name\": *\"$1\"" |
     sed -n 's/.*"sha256": *"\([0-9a-f]\{64\}\)".*/\1/p' |
     head -n 1
