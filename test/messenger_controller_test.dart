@@ -5807,6 +5807,30 @@ void main() {
     }
   }
 
+  test('a group file finished after a timeout still gets its receipt', () {
+    bool finished(GroupFileDownloadState? previous) =>
+        MessengerController.groupFileJustFinished(
+          previous,
+          GroupFileDownloadState.complete,
+        );
+    // A late piece completes a download that had gone back to waiting.
+    expect(finished(GroupFileDownloadState.waiting), isTrue);
+    expect(finished(GroupFileDownloadState.failed), isTrue);
+    expect(finished(GroupFileDownloadState.paused), isTrue);
+    expect(finished(GroupFileDownloadState.downloading), isTrue);
+    // Read back whole after a restart: acknowledged before.
+    expect(finished(null), isFalse);
+    expect(finished(GroupFileDownloadState.checking), isFalse);
+    expect(finished(GroupFileDownloadState.complete), isFalse);
+    expect(
+      MessengerController.groupFileJustFinished(
+        GroupFileDownloadState.downloading,
+        GroupFileDownloadState.failed,
+      ),
+      isFalse,
+    );
+  });
+
   test(
     'group files get receipts and stay finished with nobody reachable',
     () async {

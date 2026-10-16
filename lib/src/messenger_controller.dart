@@ -2892,9 +2892,7 @@ class MessengerController extends ChangeNotifier {
             _groupFileLastStates[eventId] = state;
             // Fetched here just now (not read back after a restart): tell
             // the sender this member has it.
-            if (session != null &&
-                previous == GroupFileDownloadState.downloading &&
-                state == GroupFileDownloadState.complete) {
+            if (session != null && groupFileJustFinished(previous, state)) {
               unawaited(_acknowledgeGroupFile(session.event));
             }
             if (previous != state) {
@@ -3097,6 +3095,22 @@ class MessengerController extends ChangeNotifier {
 
   /// A delivered receipt to the member who shared a group file, once this
   /// device has it whole. It travels like other acks (queued and retried).
+  /// Whether a group file just finished downloading here, so its author
+  /// should hear this member has it: complete after any state of an
+  /// unfinished download. Not only after `downloading`: a piece that
+  /// arrives after its request timed out leaves the download waiting or
+  /// failed, and the next attempt finds it whole. Not after `checking` or
+  /// no state yet: that is a file read back whole after a restart.
+  @visibleForTesting
+  static bool groupFileJustFinished(
+    GroupFileDownloadState? previous,
+    GroupFileDownloadState state,
+  ) =>
+      state == GroupFileDownloadState.complete &&
+      previous != null &&
+      previous != GroupFileDownloadState.checking &&
+      previous != GroupFileDownloadState.complete;
+
   Future<void> _acknowledgeGroupFile(GroupHistoryEvent event) async {
     final me = _snapshot.identity;
     final group = _groupById(event.groupId);
