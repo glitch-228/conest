@@ -204,6 +204,44 @@ void main() {
     },
   );
 
+  test('mail that can never be saved is skipped, and mail after it '
+      'still arrives', () async {
+    var attempts = 0;
+    final gaveUp = <int>[];
+    final got = <Uint8List>[];
+    final bob = EmailCarrierChannel(
+      config: account('stuck'),
+      connector: server.connect,
+      onFrame: (_, frame) => got.add(frame),
+      onOtherMail: (_) async {
+        attempts++;
+        throw const OtherMailRetryException();
+      },
+      onOtherMailGaveUp: gaveUp.add,
+    );
+    channels.add(bob);
+    bob.start();
+    await until(() => bob.state == EmailCarrierState.connected);
+    server.deliver(
+      'stuck@chat.test',
+      'From: <a@chat.test>\r\n'
+          'Content-Type: multipart/encrypted\r\n\r\nno room for it',
+    );
+    final stuckUid = server.mailboxes['stuck@chat.test']!.last.uid;
+    final alice = channel(account('alice'), [])..start();
+    await until(() => alice.state == EmailCarrierState.connected);
+    await alice.sendFrame(bob.localAddress!, frame);
+
+    await until(() => got.isNotEmpty);
+    expect(attempts, EmailCarrierChannel.maxOtherMailAttempts);
+    expect(gaveUp, [stuckUid]);
+    // Left on the server, not deleted.
+    expect(
+      server.mailboxes['stuck@chat.test']!.map((m) => m.uid),
+      contains(stuckUid),
+    );
+  });
+
   test('reading resumes after the server drops the connection', () async {
     final bobGot = <(String, Uint8List)>[];
     final alice = channel(account('alice'), [])..start();

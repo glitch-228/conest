@@ -28,6 +28,7 @@ class ConestBackgroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashReports.install(this)
         currentInstance = this
         ensureChannel()
     }

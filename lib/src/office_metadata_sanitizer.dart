@@ -59,6 +59,20 @@ abstract final class OfficeMetadataSanitizer {
     );
   }
 
+  /// A signed Office (`_xmlsignatures/`) or OpenDocument
+  /// (`META-INF/documentsignatures.xml`) file.
+  static bool isSigned(Uint8List data) {
+    try {
+      return _directory(data, checkExpansion: false).any(
+        (entry) =>
+            entry.name.startsWith('_xmlsignatures/') ||
+            entry.name == 'META-INF/documentsignatures.xml',
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Null means an ordinary ZIP; malformed or over-cap inputs throw.
   static Uint8List? clean(
     Uint8List data,

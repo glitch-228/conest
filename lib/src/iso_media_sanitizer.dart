@@ -24,6 +24,14 @@ class IsoMediaSanitizer {
   Future<bool> clean() async {
     final trailer = await _samsungTrailer();
     final boxes = await _boxes(0, trailer ?? length, 0);
+    final ftyp = boxes.where((box) => box.type == 'ftyp').firstOrNull;
+    if (ftyp != null &&
+        ftyp.end - ftyp.content >= 4 &&
+        latin1.decode(await _read(ftyp.content, 4)) == 'crx ') {
+      // Canon raw keeps its EXIF inside boxes the image needs: not
+      // something to patch in place, so sending it asks first.
+      throw const FormatException('Canon raw (CR3) is not cleaned.');
+    }
     for (final box in boxes) {
       if (box.type == 'mdat') {
         _media.add((box.content, box.end));
@@ -190,9 +198,27 @@ class IsoMediaSanitizer {
     return boxes;
   }
 
+  /// The `uuid` box type Adobe's XMP lives in. Other `uuid` boxes hold
+  /// what a file needs (Canon raw decoding tables, 360° video layout,
+  /// PIFF encryption) and are kept.
+  static const _xmpUuid = [
+    0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, //
+    0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac,
+  ];
+
+  Future<bool> _isXmpUuid(_Box box) async {
+    if (box.end - box.content < 16) return false;
+    final usertype = await _read(box.content, 16);
+    for (var i = 0; i < 16; i++) {
+      if (usertype[i] != _xmpUuid[i]) return false;
+    }
+    return true;
+  }
+
   Future<void> _plan(List<_Box> boxes, {bool top = false}) async {
     for (final box in boxes) {
-      if (const {'udta', 'uuid', 'sefd'}.contains(box.type) ||
+      if (const {'udta', 'sefd'}.contains(box.type) ||
+          box.type == 'uuid' && await _isXmpUuid(box) ||
           box.type == 'meta' && !top) {
         _freeBoxes.add(box);
         _zeros.add((box.content, box.end));

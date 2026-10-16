@@ -191,6 +191,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.onCursor,
     this.onStatusChanged,
     this.onOtherMail,
+    this.onOtherMailGaveUp,
     this.otherMailMaxBytes,
     MailConnector? connector,
     this.tls = true,
@@ -220,6 +221,13 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// Mail that is not carrier mail (Delta Chat's, say): true when it was
   /// handled and may be deleted. Without it such mail is left alone.
   final Future<bool> Function(Uint8List raw)? onOtherMail;
+
+  /// A message [onOtherMail] could not save after [maxOtherMailAttempts]
+  /// tries: left on the server, and skipped.
+  final void Function(int uid)? onOtherMailGaveUp;
+
+  static const maxOtherMailAttempts = 3;
+  final Map<int, int> _otherMailAttempts = {};
 
   /// Explicit larger budget for enabled external chats; carrier cap is unchanged.
   final int Function()? otherMailMaxBytes;
@@ -417,9 +425,21 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         } else if (raw != null && onOtherMail != null) {
           try {
             handled = await onOtherMail!(raw);
+            _otherMailAttempts.remove(uid);
           } on OtherMailRetryException {
-            // Do not advance the durable watermark past an unsaved message.
-            return true;
+            // Do not advance the durable watermark past an unsaved message,
+            // a few times: a message that can never be saved (no room, too
+            // many chats) would otherwise be downloaded again and again and
+            // hold back every mail after it, carrier frames included. Then
+            // it stays on the server, unread.
+            final attempts = (_otherMailAttempts[uid] ?? 0) + 1;
+            if (attempts < maxOtherMailAttempts) {
+              if (_otherMailAttempts.length >= 64) _otherMailAttempts.clear();
+              _otherMailAttempts[uid] = attempts;
+              return true;
+            }
+            _otherMailAttempts.remove(uid);
+            onOtherMailGaveUp?.call(uid);
           } catch (_) {
             // Not read: left on the server.
           }

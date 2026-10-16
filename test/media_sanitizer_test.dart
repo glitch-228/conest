@@ -353,6 +353,45 @@ void main() {
     }
   });
 
+  test('only XMP uuid boxes go; others the file needs stay', () async {
+    final mvhd = box('mvhd', List<int>.filled(20, 0));
+    const xmpUuid = [
+      0xbe, 0x7a, 0xcf, 0xcb, 0x97, 0xa9, 0x42, 0xe8, //
+      0x9c, 0x71, 0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac,
+    ];
+    final sphericalUuid = List<int>.generate(16, (i) => 0x10 + i);
+    final dirty = [
+      ...box('ftyp', latin1.encode('isom\u0000\u0000\u0002\u0000isom')),
+      ...box('moov', [
+        ...mvhd,
+        ...box('uuid', [
+          ...sphericalUuid,
+          ...latin1.encode('SPHERICAL-LAYOUT'),
+        ]),
+      ]),
+      ...box('uuid', [...xmpUuid, ...latin1.encode('<x:xmpmeta>Jane</x>')]),
+      ...box('mdat', latin1.encode('MEDIA-FRAMES')),
+    ];
+    final (status, cleaned) = await run(dirty);
+    expect(status, SanitizeStatus.cleaned);
+    expect(cleaned.length, dirty.length);
+    expect(has(cleaned, 'Jane'), isFalse);
+    expect(has(cleaned, 'SPHERICAL-LAYOUT'), isTrue);
+
+    // Canon raw keeps its details in boxes the image needs: not patched.
+    final cr3 = [
+      ...box('ftyp', latin1.encode('crx \u0000\u0000\u0000\u0001crx isom')),
+      ...box('moov', [
+        ...mvhd,
+        ...box('uuid', [...sphericalUuid, ...latin1.encode('CMT1-EXIF')]),
+      ]),
+      ...box('mdat', latin1.encode('RAW-DATA')),
+    ];
+    final (rawStatus, rawOut) = await run(cr3);
+    expect(rawStatus, SanitizeStatus.failed);
+    expect(rawOut, cr3);
+  });
+
   test('HEIC: the Exif item is blanked, the image item kept', () async {
     final image = latin1.encode('IMAGE-DATA');
     final exif = latin1.encode('EXIF-GPS-52.52');
@@ -512,6 +551,37 @@ void main() {
     expect(text, isNot(contains('4A616E65')));
     expect(text, contains('/Author ('));
     expect(text, contains('endstream'));
+  });
+
+  test('signed documents are left untouched and need consent', () async {
+    const pdf =
+        '%PDF-1.7\n1 0 obj\n<< /Author (Jane Doe) >>\nendobj\n'
+        '2 0 obj\n<< /Type /Sig /Filter /Adobe.PPKLite '
+        '/ByteRange [0 10 20 30] /Contents <00> >>\nendobj\n'
+        'trailer\n<< /Info 1 0 R >>\n%%EOF\n';
+    final (pdfStatus, pdfOut) = await run(latin1.encode(pdf));
+    expect(pdfStatus, SanitizeStatus.partial);
+    expect(latin1.decode(pdfOut), pdf);
+
+    final docx = Archive()
+      ..addFile(
+        ArchiveFile.bytes('[Content_Types].xml', utf8.encode('<Types/>')),
+      )
+      ..addFile(
+        ArchiveFile.bytes(
+          'docProps/core.xml',
+          utf8.encode(
+            '<cp:coreProperties><dc:creator>Jane</dc:creator></cp:coreProperties>',
+          ),
+        ),
+      )
+      ..addFile(
+        ArchiveFile.bytes('_xmlsignatures/sig1.xml', utf8.encode('<Sig/>')),
+      );
+    final bytes = ZipEncoder().encodeBytes(docx);
+    final (docxStatus, docxOut) = await run(bytes);
+    expect(docxStatus, SanitizeStatus.partial);
+    expect(docxOut, bytes);
   });
 
   test('damaged files report a failure instead of throwing', () async {

@@ -8,6 +8,13 @@ import 'metadata_limits.dart';
 abstract final class PdfMetadataSanitizer {
   static const maxInflatedBytes = 8 * 1024 * 1024;
 
+  /// Carries a digital signature, or permissions bound to one (DocMDP):
+  /// every signature dictionary has a /ByteRange.
+  static bool isSigned(Uint8List data) {
+    final text = latin1.decode(data);
+    return text.contains('/ByteRange') || text.contains('/Perms');
+  }
+
   static ({Uint8List bytes, bool partial}) clean(Uint8List data) {
     final parser = _PdfParser(latin1.decode(data))..parse();
     final ordinaryReferences = parser.ordinaryReferences();

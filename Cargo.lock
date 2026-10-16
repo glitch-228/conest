@@ -1082,6 +1082,7 @@ dependencies = [
  "tor-proto",
  "tor-rtcompat",
  "vodozemac",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

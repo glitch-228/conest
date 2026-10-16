@@ -173,6 +173,12 @@ abstract final class MediaSanitizer {
       if (data.length > maxInMemoryBytes) {
         return (bytes: data, status: SanitizeStatus.failed);
       }
+      // A signed document is left as it is: any change breaks the
+      // signature. Sending it still asks, as details remain.
+      if (kind == 'pdf' && PdfMetadataSanitizer.isSigned(data) ||
+          kind == 'zip' && OfficeMetadataSanitizer.isSigned(data)) {
+        return (bytes: data, status: SanitizeStatus.partial);
+      }
       if (kind == 'pdf') {
         final result = PdfMetadataSanitizer.clean(data);
         return (

@@ -192,20 +192,14 @@ extension GroupCallController on MessengerController {
         unawaited(voiceMessageService.stopPlayback());
         unawaited(voiceMessageService.stopForInterruption());
       }
-      unawaited(
-        _platformBridge.updateAndroidVoiceCallForeground(
-          runtimeEnabled: identity?.androidBackgroundRuntimeEnabled == true,
-          callsEnabled:
-              identity?.androidBackgroundCallsEnabled == true &&
-              experimentalAndroidBackgroundRuntimeAvailable,
-          peerName: room == null ? null : _groupById(room.groupId)?.title,
-          callState: room == null
-              ? 'idle'
-              : room.connected
-              ? 'connected'
-              : 'connecting',
-          incoming: false,
-        ),
+      _updateCallForeground(
+        title: room == null ? null : _groupById(room.groupId)?.title,
+        state: room == null
+            ? 'idle'
+            : room.connected
+            ? 'connected'
+            : 'connecting',
+        incoming: false,
       );
       notifyListeners();
     });
@@ -466,11 +460,27 @@ class _ControllerGroupCallTransport implements GroupCallTransport {
     if (signal.action == 'key' && envelope.protocolVersion != 3) {
       throw StateError('Call key requires a forward-secret session.');
     }
+    // Upkeep repeats every few seconds. To members outside the call it goes
+    // only over live routes, never through relays, mail or radio; those in
+    // it may need any route (their audio can flow where envelopes don't).
+    final inCall =
+        controller._groupCallService
+            ?.roomFor(signal.groupId)
+            ?.participants
+            .any((p) => p.deviceId == recipientDeviceId) ??
+        false;
+    final upkeep =
+        !inCall &&
+        const {'join', 'stats', 'topology', 'start'}.contains(signal.action);
     await controller._deliverToContact(
       contact: peer,
       recipientDeviceId: peer.deviceId,
       envelope: envelope,
       allowForwarding: false,
+      skipLegacyKinds: upkeep
+          ? const {PeerRouteKind.relay}
+          : const <PeerRouteKind>{},
+      allowedUnifiedKinds: upkeep ? const {TransportKind.iroh} : null,
     );
   }
 

@@ -173,10 +173,22 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
   void _markRead() {
     final items = _client.timeline(widget.roomId).items;
     if (items.isEmpty || _client.room(widget.roomId)?.invited == true) return;
+    // Only what is on screen: not while the app is hidden.
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null &&
+        lifecycle != AppLifecycleState.resumed &&
+        lifecycle != AppLifecycleState.inactive) {
+      return;
+    }
     final last = items.last.eventId;
     if (last == _lastRead) return;
     _lastRead = last;
-    unawaited(_client.markRead(widget.roomId, last).catchError((Object _) {}));
+    unawaited(
+      _client.markRead(widget.roomId, last).catchError((Object _) {
+        // Tried again on the next change (sync brings one soon).
+        if (_lastRead == last) _lastRead = null;
+      }),
+    );
   }
 
   Future<void> _loadOlder() async {

@@ -59,6 +59,10 @@ cpal = "0.18.2"
 nokhwa = { version = "0.10.11", features = ["input-native"] }
 rxing = { version = "0.9.1", default-features = false, features = ["decoders", "encoding_rs", "qrcode"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Native crash reports: the last-chance exception filter.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22.4"
 

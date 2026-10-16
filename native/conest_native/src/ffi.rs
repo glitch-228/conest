@@ -549,6 +549,20 @@ pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoic
     }
 }
 
+/// Writes native crash reports (Rust panics; Windows exceptions nothing
+/// handled) to `path`, a NUL-terminated UTF-8 file path the app reads on its
+/// next start.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_crash_init(path: *const c_char) -> bool {
+    if path.is_null() {
+        return false;
+    }
+    let Ok(path) = unsafe { CStr::from_ptr(path) }.to_str() else {
+        return false;
+    };
+    crate::crash::init(std::path::PathBuf::from(path))
+}
+
 /// Hashes a file with bounded memory. Called from a Dart worker isolate.
 /// The path must be a valid NUL-terminated UTF-8 string; free the returned
 /// JSON string with `conest_string_free`.

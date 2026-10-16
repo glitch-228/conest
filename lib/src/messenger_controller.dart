@@ -1426,21 +1426,12 @@ class MessengerController extends ChangeNotifier {
     );
     _voiceCallChanges = _voiceCallService!.changes.listen((session) {
       if (_disposed) return;
-      final currentIdentity = identity ?? me;
-      unawaited(
-        _platformBridge.updateAndroidVoiceCallForeground(
-          runtimeEnabled: currentIdentity.androidBackgroundRuntimeEnabled,
-          callsEnabled:
-              experimentalAndroidBackgroundRuntimeAvailable &&
-              _platformBridge.supportsVoiceCallMedia &&
-              currentIdentity.experimentalVoiceCallsEnabled &&
-              currentIdentity.androidBackgroundCallsEnabled,
-          peerName: session == null
-              ? null
-              : _contactByDeviceId(session.peerDeviceId)?.alias,
-          callState: session == null ? 'idle' : session.state.name,
-          incoming: session != null && !session.outgoing,
-        ),
+      _updateCallForeground(
+        title: session == null
+            ? null
+            : _contactByDeviceId(session.peerDeviceId)?.alias,
+        state: session == null ? 'idle' : session.state.name,
+        incoming: session != null && !session.outgoing,
       );
       _voiceCallSoundCues.handle(session);
       if (session?.state == VoiceCallState.connected) {
@@ -4174,10 +4165,46 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// The Android call notification and foreground service, for 1:1 and
+  /// group calls alike. Told only what changed: calls notify far more often
+  /// than this changes, and each update restarts the service.
+  void _updateCallForeground({
+    required String? title,
+    required String state,
+    required bool incoming,
+  }) {
+    final me = identity;
+    if (me == null) return;
+    final runtimeEnabled = me.androidBackgroundRuntimeEnabled;
+    final callsEnabled =
+        experimentalAndroidBackgroundRuntimeAvailable &&
+        _platformBridge.supportsVoiceCallMedia &&
+        me.experimentalVoiceCallsEnabled &&
+        me.androidBackgroundCallsEnabled;
+    final key = '$runtimeEnabled|$callsEnabled|$title|$state|$incoming';
+    if (key == _lastCallForeground) return;
+    final first = _lastCallForeground == null;
+    _lastCallForeground = key;
+    // Nothing to show and nothing shown yet: the service is not touched.
+    if (first && state == 'idle' && !runtimeEnabled && !callsEnabled) return;
+    unawaited(
+      _platformBridge.updateAndroidVoiceCallForeground(
+        runtimeEnabled: runtimeEnabled,
+        callsEnabled: callsEnabled,
+        peerName: title,
+        callState: state,
+        incoming: incoming,
+      ),
+    );
+  }
+
+  String? _lastCallForeground;
+
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
       await _openErrorHistory();
+      _clampFutureReadMarks();
       // Devices linked before own-device records existed get them now, at
       // their signed dates: that list came only from this device or its
       // link.
@@ -5587,7 +5614,13 @@ class MessengerController extends ChangeNotifier {
   /// nothing to remove. The caller deletes the copy.
   /// Throws [FileMetadataException] when metadata could not be removed
   /// from a type that has some.
-  Future<String?> _withoutFileMetadata(String path, String fileName) async {
+  /// [acceptPartial]: the user agreed to send what could not be removed;
+  /// the partly cleaned copy goes, not the original.
+  Future<String?> _withoutFileMetadata(
+    String path,
+    String fileName, {
+    bool acceptPartial = false,
+  }) async {
     if (!removesFileMetadata) return null;
     final root = await _attachmentRoot();
     final copy = File(p.join(root.path, 'spool', '${_randomId('clean')}.tmp'));
@@ -5601,6 +5634,7 @@ class MessengerController extends ChangeNotifier {
         case SanitizeStatus.failed:
           throw FileMetadataException(fileName);
         case SanitizeStatus.partial:
+          if (acceptPartial) return copy.path;
           throw FileMetadataException(fileName, partial: true);
         case SanitizeStatus.clean || SanitizeStatus.unsupported:
           break;
@@ -6880,6 +6914,17 @@ class MessengerController extends ChangeNotifier {
       onCursor: (validity, uid) => _saveEmailCursor(config.mail, validity, uid),
       onStatusChanged: notifyListeners,
       onOtherMail: _onOtherMail,
+      onOtherMailGaveUp: (_) {
+        recordError(
+          'delta',
+          'A Delta Chat message could not be saved after several tries and '
+              'was left on the mail server.',
+        );
+        setStatus(
+          'A Delta Chat message could not be saved (is the device short of '
+          'space?). It stays on the mail server.',
+        );
+      },
       otherMailMaxBytes: () =>
           deltaChatEnabled ? DeltaLimits.fileMailBytes : maxCarrierMailBytes,
     );
@@ -12173,7 +12218,12 @@ class MessengerController extends ChangeNotifier {
               // Never sent with its metadata without the user's say.
               throw const _MetadataNotRemoved();
             case SanitizeStatus.partial:
-              throw const _MetadataNotRemoved(partial: true);
+              // With consent, what could be cleaned goes (as a resumable
+              // copy), never the untouched original.
+              if (!allowOriginalFallback) {
+                throw const _MetadataNotRemoved(partial: true);
+              }
+              digest = await hashAttachmentFile(temporary.path);
             case SanitizeStatus.clean || SanitizeStatus.unsupported:
               break;
           }
@@ -14650,6 +14700,8 @@ class MessengerController extends ChangeNotifier {
     String? scheduledOperationId,
     VoiceMessageMetadata? voiceMetadata,
     bool keepMetadata = false,
+    // Agreed to send what could not be removed (see _withoutFileMetadata).
+    bool acceptPartialMetadata = false,
     bool randomizeFileName = true,
   }) async {
     final group = _requireGroup(groupId);
@@ -14671,7 +14723,11 @@ class MessengerController extends ChangeNotifier {
     // Metadata goes from a private copy; the user's file stays as it is.
     final cleaned = keepMetadata
         ? null
-        : await _withoutFileMetadata(path, fileName);
+        : await _withoutFileMetadata(
+            path,
+            fileName,
+            acceptPartial: acceptPartialMetadata,
+          );
     try {
       return await _publishGroupFile(
         groupId: groupId,
@@ -17537,15 +17593,6 @@ class MessengerController extends ChangeNotifier {
     unawaited(
       _platformBridge.dismissMessageNotification(conversationId: groupId),
     );
-    final contact = _groupMemberContact(group, message.senderDeviceId);
-    if (contact == null) {
-      return;
-    }
-    await _sendReadReceipt(
-      contact: contact,
-      conversationId: groupId,
-      acknowledgedMessageId: message.id,
-    );
   }
 
   Future<void> markLanLobbyRead() async {
@@ -19021,8 +19068,17 @@ class MessengerController extends ChangeNotifier {
       if (posterBytes.length > 32 * 1024) return;
     }
     final me = _requireIdentity();
+    // The sender's own id for it, so read receipts name a message the sender
+    // has; never one already in this chat (that would replace it).
+    final senderMessageId = parentMessageId as String?;
     final message = ChatMessage(
-      id: _randomId('msg'),
+      id:
+          senderMessageId != null &&
+              !_conversationFor(
+                sender.deviceId,
+              ).messages.any((held) => held.id == senderMessageId)
+          ? senderMessageId
+          : _randomId('msg'),
       conversationId: _crypto.conversationIdFor(sender.deviceId),
       senderDeviceId: sender.deviceId,
       recipientDeviceId: me.deviceId,
@@ -23073,10 +23129,47 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final me = _requireIdentity();
-    if (me.suppressReadReceipts) {
+    // A debug-only switch (Settings shows it only there): a vault that has
+    // it on must not go quiet on other builds.
+    if (me.suppressReadReceipts && kDebugMode) {
       return;
     }
     readReceiptsSent++;
+    // Queued first: if sealing it fails, the retry loop still sends it.
+    _enqueuePendingAckDelivery(
+      PendingAckDelivery(
+        targetDeviceId: contact.deviceId,
+        acknowledgedMessageId: acknowledgedMessageId,
+        conversationId: conversationId,
+        kind: PendingAckKind.read,
+        lastAttemptedAt: _now(),
+        attempts: 1,
+      ),
+    );
+    try {
+      await _deliverReadReceipt(
+        me: me,
+        contact: contact,
+        conversationId: conversationId,
+        acknowledgedMessageId: acknowledgedMessageId,
+      );
+    } catch (_) {
+      // Stays queued; the retry loop will pick it up.
+    }
+    try {
+      await _saveSnapshotSilently(notify: false);
+    } catch (error) {
+      // The queue is saved with the next change.
+      recordError('vault', 'Read receipt queue not saved: $error');
+    }
+  }
+
+  Future<void> _deliverReadReceipt({
+    required IdentityRecord me,
+    required ContactRecord contact,
+    required String conversationId,
+    required String acknowledgedMessageId,
+  }) async {
     final receipt = await _crypto.encryptPayloadEnvelope(
       kind: 'ack',
       messageId: _randomId('read'),
@@ -23095,39 +23188,24 @@ class MessengerController extends ChangeNotifier {
       createdAt: _now().toUtc(),
       acknowledgedMessageId: acknowledgedMessageId,
     );
-    _enqueuePendingAckDelivery(
-      PendingAckDelivery(
-        targetDeviceId: contact.deviceId,
-        acknowledgedMessageId: acknowledgedMessageId,
-        conversationId: conversationId,
-        kind: PendingAckKind.read,
-        lastAttemptedAt: _now(),
-        attempts: 1,
-      ),
+    await _deliverToContact(
+      contact: contact,
+      recipientDeviceId: contact.deviceId,
+      envelope: receipt,
     );
-    try {
-      await _deliverToContact(
-        contact: contact,
-        recipientDeviceId: contact.deviceId,
-        envelope: receipt,
-      );
-      _clearPendingAckDelivery(
-        targetDeviceId: contact.deviceId,
-        acknowledgedMessageId: acknowledgedMessageId,
-        kind: PendingAckKind.read,
-      );
-      // A successful `read` ack implies `delivered` was effectively
-      // received too — clear any stale `delivered` queue entry for the
-      // same message so we don't pointlessly re-send it.
-      _clearPendingAckDelivery(
-        targetDeviceId: contact.deviceId,
-        acknowledgedMessageId: acknowledgedMessageId,
-        kind: PendingAckKind.delivered,
-      );
-    } catch (_) {
-      // Stays queued; the retry loop will pick it up.
-    }
-    await _saveSnapshotSilently(notify: false);
+    _clearPendingAckDelivery(
+      targetDeviceId: contact.deviceId,
+      acknowledgedMessageId: acknowledgedMessageId,
+      kind: PendingAckKind.read,
+    );
+    // A successful `read` ack implies `delivered` was effectively
+    // received too — clear any stale `delivered` queue entry for the
+    // same message so we don't pointlessly re-send it.
+    _clearPendingAckDelivery(
+      targetDeviceId: contact.deviceId,
+      acknowledgedMessageId: acknowledgedMessageId,
+      kind: PendingAckKind.delivered,
+    );
   }
 
   /// Persists a raw inbound envelope under quarantine for a contact that's
@@ -32655,7 +32733,7 @@ class MessengerController extends ChangeNotifier {
     if (lastReadAt == null) {
       return true;
     }
-    return message.createdAt.isAfter(lastReadAt);
+    return message.arrivedAt.isAfter(lastReadAt);
   }
 
   Future<void> _markConversationReadWhere(
@@ -32673,61 +32751,118 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final conversation = conversations[index];
-    final latestCreatedAt =
-        readThroughAt ??
-        (conversation.messages.isEmpty
-            ? _now()
-            : conversation.messages
-                  .map((message) => message.createdAt)
-                  .reduce((left, right) => left.isAfter(right) ? left : right));
+    final now = _now();
+    // What was read: everything up to the message read through, by its
+    // place in the chat. The mark itself is the latest of their arrival
+    // times (this device's clock), so a sender's clock — or the correction
+    // for it — can't make new messages look read already.
+    final ordered = conversation.kind == ConversationKind.group
+        ? (List<ChatMessage>.from(conversation.messages)
+            ..sort(_compareGroupTimelineMessages))
+        : (List<ChatMessage>.from(conversation.messages)
+            ..sort((left, right) => left.createdAt.compareTo(right.createdAt)));
+    final through = readThroughMessageId == null
+        ? -1
+        : ordered.indexWhere((message) => message.id == readThroughMessageId);
+    final readUpTo = through != -1
+        ? ordered.take(through + 1)
+        : readThroughAt != null
+        ? ordered.where((message) => !message.createdAt.isAfter(readThroughAt))
+        : ordered;
     final currentReadAt = conversation.lastReadAt;
-    if (currentReadAt != null && !latestCreatedAt.isAfter(currentReadAt)) {
+    final newlyRead = [
+      for (final message in readUpTo)
+        if (!message.outbound &&
+            (currentReadAt == null || message.arrivedAt.isAfter(currentReadAt)))
+          message,
+    ];
+    var readAt = readThroughMessageId == null && readThroughAt == null
+        ? now
+        : null;
+    for (final message in newlyRead) {
+      if (readAt == null || message.arrivedAt.isAfter(readAt)) {
+        readAt = message.arrivedAt;
+      }
+    }
+    if (readAt == null) return;
+    if (readAt.isAfter(now)) readAt = now;
+    if (currentReadAt != null && !readAt.isAfter(currentReadAt)) {
       return;
     }
-    conversations[index] = conversation.copyWith(lastReadAt: latestCreatedAt);
+    conversations[index] = conversation.copyWith(lastReadAt: readAt);
     _snapshot = _snapshot.copyWith(conversations: conversations);
-    await _saveSnapshotSilently(debounce: true);
-    if (conversation.kind != ConversationKind.direct || fromOwnDevice) {
+    _markConversationMutationForBatch();
+    final readThrough = newlyRead.isEmpty
+        ? null
+        : newlyRead.reduce(
+            (left, right) =>
+                ordered.indexOf(right) > ordered.indexOf(left) ? right : left,
+          );
+    // Receipts are queued before the save, so a failed save can't lose them;
+    // neither failure escapes to the chat that is marking what it shows.
+    try {
+      await _sendReceiptsForRead(
+        conversation,
+        newlyRead,
+        readThrough: readThrough,
+        fromOwnDevice: fromOwnDevice,
+      );
+    } catch (error) {
+      recordError('receipt', 'Read receipts not sent: $error');
+    }
+    try {
+      await _saveSnapshotSilently(debounce: true);
+    } catch (error) {
+      recordError('vault', 'Read marks not saved: $error');
+    }
+  }
+
+  /// Read receipts for messages just read: for each sender, their newest.
+  Future<void> _sendReceiptsForRead(
+    ConversationRecord conversation,
+    List<ChatMessage> newlyRead, {
+    required ChatMessage? readThrough,
+    required bool fromOwnDevice,
+  }) async {
+    if (fromOwnDevice || readThrough == null) return;
+    final newestBySender = <String, ChatMessage>{};
+    for (final message in newlyRead) {
+      // [newlyRead] is in chat order: the last one per sender is the newest.
+      newestBySender[message.senderDeviceId] = message;
+    }
+    if (conversation.kind == ConversationKind.group) {
+      final group = _groupById(conversation.id);
+      if (group == null) return;
+      for (final MapEntry(key: senderId, value: message)
+          in newestBySender.entries) {
+        final member = _groupMemberContact(group, senderId);
+        if (member == null) continue;
+        await _sendReadReceipt(
+          contact: member,
+          conversationId: conversation.id,
+          acknowledgedMessageId: message.id,
+        );
+      }
       return;
     }
+    if (conversation.kind != ConversationKind.direct) return;
     // Saved messages are all this user's own: nothing to read.
     if (conversation.peerDeviceId != identity?.deviceId) {
       _syncToOwnDevices({
         'type': 'read',
         'chat': conversation.peerDeviceId,
-        'at': latestCreatedAt.toUtc().toIso8601String(),
+        'at': readThrough.createdAt.toUtc().toIso8601String(),
         // Times differ between devices (each corrects clocks on its own):
         // the message itself is what both hold.
-        'id':
-            ?(readThroughMessageId ??
-            _latestInboundMessageAtOrBefore(conversation, latestCreatedAt)?.id),
+        'id': readThrough.id,
       });
     }
     final contact = _contactByDeviceId(conversation.peerDeviceId);
     if (contact == null) {
       return;
     }
-    final effectiveMessageId =
-        readThroughMessageId ??
-        _latestInboundMessageAtOrBefore(conversation, latestCreatedAt)?.id;
-    if (effectiveMessageId == null || effectiveMessageId.isEmpty) {
-      return;
-    }
     // Each of the contact's devices with messages just read gets a read
     // receipt for its newest one.
-    final newestBySender = <String, ChatMessage>{};
-    for (final message in conversation.messages) {
-      if (message.outbound ||
-          message.createdAt.isAfter(latestCreatedAt) ||
-          (currentReadAt != null &&
-              !message.createdAt.isAfter(currentReadAt))) {
-        continue;
-      }
-      final newest = newestBySender[message.senderDeviceId];
-      if (newest == null || message.createdAt.isAfter(newest.createdAt)) {
-        newestBySender[message.senderDeviceId] = message;
-      }
-    }
     for (final MapEntry(key: senderId, value: message)
         in newestBySender.entries) {
       if (senderId == contact.deviceId) continue;
@@ -32742,29 +32877,64 @@ class MessengerController extends ChangeNotifier {
       );
     }
     final fromMain = newestBySender[contact.deviceId];
-    final mainId = newestBySender.isEmpty ? effectiveMessageId : fromMain?.id;
-    if (mainId == null) return;
+    if (fromMain == null) return;
     await _sendReadReceipt(
       contact: contact,
       conversationId: conversation.id,
-      acknowledgedMessageId: mainId,
+      acknowledgedMessageId: fromMain.id,
     );
   }
 
-  ChatMessage? _latestInboundMessageAtOrBefore(
-    ConversationRecord conversation,
-    DateTime cutoff,
-  ) {
-    ChatMessage? latest;
-    for (final message in conversation.messages) {
-      if (message.outbound || message.createdAt.isAfter(cutoff)) {
+  /// Read marks once came from senders' clocks (and a device's own clock
+  /// can be set back), so one can be in the future, and everything after it
+  /// looked read. Marks and arrival times are brought back to now; messages
+  /// that were unread stay unread.
+  void _clampFutureReadMarks() {
+    final now = _now();
+    final justAfter = now.add(const Duration(microseconds: 1));
+    var changed = false;
+    final conversations = <ConversationRecord>[];
+    for (final conversation in _snapshot.conversations) {
+      final readAt = conversation.lastReadAt;
+      var arrivalsMoved = false;
+      final messages = [
+        for (final message in conversation.messages)
+          if (!message.outbound && message.arrivedAt.isAfter(now))
+            () {
+              arrivalsMoved = true;
+              final wasRead =
+                  readAt != null && !message.arrivedAt.isAfter(readAt);
+              return message.copyWith(receivedAt: wasRead ? now : justAfter);
+            }()
+          else
+            message,
+      ];
+      final clampRead = readAt != null && readAt.isAfter(now);
+      if (!clampRead && !arrivalsMoved) {
+        conversations.add(conversation);
         continue;
       }
-      if (latest == null || message.createdAt.isAfter(latest.createdAt)) {
-        latest = message;
+      changed = true;
+      conversations.add(
+        conversation.copyWith(
+          lastReadAt: clampRead ? now : readAt,
+          messages: messages,
+        ),
+      );
+    }
+    if (changed) _snapshot = _snapshot.copyWith(conversations: conversations);
+  }
+
+  /// An inbound message keeps when it first reached this device.
+  ChatMessage _withArrival(List<ChatMessage> held, ChatMessage message) {
+    if (message.outbound || message.receivedAt != null) return message;
+    for (final existing in held) {
+      if (existing.id == message.id) {
+        final at = existing.receivedAt;
+        return at == null ? message : message.copyWith(receivedAt: at);
       }
     }
-    return latest;
+    return message.copyWith(receivedAt: _now());
   }
 
   void _upsertMessage(String peerDeviceId, ChatMessage message) {
@@ -32780,7 +32950,7 @@ class MessengerController extends ChangeNotifier {
           id: _crypto.conversationIdFor(peerDeviceId),
           kind: ConversationKind.direct,
           peerDeviceId: peerDeviceId,
-          messages: [message],
+          messages: [_withArrival(const [], message)],
           lastReadAt: message.outbound ? message.createdAt : null,
         ),
       );
@@ -32788,7 +32958,7 @@ class MessengerController extends ChangeNotifier {
       final updatedMessages =
           List<ChatMessage>.from(conversations[index].messages)
             ..removeWhere((candidate) => candidate.id == message.id)
-            ..add(message);
+            ..add(_withArrival(conversations[index].messages, message));
       conversations[index] = conversations[index].copyWith(
         messages: updatedMessages,
       );
@@ -32812,7 +32982,7 @@ class MessengerController extends ChangeNotifier {
           id: groupId,
           kind: ConversationKind.group,
           peerDeviceId: groupId,
-          messages: [message],
+          messages: [_withArrival(const [], message)],
           lastReadAt: message.outbound ? message.createdAt : null,
         ),
       );
@@ -32820,7 +32990,7 @@ class MessengerController extends ChangeNotifier {
       final updatedMessages =
           List<ChatMessage>.from(conversations[index].messages)
             ..removeWhere((candidate) => candidate.id == message.id)
-            ..add(message);
+            ..add(_withArrival(conversations[index].messages, message));
       conversations[index] = conversations[index].copyWith(
         messages: updatedMessages,
       );
@@ -32842,7 +33012,7 @@ class MessengerController extends ChangeNotifier {
           id: _lanLobbyConversationId,
           kind: ConversationKind.lanLobby,
           peerDeviceId: _lanLobbyMailboxId,
-          messages: [message],
+          messages: [_withArrival(const [], message)],
           lastReadAt: message.outbound ? message.createdAt : null,
         ),
       );
@@ -32850,7 +33020,7 @@ class MessengerController extends ChangeNotifier {
       final updatedMessages =
           List<ChatMessage>.from(conversations[index].messages)
             ..removeWhere((candidate) => candidate.id == message.id)
-            ..add(message);
+            ..add(_withArrival(conversations[index].messages, message));
       conversations[index] = conversations[index].copyWith(
         messages: updatedMessages,
       );
@@ -32970,10 +33140,19 @@ class MessengerController extends ChangeNotifier {
     if (conversationIndex == -1) {
       return;
     }
+    // A member who read a message has read what this device sent before it.
+    final readThrough = state == DeliveryState.read
+        ? conversations[conversationIndex].messages
+              .where((message) => message.id == messageId && message.outbound)
+              .firstOrNull
+        : null;
     final updatedMessages = conversations[conversationIndex].messages.map((
       message,
     ) {
-      if (message.id != messageId || !message.outbound) {
+      if (!message.outbound) return message;
+      if (message.id != messageId &&
+          (readThrough == null ||
+              message.createdAt.isAfter(readThrough.createdAt))) {
         return message;
       }
       final states = Map<String, DeliveryState>.from(message.recipientStates);
@@ -32991,7 +33170,7 @@ class MessengerController extends ChangeNotifier {
       }
       states[recipientDeviceId] = state;
       if (!state.awaitsRecipientAck) {
-        _clearOutboundAttempt(recipientDeviceId, messageId);
+        _clearOutboundAttempt(recipientDeviceId, message.id);
       }
       return message.copyWith(
         state: _aggregateGroupDeliveryState(states),

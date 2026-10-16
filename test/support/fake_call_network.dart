@@ -128,6 +128,7 @@ class FakeCallNetwork {
     String id, {
     bool Function()? canOpenMedia,
     FakeCallMedia? mediaOverride,
+    Future<void> Function(GroupCallSummary summary)? onSummary,
   }) async {
     final key = await Ed25519().newKeyPair();
     final media = mediaOverride ?? FakeCallMedia();
@@ -147,6 +148,7 @@ class FakeCallNetwork {
       },
       onSummary: (summary) async {
         summaries.add(summary);
+        await onSummary?.call(summary);
       },
       sign: (bytes) async {
         await signingGates[id];

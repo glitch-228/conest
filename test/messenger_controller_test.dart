@@ -85,6 +85,7 @@ import 'package:conest/src/ui/app_mode_selector.dart';
 import 'package:conest/src/ui/matrix_home_screen.dart';
 import 'package:conest/src/update_service.dart';
 import 'package:conest/src/voice_call_service.dart';
+import 'package:conest/src/group_file_manifest.dart';
 
 import 'support/fake_homeserver.dart';
 import 'support/fake_ble_mesh.dart';
@@ -4765,6 +4766,110 @@ void main() {
     },
   );
 
+  test('with no call, the app is not woken for calls', () async {
+    final bridge = _VoiceRecordingBridge();
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+      platformBridge: bridge,
+      ratchetEngine: FakeRatchetEngine(),
+    );
+    addTearDown(alice.dispose);
+    expect(alice.groupCallService, isNotNull);
+    var notified = 0;
+    void count() => notified++;
+    alice.addListener(count);
+    addTearDown(() => alice.removeListener(count));
+    await Future<void>.delayed(const Duration(milliseconds: 1600));
+    expect(bridge.foreground, isEmpty);
+    expect(notified, lessThan(2));
+  });
+
+  test('a group call tells Android only what changed', () async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    final bridge = _VoiceRecordingBridge();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      platformBridge: bridge,
+      transportRegistryFactory: network.registry,
+      ratchetEngine: FakeRatchetEngine(),
+      groupCallMedia: FakeCallMedia(),
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      transportRegistryFactory: network.registry,
+      ratchetEngine: FakeRatchetEngine(),
+      groupCallMedia: FakeCallMedia(),
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+    await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'Quiet upkeep',
+      members: alice.contacts,
+    );
+    await alice.joinOrStartGroupCall(group.groupId);
+    await Future<void>.delayed(Duration.zero);
+    final before = bridge.foreground.length;
+    for (var i = 0; i < 5; i++) {
+      await alice.groupCallService!.tick();
+      await Future<void>.delayed(Duration.zero);
+    }
+    expect(bridge.foreground.length, before);
+  });
+
+  test('call upkeep never falls back to relays', () async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      transportRegistryFactory: network.registry,
+      ratchetEngine: FakeRatchetEngine(),
+      groupCallMedia: FakeCallMedia(),
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      transportRegistryFactory: network.registry,
+      ratchetEngine: FakeRatchetEngine(),
+      groupCallMedia: FakeCallMedia(),
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(
+      title: 'Upkeep routes',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+    await alice.joinOrStartGroupCall(group.groupId);
+    // Bob drops off every live route; only the relay could still reach him.
+    final aliceIroh = alice.identity!.irohEndpointId!;
+    final bobIroh = bob.identity!.irohEndpointId!;
+    network.blockedPairs
+      ..add((aliceIroh, bobIroh))
+      ..add((bobIroh, aliceIroh));
+    final relayed = <String>[];
+    // (The fake also carries LAN delivery, which is a live route.)
+    relay.shouldFailStore = (host, _, _, _, envelope) {
+      if (envelope.kind == 'group_call_signal' && host == 'relay.example') {
+        relayed.add(envelope.messageId);
+      }
+      return false;
+    };
+    for (var i = 0; i < 12; i++) {
+      await alice.groupCallService!.tick();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    expect(relayed, isEmpty);
+  });
+
   test(
     'empty group ticks preserve a live Android 1:1 foreground call',
     () async {
@@ -9164,6 +9269,256 @@ void main() {
     },
   );
 
+  group('Read marks', () {
+    test(
+      'a contact whose clock was ahead cannot hide new messages as read',
+      () async {
+        final relayClient = _FakeRelayClient();
+        var bobSkew = const Duration(hours: 2);
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          nowProvider: () => DateTime.now().add(bobSkew),
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobId = bob.identity!.deviceId;
+
+        await bob.sendMessage(contact: bob.contacts.single, body: 'one');
+        await alice.pollNow();
+        await alice.markConversationReadThroughMessage(
+          bobId,
+          alice.messagesFor(bobId).single,
+        );
+        expect(alice.unreadCountFor(bobId), 0);
+
+        // Bob sets his clock right, then writes again.
+        bobSkew = Duration.zero;
+        await bob.sendMessage(contact: bob.contacts.single, body: 'two');
+        await alice.pollNow();
+        final two = alice.messagesFor(bobId).firstWhere((m) => m.body == 'two');
+        expect(alice.isUnreadMessage(bobId, two), isTrue);
+        expect(alice.unreadCountFor(bobId), 1);
+
+        await alice.markConversationReadThroughMessage(bobId, two);
+        await bob.pollNow();
+        final sent = bob
+            .messagesFor(alice.identity!.deviceId)
+            .firstWhere((m) => m.body == 'two');
+        expect(sent.state, DeliveryState.read);
+      },
+    );
+
+    test('a read mark left in the future is brought back at start', () async {
+      final relayClient = _FakeRelayClient();
+      final aliceVault = _MemoryVaultStore();
+      var aliceSkew = const Duration(hours: 2);
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        nowProvider: () => DateTime.now().add(aliceSkew),
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'one');
+      await alice.pollNow();
+      await alice.markConversationReadThroughMessage(
+        bobId,
+        alice.messagesFor(bobId).single,
+      );
+      await alice.flushPendingChanges();
+      alice.dispose();
+
+      aliceSkew = Duration.zero;
+      final restarted = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        createIdentity: false,
+      );
+      addTearDown(restarted.dispose);
+      await bob.sendMessage(contact: bob.contacts.single, body: 'two');
+      await restarted.pollNow();
+      expect(restarted.unreadCountFor(bobId), 1);
+    });
+
+    test('a failed save still sends the read receipt', () async {
+      final relayClient = _FakeRelayClient();
+      final aliceVault = _FailingVaultStore();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'read me');
+      await alice.pollNow();
+      await bob.pollNow();
+
+      aliceVault.failNextSave = true;
+      await alice.markConversationReadThroughMessage(
+        bobId,
+        alice.messagesFor(bobId).single,
+      );
+      await bob.pollNow();
+      expect(
+        bob.messagesFor(alice.identity!.deviceId).single.state,
+        DeliveryState.read,
+      );
+    });
+
+    test('reading a group sends each sender a receipt', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      final carol = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      final group = await alice.createGroup(
+        title: 'Receipts for all',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      await carol.pollNow();
+
+      await bob.sendGroupMessage(groupId: group.groupId, body: 'from bob');
+      await carol.sendGroupMessage(groupId: group.groupId, body: 'from carol');
+      await alice.pollNow();
+      final inbound = alice.messagesForGroup(group.groupId);
+      expect(inbound, hasLength(2));
+      await alice.markGroupReadThroughMessage(group.groupId, inbound.last);
+      expect(alice.unreadGroupCountFor(group.groupId), 0);
+
+      await bob.pollNow();
+      await carol.pollNow();
+      final aliceId = alice.identity!.deviceId;
+      for (final (device, body) in [(bob, 'from bob'), (carol, 'from carol')]) {
+        final sent = device
+            .messagesForGroup(group.groupId)
+            .firstWhere((m) => m.body == body);
+        expect(sent.recipientStates[aliceId], DeliveryState.read, reason: body);
+      }
+    });
+
+    test('a file that was read shows as read to its sender', () async {
+      final relayClient = _FakeRelayClient();
+      final root = Directory.systemTemp.createTempSync('conest_read_file_');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        attachmentRootProvider: () async =>
+            Directory('${root.path}/a')..createSync(recursive: true),
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        attachmentRootProvider: () async =>
+            Directory('${root.path}/b')..createSync(recursive: true),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: Uint8List.fromList(List<int>.generate(5000, (i) => i % 251)),
+        fileName: 'notes.pdf',
+        mimeType: 'application/pdf',
+      );
+      await bob.pollNow();
+      final received = bob
+          .messagesFor(aliceId)
+          .singleWhere((m) => m.hasAttachment);
+      final sent = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.hasAttachment);
+      expect(received.id, sent.id);
+
+      await bob.markConversationReadThroughMessage(aliceId, received);
+      await alice.pollNow();
+      expect(
+        alice
+            .messagesFor(bob.identity!.deviceId)
+            .singleWhere((m) => m.hasAttachment)
+            .state,
+        DeliveryState.read,
+      );
+    });
+
+    test(
+      'a member who read a group message has read the ones before it',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final group = await alice.createGroup(
+          title: 'Read through',
+          members: alice.contacts,
+        );
+        await bob.pollNow();
+        await alice.sendGroupMessage(groupId: group.groupId, body: 'first');
+        await alice.sendGroupMessage(groupId: group.groupId, body: 'second');
+        await bob.pollNow();
+        await alice.pollNow();
+
+        // Bob's read names only the newest message.
+        final second = bob
+            .messagesForGroup(group.groupId)
+            .firstWhere((m) => m.body == 'second');
+        await bob.markGroupReadThroughMessage(group.groupId, second);
+        await alice.pollNow();
+        final bobId = bob.identity!.deviceId;
+        for (final message in alice.messagesForGroup(group.groupId)) {
+          expect(
+            message.recipientStates[bobId],
+            DeliveryState.read,
+            reason: message.body,
+          );
+        }
+      },
+    );
+  });
+
   testWidgets('Courier navigation keeps private and lobby drafts separate', (
     tester,
   ) async {
@@ -9881,6 +10236,181 @@ void main() {
     expect(alice.unreadCountFor(aliceContactForBob.deviceId), 0);
     expect(find.byKey(const Key('unread-badge-1')), findsNothing);
     expect(find.text('new'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    alice.dispose();
+    bob.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('an album as the newest message is marked read', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    late String bobId;
+    final root = Directory.systemTemp.createTempSync('conest_album_read_');
+    addTearDown(() => root.deleteSync(recursive: true));
+    await tester.runAsync(() async {
+      final relayClient = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        attachmentRootProvider: () async =>
+            Directory('${root.path}/a')..createSync(recursive: true),
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        attachmentRootProvider: () async =>
+            Directory('${root.path}/b')..createSync(recursive: true),
+      );
+      await _pairControllers(alice, bob);
+      bobId = bob.identity!.deviceId;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'two files');
+      for (var i = 0; i < 2; i++) {
+        await bob.sendAttachment(
+          contact: bob.contacts.single,
+          bytes: Uint8List.fromList(
+            List<int>.generate(3000, (j) => (i + j) % 251),
+          ),
+          fileName: 'part$i.pdf',
+          mimeType: 'application/pdf',
+          albumId: 'album-1',
+        );
+      }
+      await alice.pollNow();
+    });
+    expect(alice.unreadCountFor(bobId), 3);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimatedBuilder(
+          animation: alice,
+          builder: (context, _) => app.HomeScreen(
+            controller: alice,
+            updateService: _createUpdateService(),
+            buildInfo: _createBuildInfo(),
+            themeController: app.ConestThemeController.memory(),
+            palette: app.ConestPalette(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pump();
+    expect(alice.unreadCountFor(bobId), 0);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    alice.dispose();
+    bob.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('scrolling a chat to newer unread messages marks them read', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    late String bobId;
+    await tester.runAsync(() async {
+      final relayClient = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      await _pairControllers(alice, bob);
+      bobId = bob.identity!.deviceId;
+      for (var i = 0; i < 40; i++) {
+        await bob.sendMessage(contact: bob.contacts.single, body: 'line $i');
+      }
+      await alice.pollNow();
+    });
+    expect(alice.unreadCountFor(bobId), 40);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AnimatedBuilder(
+          animation: alice,
+          builder: (context, _) => app.HomeScreen(
+            controller: alice,
+            updateService: _createUpdateService(),
+            buildInfo: _createBuildInfo(),
+            themeController: app.ConestThemeController.memory(),
+            palette: app.ConestPalette(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Bob').first);
+    Future<void> settle() async {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+    }
+
+    await settle();
+    expect(alice.unreadCountFor(bobId), 0);
+
+    // Up in the history, new messages arrive out of sight.
+    // [shown] counts the chat list's preview of the newest message too.
+    Future<void> dragUntil(String text, double dy, {int shown = 1}) async {
+      for (
+        var i = 0;
+        i < 12 && find.text(text).hitTestable().evaluate().length < shown;
+        i++
+      ) {
+        // The last match is in the chat (the first is the chat list's
+        // preview of the newest message).
+        await tester.drag(
+          find.textContaining('line ').hitTestable().last,
+          Offset(0, dy),
+        );
+        await tester.pump();
+      }
+      expect(find.text(text).hitTestable(), findsNWidgets(shown));
+    }
+
+    await dragUntil('line 0', 400);
+    await tester.runAsync(() async {
+      for (var i = 0; i < 3; i++) {
+        await bob.sendMessage(
+          contact: bob.contacts.single,
+          body: 'line new $i',
+        );
+      }
+      await alice.pollNow();
+    });
+    await settle();
+    expect(alice.unreadCountFor(bobId), 3);
+    // Sweeps the arrival asked for run now, out of sight of the new ones.
+    await tester.pump(const Duration(seconds: 1));
+
+    // Scrolling down to them marks them read, with nothing else in the app
+    // changing.
+    await dragUntil('line new 2', -400, shown: 2);
+    await settle();
+    expect(alice.unreadCountFor(bobId), 0);
 
     await tester.pumpWidget(const SizedBox.shrink());
     alice.dispose();
@@ -18419,6 +18949,84 @@ void main() {
       await send();
       final (_, kept) = await received(alice, bob, 3);
       expect(hasLocation(kept), isTrue);
+    });
+
+    test('agreeing to send a partly cleaned file sends what was cleaned, '
+        'not the original', () async {
+      final (alice, bob, root) = await pair();
+      // An Info dictionary that can be blanked, and an author inside a
+      // compressed object stream that cannot.
+      final hidden = zlib.encode(latin1.encode('3 0 << /Author (Hidden) >>'));
+      final pdf = <int>[
+        ...latin1.encode(
+          '%PDF-1.5\n1 0 obj\n<< /Author (Jane Private) >>\nendobj\n'
+          '2 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode '
+          '/Length ${hidden.length} >>\nstream\n',
+        ),
+        ...hidden,
+        ...latin1.encode(
+          '\nendstream\nendobj\ntrailer\n<< /Info 1 0 R >>\n%%EOF\n',
+        ),
+      ];
+      final source = await File('${root.path}/plan.pdf').writeAsBytes(pdf);
+      StagedAttachment staged() => StagedAttachment(
+        id: 'pdf-${DateTime.now().microsecondsSinceEpoch}',
+        fileName: 'plan.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: pdf.length,
+        filePath: source.path,
+      );
+      Object? error;
+      try {
+        await alice.sendAttachmentSource(
+          contact: alice.contacts.single,
+          source: staged(),
+        );
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error, isA<AttachmentSpoolException>());
+      expect((error! as AttachmentSpoolException).partialMetadata, isTrue);
+
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: staged(),
+        allowOriginalFallback: true,
+      );
+      final (_, sent) = await received(alice, bob, 1);
+      expect(latin1.decode(sent), isNot(contains('Jane Private')));
+
+      final group = await alice.createGroup(
+        title: 'Partly cleaned',
+        members: [alice.contacts.single],
+      );
+      await expectLater(
+        alice.publishGroupFile(
+          groupId: group.groupId,
+          path: source.path,
+          fileName: 'plan.pdf',
+          mimeType: 'application/pdf',
+        ),
+        throwsA(isA<FileMetadataException>()),
+      );
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'plan.pdf',
+        mimeType: 'application/pdf',
+        acceptPartialMetadata: true,
+      );
+      final original = await hashGroupFile(
+        path: source.path,
+        fileName: 'plan.pdf',
+        mimeType: 'application/pdf',
+      );
+      final shared = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .groupFile!;
+      expect(shared.fileHash, isNot(original.fileHash));
+      expect(shared.sizeBytes, pdf.length);
     });
 
     test(

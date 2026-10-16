@@ -783,13 +783,26 @@ fn decode_loop(
             thread::sleep(Duration::from_millis(2));
             continue;
         };
-        next_playout = now + Duration::from_millis(20);
+        next_playout = next_playout_after(next_playout, now);
         if playback.len().saturating_add(frame.len()) > PLAYBACK_QUEUE_SAMPLES * 3 / 4 {
             while playback.len() > PLAYBACK_QUEUE_SAMPLES / 4 {
                 let _ = playback.pop();
             }
         }
         for sample in frame { let _ = playback.push(sample); }
+    }
+}
+
+/// The next 20 ms playout slot. A fixed schedule: taking it from the
+/// (always a little late) wake time played about 5% slower than the
+/// speaker consumed, so playback starved and crackled. Far behind (after a
+/// gap with nothing to play), the schedule starts again from now.
+fn next_playout_after(scheduled: Instant, now: Instant) -> Instant {
+    let next = scheduled + Duration::from_millis(20);
+    if now.saturating_duration_since(next) > Duration::from_millis(60) {
+        now + Duration::from_millis(20)
+    } else {
+        next
     }
 }
 
@@ -877,10 +890,31 @@ impl PacketJitterBuffer {
 mod tests {
     use super::{
         AdaptiveBitrate, Application, Channels, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
-        PacketJitterBuffer,
+        PacketJitterBuffer, next_playout_after,
     };
     use opus::Decoder;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn late_wakeups_do_not_slow_playout() {
+        let start = Instant::now();
+        let mut next = start;
+        // Every wake comes 1.5 ms after its slot, as a 2 ms poll does.
+        for _ in 0..500 {
+            let woke = next + Duration::from_micros(1500);
+            next = next_playout_after(next, woke);
+        }
+        // 500 frames take 10 s of playout, not 10.75 s.
+        assert_eq!(next - start, Duration::from_millis(500 * 20));
+    }
+
+    #[test]
+    fn a_long_gap_restarts_the_schedule() {
+        let start = Instant::now();
+        let woke = start + Duration::from_millis(500);
+        let next = next_playout_after(start, woke);
+        assert_eq!(next, woke + Duration::from_millis(20));
+    }
 
     #[test]
     fn twenty_millisecond_mono_opus_round_trip() {

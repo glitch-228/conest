@@ -49,6 +49,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        CrashReports.install(this)
         FlutterEngineCache.getInstance().put(ENGINE_CACHE_ID, flutterEngine)
         Thread { clearOldSharedCopies() }.start()
         val channel = MethodChannel(
@@ -213,6 +214,7 @@ class MainActivity : FlutterActivity() {
                 // --es conestDebugRun routes` asks for the automatic tests;
                 // only debug-channel builds act on it (checked in Dart).
                 // Read once: a restart or Recents does not run it again.
+                "takeExitReports" -> result.success(CrashReports.takeExitReports(this))
                 "debugRunRequest" -> {
                     val request = intent?.getStringExtra("conestDebugRun")
                     intent?.removeExtra("conestDebugRun")

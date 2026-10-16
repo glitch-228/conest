@@ -185,6 +185,10 @@ class PlatformBridge {
       });
     } on MissingPluginException {
       return;
+    } on PlatformException {
+      // Android refuses a foreground start from the background: the next
+      // change tries again.
+      return;
     }
   }
 
@@ -568,6 +572,22 @@ class PlatformBridge {
 
   /// On Android, the automatic tests a debug build was started for
   /// (`adb shell am start … --es conestDebugRun routes`); null otherwise.
+  /// Why earlier runs ended badly (crashes, native crashes, freezes), as
+  /// Android recorded it; each is reported once.
+  Future<List<Map<Object?, Object?>>> takeAndroidExitReports() async {
+    if (!_supportsAndroidSystemCalls) return const [];
+    try {
+      final reports = await _channel.invokeListMethod<Map<Object?, Object?>>(
+        'takeExitReports',
+      );
+      return reports ?? const [];
+    } on MissingPluginException {
+      return const [];
+    } on PlatformException {
+      return const [];
+    }
+  }
+
   Future<String?> debugRunRequest() async {
     if (!_supportsAndroidSystemCalls) return null;
     try {

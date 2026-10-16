@@ -107,16 +107,14 @@ class GroupCallService {
     this.onSummary,
     Iterable<(String, String)> terminalCalls = const [],
     bool autoTick = true,
-  }) : now = now ?? DateTime.now {
+  }) : now = now ?? DateTime.now,
+       _autoTick = autoTick {
     _terminal.addAll(
       terminalCalls.take(128).map((c) => _callIdentity(c.$1, c.$2)),
     );
-    if (autoTick) {
-      _timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-        unawaited(tick().catchError((Object _) {}));
-      });
-    }
   }
+
+  final bool _autoTick;
   final bool Function()? canOpenMedia;
   final String localDeviceId;
   final GroupCallTransport transport;
@@ -143,6 +141,7 @@ class GroupCallService {
   Timer? _timer;
   String? _activeGroup;
   bool _disposed = false;
+  bool _disposing = false;
   Future<void>? _pendingMediaClose;
   bool get mediaBusy => _activeGroup != null || _pendingMediaClose != null;
   int _outboundFrames = 0;
@@ -170,7 +169,23 @@ class GroupCallService {
   }
 
   void _notify() {
+    _syncTicking();
     if (!_changes.isClosed) _changes.add(null);
+  }
+
+  /// The upkeep timer runs only while there is a call to keep up: with
+  /// none it would wake the device (and every listener) twice a second.
+  void _syncTicking() {
+    if (!_autoTick) return;
+    final live = !_disposed && _rooms.values.any((room) => !room.ended);
+    if (live && _timer == null) {
+      _timer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+        unawaited(tick().catchError((Object _) {}));
+      });
+    } else if (!live) {
+      _timer?.cancel();
+      _timer = null;
+    }
   }
 
   List<GroupCallMember> _members(String groupId) =>
@@ -221,10 +236,16 @@ class GroupCallService {
     GroupCallRoom room,
     String action, [
     Map<String, dynamic> payload = const {},
+    // Upkeep that only those in the call use: members who stay out of it
+    // are not woken for it.
+    bool participantsOnly = false,
   ]) async {
     final signal = _signal(room, action, payload);
+    final inCall = {for (final p in room.participants) p.deviceId};
     for (final peer in _members(room.groupId)) {
-      if (peer.deviceId != localDeviceId && peer.canJoin) {
+      if (peer.deviceId != localDeviceId &&
+          peer.canJoin &&
+          (!participantsOnly || inCall.contains(peer.deviceId))) {
         _dispatchSignal(signal, peer.deviceId);
       }
     }
@@ -367,6 +388,7 @@ class GroupCallService {
 
   void _reserveRoom(GroupCallRoom room) {
     _rooms.removeWhere((_, r) => r.ended);
+    scheduleMicrotask(_syncTicking);
     if (_rooms.length >= 8) {
       final idle = _rooms.values.where((r) => !r.joined).firstOrNull;
       if (idle == null) throw StateError('Too many incoming calls.');
@@ -1292,10 +1314,11 @@ class GroupCallService {
             room.stats,
           )
         : null;
+    // On a change, and otherwise now and then (pings carry liveness).
     if (room.forwarder != selected ||
         room.lastTopologySent == null ||
         now().difference(room.lastTopologySent!) >=
-            const Duration(seconds: 1)) {
+            const Duration(seconds: 5)) {
       _setForwarder(room, selected);
       room.topologyVersion++;
       await _fanout(room, 'topology', {
@@ -1310,7 +1333,7 @@ class GroupCallService {
         'excluded': room.failedForwarders.keys
             .where((id) => room.participants.any((p) => p.deviceId == id))
             .toList(),
-      });
+      }, true);
       room.lastTopologySent = now();
     }
   }
@@ -1339,7 +1362,12 @@ class GroupCallService {
 
   Future<void> _tick() async {
     if (_disposed) return;
-    for (final room in List<GroupCallRoom>.of(rooms)) {
+    final live = List<GroupCallRoom>.of(rooms);
+    if (live.isEmpty) {
+      _syncTicking();
+      return;
+    }
+    for (final room in live) {
       if (_member(room.groupId, localDeviceId)?.canJoin != true) {
         await _finish(
           room,
@@ -1401,9 +1429,12 @@ class GroupCallService {
         await _remove(room, peer.deviceId);
       }
       if (!room.joined || room.ended) continue;
+      // Asking to join goes to every member until the coordinator admits
+      // this device; then only to the call's own members (it lets them
+      // notice a roster they missed).
       if (room.lastJoinSent == null ||
           now().difference(room.lastJoinSent!) >= const Duration(seconds: 2)) {
-        await _fanout(room, 'join', _joinPayload(room));
+        await _fanout(room, 'join', _joinPayload(room), admitted);
         room.lastJoinSent = now();
       }
       if (room.lastStatsSent == null ||
@@ -1419,7 +1450,7 @@ class GroupCallService {
           if (currentForwarder != null &&
               room.failedForwarders.containsKey(currentForwarder))
             'silentForwarder': currentForwarder,
-        });
+        }, true);
         room.lastStatsSent = now();
       }
       await _ping(room);
@@ -1442,8 +1473,24 @@ class GroupCallService {
   }
 
   Future<void> dispose() async {
+    if (_disposing) return;
+    _disposing = true;
     _timer?.cancel();
-    await leave();
+    // Leaving waits behind earlier operations; one that hangs (a
+    // notification, a save) must not keep 1:1 calls blocked until restart.
+    // The hardware close below is still waited for.
+    try {
+      // (No timer at all with no call: nothing can be stuck then.)
+      _rooms.isEmpty
+          ? await leave()
+          : await leave().timeout(const Duration(seconds: 5));
+    } catch (_) {
+      if (_activeGroup != null) {
+        try {
+          await media.close().timeout(const Duration(seconds: 5));
+        } catch (_) {}
+      }
+    }
     _disposed = true;
     await _pendingMediaClose;
     for (final room in _rooms.values) {

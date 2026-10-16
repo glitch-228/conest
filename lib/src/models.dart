@@ -2697,6 +2697,7 @@ class ChatMessage {
     this.senderDisplayName,
     this.untrusted = false,
     this.editedAt,
+    this.receivedAt,
     this.deleted = false,
     this.replyToMessageId,
     this.replySnippet,
@@ -2753,6 +2754,14 @@ class ChatMessage {
   final String? senderDisplayName;
   final bool untrusted;
   final DateTime? editedAt;
+
+  /// When this device got it (this device's clock). What has been read is
+  /// decided by this, not by the sender's time: a sender's clock, or the
+  /// correction for it, must not hide new messages as already read.
+  final DateTime? receivedAt;
+
+  /// When it reached this device, as far as known.
+  DateTime get arrivedAt => receivedAt ?? createdAt;
 
   /// Durable tombstone. Keep the ID so legacy replay cannot resurrect it.
   final bool deleted;
@@ -2879,6 +2888,7 @@ class ChatMessage {
     String? body,
     DeliveryState? state,
     DateTime? editedAt,
+    DateTime? receivedAt,
     bool? deleted,
     String? replyToMessageId,
     String? replySnippet,
@@ -2919,6 +2929,7 @@ class ChatMessage {
       senderDisplayName: senderDisplayName,
       untrusted: untrusted,
       editedAt: editedAt ?? this.editedAt,
+      receivedAt: receivedAt ?? this.receivedAt,
       deleted: deleted ?? this.deleted,
       replyToMessageId: replyToMessageId ?? this.replyToMessageId,
       replySnippet: replySnippet ?? this.replySnippet,
@@ -2963,6 +2974,7 @@ class ChatMessage {
       'senderDisplayName': senderDisplayName,
       'untrusted': untrusted,
       'editedAt': editedAt?.toIso8601String(),
+      if (receivedAt != null) 'receivedAt': receivedAt!.toIso8601String(),
       if (deleted) 'deleted': true,
       'replyToMessageId': replyToMessageId,
       'replySnippet': replySnippet,
@@ -3040,6 +3052,7 @@ class ChatMessage {
       editedAt: json['editedAt'] == null
           ? null
           : DateTime.parse(json['editedAt'] as String),
+      receivedAt: DateTime.tryParse(json['receivedAt'] as String? ?? ''),
       replyToMessageId: json['replyToMessageId'] as String?,
       replySnippet: json['replySnippet'] as String?,
       replySenderDeviceId: json['replySenderDeviceId'] as String?,

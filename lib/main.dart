@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:cross_file/cross_file.dart';
@@ -46,6 +47,10 @@ import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
 import 'src/ui/group_call_screen.dart';
+import 'src/ui/read_sweep.dart';
+import 'src/ui/crash_notice.dart';
+import 'src/crash_catcher.dart';
+import 'src/native_crash_reports.dart';
 import 'src/ui/matrix_account_panel.dart';
 import 'src/ui/bitchat_carrier_panel.dart';
 import 'src/ui/email_carrier_panel.dart';
@@ -128,11 +133,74 @@ Future<void> _startDebugRunIfAsked(
 /// The command line this run was started with (desktop).
 List<String> _launchArgs = const [];
 
+/// Crash records go in the app's data folder; the native library and
+/// Android add what they know of earlier runs.
+Future<void> _startCrashRecords(CrashCatcher crashes, Directory root) async {
+  final directory = Directory(p.join(root.path, 'crash'));
+  // On Android the system ends apps in the background as a matter of
+  // course: there a run counts as running only while in front.
+  await crashes.attach(directory, markRunning: !Platform.isAndroid);
+  try {
+    startNativeCrashReports(p.join(directory.path, CrashCatcher.nativeName));
+  } catch (error) {
+    debugPrint('Native crash reports unavailable: $error');
+  }
+  if (Platform.isAndroid) {
+    final exits = await PlatformBridge().takeAndroidExitReports();
+    crashes.addPrevious([
+      for (final exit in exits)
+        if (exit['at'] case final int at)
+          CrashRecord(
+            at: DateTime.fromMillisecondsSinceEpoch(at, isUtc: true),
+            kind: 'android',
+            text: [
+              'Android: ${exit['kind']}',
+              if (exit['description'] case final String description
+                  when description.isNotEmpty)
+                description,
+              if (exit['trace'] case final String trace when trace.isNotEmpty)
+                trace,
+            ].join('\n'),
+          ),
+    ]);
+  }
+}
+
+/// Where a part of the screen failed to draw (release builds).
+class _BrokenPart extends StatelessWidget {
+  const _BrokenPart();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.all(8),
+    child: Text(
+      'Something went wrong here.',
+      style: TextStyle(color: Color(0xFFB00020), fontSize: 13),
+    ),
+  );
+}
+
 Future<void> main(List<String> args) async {
+  // Every error nothing else caught is written down (crash_catcher.dart).
+  final crashes = CrashCatcher.instance;
+  await runZonedGuarded(() => _main(args, crashes), crashes.zoneError);
+}
+
+Future<void> _main(List<String> args, CrashCatcher crashes) async {
   _launchArgs = args;
   WidgetsFlutterBinding.ensureInitialized();
+  crashes.install();
+  if (!kDebugMode) {
+    // Instead of a grey box where a part of the screen failed to draw.
+    ErrorWidget.builder = (details) => const _BrokenPart();
+  }
   final storageResolver = AppStorageResolver();
   final storageResolution = await storageResolver.resolve();
+  await _startCrashRecords(
+    crashes,
+    storageResolution.profile?.dataRoot ??
+        await getApplicationSupportDirectory(),
+  );
   if (storageResolution.status == AppStorageResolutionStatus.ready) {
     await _runConestWithProfile(storageResolution.profile!);
     return;
@@ -233,6 +301,13 @@ Future<void> _runConestWithProfile(
     automaticStartupChecksEnabled: profile.automaticStartupChecksEnabled,
   );
   await controller.initialize();
+  final crashes = CrashCatcher.instance;
+  crashes.connect(
+    (kind, text) => controller.recordError('crash', '$kind: $text'),
+  );
+  // Errors earlier runs lived through are in the error history now; only a
+  // run that ended badly is worth a notice.
+  if (!crashes.previousRun.crashed) crashes.dismissPrevious();
   if (buildInfo.channel == UpdateChannel.debug) {
     unawaited(
       _startDebugRunIfAsked(
@@ -899,6 +974,15 @@ class ConestApp extends StatefulWidget {
 
 class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  final GlobalKey<ScaffoldMessengerState> _messengerKey =
+      GlobalKey<ScaffoldMessengerState>();
+  // Closing the window is a proper end, not a crash.
+  late final AppLifecycleListener _exitListener = AppLifecycleListener(
+    onExitRequested: () async {
+      CrashCatcher.instance.markStopped();
+      return AppExitResponse.exit;
+    },
+  );
   String? _activeUpdatePromptTag;
   late bool _controllerReady;
   late bool _controllerHasIdentity;
@@ -921,11 +1005,21 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     widget.controller.addListener(_handleControllerChanged);
     widget.controller.setAppForegroundState(true);
     widget.updateService.addListener(_handleUpdateServiceChanged);
+    _exitListener;
+    if (Platform.isAndroid) CrashCatcher.instance.markRunning();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
         return;
       }
       unawaited(widget.updateService.ensureStartupCheck());
+      final messenger = _messengerKey.currentState;
+      if (messenger != null) {
+        showCrashNotice(
+          messenger: messenger,
+          crashes: CrashCatcher.instance,
+          dialogContext: () => _navigatorKey.currentContext,
+        );
+      }
     });
   }
 
@@ -974,6 +1068,15 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
         state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive;
     widget.controller.setAppForegroundState(inForeground);
+    if (state == AppLifecycleState.detached) {
+      CrashCatcher.instance.markStopped();
+    } else if (Platform.isAndroid) {
+      // Android may end it in the background; only a run in front that
+      // vanishes is a crash (Android's own records catch the rest).
+      inForeground
+          ? CrashCatcher.instance.markRunning()
+          : CrashCatcher.instance.markStopped();
+    }
   }
 
   @override
@@ -982,6 +1085,10 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_handleControllerChanged);
     widget.updateService.removeListener(_handleUpdateServiceChanged);
+    _exitListener.dispose();
+    CrashCatcher.instance
+      ..disconnect()
+      ..markStopped();
     widget.updateService.dispose();
     widget.controller.dispose();
     widget.themeController.dispose();
@@ -1059,6 +1166,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               debugShowCheckedModeBanner: false,
               title: 'Conest',
               navigatorKey: _navigatorKey,
+              scaffoldMessengerKey: _messengerKey,
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,
               locale: _controllerLocale == null
@@ -8149,13 +8257,12 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
   bool _droppingFiles = false;
-  Timer? _readSweepDebounce;
+  final ReadSweepTimer _readSweep = ReadSweepTimer();
   String? _anchoredFirstUnreadId;
   final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
   String? _flashingMessageId;
   Timer? _flashTimer;
 
-  static const Duration _readSweepDelay = Duration(milliseconds: 800);
   static const Duration _replyFlashDuration = Duration(milliseconds: 320);
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
@@ -8608,7 +8715,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_scheduleReadSweep);
+    _scrollController.addListener(_handleScroll);
     controller.requestGroupHistoryCatchUp(group.groupId);
   }
 
@@ -8624,7 +8731,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       _didInitialPosition = false;
       _initialPositionScheduled = false;
       _anchoredFirstUnreadId = null;
-      _readSweepDebounce?.cancel();
+      _readSweep.cancel();
     }
     _scheduleInitialPosition();
     _scheduleReadSweep();
@@ -8637,9 +8744,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
         voiceService.previewDestinationKey == 'group:${group.groupId}') {
       unawaited(voiceService.stopForInterruption());
     }
-    _readSweepDebounce?.cancel();
+    _readSweep.cancel();
     _flashTimer?.cancel();
-    _scrollController.removeListener(_scheduleReadSweep);
+    _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     super.dispose();
   }
@@ -8694,12 +8801,13 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     });
   }
 
-  void _scheduleReadSweep() {
+  void _handleScroll() => _scheduleReadSweep(restart: true);
+
+  void _scheduleReadSweep({bool restart = false}) {
     if (!mounted || !_didInitialPosition || !controller.isAppForeground) {
       return;
     }
-    _readSweepDebounce?.cancel();
-    _readSweepDebounce = Timer(_readSweepDelay, _runReadSweep);
+    _readSweep.schedule(_runReadSweep, restart: restart);
   }
 
   Future<void> _runReadSweep() async {
@@ -8827,7 +8935,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     final allSelected = members.every(
       (m) => _selectedMessageIds.contains(m.id),
     );
+    // Keyed by the newest member, so the read sweep sees the album.
     return _AlbumBubble(
+      key: _messageKeyFor(members.last.id),
       members: members,
       controller: controller,
       palette: palette,
@@ -10162,7 +10272,7 @@ class _ChatPanelState extends State<_ChatPanel> {
   final Map<String, GlobalKey<PopupMenuButtonState<String>>> _messageActionKeys = {};
   bool _didInitialPosition = false;
   bool _initialPositionScheduled = false;
-  Timer? _readSweepDebounce;
+  final ReadSweepTimer _readSweep = ReadSweepTimer();
   String? _anchoredFirstUnreadId;
   final LinkedHashSet<String> _selectedMessageIds = LinkedHashSet<String>();
   String? _flashingMessageId;
@@ -10175,7 +10285,13 @@ class _ChatPanelState extends State<_ChatPanel> {
 
   bool get _voiceRecording => controller.voiceMessageService.isRecording;
 
-  static const Duration _readSweepDelay = Duration(milliseconds: 800);
+  @override
+  void initState() {
+    super.initState();
+    // Scrolling to older unread messages marks them read.
+    _scrollController.addListener(_handleScroll);
+  }
+
   static const Duration _replyFlashDuration = Duration(milliseconds: 320);
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
@@ -10553,7 +10669,7 @@ class _ChatPanelState extends State<_ChatPanel> {
       _didInitialPosition = false;
       _initialPositionScheduled = false;
       _anchoredFirstUnreadId = null;
-      _readSweepDebounce?.cancel();
+      _readSweep.cancel();
     }
     _scheduleInitialPosition();
     _scheduleReadSweep();
@@ -10566,15 +10682,11 @@ class _ChatPanelState extends State<_ChatPanel> {
         voiceService.previewDestinationKey == 'direct:${contact.deviceId}') {
       unawaited(voiceService.stopForInterruption());
     }
-    _readSweepDebounce?.cancel();
+    _readSweep.cancel();
     _flashTimer?.cancel();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     super.dispose();
-  }
-
-  void _handleScroll() {
-    _scheduleReadSweep();
   }
 
   GlobalKey _messageKeyFor(String messageId) {
@@ -10635,16 +10747,14 @@ class _ChatPanelState extends State<_ChatPanel> {
     });
   }
 
-  void _scheduleReadSweep() {
+  void _handleScroll() => _scheduleReadSweep(restart: true);
+
+  void _scheduleReadSweep({bool restart = false}) {
     if (!mounted || !_didInitialPosition || !controller.isAppForeground) {
       return;
     }
-    // Telegram-style: debounce the mark-read by 800 ms so the unread badge
-    // on the contact list has time to appear and a burst of inbound
-    // messages doesn't clear it instantly. The timer is reset on every
-    // call so successive scroll events keep pushing the sweep out.
-    _readSweepDebounce?.cancel();
-    _readSweepDebounce = Timer(_readSweepDelay, _runReadSweep);
+    // Telegram-style: the mark-read waits 800 ms (see ReadSweepTimer).
+    _readSweep.schedule(_runReadSweep, restart: restart);
   }
 
   Future<void> _runReadSweep() async {
@@ -10760,7 +10870,9 @@ class _ChatPanelState extends State<_ChatPanel> {
     final allSelected = members.every(
       (m) => _selectedMessageIds.contains(m.id),
     );
+    // Keyed by the newest member, so the read sweep sees the album.
     return _AlbumBubble(
+      key: _messageKeyFor(members.last.id),
       members: members,
       controller: controller,
       palette: palette,
@@ -18219,6 +18331,7 @@ Future<void> bulkSaveAttachments(
 /// Save / Copy actions stay one-tile-deep.
 class _AlbumBubble extends StatelessWidget {
   const _AlbumBubble({
+    super.key,
     required this.members,
     required this.controller,
     required this.palette,
@@ -21657,7 +21770,9 @@ Future<bool> publishGroupFileAsking(
       fileName: fileName,
       mimeType: mimeType,
       caption: caption,
-      keepMetadata: true,
+      // Partly cleaned: what could be removed stays removed.
+      keepMetadata: !error.partial,
+      acceptPartialMetadata: error.partial,
     );
     return true;
   }
@@ -21770,7 +21885,7 @@ class StableScrollbar extends StatelessWidget {
   }
 }
 
-/// Pointer activity on the window proves the app is in front, whatever the
+/// Pointer or key activity on the window proves the app is in front, whatever the
 /// platform last reported: some Linux desktops report a window in use as
 /// hidden, and then chats stopped marking what was on screen read.
 class UserActivityForeground extends StatelessWidget {
@@ -21789,12 +21904,23 @@ class UserActivityForeground extends StatelessWidget {
     if (!isForeground()) onForeground();
   }
 
+  KeyEventResult _typed(FocusNode _, KeyEvent _) {
+    if (!isForeground()) onForeground();
+    return KeyEventResult.ignored;
+  }
+
   @override
-  Widget build(BuildContext context) => Listener(
-    behavior: HitTestBehavior.translucent,
-    onPointerDown: _seen,
-    onPointerSignal: _seen,
-    child: child,
+  Widget build(BuildContext context) => Focus(
+    // Typing counts too (it only listens; keys go on as before).
+    canRequestFocus: false,
+    skipTraversal: true,
+    onKeyEvent: _typed,
+    child: Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _seen,
+      onPointerSignal: _seen,
+      child: child,
+    ),
   );
 }
 
