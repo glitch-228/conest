@@ -3689,9 +3689,7 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
   String _connectedTime() {
     final elapsed = DateTime.now().difference(widget.call.startedAt);
     final seconds = elapsed.inSeconds.clamp(0, 24 * 60 * 60);
-    return l10nOf(context).voiceConnected(
-      '${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}',
-    );
+    return l10nOf(context).voiceConnected('${(seconds ~/ 60).toString().padLeft(2, '0')}:${(seconds % 60).toString().padLeft(2, '0')}');
   }
 
   void _run(Future<void> Function() operation) {
@@ -3791,12 +3789,11 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             icon: Icon(
                               call.muted ? Icons.mic_off : Icons.mic,
                             ),
+                            label: Text(call.muted ? l10nOf(context).uiUnmute7044C3 : l10nOf(context).uiMute0F0973),
                           ),
                         if (connected)
                           FilterChip(
-                            label: Text(
-                              l10nOf(context).uiNoiseSuppression71DE3C,
-                            ),
+                            label:  Text(l10nOf(context).uiNoiseSuppression71DE3C),
                             selected:
                                 widget
                                     .controller
@@ -7042,8 +7039,9 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final choice = await showDialog<_DeleteGroupChoice>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(
-          l10nOf(context).uiDeleteValueF0396B((group.title).toString()),
+        title: Text(l10nOf(context).uiDeleteValueF0396B((group.title).toString())),
+        content:  Text(
+          l10nOf(context).uiChooseHowToWindDownF7399D,
         ),
         actions: [
           TextButton(
@@ -7164,10 +7162,9 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(
-          l10nOf(
-            context,
-          ).uiDeleteValueForEveryone12E724((group.title).toString()),
+        title: Text(l10nOf(context).uiDeleteValueForEveryone12E724((group.title).toString())),
+        content:  Text(
+          l10nOf(context).uiEveryMemberWillBeRemoved75A3FC,
         ),
         actions: [
           TextButton(
@@ -8017,20 +8014,19 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
     final playing = _isCurrent && _service.isPlaying;
     final volume = _service.playbackVolume;
     return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            IconButton(
-              tooltip: playing
-                  ? l10nOf(context).uiPausePreview805180
-                  : l10nOf(context).uiPlayPreview47BB44,
-              onPressed: () => unawaited(_run(_service.playPreview)),
-              icon: Icon(
-                playing
-                    ? Icons.pause_circle_outline
-                    : Icons.play_circle_outline,
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                tooltip: playing ? l10nOf(context).uiPausePreview805180 : l10nOf(context).uiPlayPreview47BB44,
+                onPressed: () => unawaited(_run(_service.playPreview)),
+                icon: Icon(
+                  playing
+                      ? Icons.pause_circle_outline
+                      : Icons.play_circle_outline,
+                ),
               ),
               Expanded(
                 child: Slider(
@@ -8038,25 +8034,32 @@ class _VoicePreviewPlayerState extends State<_VoicePreviewPlayer> {
                   onChanged: (value) => unawaited(_seek(value)),
                 ),
               ),
-            ),
-            Text("${(_clock(position))} / ${(_clock(total))}"),
-          ],
-        ),
-        Row(
-          children: [
-            IconButton(
-              tooltip: volume == 0
-                  ? l10nOf(context).uiUnmutePreview12A31A
-                  : l10nOf(context).uiMutePreviewCE44BD,
-              onPressed: () => unawaited(
-                _run(() => _service.setPlaybackVolume(volume == 0 ? 1 : 0)),
+              Text("${(_clock(position))} / ${(_clock(total))}"),
+            ],
+          ),
+          Row(
+            children: [
+              IconButton(
+                tooltip: volume == 0 ? l10nOf(context).uiUnmutePreview12A31A : l10nOf(context).uiMutePreviewCE44BD,
+                onPressed: () => unawaited(
+                  _run(() => _service.setPlaybackVolume(volume == 0 ? 1 : 0)),
+                ),
+                icon: Icon(
+                  volume == 0
+                      ? Icons.volume_off_outlined
+                      : volume < 0.5
+                      ? Icons.volume_down_outlined
+                      : Icons.volume_up_outlined,
+                ),
               ),
-              icon: Icon(
-                volume == 0
-                    ? Icons.volume_off_outlined
-                    : volume < 0.5
-                    ? Icons.volume_down_outlined
-                    : Icons.volume_up_outlined,
+              Expanded(
+                child: Slider(
+                  value: volume,
+                  label: l10nOf(context).uiValue3072D4((((volume * 100).round())).toString()),
+                  divisions: 20,
+                  onChanged: (value) =>
+                      unawaited(_run(() => _service.setPlaybackVolume(value))),
+                ),
               ),
             ],
           ),
@@ -8097,37 +8100,17 @@ class _GroupVoiceControls extends StatelessWidget {
           children: [
             Row(
               children: [
-                IconButton(
-                  tooltip: isCurrent && service.isPlaying
-                      ? l10nOf(context).uiPauseVoiceMessageECD12D
-                      : l10nOf(context).uiPlayVoiceMessageB16684,
-                  onPressed: path == null
-                      ? null
-                      : () => unawaited(
-                          service
-                              .togglePlayback(path, itemId: messageId)
-                              .catchError(
-                                (Object error) =>
-                                    controller.setStatus('$error'),
-                              ),
-                        ),
-                  icon: Icon(
-                    isCurrent && service.isPlaying
-                        ? Icons.pause_circle_outline
-                        : Icons.play_circle_outline,
-                    color: palette.primary,
-                  ),
-                ),
-                Expanded(
-                  child: isCurrent
-                      ? Slider(
-                          value: value,
-                          onChanged: (next) => unawaited(
-                            service.seekPlayback(
-                              Duration(
-                                milliseconds: (next * durationMs).round(),
-                              ),
-                            ),
+            IconButton(
+              tooltip: isCurrent && service.isPlaying
+                  ? l10nOf(context).uiPauseVoiceMessageECD12D
+                  : l10nOf(context).uiPlayVoiceMessageB16684,
+              onPressed: path == null
+                  ? null
+                  : () => unawaited(
+                      service
+                          .togglePlayback(path, itemId: messageId)
+                          .catchError(
+                            (Object error) => controller.setStatus('$error'),
                           ),
                     ),
               icon: Icon(
@@ -8145,23 +8128,26 @@ class _GroupVoiceControls extends StatelessWidget {
                         service.seekPlayback(
                           Duration(milliseconds: (next * durationMs).round()),
                         ),
-                ),
-                PopupMenuButton<double>(
-                  tooltip: l10nOf(context).uiPlaybackSpeed6FF42B,
-                  icon: const Icon(Icons.speed),
-                  onSelected: (rate) => unawaited(
-                    service
-                        .setPlaybackRate(rate)
-                        .catchError(
-                          (Object error) => controller.setStatus('$error'),
-                        ),
-                  ),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 1, child: Text('1×')),
-                    PopupMenuItem(value: 1.5, child: Text('1.5×')),
-                    PopupMenuItem(value: 2, child: Text('2×')),
-                  ],
-                ),
+                      ),
+                    )
+                  : Text(l10nOf(context).uiVoiceMessageValue2F0300((label).toString())),
+            ),
+            PopupMenuButton<double>(
+              tooltip: l10nOf(context).uiPlaybackSpeed6FF42B,
+              icon: const Icon(Icons.speed),
+              onSelected: (rate) => unawaited(
+                service
+                    .setPlaybackRate(rate)
+                    .catchError(
+                      (Object error) => controller.setStatus('$error'),
+                    ),
+              ),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 1, child: Text('1×')),
+                PopupMenuItem(value: 1.5, child: Text('1.5×')),
+                PopupMenuItem(value: 2, child: Text('2×')),
+              ],
+            ),
               ],
             ),
             if (isCurrent && service.playbackError != null)
@@ -8170,9 +8156,7 @@ class _GroupVoiceControls extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
-                    l10nOf(context).uiPlaybackFailedValue1C0E1A(
-                      (service.playbackError).toString(),
-                    ),
+                    l10nOf(context).uiPlaybackFailedValue1C0E1A((service.playbackError).toString()),
                     style: TextStyle(color: palette.danger, fontSize: 12),
                   ),
                 ),
@@ -11262,9 +11246,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                         children: [
                           for (final entry in message.reactions.entries)
                             ActionChip(
-                              label: Text(
-                                "${(entry.key)} ${(entry.value.length)}",
-                              ),
+                              label: Text("${(entry.key)} ${(entry.value.length)}"),
                               onPressed: () => unawaited(
                                 controller
                                     .toggleMessageReaction(
@@ -11697,13 +11679,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                               const SizedBox(height: 4),
                               Text(
                                 saved
-                                    ? l10nOf(
-                                        context,
-                                      ).uiNotesFilesAndForwardsOnlyB0145F
-                                    : l10nOf(context).uiValueSafetyValue82C755(
-                                        (contact.routeSummary).toString(),
-                                        (contact.shortSafetyNumber).toString(),
-                                      ),
+                                    ? l10nOf(context).uiNotesFilesAndForwardsOnlyB0145F
+                                    : l10nOf(context).uiValueSafetyValue82C755((contact.routeSummary).toString(), (contact.shortSafetyNumber).toString()),
                                 maxLines: compactHeader ? 3 : 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(context).textTheme.bodySmall
@@ -11732,25 +11709,16 @@ class _ChatPanelState extends State<_ChatPanel> {
                         onPressed: () => setState(
                           () => _routeInspectorOpen = !_routeInspectorOpen,
                         ),
-                        _ConnectivityChip(
-                          contact: contact,
-                          controller: controller,
-                          palette: palette,
-                        ),
-                        IconButton(
-                          onPressed: () => setState(
-                            () => _routeInspectorOpen = !_routeInspectorOpen,
-                          ),
-                          icon: const Icon(Icons.route_outlined),
-                          tooltip: l10nOf(context).uiRouteInspector0E65DE,
-                          isSelected: _routeInspectorOpen,
-                          color: _routeInspectorOpen ? palette.primary : null,
-                        ),
-                        IconButton(
-                          onPressed: widget.onShowProfile,
-                          icon: const Icon(Icons.badge_outlined),
-                          tooltip: l10nOf(context).uiContactProfile1B3A0E,
-                        ),
+                        icon: const Icon(Icons.route_outlined),
+                        tooltip: l10nOf(context).uiRouteInspector0E65DE,
+                        isSelected: _routeInspectorOpen,
+                        color: _routeInspectorOpen ? palette.primary : null,
+                      ),
+                      IconButton(
+                        onPressed: widget.onShowProfile,
+                        icon: const Icon(Icons.badge_outlined),
+                        tooltip: l10nOf(context).uiContactProfile1B3A0E,
+                      ),
                       ],
                     ];
                     if (!compactHeader) {
@@ -11994,19 +11962,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                               enabled: contact.canComposeOutbound,
                               decoration: InputDecoration(
                                 hintText: !contact.canComposeOutbound
-                                    ? l10nOf(
-                                        context,
-                                      ).uiThisContactRequestIsBlocked944F7D
+                                    ? l10nOf(context).uiThisContactRequestIsBlocked944F7D
                                     : !contact.canSendOutbound
-                                    ? l10nOf(
-                                        context,
-                                      ).uiMessageSavedHereUntilTheA49A2C
+                                    ? l10nOf(context).uiMessageSavedHereUntilTheA49A2C
                                     : activeReplyTarget == null
                                     ? (widget.telegramLayout
                                           ? l10nOf(context).uiMessage68F414
-                                          : l10nOf(
-                                              context,
-                                            ).uiWriteAnEncryptedMessage9F7705)
+                                          : l10nOf(context).uiWriteAnEncryptedMessage9F7705)
                                     : l10nOf(context).uiWriteAReplyOrAddFC0A42,
                               ),
                               onSubmitted: (_) => widget.onSend(),
@@ -12073,33 +12035,19 @@ class _ChatPanelState extends State<_ChatPanel> {
                                 : (_) => unawaited(_releaseVoiceRecording()),
                             child: IconButton(
                               tooltip: foreignRecording
-                                  ? l10nOf(
-                                      context,
-                                    ).uiRecordingBelongsToAnotherConversation87E802
+                                  ? l10nOf(context).uiRecordingBelongsToAnotherConversation87E802
                                   : foreignPreview
-                                  ? l10nOf(
-                                      context,
-                                    ).uiFinishTheVoicePreviewIn142571
+                                  ? l10nOf(context).uiFinishTheVoicePreviewIn142571
                                   : preview
-                                  ? l10nOf(
-                                      context,
-                                    ).uiReviewUnsentVoiceMessage24931C
+                                  ? l10nOf(context).uiReviewUnsentVoiceMessage24931C
                                   : _voiceRecordingStarting
-                                  ? l10nOf(
-                                      context,
-                                    ).uiCancelMicrophoneStartup9E9F8A
+                                  ? l10nOf(context).uiCancelMicrophoneStartup9E9F8A
                                   : _voiceRecordingCancelGesture
-                                  ? l10nOf(
-                                      context,
-                                    ).uiReleaseToDiscardRecording4C5C71
+                                  ? l10nOf(context).uiReleaseToDiscardRecording4C5C71
                                   : _voiceRecordingLocked
-                                  ? l10nOf(
-                                      context,
-                                    ).uiRecordingLockedTapToFinish40CD88
+                                  ? l10nOf(context).uiRecordingLockedTapToFinish40CD88
                                   : recording
-                                  ? l10nOf(
-                                      context,
-                                    ).uiReleaseToStopSlideLeft4686F1
+                                  ? l10nOf(context).uiReleaseToStopSlideLeft4686F1
                                   : l10nOf(context).uiHoldToRecordAVoice06B1B5,
                               onPressed:
                                   contact.canSendOutbound &&
@@ -12200,9 +12148,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    l10nOf(context).uiDropFilesToSendMax106011(
-                      (MessengerController.maxAttachmentsPerSend).toString(),
-                    ),
+                    l10nOf(context).uiDropFilesToSendMax106011((MessengerController.maxAttachmentsPerSend).toString()),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       color: palette.primary,
                       fontWeight: FontWeight.w700,
@@ -12643,10 +12589,9 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(
-          l10nOf(
-            context,
-          ).uiRemoveValueF4FE4B((widget.contact.alias).toString()),
+        title: Text(l10nOf(context).uiRemoveValueF4FE4B((widget.contact.alias).toString())),
+        content:  Text(
+          l10nOf(context).uiThisRemovesTheLocalContact0D6D1E,
         ),
         actions: [
           TextButton(
@@ -14565,8 +14510,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(l10nOf(context).uiResetIdentity8B0224),
-        content: Text(l10nOf(context).uiThisClearsTheEncryptedVault864B3D),
+        title:  Text(l10nOf(context).uiResetIdentity8B0224),
+        content:  Text(
+          l10nOf(context).uiThisClearsTheEncryptedVault864B3D,
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -14631,9 +14578,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               'Danger',
                             ])
                               Padding(
-                                padding: const EdgeInsetsDirectional.only(
-                                  end: 8,
-                                ),
+                                padding: const EdgeInsetsDirectional.only(end: 8),
                                 child: ChoiceChip(
                                   label: Text(switch (category) {
                                     'Personal / Preferences' => l10nOf(
@@ -14734,10 +14679,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     controller: _bioController,
                                     minLines: 1,
                                     maxLines: 4,
-                                    decoration: InputDecoration(
-                                      labelText: l10nOf(
-                                        context,
-                                      ).uiDescriptionBio505243,
+                                    decoration:  InputDecoration(
+                                      labelText: l10nOf(context).uiDescriptionBio505243,
                                     ),
                                   ),
                                 ),
@@ -14763,13 +14706,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateNotificationsEnabled(value),
                                     ),
-                              title: Text(
-                                l10nOf(context).uiMessageNotifications595635,
-                              ),
-                              subtitle: Text(
-                                l10nOf(
-                                  context,
-                                ).uiShowASystemNotificationWhen90113B,
+                              title:  Text(l10nOf(context).uiMessageNotifications595635),
+                              subtitle:  Text(
+                                l10nOf(context).uiShowASystemNotificationWhen90113B,
                               ),
                             ),
                             if (widget
@@ -14788,13 +14727,23 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                               ?.media
                                               .available !=
                                           true
-                                      ? l10nOf(
-                                          context,
-                                        ).uiAllowsOneToOneIroh45EEF1
-                                      : l10nOf(
-                                          context,
-                                        ).uiVoiceCallAudioIsUnavailable0B6C43,
-                                ),
+                                  ? null
+                                  : (value) => _run(
+                                      () => widget.controller
+                                          .updateExperimentalVoiceCallsEnabled(
+                                            value,
+                                          ),
+                                    ),
+                              title:  Text(l10nOf(context).uiExperimentalVoiceCalls51098B),
+                              subtitle: Text(
+                                widget
+                                            .controller
+                                            .voiceCallService
+                                            ?.media
+                                            .available ==
+                                        true
+                                    ? l10nOf(context).uiAllowsOneToOneIroh45EEF1
+                                    : l10nOf(context).uiVoiceCallAudioIsUnavailable0B6C43,
                               ),
                             ),
                             if (!kIsWeb && Platform.isAndroid)
@@ -14813,15 +14762,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                               value,
                                             ),
                                       ),
-                                title: Text(
-                                  l10nOf(
-                                    context,
-                                  ).uiExperimentalAndroidBackgroundReceive60828A,
+                                title:  Text(
+                                  l10nOf(context).uiExperimentalAndroidBackgroundReceive60828A,
                                 ),
-                                subtitle: Text(
-                                  l10nOf(
-                                    context,
-                                  ).uiDisabledInReleaseBuildsThe45B7DF,
+                                subtitle:  Text(
+                                  l10nOf(context).uiDisabledInReleaseBuildsThe45B7DF,
                                 ),
                               ),
                             if (!kIsWeb &&
@@ -14855,15 +14800,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                               value,
                                             ),
                                       ),
-                                title: Text(
-                                  l10nOf(
-                                    context,
-                                  ).uiAllowVoiceCallsInBackground73C5C5,
+                                title:  Text(
+                                  l10nOf(context).uiAllowVoiceCallsInBackground73C5C5,
                                 ),
-                                subtitle: Text(
-                                  l10nOf(
-                                    context,
-                                  ).uiKeepsCallSignalingActiveAndC0A342,
+                                subtitle:  Text(
+                                  l10nOf(context).uiKeepsCallSignalingActiveAndC0A342,
                                 ),
                               ),
                             if (kDebugMode)
@@ -14876,15 +14817,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                         () => widget.controller
                                             .updateSuppressReadReceipts(value),
                                       ),
-                                title: Text(
-                                  l10nOf(
-                                    context,
-                                  ).uiDonTSendReadConfirmations230076,
+                                title:  Text(
+                                  l10nOf(context).uiDonTSendReadConfirmations230076,
                                 ),
-                                subtitle: Text(
-                                  l10nOf(
-                                    context,
-                                  ).uiDebugOnlyDeliveryAcknowledgementsStill7D6A9C,
+                                subtitle:  Text(
+                                  l10nOf(context).uiDebugOnlyDeliveryAcknowledgementsStill7D6A9C,
                                 ),
                               ),
                             const SizedBox(height: 12),
@@ -14896,13 +14833,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               key: const ValueKey('strip-file-metadata'),
                               contentPadding: EdgeInsets.zero,
                               value: widget.controller.removesFileMetadata,
-                              title: Text(
-                                l10nOf(context).uiRemoveMetadataFromFilesA4860E,
-                              ),
-                              subtitle: Text(
-                                l10nOf(
-                                  context,
-                                ).uiBeforeSendingRemovesLocationCamera4E390D,
+                              title:  Text(l10nOf(context).uiRemoveMetadataFromFilesA4860E),
+                              subtitle:  Text(
+                                l10nOf(context).uiBeforeSendingRemovesLocationCamera4E390D,
                               ),
                               onChanged: (value) => unawaited(
                                 widget.controller
@@ -14916,15 +14849,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               key: const ValueKey('random-file-names'),
                               contentPadding: EdgeInsets.zero,
                               value: widget.controller.randomizesFileNames,
-                              title: Text(
-                                l10nOf(
-                                  context,
-                                ).uiSendFilesUnderRandomNames5F79D4,
+                              title:  Text(
+                                l10nOf(context).uiSendFilesUnderRandomNames5F79D4,
                               ),
-                              subtitle: Text(
-                                l10nOf(
-                                  context,
-                                ).uiReplacesFileNamesWithRandom16F099,
+                              subtitle:  Text(
+                                l10nOf(context).uiReplacesFileNamesWithRandom16F099,
                               ),
                               onChanged: (value) => unawaited(
                                 widget.controller
@@ -14979,10 +14908,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   () => widget.controller
                                       .updateStorageReserveEnabled(value),
                                 ),
-                          title: Text(
-                            l10nOf(context).uiKeepOfStorageFreeF00434,
-                          ),
-                          subtitle: Text(
+                          title:  Text(l10nOf(context).uiKeepOfStorageFreeF00434),
+                          subtitle:  Text(
                             l10nOf(context).uiReserveFreeSpaceForOther1AC9CF,
                           ),
                         ),
@@ -15023,11 +14950,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title: Text(l10nOf(context).uiLAN2ECD17),
-                              subtitle: Text(
-                                l10nOf(
-                                  context,
-                                ).uiSameNetworkListenerPairingBeacons5CF0A2,
+                              title:  Text(l10nOf(context).uiLAN2ECD17),
+                              subtitle:  Text(
+                                l10nOf(context).uiSameNetworkListenerPairingBeacons5CF0A2,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -15043,11 +14968,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title: Text(l10nOf(context).uiOnlineC3E839),
-                              subtitle: Text(
-                                l10nOf(
-                                  context,
-                                ).uiIrohMessagingAndFileTransfersC4D635,
+                              title:  Text(l10nOf(context).uiOnlineC3E839),
+                              subtitle:  Text(
+                                l10nOf(context).uiIrohMessagingAndFileTransfersC4D635,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -15064,10 +14987,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             ),
                                           ),
                                     ),
-                              title: Text(
-                                l10nOf(context).uiIrohRelayFallbackE954F7,
-                              ),
-                              subtitle: Text(
+                              title:  Text(l10nOf(context).uiIrohRelayFallbackE954F7),
+                              subtitle:  Text(
                                 l10nOf(context).uiUseIrohSBuiltIn631E03,
                               ),
                             ),
@@ -15087,10 +15008,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               title: Text(
                                 l10nOf(context).uiLimitIrohFilesToMiBB58353,
                               ),
-                              subtitle: Text(
-                                l10nOf(
-                                  context,
-                                ).uiAppliesToDirectOnlineAnd28F6F1,
+                              subtitle:  Text(
+                                l10nOf(context).uiAppliesToDirectOnlineAnd28F6F1,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -15107,10 +15026,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                             value,
                                           ),
                                     ),
-                              title: Text(
-                                l10nOf(
-                                  context,
-                                ).uiShareEmailAndMatrixAddressesD762EE,
+                              title:  Text(
+                                l10nOf(context).uiShareEmailAndMatrixAddressesD762EE,
                               ),
                               subtitle: Text(
                                 l10nOf(context).uiLetsMembersOfYourGroups9912A5,
@@ -15118,13 +15035,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             ),
                             ListTile(
                               contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                l10nOf(context).uiAutomaticDownloads5E777B,
-                              ),
-                              subtitle: Text(
-                                l10nOf(
-                                  context,
-                                ).uiVerifiedContactsOnlyLimitsAdapt8A1876,
+                              title:  Text(l10nOf(context).uiAutomaticDownloads5E777B),
+                              subtitle:  Text(
+                                l10nOf(context).uiVerifiedContactsOnlyLimitsAdapt8A1876,
                               ),
                               trailing: DropdownButton<AutoDownloadPreset>(
                                 value:
@@ -15179,13 +15092,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                         identity.connectivity.irohRelayEnabled,
                                     minLines: 1,
                                     maxLines: 4,
-                                    decoration: InputDecoration(
-                                      labelText: l10nOf(
-                                        context,
-                                      ).uiCustomIrohRelayURLsDBF979,
-                                      helperText: l10nOf(
-                                        context,
-                                      ).uiOneHTTPSURLPerLineDA8E70,
+                                    decoration:  InputDecoration(
+                                      labelText: l10nOf(context).uiCustomIrohRelayURLsDBF979,
+                                      helperText:
+                                          l10nOf(context).uiOneHTTPSURLPerLineDA8E70,
                                     ),
                                   ),
                                 ),
@@ -15217,9 +15127,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                                 ),
                                               );
                                         }),
-                                  child: Text(
-                                    l10nOf(context).uiSaveIrohRelaysC144AD,
-                                  ),
+                                  child:  Text(l10nOf(context).uiSaveIrohRelaysC144AD),
                                 ),
                               ],
                             ),
@@ -15276,12 +15184,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             const SizedBox(height: 8),
                             Text(
                               identity.connectivity.anyEnabled
-                                  ? l10nOf(
-                                      context,
-                                    ).uiPerContactRoutingIsIntersected88E292
-                                  : l10nOf(
-                                      context,
-                                    ).uiConnectivityIsFullyOffTheB12483,
+                                  ? l10nOf(context).uiPerContactRoutingIsIntersected88E292
+                                  : l10nOf(context).uiConnectivityIsFullyOffTheB12483,
                               style: Theme.of(context).textTheme.bodySmall
                                   ?.copyWith(
                                     color: identity.connectivity.anyEnabled
@@ -15344,9 +15248,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       widget.controller.checkRelayAvailability,
                                     ),
                               icon: const Icon(Icons.network_check),
-                              label: Text(
-                                l10nOf(context).uiCheckAvailabilityFCC1A6,
-                              ),
+                              label:  Text(l10nOf(context).uiCheckAvailabilityFCC1A6),
                             ),
                             const SizedBox(height: 12),
                             SwitchListTile.adaptive(
@@ -15358,13 +15260,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateRelayModeEnabled(value),
                                     ),
-                              title: Text(
-                                l10nOf(context).uiRunThisDeviceAsA9DEA14,
-                              ),
-                              subtitle: Text(
-                                l10nOf(
-                                  context,
-                                ).uiAllowTrustedContactsToUse001771,
+                              title:  Text(l10nOf(context).uiRunThisDeviceAsA9DEA14),
+                              subtitle:  Text(
+                                l10nOf(context).uiAllowTrustedContactsToUse001771,
                               ),
                             ),
                             SwitchListTile.adaptive(
@@ -15376,13 +15274,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       () => widget.controller
                                           .updateAutoUseContactRelays(value),
                                     ),
-                              title: Text(
-                                l10nOf(context).uiAutoUseContactsAsRelaysC62C06,
-                              ),
+                              title:  Text(l10nOf(context).uiAutoUseContactsAsRelaysC62C06),
                               subtitle: Text(
-                                l10nOf(context).uiValueCandidateRouteSAre175673(
-                                  (contactRelays.length),
-                                ),
+                                l10nOf(context).uiValueCandidateRouteSAre175673((contactRelays.length)),
                               ),
                             ),
                             const SizedBox(height: 8),
@@ -15395,10 +15289,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   child: TextField(
                                     controller: _localRelayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      labelText: l10nOf(
-                                        context,
-                                      ).uiLocalRelayPort28A73C,
+                                    decoration:  InputDecoration(
+                                      labelText: l10nOf(context).uiLocalRelayPort28A73C,
                                     ),
                                   ),
                                 ),
@@ -15492,10 +15384,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   child: TextField(
                                     controller: _relayPortController,
                                     keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      labelText: l10nOf(
-                                        context,
-                                      ).uiRelayPortEA05DA,
+                                    decoration:  InputDecoration(
+                                      labelText: l10nOf(context).uiRelayPortEA05DA,
                                     ),
                                   ),
                                 ),
@@ -15533,9 +15423,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                           _relayPortController.text =
                                               '$defaultRelayPort';
                                         }),
-                                  child: Text(
-                                    l10nOf(context).uiDetectAddRelayE825AD,
-                                  ),
+                                  child:  Text(l10nOf(context).uiDetectAddRelayE825AD),
                                 ),
                               ],
                             ),
@@ -15563,12 +15451,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  l10nOf(
-                                    context,
-                                  ).uiCurrentBuildValueValue9A675D(
-                                    (buildInfo.displayVersion).toString(),
-                                    (buildInfo.channelLabel).toString(),
-                                  ),
+                                  l10nOf(context).uiCurrentBuildValueValue9A675D((buildInfo.displayVersion).toString(), (buildInfo.channelLabel).toString()),
                                   style: Theme.of(context).textTheme.bodyLarge
                                       ?.copyWith(fontWeight: FontWeight.w700),
                                 ),
@@ -15576,9 +15459,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     buildInfo.commit!.isNotEmpty) ...[
                                   const SizedBox(height: 6),
                                   Text(
-                                    l10nOf(context).uiCommitValue2E080C(
-                                      (buildInfo.commit).toString(),
-                                    ),
+                                    l10nOf(context).uiCommitValue2E080C((buildInfo.commit).toString()),
                                     style: Theme.of(context).textTheme.bodySmall
                                         ?.copyWith(
                                           color: widget.palette.inkSoft,
@@ -15592,13 +15473,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     leading: const Icon(
                                       Icons.bug_report_outlined,
                                     ),
-                                    title: Text(
-                                      l10nOf(context).uiErrorHistory25AFF8,
-                                    ),
-                                    subtitle: Text(
-                                      l10nOf(
-                                        context,
-                                      ).uiWhatWentWrongKeptAcross27FC1F,
+                                    title:  Text(l10nOf(context).uiErrorHistory25AFF8),
+                                    subtitle:  Text(
+                                      l10nOf(context).uiWhatWentWrongKeptAcross27FC1F,
                                     ),
                                     onTap: () => ErrorHistoryScreen.show(
                                       context,
@@ -15622,23 +15499,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                                   value,
                                                 ),
                                           ),
-                                    title: Text(
-                                      l10nOf(
-                                        context,
-                                      ).uiReceiveUnstableUpdatesBF7122,
+                                    title:  Text(
+                                      l10nOf(context).uiReceiveUnstableUpdatesBF7122,
                                     ),
-                                    subtitle: Text(
-                                      l10nOf(
-                                        context,
-                                      ).uiAlsoOfferNightlyBuildsNewerA7FAB0,
+                                    subtitle:  Text(
+                                      l10nOf(context).uiAlsoOfferNightlyBuildsNewerA7FAB0,
                                     ),
                                   ),
                                 if (available != null) ...[
                                   const SizedBox(height: 10),
                                   Text(
-                                    l10nOf(context).uiAvailableValue4B15F7(
-                                      (available.release.tagName).toString(),
-                                    ),
+                                    l10nOf(context).uiAvailableValue4B15F7((available.release.tagName).toString()),
                                   ),
                                 ],
                                 if (updateService.isDownloading) ...[
@@ -15687,9 +15558,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       label: Text(
                                         updateService.isChecking
                                             ? l10nOf(context).uiChecking494D0F
-                                            : l10nOf(
-                                                context,
-                                              ).uiCheckForUpdates8604FF,
+                                            : l10nOf(context).uiCheckForUpdates8604FF,
                                       ),
                                     ),
                                     if (available != null)
@@ -21946,9 +21815,7 @@ class _QuotedReference extends StatelessWidget {
             ? palette.primary.withValues(alpha: 0.10)
             : palette.selection,
         borderRadius: BorderRadius.circular(12),
-        border: BorderDirectional(
-          start: BorderSide(color: borderColor, width: 3),
-        ),
+        border: BorderDirectional(start: BorderSide(color: borderColor, width: 3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
