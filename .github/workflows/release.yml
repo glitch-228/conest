@@ -164,7 +164,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -240,14 +239,13 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: windows-app
-          workspaces: |
-            .
-            . -> build/windows/x64/conest_native_target
+          # The debug runs' cache, read only (see the Android job).
+          shared-key: windows-native
+          save-if: false
+          workspaces: ". -> build/windows/x64/conest_native_target"
       - name: Verify manifest public key is set
         shell: bash
         run: |
@@ -316,12 +314,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       # super_clipboard's super_native_extensions builds an Android JNI
       # shared library from Rust via cargokit. Without a local Rust
       # toolchain, the build falls back to a download of precompiled
@@ -335,7 +331,10 @@ jobs:
           tool: cargo-ndk@4.1.2
       - uses: Swatinem/rust-cache@v2
         with:
-          key: android-app
+          # The debug runs' cache, read only: the repository's 10 GB of
+          # caches has no room for a second copy.
+          shared-key: android-native
+          save-if: false
       - name: Verify required secrets
         shell: bash
         env:
@@ -415,7 +414,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - name: Flutter pub get
         run: flutter pub get
       - uses: actions/download-artifact@v4

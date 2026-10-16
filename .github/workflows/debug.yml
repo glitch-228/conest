@@ -84,7 +84,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - run: flutter pub get
       - name: Verify desktop Bluetooth links and hostile-input negative checks
         run: |
@@ -127,7 +126,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -193,7 +191,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -243,7 +240,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - run: flutter pub get
       - name: Start nostr-rs-relay and strfry
         run: |
@@ -304,7 +300,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - run: flutter pub get
       - name: Start GreenMail (accounts created on first login)
         run: |
@@ -337,7 +332,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - run: flutter pub get
       - name: Install Reticulum (pinned)
         run: |
@@ -360,7 +354,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - run: flutter pub get
       - name: Start meshtasticd in simulation (pinned 2.7.26)
         run: |
@@ -421,12 +414,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
@@ -435,7 +426,8 @@ jobs:
           tool: cargo-ndk@4.1.2
       - uses: Swatinem/rust-cache@v2
         with:
-          key: android-debug
+          # Shared with the release APK, which builds the same library.
+          shared-key: android-native
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
@@ -484,7 +476,6 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -582,11 +573,11 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: windows-debug
+          # Shared with the release bundle, which builds the same library.
+          shared-key: windows-native
           workspaces: ". -> build/windows/x64/conest_native_target"
       - uses: actions/setup-go@v5
         with:
