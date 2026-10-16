@@ -418,6 +418,8 @@ fn resolve_manifest_url(configured: &str, channel: &str) -> Result<String, Strin
     let valid = repo.split('/').count() == 2
         && repo.split('/').all(|part| {
             !part.is_empty()
+                && part != "."
+                && part != ".."
                 && part
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
