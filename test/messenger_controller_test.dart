@@ -18326,6 +18326,102 @@ void main() {
     },
   );
 
+  test('lab devices set themselves up, pair, and report messages', () async {
+    final parsed = DebugRunRequest.fromExtra(
+      'args:--debug-run=messages --debug-name=phone --debug-approve '
+      '--debug-serve=5 --debug-group=lab-all --debug-relay=1.2.3.4:7667 '
+      '--debug-accept-invite=AAA --debug-accept-invite=BBB',
+    )!;
+    expect(parsed.what, 'messages');
+    expect(parsed.name, 'phone');
+    expect(parsed.approve, isTrue);
+    expect(parsed.serve, const Duration(seconds: 5));
+    expect(parsed.group, 'lab-all');
+    expect(parsed.relay, '1.2.3.4:7667');
+    expect(parsed.invites, ['AAA', 'BBB']);
+    // Groups made by the lab are lab-* only.
+    expect(
+      DebugRunRequest.fromArgs(const [
+        '--debug-run=none',
+        '--debug-group=Family',
+      ])!.group,
+      isNull,
+    );
+
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    Future<MessengerController> device() async {
+      final controller = await _createController(
+        relayClient: relay,
+        displayName: 'unused',
+        createIdentity: false,
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'test@abc',
+      );
+      addTearDown(controller.dispose);
+      return controller;
+    }
+
+    final phone = await device();
+    final laptop = await device();
+    var polling = true;
+    addTearDown(() => polling = false);
+    unawaited(() async {
+      while (polling) {
+        await Future.wait([
+          if (phone.hasIdentity) phone.pollNow(),
+          if (laptop.hasIdentity) laptop.pollNow(),
+        ]).catchError((_) => const <void>[]);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }());
+    final root = Directory.systemTemp.createTempSync('conest_lab_');
+    addTearDown(() => root.deleteSync(recursive: true));
+    // The phone waits for the others, approving them.
+    final phoneRun = runDebugRequest(
+      phone,
+      const DebugRunRequest(
+        what: 'none',
+        name: 'phone',
+        approve: true,
+        serve: Duration(seconds: 4),
+        wait: Duration.zero,
+      ),
+      defaultReportPath: () async => '${root.path}/phone.json',
+    );
+    final inviteFile = File('${root.path}/phone.json.invite');
+    for (var i = 0; i < 100 && !inviteFile.existsSync(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    final laptopPath = await runDebugRequest(
+      laptop,
+      DebugRunRequest(
+        what: 'messages',
+        name: 'laptop',
+        invites: [inviteFile.readAsStringSync()],
+        serve: const Duration(seconds: 4),
+        group: 'lab-all',
+        wait: const Duration(seconds: 1),
+      ),
+      defaultReportPath: () async => '${root.path}/laptop.json',
+    );
+    await phoneRun;
+    expect(phone.identity!.displayName, 'phone');
+    expect(laptop.contacts.single.canSendOutbound, isTrue);
+    final report = jsonDecode(File(laptopPath).readAsStringSync()) as Map;
+    final chats = report['chats'] as List;
+    final direct = chats.firstWhere((chat) => chat['contact'] != null) as Map;
+    expect(direct['messages'] as List, hasLength(3));
+    final group = chats.firstWhere((chat) => chat['group'] == 'lab-all') as Map;
+    expect(group['messages'] as List, hasLength(3));
+    expect(
+      phone
+          .messagesFor(laptop.identity!.deviceId)
+          .where((message) => message.body.startsWith('lab ')),
+      hasLength(3),
+    );
+  });
+
   test(
     'background upkeep slows down on battery and more in battery saver',
     () async {

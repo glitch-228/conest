@@ -216,9 +216,13 @@ class MainActivity : FlutterActivity() {
                 // Read once: a restart or Recents does not run it again.
                 "takeExitReports" -> result.success(CrashReports.takeExitReports(this))
                 "debugRunRequest" -> {
+                    // `--es conestDebugArgs "--debug-run=all --debug-name=…"`
+                    // carries a whole lab run, as on a desktop command line.
+                    val args = intent?.getStringExtra("conestDebugArgs")
                     val request = intent?.getStringExtra("conestDebugRun")
+                    intent?.removeExtra("conestDebugArgs")
                     intent?.removeExtra("conestDebugRun")
-                    result.success(request)
+                    result.success(if (args != null) "args:$args" else request)
                 }
                 "showToast" -> {
                     val text = call.argument<String>("text") ?: ""

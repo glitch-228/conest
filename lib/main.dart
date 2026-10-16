@@ -102,14 +102,10 @@ export 'src/conest_theme.dart'
 /// A debug build started for automatic tests (`--debug-run=routes`, or the
 /// Android `conestDebugRun` extra) runs them and writes a report.
 Future<void> _startDebugRunIfAsked(
-  MessengerController controller,
-  PlatformBridge platformBridge,
-  List<String> args, {
+  MessengerController controller, {
   required String dataRoot,
 }) async {
-  final request =
-      DebugRunRequest.fromArgs(args) ??
-      DebugRunRequest.fromExtra(await platformBridge.debugRunRequest());
+  final request = _debugRequest;
   if (request == null) return;
   try {
     final path = await runDebugRequest(
@@ -133,8 +129,17 @@ Future<void> _startDebugRunIfAsked(
   }
 }
 
-/// The command line this run was started with (desktop).
-List<String> _launchArgs = const [];
+/// What a debug build was started to do (read once, at start).
+DebugRunRequest? _debugRequest;
+
+/// Debug builds only: the automatic run asked for on the command line or,
+/// on Android, in the launching intent.
+Future<DebugRunRequest?> _readDebugRequest(List<String> args) async {
+  final buildInfo = await ConestBuildInfo.load();
+  if (buildInfo.channel != UpdateChannel.debug) return null;
+  return DebugRunRequest.fromArgs(args) ??
+      DebugRunRequest.fromExtra(await PlatformBridge().debugRunRequest());
+}
 
 /// Crash records go in the app's data folder; the native library and
 /// Android add what they know of earlier runs.
@@ -190,7 +195,6 @@ Future<void> main(List<String> args) async {
 }
 
 Future<void> _main(List<String> args, CrashCatcher crashes) async {
-  _launchArgs = args;
   WidgetsFlutterBinding.ensureInitialized();
   crashes.install();
   if (!kDebugMode) {
@@ -198,7 +202,23 @@ Future<void> _main(List<String> args, CrashCatcher crashes) async {
     ErrorWidget.builder = (details) => const _BrokenPart();
   }
   final storageResolver = AppStorageResolver();
-  final storageResolution = await storageResolver.resolve();
+  var storageResolution = await storageResolver.resolve();
+  _debugRequest = await _readDebugRequest(args);
+  if (_debugRequest?.setsUp == true &&
+      storageResolution.status == AppStorageResolutionStatus.needsSetup) {
+    // A lab device sets itself up: beside the app on desktops (with its key
+    // file), in the app's own storage on Android.
+    storageResolution = AppStorageResolution.ready(
+      await storageResolver.createProfile(
+        mode: Platform.isAndroid
+            ? AppStorageMode.device
+            : AppStorageMode.portable,
+        unlockMode: Platform.isAndroid
+            ? VaultUnlockMode.secureStorage
+            : VaultUnlockMode.keyFile,
+      ),
+    );
+  }
   await _startCrashRecords(
     crashes,
     storageResolution.profile?.dataRoot ??
@@ -313,12 +333,7 @@ Future<void> _runConestWithProfile(
   if (!crashes.previousRun.crashed) crashes.dismissPrevious();
   if (buildInfo.channel == UpdateChannel.debug) {
     unawaited(
-      _startDebugRunIfAsked(
-        controller,
-        platformBridge,
-        _launchArgs,
-        dataRoot: profile.dataRoot.path,
-      ),
+      _startDebugRunIfAsked(controller, dataRoot: profile.dataRoot.path),
     );
   }
   // nightly.9: forward platform connectivity changes (Wi-Fi ↔ VPN ↔
