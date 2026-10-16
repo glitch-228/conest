@@ -1351,5 +1351,8 @@
   "connectionsRouteBlocked": "محجوب على هذه الشبكة",
   "connectionsRouteFailing": "يفشل",
   "connectionsAsOf": "حتى {when}",
-  "bluetoothMeshNeedsAttention": "شبكة البلوتوث تحتاج إلى انتباه"
+  "bluetoothMeshNeedsAttention": "شبكة البلوتوث تحتاج إلى انتباه",
+  "forwardSelectedTitle": "{count, plural, zero{إعادة توجيه {count} رسالة} one{إعادة توجيه رسالة واحدة} two{إعادة توجيه رسالتين} few{إعادة توجيه {count} رسائل} many{إعادة توجيه {count} رسالة} other{إعادة توجيه {count} رسالة}}",
+  "forwardedSummary": "{count, plural, zero{لم تُوجَّه أي رسالة} one{وُجِّهت رسالة واحدة} two{وُجِّهت رسالتان} few{وُجِّهت {count} رسائل} many{وُجِّهت {count} رسالة} other{وُجِّهت {count} رسالة}}",
+  "forwardSkipped": "{count, plural, zero{لم يُترك أي ملف} one{ملف واحد ليس على هذا الجهاز بعد فتُرك} two{ملفان ليسا على هذا الجهاز بعد فتُركا} few{{count} ملفات ليست على هذا الجهاز بعد فتُركت} many{{count} ملفًا ليست على هذا الجهاز بعد فتُركت} other{{count} ملف ليست على هذا الجهاز بعد فتُركت}}"
 }

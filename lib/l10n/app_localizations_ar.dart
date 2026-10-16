@@ -5330,4 +5330,49 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get bluetoothMeshNeedsAttention => 'شبكة البلوتوث تحتاج إلى انتباه';
+
+  @override
+  String forwardSelectedTitle(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'إعادة توجيه $count رسالة',
+      many: 'إعادة توجيه $count رسالة',
+      few: 'إعادة توجيه $count رسائل',
+      two: 'إعادة توجيه رسالتين',
+      one: 'إعادة توجيه رسالة واحدة',
+      zero: 'إعادة توجيه $count رسالة',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardedSummary(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'وُجِّهت $count رسالة',
+      many: 'وُجِّهت $count رسالة',
+      few: 'وُجِّهت $count رسائل',
+      two: 'وُجِّهت رسالتان',
+      one: 'وُجِّهت رسالة واحدة',
+      zero: 'لم تُوجَّه أي رسالة',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardSkipped(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count ملف ليست على هذا الجهاز بعد فتُركت',
+      many: '$count ملفًا ليست على هذا الجهاز بعد فتُركت',
+      few: '$count ملفات ليست على هذا الجهاز بعد فتُركت',
+      two: 'ملفان ليسا على هذا الجهاز بعد فتُركا',
+      one: 'ملف واحد ليس على هذا الجهاز بعد فتُرك',
+      zero: 'لم يُترك أي ملف',
+    );
+    return '$_temp0';
+  }
 }

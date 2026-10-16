@@ -5202,4 +5202,34 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get bluetoothMeshNeedsAttention =>
       'Jaringan Bluetooth perlu diperiksa';
+
+  @override
+  String forwardSelectedTitle(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Teruskan $count pesan',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardedSummary(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count pesan diteruskan',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardSkipped(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count file belum ada di perangkat ini dan dilewati',
+    );
+    return '$_temp0';
+  }
 }

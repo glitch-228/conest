@@ -5213,4 +5213,37 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get bluetoothMeshNeedsAttention => 'Bluetooth mesh needs attention';
+
+  @override
+  String forwardSelectedTitle(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Forward $count messages',
+      one: 'Forward 1 message',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardedSummary(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count messages forwarded',
+      one: '1 message forwarded',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardSkipped(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count files are not on this device yet and were left out',
+      one: '1 file is not on this device yet and was left out',
+    );
+    return '$_temp0';
+  }
 }

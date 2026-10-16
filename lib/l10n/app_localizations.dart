@@ -8272,6 +8272,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Bluetooth mesh needs attention'**
   String get bluetoothMeshNeedsAttention;
+
+  /// Forward dialog title for several selected messages
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{Forward 1 message} other{Forward {count} messages}}'**
+  String forwardSelectedTitle(int count);
+
+  /// After forwarding several messages
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 message forwarded} other{{count} messages forwarded}}'**
+  String forwardedSummary(int count);
+
+  /// Selected files that could not be forwarded because they have not been downloaded
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 file is not on this device yet and was left out} other{{count} files are not on this device yet and were left out}}'**
+  String forwardSkipped(int count);
 }
 
 class _AppLocalizationsDelegate

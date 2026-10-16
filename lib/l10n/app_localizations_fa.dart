@@ -5212,4 +5212,37 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get bluetoothMeshNeedsAttention => 'شبکهٔ بلوتوث نیاز به بررسی دارد';
+
+  @override
+  String forwardSelectedTitle(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'بازارسال $count پیام',
+      one: 'بازارسال $count پیام',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardedSummary(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count پیام بازارسال شد',
+      one: '$count پیام بازارسال شد',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardSkipped(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count فایل هنوز روی این دستگاه نیست و کنار گذاشته شد',
+      one: '$count فایل هنوز روی این دستگاه نیست و کنار گذاشته شد',
+    );
+    return '$_temp0';
+  }
 }

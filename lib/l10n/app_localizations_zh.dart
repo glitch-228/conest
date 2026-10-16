@@ -4984,4 +4984,34 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get bluetoothMeshNeedsAttention => '蓝牙网状网络需要处理';
+
+  @override
+  String forwardSelectedTitle(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '转发 $count 条消息',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardedSummary(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '已转发 $count 条消息',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardSkipped(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 个文件尚未在此设备上，已跳过',
+    );
+    return '$_temp0';
+  }
 }

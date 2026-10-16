@@ -10025,6 +10025,85 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
+  testWidgets('several selected messages are forwarded together, in order', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    late MessengerController carol;
+    await tester.runAsync(() async {
+      final relayClient = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      carol = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+      );
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      final bobContact = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      await alice.sendMessage(contact: bobContact, body: 'first to forward');
+      await alice.sendMessage(contact: bobContact, body: 'second to forward');
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: _createUpdateService(),
+          buildInfo: _createBuildInfo(),
+          themeController: app.ConestThemeController.memory(),
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    // Beside the bubble (on the text itself, a long press selects text).
+    Offset beside(String text) {
+      final rect = tester.getRect(find.text(text).last);
+      return Offset(rect.left - 120, rect.center.dy);
+    }
+
+    await tester.longPressAt(beside('first to forward'));
+    await tester.pump();
+    await tester.tapAt(beside('second to forward'));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('selection-forward')));
+    await tester.pumpAndSettle();
+    expect(find.text('Forward 2 messages'), findsOneWidget);
+    await tester.tap(find.text('Carol').last);
+    await tester.runAsync(() async {
+      for (var i = 0; i < 20; i++) {
+        await carol.pollNow();
+        if (carol.messagesFor(alice.identity!.deviceId).length >= 2) break;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    });
+    await tester.pump();
+    expect(carol.messagesFor(alice.identity!.deviceId).map((m) => m.body), [
+      'first to forward',
+      'second to forward',
+    ]);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    alice.dispose();
+    bob.dispose();
+    carol.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
   testWidgets('message bubbles support selection and copy message actions', (
     tester,
   ) async {

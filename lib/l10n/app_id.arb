@@ -1351,5 +1351,8 @@
   "connectionsRouteBlocked": "diblokir di jaringan ini",
   "connectionsRouteFailing": "gagal",
   "connectionsAsOf": "per {when}",
-  "bluetoothMeshNeedsAttention": "Jaringan Bluetooth perlu diperiksa"
+  "bluetoothMeshNeedsAttention": "Jaringan Bluetooth perlu diperiksa",
+  "forwardSelectedTitle": "{count, plural, other{Teruskan {count} pesan}}",
+  "forwardedSummary": "{count, plural, other{{count} pesan diteruskan}}",
+  "forwardSkipped": "{count, plural, other{{count} file belum ada di perangkat ini dan dilewati}}"
 }

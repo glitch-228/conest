@@ -7480,111 +7480,16 @@ Future<void> _forwardTextMessage(
   ChatMessage message,
 ) async {
   if (message.hasAttachment || message.body.trim().isEmpty) return;
-  final search = TextEditingController();
-  Object? destination;
-  try {
-    destination = await showDialog<Object>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final query = search.text.trim().toLowerCase();
-          final contacts = controller.contacts.where(
-            (contact) =>
-                contact.canSendOutbound &&
-                contact.alias.toLowerCase().contains(query),
-          );
-          final groups = controller.visibleGroups.where(
-            (group) =>
-                group.hasActiveMember(controller.identity?.deviceId ?? '') &&
-                group.title.toLowerCase().contains(query),
-          );
-          return AlertDialog(
-            title: Text(l10nOf(context).uiForwardMessage482959),
-            content: SizedBox(
-              width: 420,
-              height: 400,
-              child: Column(
-                children: [
-                  Text(
-                    message.body,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: search,
-                    autofocus: true,
-                    onChanged: (_) => setDialogState(() {}),
-                    decoration: InputDecoration(
-                      hintText: l10nOf(context).searchChats,
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: ListView(
-                      children: [
-                        if (controller.savedMessagesContact case final saved?
-                            when 'saved messages'.contains(query))
-                          ListTile(
-                            key: const ValueKey('forward-to-saved'),
-                            leading: const Icon(Icons.bookmark_outline),
-                            title: Text(l10nOf(context).uiSavedMessagesC0FA7E),
-                            onTap: () => Navigator.pop(context, saved),
-                          ),
-                        if (contacts.isEmpty && groups.isEmpty)
-                          ListTile(
-                            title: Text(
-                              l10nOf(context).uiNoAvailableChats1FAA40,
-                            ),
-                          ),
-                        for (final contact in contacts)
-                          ListTile(
-                            leading: SealAvatar(
-                              seed: contact.deviceId,
-                              label: contact.alias,
-                              palette: palette,
-                              size: 36,
-                            ),
-                            title: Text(contact.alias),
-                            onTap: () => Navigator.pop(context, contact),
-                          ),
-                        for (final group in groups)
-                          ListTile(
-                            leading: const Icon(Icons.group_outlined),
-                            title: Text(group.title),
-                            onTap: () => Navigator.pop(context, group),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(l10nOf(context).actionCancel),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  } finally {
-    search.dispose();
-  }
+  final destination = await _pickForwardDestination(
+    context,
+    controller,
+    palette,
+    title: l10nOf(context).uiForwardMessage482959,
+    preview: message.body,
+  );
   if (destination == null) return;
   try {
-    switch (destination) {
-      case ContactRecord contact:
-        await controller.sendMessage(contact: contact, body: message.body);
-      case GroupRecord group:
-        await controller.sendGroupMessage(
-          groupId: group.groupId,
-          body: message.body,
-        );
-    }
+    await _sendTextTo(controller, destination, message.body);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(l10nOf(context).uiForwardedMessageQueuedC82DA4)),
@@ -7598,6 +7503,101 @@ Future<void> _forwardTextMessage(
             l10nOf(context).uiCouldNotForwardValue80193D((error).toString()),
           ),
         ),
+      );
+    }
+  }
+}
+
+/// Forwards the selected messages, in chat order, to one chat: texts as
+/// texts, files (photos, voice, album items, group files) as files. Files
+/// not downloaded yet are left out, and said so.
+Future<void> _forwardMessages(
+  BuildContext context,
+  MessengerController controller,
+  ConestPalette palette,
+  List<ChatMessage> selected,
+) async {
+  if (selected.isEmpty) return;
+  final strings = l10nOf(context);
+  final ordered = [...selected]
+    ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  final first = ordered.first;
+  final destination = await _pickForwardDestination(
+    context,
+    controller,
+    palette,
+    title: strings.forwardSelectedTitle(ordered.length),
+    preview: first.body.trim().isNotEmpty
+        ? first.body
+        : first.attachment?.fileName ?? first.groupFile?.fileName ?? '',
+  );
+  if (destination == null || !context.mounted) return;
+  var sent = 0;
+  var skipped = 0;
+  try {
+    for (final message in ordered) {
+      if (!context.mounted) return;
+      final attachment = message.attachment;
+      final groupFile = message.groupFile;
+      if (attachment != null) {
+        final path = await controller.attachmentCachePathFor(attachment.id);
+        if (path == null || !context.mounted) {
+          skipped++;
+          continue;
+        }
+        await _sendFileTo(
+          context,
+          controller,
+          destination,
+          path: path,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          presentation: attachment.presentation,
+        );
+        sent++;
+      } else if (groupFile != null) {
+        final path = controller.groupFilePathFor(message.id);
+        if (path == null) {
+          skipped++;
+          continue;
+        }
+        await _sendFileTo(
+          context,
+          controller,
+          destination,
+          path: path,
+          fileName: groupFile.fileName,
+          mimeType: groupFile.mimeType,
+          sizeBytes: groupFile.sizeBytes,
+          presentation:
+              groupFile.mimeType.startsWith('image/') ||
+                  groupFile.mimeType.startsWith('video/')
+              ? AttachmentPresentation.media
+              : AttachmentPresentation.file,
+        );
+        sent++;
+      } else if (message.body.trim().isNotEmpty) {
+        await _sendTextTo(controller, destination, message.body);
+        sent++;
+      }
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            [
+              strings.forwardedSummary(sent),
+              if (skipped > 0) strings.forwardSkipped(skipped),
+            ].join(' '),
+          ),
+        ),
+      );
+    }
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(strings.uiCouldNotForwardValue80193D('$error'))),
       );
     }
   }
@@ -7658,6 +7658,179 @@ Future<void> _forwardGroupFile(
   );
 }
 
+/// Where to forward to: a contact, a group, or Saved messages.
+Future<Object?> _pickForwardDestination(
+  BuildContext context,
+  MessengerController controller,
+  ConestPalette palette, {
+  required String title,
+  required String preview,
+}) => showDialog<Object>(
+  context: context,
+  builder: (context) => _ForwardPickerDialog(
+    controller: controller,
+    palette: palette,
+    title: title,
+    preview: preview,
+  ),
+);
+
+class _ForwardPickerDialog extends StatefulWidget {
+  const _ForwardPickerDialog({
+    required this.controller,
+    required this.palette,
+    required this.title,
+    required this.preview,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+  final String title;
+  final String preview;
+
+  @override
+  State<_ForwardPickerDialog> createState() => _ForwardPickerDialogState();
+}
+
+class _ForwardPickerDialogState extends State<_ForwardPickerDialog> {
+  // Owned here, so it outlives the closing animation.
+  final _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _search.text.trim().toLowerCase();
+    final contacts = widget.controller.contacts.where(
+      (contact) =>
+          contact.canSendOutbound &&
+          contact.alias.toLowerCase().contains(query),
+    );
+    final groups = widget.controller.visibleGroups.where(
+      (group) =>
+          group.hasActiveMember(widget.controller.identity?.deviceId ?? '') &&
+          group.title.toLowerCase().contains(query),
+    );
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 420,
+        height: 400,
+        child: Column(
+          children: [
+            Text(widget.preview, maxLines: 3, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _search,
+              autofocus: true,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: l10nOf(context).searchChats,
+                prefixIcon: Icon(Icons.search),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView(
+                children: [
+                  if (widget.controller.savedMessagesContact case final saved?
+                      when 'saved messages'.contains(query))
+                    ListTile(
+                      key: const ValueKey('forward-to-saved'),
+                      leading: const Icon(Icons.bookmark_outline),
+                      title: Text(l10nOf(context).uiSavedMessagesC0FA7E),
+                      onTap: () => Navigator.pop(context, saved),
+                    ),
+                  if (contacts.isEmpty && groups.isEmpty)
+                    ListTile(
+                      title: Text(l10nOf(context).uiNoAvailableChats1FAA40),
+                    ),
+                  for (final contact in contacts)
+                    ListTile(
+                      leading: SealAvatar(
+                        seed: contact.deviceId,
+                        label: contact.alias,
+                        palette: widget.palette,
+                        size: 36,
+                      ),
+                      title: Text(contact.alias),
+                      onTap: () => Navigator.pop(context, contact),
+                    ),
+                  for (final group in groups)
+                    ListTile(
+                      leading: const Icon(Icons.group_outlined),
+                      title: Text(group.title),
+                      onTap: () => Navigator.pop(context, group),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(l10nOf(context).actionCancel),
+        ),
+      ],
+    );
+  }
+}
+
+/// Sends a file (forwarded) to [destination].
+Future<void> _sendFileTo(
+  BuildContext context,
+  MessengerController controller,
+  Object destination, {
+  required String path,
+  required String fileName,
+  required String mimeType,
+  required int sizeBytes,
+  required AttachmentPresentation presentation,
+}) async {
+  switch (destination) {
+    case ContactRecord contact:
+      await controller.sendAttachmentSource(
+        contact: contact,
+        source: StagedAttachment(
+          id: 'forward-${DateTime.now().microsecondsSinceEpoch}',
+          fileName: fileName,
+          mimeType: mimeType,
+          sizeBytes: sizeBytes,
+          filePath: path,
+          presentation: presentation,
+        ),
+      );
+    case GroupRecord group:
+      await publishGroupFileAsking(
+        context,
+        controller,
+        groupId: group.groupId,
+        path: path,
+        fileName: fileName,
+        mimeType: mimeType,
+      );
+  }
+}
+
+Future<void> _sendTextTo(
+  MessengerController controller,
+  Object destination,
+  String body,
+) async {
+  switch (destination) {
+    case ContactRecord contact:
+      await controller.sendMessage(contact: contact, body: body);
+    case GroupRecord group:
+      await controller.sendGroupMessage(groupId: group.groupId, body: body);
+  }
+}
+
 Future<void> _forwardFile(
   BuildContext context,
   MessengerController controller,
@@ -7668,121 +7841,25 @@ Future<void> _forwardFile(
   required int sizeBytes,
   required AttachmentPresentation presentation,
 }) async {
-  final search = TextEditingController();
-  Object? destination;
+  final destination = await _pickForwardDestination(
+    context,
+    controller,
+    palette,
+    title: l10nOf(context).menuForwardAttachment,
+    preview: fileName,
+  );
+  if (destination == null || !context.mounted) return;
   try {
-    destination = await showDialog<Object>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final query = search.text.trim().toLowerCase();
-          final contacts = controller.contacts.where(
-            (contact) =>
-                contact.canSendOutbound &&
-                contact.alias.toLowerCase().contains(query),
-          );
-          final groups = controller.visibleGroups.where(
-            (group) =>
-                group.hasActiveMember(controller.identity?.deviceId ?? '') &&
-                group.title.toLowerCase().contains(query),
-          );
-          return AlertDialog(
-            title: Text(l10nOf(context).menuForwardAttachment),
-            content: SizedBox(
-              width: 420,
-              height: 400,
-              child: Column(
-                children: [
-                  Text(fileName, maxLines: 2, overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: search,
-                    autofocus: true,
-                    onChanged: (_) => setDialogState(() {}),
-                    decoration: InputDecoration(
-                      hintText: l10nOf(context).searchChats,
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: ListView(
-                      children: [
-                        if (controller.savedMessagesContact case final saved?
-                            when 'saved messages'.contains(query))
-                          ListTile(
-                            key: const ValueKey('forward-to-saved'),
-                            leading: const Icon(Icons.bookmark_outline),
-                            title: Text(l10nOf(context).uiSavedMessagesC0FA7E),
-                            onTap: () => Navigator.pop(context, saved),
-                          ),
-                        if (contacts.isEmpty && groups.isEmpty)
-                          ListTile(
-                            title: Text(
-                              l10nOf(context).uiNoAvailableChats1FAA40,
-                            ),
-                          ),
-                        for (final contact in contacts)
-                          ListTile(
-                            leading: SealAvatar(
-                              seed: contact.deviceId,
-                              label: contact.alias,
-                              palette: palette,
-                              size: 36,
-                            ),
-                            title: Text(contact.alias),
-                            onTap: () => Navigator.pop(context, contact),
-                          ),
-                        for (final group in groups)
-                          ListTile(
-                            leading: const Icon(Icons.group_outlined),
-                            title: Text(group.title),
-                            onTap: () => Navigator.pop(context, group),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(l10nOf(context).actionCancel),
-              ),
-            ],
-          );
-        },
-      ),
+    await _sendFileTo(
+      context,
+      controller,
+      destination,
+      path: path,
+      fileName: fileName,
+      mimeType: mimeType,
+      sizeBytes: sizeBytes,
+      presentation: presentation,
     );
-  } finally {
-    search.dispose();
-  }
-  if (destination == null) return;
-  try {
-    switch (destination) {
-      case ContactRecord contact:
-        await controller.sendAttachmentSource(
-          contact: contact,
-          source: StagedAttachment(
-            id: 'forward-${DateTime.now().microsecondsSinceEpoch}',
-            fileName: fileName,
-            mimeType: mimeType,
-            sizeBytes: sizeBytes,
-            filePath: path,
-            presentation: presentation,
-          ),
-        );
-      case GroupRecord group:
-        await publishGroupFileAsking(
-          context,
-          controller,
-          groupId: group.groupId,
-          path: path,
-          fileName: fileName,
-          mimeType: mimeType,
-        );
-    }
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -9807,6 +9884,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 count: _selectedMessageIds.length,
                 onCancel: _clearMessageSelection,
                 onCopy: () => _copySelectedMessagesText(messages),
+                onForward: () {
+                  final selected = [
+                    for (final message in messages)
+                      if (_selectedMessageIds.contains(message.id)) message,
+                  ];
+                  _clearMessageSelection();
+                  unawaited(
+                    _forwardMessages(context, controller, palette, selected),
+                  );
+                },
                 onSave: _canSaveSelected(messages)
                     ? () => _bulkSaveSelected(messages)
                     : null,
@@ -11813,6 +11900,16 @@ class _ChatPanelState extends State<_ChatPanel> {
                 count: _selectedMessageIds.length,
                 onCancel: _clearMessageSelection,
                 onCopy: () => _copySelectedMessagesText(messages),
+                onForward: () {
+                  final selected = [
+                    for (final message in messages)
+                      if (_selectedMessageIds.contains(message.id)) message,
+                  ];
+                  _clearMessageSelection();
+                  unawaited(
+                    _forwardMessages(context, controller, palette, selected),
+                  );
+                },
                 onSave: _canSaveSelected(messages)
                     ? () => _bulkSaveSelected(messages)
                     : null,
@@ -18907,6 +19004,7 @@ class _MessageSelectionBar extends StatelessWidget {
     required this.count,
     required this.onCancel,
     required this.onCopy,
+    required this.onForward,
     required this.onSave,
     required this.onDelete,
   });
@@ -18915,6 +19013,7 @@ class _MessageSelectionBar extends StatelessWidget {
   final int count;
   final VoidCallback onCancel;
   final VoidCallback onCopy;
+  final VoidCallback onForward;
   final VoidCallback? onSave;
   final VoidCallback? onDelete;
 
@@ -18943,6 +19042,12 @@ class _MessageSelectionBar extends StatelessWidget {
             onPressed: onCopy,
             icon: const Icon(Icons.copy_outlined),
             tooltip: l10nOf(context).uiCopyAF74F7,
+          ),
+          IconButton(
+            key: const ValueKey('selection-forward'),
+            onPressed: onForward,
+            icon: const Icon(Icons.forward_outlined),
+            tooltip: l10nOf(context).menuForward,
           ),
           IconButton(
             onPressed: onSave,

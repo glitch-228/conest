@@ -5328,4 +5328,43 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get bluetoothMeshNeedsAttention => 'Bluetooth-сеть требует внимания';
+
+  @override
+  String forwardSelectedTitle(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Переслать $count сообщения',
+      many: 'Переслать $count сообщений',
+      few: 'Переслать $count сообщения',
+      one: 'Переслать $count сообщение',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardedSummary(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Переслано $count сообщения',
+      many: 'Переслано $count сообщений',
+      few: 'Переслано $count сообщения',
+      one: 'Переслано $count сообщение',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String forwardSkipped(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count файла ещё не на этом устройстве и пропущены',
+      many: '$count файлов ещё не на этом устройстве и пропущены',
+      few: '$count файла ещё не на этом устройстве и пропущены',
+      one: '$count файл ещё не на этом устройстве и пропущен',
+    );
+    return '$_temp0';
+  }
 }

@@ -1351,5 +1351,8 @@
   "connectionsRouteBlocked": "در این شبکه مسدود است",
   "connectionsRouteFailing": "خطا دارد",
   "connectionsAsOf": "تا {when}",
-  "bluetoothMeshNeedsAttention": "شبکهٔ بلوتوث نیاز به بررسی دارد"
+  "bluetoothMeshNeedsAttention": "شبکهٔ بلوتوث نیاز به بررسی دارد",
+  "forwardSelectedTitle": "{count, plural, one{بازارسال {count} پیام} other{بازارسال {count} پیام}}",
+  "forwardedSummary": "{count, plural, one{{count} پیام بازارسال شد} other{{count} پیام بازارسال شد}}",
+  "forwardSkipped": "{count, plural, one{{count} فایل هنوز روی این دستگاه نیست و کنار گذاشته شد} other{{count} فایل هنوز روی این دستگاه نیست و کنار گذاشته شد}}"
 }
