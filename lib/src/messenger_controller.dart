@@ -3036,8 +3036,9 @@ class MessengerController extends ChangeNotifier {
           } catch (error) {
             lastError = error;
             appendDebugLog(
-              'Group file frame ${event.eventId}/$request via '
-              '${route.label} failed (attempt ${attempt + 1}/2): $error',
+              'Group file frame ${event.eventId}/$request to '
+              '${contact.alias} via ${route.label} failed '
+              '(attempt ${attempt + 1}/2): $error',
             );
           }
           if (attempt == 0) {
