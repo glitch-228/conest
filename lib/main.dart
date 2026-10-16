@@ -20222,7 +20222,8 @@ class _AttachmentRow extends StatelessWidget {
                 if (transferInFlight)
                   _TransferOverlay(
                     progress: progress,
-                    route: outbound
+                    // Routes are network detail (Advanced mode only).
+                    route: outbound && controller.userMode.showsNetworkDetail
                         ? controller.lastDeliveryRouteFor(descriptor.id)
                         : OutboundDeliveryRoute.unknown,
                     pauseState: pauseState,
@@ -20284,7 +20285,8 @@ class _AttachmentRow extends StatelessWidget {
                 if (transferInFlight)
                   _TransferOverlay(
                     progress: progress,
-                    route: outbound
+                    // Routes are network detail (Advanced mode only).
+                    route: outbound && controller.userMode.showsNetworkDetail
                         ? controller.lastDeliveryRouteFor(descriptor.id)
                         : OutboundDeliveryRoute.unknown,
                     pauseState: pauseState,
@@ -20413,7 +20415,8 @@ class _AttachmentRow extends StatelessWidget {
                       if (transferInFlight)
                         _TransferOverlay(
                           progress: progress,
-                          route: outbound
+                          route:
+                              outbound && controller.userMode.showsNetworkDetail
                               ? controller.lastDeliveryRouteFor(descriptor.id)
                               : OutboundDeliveryRoute.unknown,
                           pauseState: pauseState,
@@ -20709,7 +20712,7 @@ class _AttachmentRow extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (outbound)
+                  if (outbound && controller.userMode.showsNetworkDetail)
                     Padding(
                       padding: const EdgeInsetsDirectional.only(end: 8),
                       child: _RouteChip(
