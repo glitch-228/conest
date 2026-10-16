@@ -41,7 +41,7 @@ check("self.inspect(shared, adapter, available_workers, Some(key), admit)\n     
       "ble::callbacks::tests::first_write_refreshes_subscription_before_delivery", callbacks)
 check("complete = false;", "return Err(result.err().unwrap());",
       "ble::callbacks::tests::vanished_subscriber_does_not_reset_healthy_links", callbacks)
-check("if !shared.core.lock().unwrap().ready(id, limit)", "if true",
+check("if !shared.core().ready(id, limit)", "if true",
       "ble::callbacks::tests::callbacks_during_cccd_setup_can_deliver_the_first_packet", callbacks)
 check("admit(id, client);", "drop(client);",
       "ble::callbacks::tests::cancelled_refresh_never_leaves_a_ready_link_without_a_writer", callbacks)
