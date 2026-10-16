@@ -50,6 +50,7 @@ import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
 import 'src/ui/group_call_screen.dart';
 import 'src/ui/read_sweep.dart';
+import 'src/ui/forwarding.dart';
 import 'src/relay_link.dart';
 import 'src/ui/crash_notice.dart';
 import 'src/crash_catcher.dart';
@@ -1218,6 +1219,9 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               lightDynamic: lightDynamic,
               darkDynamic: darkDynamic,
             );
+            // Network chats (Matrix, …) forward into Conest chats.
+            forwardTextToConest = (context, text) =>
+                _forwardPlainText(context, widget.controller, palette, text);
             return MaterialApp(
               debugShowCheckedModeBanner: false,
               onGenerateTitle: (context) => l10nOf(context).uiConest26885B,
@@ -7480,16 +7484,25 @@ Future<void> _forwardTextMessage(
   ChatMessage message,
 ) async {
   if (message.hasAttachment || message.body.trim().isEmpty) return;
+  await _forwardPlainText(context, controller, palette, message.body);
+}
+
+Future<void> _forwardPlainText(
+  BuildContext context,
+  MessengerController controller,
+  ConestPalette palette,
+  String text,
+) async {
   final destination = await _pickForwardDestination(
     context,
     controller,
     palette,
     title: l10nOf(context).uiForwardMessage482959,
-    preview: message.body,
+    preview: text,
   );
   if (destination == null) return;
   try {
-    await _sendTextTo(controller, destination, message.body);
+    await _sendTextTo(controller, destination, text);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(l10nOf(context).uiForwardedMessageQueuedC82DA4)),

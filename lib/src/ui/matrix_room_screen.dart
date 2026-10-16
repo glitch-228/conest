@@ -1,4 +1,5 @@
 import '../app_locales.dart';
+import 'forwarding.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -292,6 +293,13 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                 title: Text(l10nOf(context).uiCopyText06A76C),
                 onTap: () => Navigator.pop(context, 'copy'),
               ),
+            if (readable && item.body.isNotEmpty && forwardTextToConest != null)
+              ListTile(
+                key: const ValueKey('matrix-forward'),
+                leading: const Icon(Icons.forward_outlined),
+                title: Text(l10nOf(context).menuForward),
+                onTap: () => Navigator.pop(context, 'forward'),
+              ),
             if (mine && item.kind == MatrixItemKind.text)
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
@@ -324,6 +332,8 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
           });
         case 'copy':
           await Clipboard.setData(ClipboardData(text: item.body));
+        case 'forward':
+          await forwardTextToConest?.call(context, item.body);
         case 'delete':
           await _client.redact(widget.roomId, item.eventId);
         default:

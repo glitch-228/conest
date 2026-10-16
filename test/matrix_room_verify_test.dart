@@ -1,5 +1,6 @@
 import 'package:conest/src/conest_theme.dart';
 import 'package:conest/src/matrix_service.dart';
+import 'package:conest/src/ui/forwarding.dart';
 import 'package:conest/src/ui/matrix_room_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -72,6 +73,70 @@ void main() {
       find.byKey(const ValueKey('matrix-partner-verified')),
       findsOneWidget,
     );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a Matrix message can be forwarded into Conest', (tester) async {
+    final native = FakeMatrixNative(FakeMatrixHub())
+      ..rooms = [
+        {'roomId': '!r:x', 'name': 'Room', 'direct': false, 'encrypted': true},
+      ];
+    late MatrixClientService client;
+    await tester.runAsync(() async {
+      client = MatrixClientService(
+        api: native,
+        store: () async => (path: '/store', passphrase: 'p'),
+        onSession: (_) async {},
+      );
+      await client.signInWithPassword(
+        homeserver: 'https://x',
+        user: 'alice',
+        password: 'p',
+      );
+      await client.refreshRooms();
+    });
+    addTearDown(client.dispose);
+    String? forwarded;
+    forwardTextToConest = (context, text) async => forwarded = text;
+    addTearDown(() => forwardTextToConest = null);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MatrixRoomScreen(
+          client: client,
+          roomId: '!r:x',
+          palette: ConestPalette(),
+        ),
+      ),
+    );
+    await tester.runAsync(() async {
+      native.emit({
+        'type': 'timeline',
+        'roomId': '!r:x',
+        'events': [
+          {
+            'event_id': r'$1',
+            'type': 'm.room.message',
+            'sender': '@bob:x',
+            'origin_server_ts': 1,
+            'content': {'msgtype': 'm.text', 'body': 'worth passing on'},
+          },
+        ],
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+    await tester.pump();
+    expect(find.text('worth passing on'), findsOneWidget);
+    // The message's actions (long press, or a secondary click).
+    final bubble = tester.widget(
+      find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == '_MatrixBubble',
+      ),
+    );
+    (bubble as dynamic).onLongPress();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('matrix-forward')));
+    await tester.pumpAndSettle();
+    expect(forwarded, 'worth passing on');
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
