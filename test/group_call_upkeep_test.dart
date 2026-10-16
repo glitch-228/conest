@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -51,5 +52,23 @@ void main() {
     final watch = Stopwatch()..start();
     await peer.service.dispose().timeout(const Duration(seconds: 9));
     expect(watch.elapsed, lessThan(const Duration(seconds: 9)));
+  });
+
+  test('an audio frame looks the members up once per device', () async {
+    final net = FakeCallNetwork();
+    for (var i = 0; i < 3; i++) {
+      await net.add('p$i');
+    }
+    addTearDown(net.dispose);
+    await net.connect(['p0', 'p1', 'p2']);
+    await net.flush();
+    net.memberLookups = 0;
+    for (var i = 0; i < 20; i++) {
+      await net.peers['p0']!.service.sendAudio(Uint8List.fromList([i]));
+      await net.flush();
+    }
+    // The sender and two receivers, at most twice each per frame (it was
+    // 280 here: every check walked the members again).
+    expect(net.memberLookups, lessThanOrEqualTo(20 * 3 * 2));
   });
 }

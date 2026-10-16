@@ -188,8 +188,19 @@ class GroupCallService {
     }
   }
 
-  List<GroupCallMember> _members(String groupId) =>
-      members(groupId).take(groupCallMaxParticipants).toList();
+  /// Members as of this moment: looked up once per synchronous step (one
+  /// audio frame asks several times, and each lookup walks every contact),
+  /// never kept past it, so a removal counts at once.
+  List<GroupCallMember> _members(String groupId) {
+    final cached = _memberCache[groupId];
+    if (cached != null) return cached;
+    final list = members(groupId).take(groupCallMaxParticipants).toList();
+    if (_memberCache.isEmpty) scheduleMicrotask(_memberCache.clear);
+    _memberCache[groupId] = list;
+    return list;
+  }
+
+  final Map<String, List<GroupCallMember>> _memberCache = {};
   GroupCallMember? _member(String groupId, String id) =>
       _members(groupId).where((m) => m.deviceId == id).firstOrNull;
   static String _callIdentity(String groupId, String callId) =>

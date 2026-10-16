@@ -113,7 +113,8 @@ class FakeCallNetwork {
   final datagrams = <FakeCallDatagram>[];
   final signals = <(String, String, GroupCallSignal)>[];
   final _pending = <_Delivery>[];
-  List<GroupCallMember> members(String _) => currentMembers
+  int memberLookups = 0;
+  List<GroupCallMember> members(String _) => (memberLookups++, currentMembers).$2
       .map(
         (id) => GroupCallMember(
           deviceId: id,
