@@ -1,3 +1,4 @@
+import '../app_locales.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -21,12 +22,13 @@ class ConnectionsScreen extends StatelessWidget {
     ),
   );
 
-  static String label(LinkStatus status) => switch (status) {
-    LinkStatus.twoWay => 'both ways',
-    LinkStatus.inboundOnly => 'only from them',
-    LinkStatus.failing => 'failing',
-    LinkStatus.unknown => 'no recent word',
-  };
+  static String label(LinkStatus status, [BuildContext? context]) =>
+      switch (status) {
+        LinkStatus.twoWay => l10nOf(context).connectionsBothWays,
+        LinkStatus.inboundOnly => l10nOf(context).connectionsInbound,
+        LinkStatus.failing => l10nOf(context).connectionsFailing,
+        LinkStatus.unknown => l10nOf(context).connectionsUnknown,
+      };
 
   static Color colorOf(LinkStatus status, ColorScheme scheme) =>
       switch (status) {
@@ -40,7 +42,7 @@ class ConnectionsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Connections')),
+      appBar: AppBar(title: Text(l10nOf(context).connectionsTitle)),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
@@ -71,14 +73,14 @@ class ConnectionsScreen extends StatelessWidget {
                           color: colorOf(status, scheme),
                         ),
                         const SizedBox(width: 4),
-                        Text(label(status)),
+                        Text(label(status, context)),
                       ],
                     ),
                 ],
               ),
               const SizedBox(height: 16),
               Text(
-                'This device',
+                l10nOf(context).uiThisDeviceFA5A6D,
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               for (final MapEntry(key: id, value: status) in mine)
@@ -86,7 +88,7 @@ class ConnectionsScreen extends StatelessWidget {
                   dense: true,
                   leading: Icon(Icons.circle, color: colorOf(status, scheme)),
                   title: Text(map.nameOf(id)),
-                  trailing: Text(label(status)),
+                  trailing: Text(label(status, context)),
                 ),
               for (final MapEntry(key: reporter, value: links)
                   in map.reported.entries)
@@ -104,7 +106,7 @@ class ConnectionsScreen extends StatelessWidget {
                         color: colorOf(link.status, scheme),
                       ),
                       title: Text(map.nameOf(id)),
-                      trailing: Text(label(link.status)),
+                      trailing: Text(label(link.status, context)),
                     ),
                 ],
             ],

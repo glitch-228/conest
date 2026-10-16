@@ -1,3 +1,4 @@
+import '../app_locales.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -76,10 +77,10 @@ class _MatrixHomeScreenState extends State<MatrixHomeScreen> {
     return Scaffold(
       backgroundColor: widget.palette.panel,
       appBar: AppBar(
-        title: const Text('Matrix'),
+        title: Text(l10nOf(context).uiMatrix58947E),
         actions: [
           IconButton(
-            tooltip: 'Settings',
+            tooltip: l10nOf(context).tabSettings,
             onPressed: _openSettings,
             icon: const Icon(Icons.settings_outlined),
           ),
@@ -87,7 +88,7 @@ class _MatrixHomeScreenState extends State<MatrixHomeScreen> {
       ),
       floatingActionButton: signedIn
           ? FloatingActionButton(
-              tooltip: 'New Matrix chat',
+              tooltip: l10nOf(context).uiNewMatrixChatC065C8,
               onPressed: () =>
                   startMatrixChat(context, client!, widget.palette),
               backgroundColor: widget.palette.primary,
@@ -110,7 +111,7 @@ class _MatrixHomeScreenState extends State<MatrixHomeScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Sign in to your Matrix account',
+                        l10nOf(context).uiSignInToYourMatrix8D0037,
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 8),
@@ -138,15 +139,14 @@ class _MatrixHomeScreenState extends State<MatrixHomeScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            'The Matrix client is not available on this device, so Conest '
-            'cannot run in Matrix-only mode here.',
+          Text(
+            l10nOf(context).uiTheMatrixClientIsNot01A5B4,
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
           FilledButton(
             onPressed: () => widget.controller.setAppMode(AppMode.conest),
-            child: const Text('Use Conest'),
+            child: Text(l10nOf(context).uiUseConest12EEF3),
           ),
         ],
       ),
@@ -165,9 +165,9 @@ class _MatrixHomeScreenState extends State<MatrixHomeScreen> {
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
           child: TextField(
             controller: _search,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               prefixIcon: Icon(Icons.search),
-              hintText: 'Search rooms',
+              hintText: l10nOf(context).uiSearchRoomsCCE4F9,
               isDense: true,
             ),
           ),
@@ -176,7 +176,9 @@ class _MatrixHomeScreenState extends State<MatrixHomeScreen> {
           child: rooms.isEmpty
               ? Center(
                   child: Text(
-                    query.isEmpty ? 'No Matrix chats yet' : 'No rooms found',
+                    query.isEmpty
+                        ? l10nOf(context).uiNoMatrixChatsYet23B023
+                        : l10nOf(context).uiNoRoomsFoundAD2C3E,
                   ),
                 )
               : ListView.builder(
@@ -194,21 +196,27 @@ class _MatrixHomeScreenState extends State<MatrixHomeScreen> {
                         ),
                       ),
                       title: Text(
-                        room.invited ? 'Invitation: ${room.name}' : room.name,
+                        room.invited
+                            ? l10nOf(
+                                context,
+                              ).uiInvitationValue6F0633((room.name).toString())
+                            : room.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                       subtitle: Text(
                         room.invited
-                            ? 'Matrix invitation'
+                            ? l10nOf(context).uiMatrixInvitation525106
                             : last == null
-                            ? (room.encrypted ? 'Encrypted chat' : 'Chat')
+                            ? (room.encrypted
+                                  ? l10nOf(context).uiEncryptedChat0D7563
+                                  : l10nOf(context).uiChat2CED57)
                             : matrixPreview(last),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                       trailing: room.unread > 0
-                          ? Badge(label: Text('${room.unread}'))
+                          ? Badge(label: Text("${(room.unread)}"))
                           : null,
                       onTap: () => _openRoom(client, room.roomId),
                     );
@@ -228,7 +236,7 @@ class _MatrixSettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: Text(l10nOf(context).tabSettings)),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) => ListView(

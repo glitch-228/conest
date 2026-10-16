@@ -13,6 +13,9 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
+import 'package:conest/l10n/app_localizations.dart';
+import 'package:conest/src/app_locales.dart';
+import 'package:conest/src/ui/calls_list.dart';
 import 'package:conest/main.dart' show sniffImageMimeType, buildDeltaAttachment;
 import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat/gateway.dart';
@@ -100,6 +103,7 @@ import 'support/fake_rns_bus.dart';
 import 'support/fake_tor.dart';
 
 part 'delta_controller_content_tests.dart';
+part 'l10n_controller_cases.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -1406,6 +1410,7 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 
 void main() {
   deltaContentControllerTests();
+  _localizationControllerTests();
   test('chat folders move later and persist their final order', () async {
     final vault = _MemoryVaultStore();
     final controller = await _createController(

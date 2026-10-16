@@ -1,3 +1,4 @@
+import '../app_locales.dart';
 import 'dart:async';
 import 'dart:math';
 
@@ -119,7 +120,7 @@ class RadioChatsScreen extends StatelessWidget {
       builder: (context) {
         final field = TextEditingController();
         return AlertDialog(
-          title: const Text('New chat'),
+          title: Text(l10nOf(context).uiNewChat009BF6),
           content: SizedBox(
             width: 360,
             child: ListView(
@@ -127,7 +128,9 @@ class RadioChatsScreen extends StatelessWidget {
               children: [
                 TextField(
                   controller: field,
-                  decoration: const InputDecoration(hintText: 'Node address'),
+                  decoration: InputDecoration(
+                    hintText: l10nOf(context).uiNodeAddress896F20,
+                  ),
                   onSubmitted: (value) => Navigator.of(context).pop(value),
                 ),
                 for (final MapEntry(key: node, value: name) in nodes.entries)
@@ -142,11 +145,11 @@ class RadioChatsScreen extends StatelessWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
+              child: Text(l10nOf(context).actionCancel),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(field.text),
-              child: const Text('Start'),
+              child: Text(l10nOf(context).actionStart),
             ),
           ],
         );
@@ -160,7 +163,7 @@ class RadioChatsScreen extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ).showSnackBar(SnackBar(content: Text("${(error)}")));
       }
     }
   }
@@ -178,10 +181,12 @@ class RadioChatsScreen extends StatelessWidget {
             return last(b).compareTo(last(a));
           });
         return Scaffold(
-          appBar: AppBar(title: Text('${access.network} chats')),
+          appBar: AppBar(
+            title: Text(l10nOf(context).networkChatsTitle(access.network)),
+          ),
           floatingActionButton: access.canWrite()
               ? FloatingActionButton(
-                  tooltip: 'New chat',
+                  tooltip: l10nOf(context).uiNewChat009BF6,
                   onPressed: () => _newChat(context),
                   child: const Icon(Icons.edit_outlined),
                 )
@@ -201,7 +206,7 @@ class RadioChatsScreen extends StatelessWidget {
                   ),
                   trailing: (chats.unread[key] ?? 0) == 0
                       ? null
-                      : Badge(label: Text('${chats.unread[key]}')),
+                      : Badge(label: Text("${(chats.unread[key])}")),
                   onTap: () => openRadioChat(context, controller, access, key),
                 ),
             ],
@@ -301,7 +306,7 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
             title: Text(widget.access.title(widget.chatKey)),
             actions: [
               IconButton(
-                tooltip: 'Delete chat',
+                tooltip: l10nOf(context).uiDeleteChatDB9121,
                 icon: const Icon(Icons.delete_outline),
                 onPressed: () async {
                   await widget.access.delete(widget.chatKey);
@@ -329,8 +334,8 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                     final message = messages[messages.length - 1 - index];
                     return Align(
                       alignment: message.outgoing
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
+                          ? AlignmentDirectional.centerEnd
+                          : AlignmentDirectional.centerStart,
                       child: Card(
                         color: message.outgoing
                             ? theme.colorScheme.primaryContainer
@@ -346,8 +351,7 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                                   // are alike (names are self-chosen).
                                   message.from.isEmpty
                                       ? message.name
-                                      : '${message.name} '
-                                            '(${message.from.substring(0, min(6, message.from.length))})',
+                                      : "${(message.name)} (${(message.from.substring(0, min(6, message.from.length)))})",
                                   style: theme.textTheme.labelMedium,
                                 ),
                               Text(message.text),
@@ -358,17 +362,20 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                                   ).format(context),
                                   if (message.outgoing && !channel)
                                     switch (message.state) {
-                                      RadioMessageState.delivered =>
-                                        'delivered',
-                                      RadioMessageState.failed =>
-                                        'not delivered (their radio could '
-                                            'not read it)',
-                                      RadioMessageState.sent => 'sent',
+                                      RadioMessageState.delivered => l10nOf(
+                                        context,
+                                      ).uiDeliveredF81891,
+                                      RadioMessageState.failed => l10nOf(
+                                        context,
+                                      ).uiNotDeliveredTheirRadioCould75D581,
+                                      RadioMessageState.sent => l10nOf(
+                                        context,
+                                      ).uiSent27E770,
                                     },
                                   if (!message.outgoing &&
                                       !channel &&
                                       !message.authentic)
-                                    'sender not verified',
+                                    l10nOf(context).uiSenderNotVerified2BB0FA,
                                 ].join(' · '),
                                 style: theme.textTheme.labelSmall,
                               ),
@@ -401,14 +408,14 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                           enabled: canWrite,
                           decoration: InputDecoration(
                             hintText: canWrite
-                                ? 'Message'
-                                : 'Turn on app messages to write',
+                                ? l10nOf(context).uiMessage68F414
+                                : l10nOf(context).uiTurnOnAppMessagesTo7DCA13,
                           ),
                           onSubmitted: (_) => _send(),
                         ),
                       ),
                       IconButton(
-                        tooltip: 'Send',
+                        tooltip: l10nOf(context).composerSend,
                         icon: const Icon(Icons.send),
                         onPressed: canWrite && !_sending ? _send : null,
                       ),

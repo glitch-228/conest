@@ -226,6 +226,7 @@ class LanguageSelector extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         DropdownButtonFormField<String?>(
+          isExpanded: true,
           key: const ValueKey('language-selector'),
           initialValue: controller.localeCode,
           decoration: InputDecoration(labelText: l10n.settingsLanguage),

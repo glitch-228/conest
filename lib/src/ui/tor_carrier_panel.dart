@@ -1,3 +1,4 @@
+import '../app_locales.dart';
 import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
@@ -79,12 +80,8 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
         SwitchListTile.adaptive(
           key: const ValueKey('tor-carrier-switch'),
           contentPadding: EdgeInsets.zero,
-          title: const Text('Tor'),
-          subtitle: const Text(
-            'Reach contacts through Tor onion services: neither side nor '
-            'the network learns where the other is. Slower than other '
-            'routes; add bridges where Tor is blocked.',
-          ),
+          title: Text(l10nOf(context).uiTorED7088),
+          subtitle: Text(l10nOf(context).uiReachContactsThroughTorOnion8B8A98),
           value: config != null,
           onChanged: _busy
               ? null
@@ -97,21 +94,14 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
           maxLines: 6,
           enabled: !_busy,
           decoration: InputDecoration(
-            labelText: 'Bridges (optional, one per line)',
+            labelText: l10nOf(context).uiBridgesOptionalOnePerLine110291,
             hintText: _transports == false
-                ? '192.0.2.1:443 4352E58420E68F5E40BF7C74FADDCCD9D1349413'
-                : 'obfs4 192.0.2.1:443 '
-                      '4352E58420E68F5E40BF7C74FADDCCD9D1349413 '
-                      'cert=… iat-mode=0',
+                ? l10nOf(context).uiEEFEBFE80B7A
+                : l10nOf(context).uiObfsEEFEAD0EDF,
             hintMaxLines: 3,
             helperText: switch (_transports) {
-              true =>
-                'Lines from bridges.torproject.org, starting with the '
-                    'type: obfs4, webtunnel, snowflake or meek_lite (or '
-                    'plain bridges: address and fingerprint).',
-              false =>
-                'Plain bridges only (address and fingerprint) in '
-                    'this build.',
+              true => l10nOf(context).uiLinesFromBridgesTorprojectOrgF08389,
+              false => l10nOf(context).uiPlainBridgesOnlyAddressAnd7F0B60,
               null => null,
             },
             helperMaxLines: 2,
@@ -119,11 +109,11 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
         ),
         if (config != null)
           Align(
-            alignment: Alignment.centerRight,
+            alignment: AlignmentDirectional.centerEnd,
             child: TextButton(
               key: const ValueKey('tor-bridges-save'),
               onPressed: _busy ? null : () => _run(_enable),
-              child: const Text('Use these bridges'),
+              child: Text(l10nOf(context).uiUseTheseBridgesC1FA11),
             ),
           ),
         if (config != null)

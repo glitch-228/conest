@@ -1,3 +1,4 @@
+import '../app_locales.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -23,24 +24,24 @@ Future<void> startMatrixChat(
   final userId = await showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('New Matrix chat'),
+      title: Text(l10nOf(context).uiNewMatrixChatC065C8),
       content: TextField(
         controller: input,
         autofocus: true,
-        decoration: const InputDecoration(
-          labelText: 'Matrix user',
-          hintText: '@name:matrix.org',
+        decoration: InputDecoration(
+          labelText: l10nOf(context).uiMatrixUser70A560,
+          hintText: l10nOf(context).uiNameMatrixOrgD0BB06,
         ),
         onSubmitted: (value) => Navigator.pop(context, value),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: Text(l10nOf(context).actionCancel),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, input.text),
-          child: const Text('Start chat'),
+          child: Text(l10nOf(context).uiStartChat18BB58),
         ),
       ],
     ),
@@ -60,7 +61,11 @@ Future<void> startMatrixChat(
   } catch (error) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not start the chat: $error')),
+        SnackBar(
+          content: Text(
+            l10nOf(context).uiCouldNotStartTheChatAE2F54((error).toString()),
+          ),
+        ),
       );
     }
   }
@@ -278,25 +283,25 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
             if (readable)
               ListTile(
                 leading: const Icon(Icons.reply),
-                title: const Text('Reply'),
+                title: Text(l10nOf(context).menuReply),
                 onTap: () => Navigator.pop(context, 'reply'),
               ),
             if (readable && item.body.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.copy),
-                title: const Text('Copy text'),
+                title: Text(l10nOf(context).uiCopyText06A76C),
                 onTap: () => Navigator.pop(context, 'copy'),
               ),
             if (mine && item.kind == MatrixItemKind.text)
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
-                title: const Text('Edit'),
+                title: Text(l10nOf(context).menuEdit),
                 onTap: () => Navigator.pop(context, 'edit'),
               ),
             if (mine && item.kind != MatrixItemKind.redacted)
               ListTile(
                 leading: const Icon(Icons.delete_outline),
-                title: const Text('Delete for everyone'),
+                title: Text(l10nOf(context).uiDeleteForEveryoneE055A8),
                 onTap: () => Navigator.pop(context, 'delete'),
               ),
           ],
@@ -367,7 +372,7 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
             if (room?.encrypted == true) ...[
               const SizedBox(width: 6),
               Tooltip(
-                message: 'End-to-end encrypted (Matrix)',
+                message: l10nOf(context).uiEndToEndEncryptedMatrix9E4418,
                 child: Icon(
                   Icons.lock_outline,
                   size: 16,
@@ -382,7 +387,7 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
             _partnerState?.verified == true
                 ? Tooltip(
                     key: const ValueKey('matrix-partner-verified'),
-                    message: 'Verified',
+                    message: l10nOf(context).uiVerifiedAED3B8,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       child: Icon(Icons.verified_user, color: palette.success),
@@ -390,7 +395,9 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                   )
                 : IconButton(
                     key: const ValueKey('matrix-verify-partner'),
-                    tooltip: 'Verify ${room?.name ?? _partner}',
+                    tooltip: l10nOf(
+                      context,
+                    ).uiVerifyValue1B6B79((room?.name ?? _partner).toString()),
                     icon: const Icon(Icons.gpp_maybe_outlined),
                     onPressed: _verifyPartner,
                   ),
@@ -403,11 +410,10 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Text(
                 room?.encrypted == true
-                    ? 'Messages are end-to-end encrypted, but your homeserver '
-                          'and theirs see who talks to whom and when. Verify '
-                          '${room?.name ?? _partner} to be sure it is them.'
-                    : 'This chat is not encrypted: your homeserver and theirs '
-                          'can read it.',
+                    ? l10nOf(context).uiMessagesAreEndToEndE786B5(
+                        (room?.name ?? _partner).toString(),
+                      )
+                    : l10nOf(context).uiThisChatIsNotEncrypted799D99,
                 style: TextStyle(color: palette.textMuted, fontSize: 12),
               ),
             ),
@@ -443,7 +449,9 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                     child: TextButton(
                       onPressed: _loadingOlder ? null : _loadOlder,
                       child: Text(
-                        _loadingOlder ? 'Loading…' : 'Load earlier messages',
+                        _loadingOlder
+                            ? l10nOf(context).uiLoading33CE41
+                            : l10nOf(context).uiLoadEarlierMessages4AC08D,
                       ),
                     ),
                   );
@@ -487,15 +495,17 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                   Expanded(
                     child: Text(
                       _editing != null
-                          ? 'Editing'
-                          : 'Reply to ${_shortName(_replyTo!.sender)}: '
-                                '${_preview(_replyTo!)}',
+                          ? l10nOf(context).uiEditing3B9BA1
+                          : l10nOf(context).uiReplyToValueValue666B4E(
+                              (_shortName(_replyTo!.sender)).toString(),
+                              (_preview(_replyTo!)).toString(),
+                            ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Cancel',
+                    tooltip: l10nOf(context).actionCancel,
                     onPressed: () => setState(() {
                       if (_editing != null) _composer.clear();
                       _replyTo = null;
@@ -514,7 +524,7 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                 child: Row(
                   children: [
                     IconButton(
-                      tooltip: 'Attach a file',
+                      tooltip: l10nOf(context).uiAttachAFileAE85E4,
                       onPressed: _sending ? null : _attach,
                       icon: const Icon(Icons.attach_file),
                     ),
@@ -525,15 +535,15 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                         maxLines: 6,
                         textInputAction: TextInputAction.send,
                         onSubmitted: (_) => _send(),
-                        decoration: const InputDecoration(
-                          hintText: 'Message',
+                        decoration: InputDecoration(
+                          hintText: l10nOf(context).uiMessage68F414,
                           border: OutlineInputBorder(),
                           isDense: true,
                         ),
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Send',
+                      tooltip: l10nOf(context).composerSend,
                       onPressed: _sending ? null : _send,
                       icon: _sending
                           ? const SizedBox(
@@ -667,7 +677,7 @@ class _MatrixBadge extends StatelessWidget {
       borderRadius: BorderRadius.circular(6),
     ),
     child: Text(
-      'Matrix',
+      l10nOf(context).uiMatrix58947E,
       style: TextStyle(
         fontSize: 11,
         fontWeight: FontWeight.w600,
@@ -694,10 +704,16 @@ class _InviteBanner extends StatelessWidget {
     padding: const EdgeInsets.all(12),
     child: Row(
       children: [
-        const Expanded(child: Text('You were invited to this Matrix chat.')),
-        TextButton(onPressed: onDecline, child: const Text('Decline')),
+        Expanded(child: Text(l10nOf(context).uiYouWereInvitedToThisE30D1E)),
+        TextButton(
+          onPressed: onDecline,
+          child: Text(l10nOf(context).uiDeclineB59CF9),
+        ),
         const SizedBox(width: 8),
-        FilledButton(onPressed: onAccept, child: const Text('Join')),
+        FilledButton(
+          onPressed: onAccept,
+          child: Text(l10nOf(context).uiJoinE0D731),
+        ),
       ],
     ),
   );
@@ -729,7 +745,9 @@ class _MatrixBubble extends StatelessWidget {
     final meta = mine ? palette.outboundMeta : palette.inboundMeta;
     final time = TimeOfDay.fromDateTime(item.timestamp.toLocal());
     return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: mine
+          ? AlignmentDirectional.centerEnd
+          : AlignmentDirectional.centerStart,
       child: GestureDetector(
         onLongPress: onLongPress,
         onSecondaryTap: onLongPress,
@@ -756,14 +774,14 @@ class _MatrixBubble extends StatelessWidget {
               if (quoted != null)
                 Container(
                   margin: const EdgeInsets.only(top: 4, bottom: 4),
-                  padding: const EdgeInsets.only(left: 8),
+                  padding: const EdgeInsetsDirectional.only(start: 8),
                   decoration: BoxDecoration(
-                    border: Border(
-                      left: BorderSide(color: palette.primary, width: 3),
+                    border: BorderDirectional(
+                      start: BorderSide(color: palette.primary, width: 3),
                     ),
                   ),
                   child: Text(
-                    '${_shortName(quoted!.sender)}: ${_preview(quoted!)}',
+                    "${(_shortName(quoted!.sender))}: ${(_preview(quoted!))}",
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: meta),
@@ -776,7 +794,7 @@ class _MatrixBubble extends StatelessWidget {
                 children: [
                   if (item.edited)
                     Text(
-                      'edited · ',
+                      l10nOf(context).uiEdited0E3C32,
                       style: TextStyle(fontSize: 10, color: meta),
                     ),
                   Text(
@@ -809,7 +827,9 @@ class _MatrixBubble extends StatelessWidget {
                                   : palette.chipBackground,
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: Text('${entry.key} ${entry.value.length}'),
+                            child: Text(
+                              "${(entry.key)} ${(entry.value.length)}",
+                            ),
                           ),
                         ),
                     ],
@@ -826,12 +846,12 @@ class _MatrixBubble extends StatelessWidget {
     switch (item.kind) {
       case MatrixItemKind.redacted:
         return Text(
-          'Message deleted',
+          l10nOf(context).uiMessageDeleted3271A7,
           style: TextStyle(fontStyle: FontStyle.italic, color: meta),
         );
       case MatrixItemKind.undecryptable:
         return Text(
-          'Unable to decrypt this message yet',
+          l10nOf(context).uiUnableToDecryptThisMessage8A31CC,
           style: TextStyle(fontStyle: FontStyle.italic, color: meta),
         );
       case MatrixItemKind.image when item.media != null:
@@ -846,7 +866,9 @@ class _MatrixBubble extends StatelessWidget {
         );
       case MatrixItemKind.unsupported:
         return Text(
-          item.body.isEmpty ? 'Unsupported message' : item.body,
+          item.body.isEmpty
+              ? l10nOf(context).uiUnsupportedMessage9E48EB
+              : item.body,
           style: TextStyle(color: meta),
         );
       default:
@@ -903,7 +925,11 @@ class _MatrixImageState extends State<_MatrixImage> {
     builder: (context, snapshot) {
       final file = snapshot.data;
       if (snapshot.hasError) {
-        return Text('Image unavailable: ${snapshot.error}');
+        return Text(
+          l10nOf(
+            context,
+          ).uiImageUnavailableValueB024FC((snapshot.error).toString()),
+        );
       }
       if (file == null) {
         return const SizedBox(
@@ -960,9 +986,13 @@ class _MatrixFileState extends State<_MatrixFile> {
       if (mounted) setState(() => _savedPath = target.path);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Download failed: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              l10nOf(context).uiDownloadFailedValueB18BB6((error).toString()),
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -993,8 +1023,12 @@ class _MatrixFileState extends State<_MatrixFile> {
               Text(
                 _savedPath ??
                     (size == null
-                        ? 'File'
-                        : '${(size / 1024).toStringAsFixed(size < 10240 ? 1 : 0)} KiB'),
+                        ? l10nOf(context).uiFile2C3CAF
+                        : l10nOf(context).uiValueKiBEC48AF(
+                            ((size / 1024).toStringAsFixed(
+                              size < 10240 ? 1 : 0,
+                            )).toString(),
+                          )),
                 style: TextStyle(fontSize: 11, color: widget.color),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -1002,7 +1036,7 @@ class _MatrixFileState extends State<_MatrixFile> {
           ),
         ),
         IconButton(
-          tooltip: 'Download',
+          tooltip: l10nOf(context).uiDownloadA479C9,
           onPressed: _busy || _savedPath != null ? null : _download,
           icon: _busy
               ? const SizedBox(

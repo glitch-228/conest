@@ -1,0 +1,11 @@
+Conest is a messenger for Android, Linux and Windows. Talk directly over your local network or the internet, with end-to-end encryption on Conest routes.
+
+Chat one to one or in invite-only groups. Send files, voice messages, replies and reactions. Keep notes in Saved messages, or try experimental voice calls.
+
+When ordinary connections fail, choose other routes in Settings: relays, Matrix, Nostr, encrypted email, Tor, Bluetooth mesh or LoRa radios. These routes are optional and may need an account or compatible hardware. Share files and invites between screens with Conest Beam, even without a network.
+
+Use Conest as a Matrix client too. Chats with people on other supported networks use those networks' protections. Public mesh and radio channels are not private Conest chats.
+
+Your local vault is encrypted. Choose a passphrase, device unlock or portable storage. Remove metadata from supported files before sending them.
+
+Some routes and calls are experimental. See the project documentation for setup and device requirements.

@@ -113,7 +113,7 @@ class MonoSectionLabel extends StatelessWidget {
     return Padding(
       padding: padding,
       child: Text(
-        '// ${label.toUpperCase()}',
+        "// ${(label.toUpperCase())}",
         style: TextStyle(
           fontFamily: ConestPalette.monoFont,
           fontSize: 10,

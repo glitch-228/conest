@@ -1,3 +1,4 @@
+import 'app_locales.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -95,46 +96,66 @@ class GroupFileTile extends StatelessWidget {
           const SizedBox(height: 4),
           LinearProgressIndicator(
             value: progress,
-            semanticsLabel: 'Verified download progress',
+            semanticsLabel: l10nOf(context).uiVerifiedDownloadProgressBED7C2,
             semanticsValue: '${(progress * 100).floor()}%',
           ),
-          Text('${_bytes(verified)} of ${_bytes(total)} verified'),
+          Text(
+            l10nOf(context).uiValueOfValueVerified63B11D(
+              (_bytes(verified)).toString(),
+              (_bytes(total)).toString(),
+            ),
+          ),
         ],
         if (!needsAcceptance &&
             state == GroupFileDownloadState.failed &&
             error != null)
           Text(error!),
-        if (sharing) const Text('Sharing with group'),
+        if (sharing) Text(l10nOf(context).uiSharingWithGroup2AED71),
         if (complete && playbackControls != null) playbackControls!,
         Wrap(
           spacing: 8,
           children: [
             if (needsAcceptance)
-              TextButton(onPressed: onDownload, child: const Text('Download'))
+              TextButton(
+                onPressed: onDownload,
+                child: Text(l10nOf(context).uiDownloadA479C9),
+              )
             else if (complete)
-              TextButton(onPressed: onOpen, child: const Text('Open'))
+              TextButton(
+                onPressed: onOpen,
+                child: Text(l10nOf(context).uiOpenCF9B77),
+              )
             else if (state == GroupFileDownloadState.paused)
-              TextButton(onPressed: onResume, child: const Text('Resume'))
+              TextButton(
+                onPressed: onResume,
+                child: Text(l10nOf(context).uiResumeB3BD0B),
+              )
             else if (state == GroupFileDownloadState.failed)
-              TextButton(onPressed: onResume, child: const Text('Retry'))
+              TextButton(
+                onPressed: onResume,
+                child: Text(l10nOf(context).uiRetry9F5CD8),
+              )
             else
-              TextButton(onPressed: onPause, child: const Text('Pause')),
+              TextButton(
+                onPressed: onPause,
+                child: Text(l10nOf(context).uiPause781961),
+              ),
             if (state == GroupFileDownloadState.failed &&
                 error?.contains('free-space reserve') == true &&
                 onDownloadAnyway != null)
               TextButton(
                 onPressed: onDownloadAnyway,
-                child: const Text('Download anyway'),
+                child: Text(l10nOf(context).uiDownloadAnyway42859F),
               ),
             if (sharing)
               TextButton(
                 onPressed: onStopSharing,
-                child: const Text('Stop sharing'),
+                child: Text(l10nOf(context).uiStopSharing0E45AE),
               ),
             if (onEvict != null && (verified > 0 || complete))
               TextButton(
                 onPressed: onEvict,
-                child: const Text('Remove local copy'),
+                child: Text(l10nOf(context).uiRemoveLocalCopy80FA01),
               ),
           ],
         ),

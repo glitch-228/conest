@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../crash_catcher.dart';
+import '../app_locales.dart';
 
 /// "Conest closed unexpectedly last time", once, at the top of the app,
 /// with the details a bug report needs.
@@ -21,9 +22,8 @@ void showCrashNotice({
     MaterialBanner(
       key: const ValueKey('crash-notice'),
       leading: const Icon(Icons.report_problem_outlined),
-      content: const Text(
-        'Conest closed unexpectedly last time. The details stay on this '
-        'device; you can copy them into a bug report.',
+      content: Builder(
+        builder: (context) => Text(l10nOf(context).crashNoticeBody),
       ),
       actions: [
         TextButton(
@@ -35,9 +35,16 @@ void showCrashNotice({
               builder: (context) => CrashReportDialog(report: report),
             );
           },
-          child: const Text('Details'),
+          child: Builder(
+            builder: (context) => Text(l10nOf(context).crashNoticeDetails),
+          ),
         ),
-        TextButton(onPressed: dismiss, child: const Text('Dismiss')),
+        TextButton(
+          onPressed: dismiss,
+          child: Builder(
+            builder: (context) => Text(l10nOf(context).crashNoticeDismiss),
+          ),
+        ),
       ],
     ),
   );
@@ -52,7 +59,7 @@ class CrashReportDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = report.format();
     return AlertDialog(
-      title: const Text('What happened'),
+      title: Text(l10nOf(context).crashReportTitle),
       content: SizedBox(
         width: 640,
         child: SingleChildScrollView(
@@ -65,11 +72,11 @@ class CrashReportDialog extends StatelessWidget {
       actions: [
         TextButton(
           onPressed: () => Clipboard.setData(ClipboardData(text: text)),
-          child: const Text('Copy'),
+          child: Text(l10nOf(context).crashReportCopy),
         ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
+          child: Text(l10nOf(context).crashReportClose),
         ),
       ],
     );

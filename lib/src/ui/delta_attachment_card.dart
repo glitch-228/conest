@@ -1,3 +1,4 @@
+import '../app_locales.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -32,7 +33,7 @@ class DeltaAttachmentCard extends StatelessWidget {
       children: [
         Expanded(child: child),
         PopupMenuButton<String>(
-          tooltip: 'File actions',
+          tooltip: l10nOf(context).deltaFileActions,
           icon: const Icon(Icons.more_vert, size: 18),
           onSelected: (action) => unawaited(() async {
             try {
@@ -55,17 +56,17 @@ class DeltaAttachmentCard extends StatelessWidget {
             PopupMenuItem(
               value: 'open',
               enabled: available,
-              child: const Text('Open'),
+              child: Text(l10nOf(context).uiOpenCF9B77),
             ),
             PopupMenuItem(
               value: 'save',
               enabled: available,
-              child: const Text('Save'),
+              child: Text(l10nOf(context).uiSaveEFC007),
             ),
             PopupMenuItem(
               value: 'forward',
               enabled: available,
-              child: const Text('Forward'),
+              child: Text(l10nOf(context).menuForward),
             ),
           ],
         ),

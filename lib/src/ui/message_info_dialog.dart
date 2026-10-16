@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_locales.dart';
+import 'localized_labels.dart';
 import '../models.dart';
 
 /// What happened to a message on its way: when it was sent, every route it
@@ -65,22 +66,23 @@ class MessageInfoDialog extends StatelessWidget {
     return '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
   }
 
-  static String outOfTouchLabel(DateTime since) {
+  static String outOfTouchLabel(DateTime since, {BuildContext? context}) {
     final local = since.toLocal();
     String two(int value) => value.toString().padLeft(2, '0');
-    return 'Not recently confirmed: their other devices last counted this '
-        'one as theirs on ${local.year}-${two(local.month)}-${two(local.day)}.';
+    return l10nOf(context).messageNotRecentlyConfirmed(
+      '${local.year}-${two(local.month)}-${two(local.day)}',
+    );
   }
 
   /// "Their clock is about 2 h behind; times here are by this device."
-  static String clockOffsetLabel(Duration offset) {
+  static String clockOffsetLabel(Duration offset, {BuildContext? context}) {
     final size = offset.abs();
     final amount = size >= const Duration(hours: 1)
         ? '${(size.inMinutes / 60).toStringAsFixed(size.inMinutes % 60 == 0 ? 0 : 1)} h'
         : '${size.inMinutes} min';
-    return 'Their clock is about $amount '
-        '${offset.isNegative ? 'ahead' : 'behind'}; times here are by '
-        'this device.';
+    return offset.isNegative
+        ? l10nOf(context).messageClockAhead(amount)
+        : l10nOf(context).messageClockBehind(amount);
   }
 
   static String sizeLabel(int bytes) {
@@ -92,13 +94,21 @@ class MessageInfoDialog extends StatelessWidget {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
-  static String markLabel(MessageRouteMark mark, {required bool outbound}) =>
-      switch (mark) {
-        MessageRouteMark.sent => 'sent',
-        MessageRouteMark.stored => 'waiting on the relay',
-        MessageRouteMark.reachedDevice => 'reached their device',
-        MessageRouteMark.confirmed => outbound ? 'delivered' : 'received',
-      };
+  static String markLabel(
+    MessageRouteMark mark, {
+    required bool outbound,
+    BuildContext? context,
+  }) => switch (mark) {
+    MessageRouteMark.sent => l10nOf(context).routeMarkSent,
+    MessageRouteMark.stored => l10nOf(context).routeMarkStored,
+    MessageRouteMark.reachedDevice => l10nOf(
+      context,
+    ).uiReachedTheirDevice0FE289,
+    MessageRouteMark.confirmed =>
+      outbound
+          ? l10nOf(context).routeMarkDelivered
+          : l10nOf(context).routeMarkReceived,
+  };
 
   /// When it first reached them (their receipt, or their radio).
   static DateTime? _deliveredAt(Iterable<RouteTrace> traces) {
@@ -122,9 +132,7 @@ class MessageInfoDialog extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(top: 4),
           child: Text(
-            '${trace.route.label}: ${markLabel(trace.mark, outbound: outbound)} '
-            '${_time(trace.at)}'
-            '${trace.bytes == null ? '' : ', ${sizeLabel(trace.bytes!)}'}',
+            "${(messageRouteLabel(context, trace.route))}: ${(markLabel(trace.mark, outbound: outbound, context: context))} ${(_time(trace.at))}${(trace.bytes == null ? '' : ', ${sizeLabel(trace.bytes!)}')}",
             style: style,
           ),
         ),
@@ -150,7 +158,7 @@ class MessageInfoDialog extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              outOfTouchLabel(since),
+              outOfTouchLabel(since, context: context),
               key: const ValueKey('message-info-out-of-touch'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.error,
@@ -162,7 +170,7 @@ class MessageInfoDialog extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              clockOffsetLabel(offset),
+              clockOffsetLabel(offset, context: context),
               key: const ValueKey('message-info-clock'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
@@ -172,7 +180,7 @@ class MessageInfoDialog extends StatelessWidget {
     ];
     if (members == null || !outbound) {
       children.add(const SizedBox(height: 8));
-      children.add(Text(message.state.label));
+      children.add(Text(deliveryStateLabel(context, message.state)));
       final traces = message.routeTrace.where(
         (trace) =>
             members == null ||
@@ -199,7 +207,13 @@ class MessageInfoDialog extends StatelessWidget {
       } else if (message.effectiveRoute case final route?) {
         children
           ..add(const SizedBox(height: 12))
-          ..add(Text('Route: ${route.label}'));
+          ..add(
+            Text(
+              l10nOf(
+                context,
+              ).uiRouteValue9D8426(messageRouteLabel(context, route)),
+            ),
+          );
       }
       final readAt = message.recipientReadAt[message.recipientDeviceId];
       if (outbound && readAt != null) {
@@ -233,7 +247,7 @@ class MessageInfoDialog extends StatelessWidget {
           ..add(
             Text(
               [
-                if (state != null) state.label,
+                if (state != null) deliveryStateLabel(context, state),
                 if (deliveredAt != null)
                   l10n.memberDeliveredAt(_time(deliveredAt)),
                 if (readAt != null) l10n.memberReadAt(_time(readAt)),
