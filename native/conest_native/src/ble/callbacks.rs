@@ -31,7 +31,7 @@ impl Subscribers {
         self.links
             .get(key)
             .copied()
-            .filter(|id| shared.core.lock().unwrap().contains(*id))
+            .filter(|id| shared.core().contains(*id))
     }
 
     /// Errors from one disappearing peer never discard another's slot.
@@ -57,7 +57,7 @@ impl Subscribers {
     ) -> Result<usize, A::Error> {
         let count = adapter.count()?.min(MAX_LINKS);
         self.links
-            .retain(|_, id| shared.core.lock().unwrap().contains(*id));
+            .retain(|_, id| shared.core().contains(*id));
         let mut seen = BTreeSet::new();
         let mut complete = wanted.is_none();
         let mut added = 0;
@@ -87,7 +87,7 @@ impl Subscribers {
                 seen.insert(key.clone());
                 let limit = adapter.limit(&client)?;
                 if let Some(id) = self.id(shared, &key) {
-                    shared.core.lock().unwrap().ready(id, limit);
+                    shared.core().ready(id, limit);
                     return Ok(());
                 }
                 if added >= available_workers.min(MAX_LINKS) || self.links.len() >= MAX_LINKS {
@@ -95,7 +95,7 @@ impl Subscribers {
                 }
                 let peer = adapter.peer(&client, &key).await?;
                 let id = {
-                    let mut core = shared.core.lock().unwrap();
+                    let mut core = shared.core();
                     core.reserve(peer, Role::Peripheral, shared.now())
                         .filter(|id| {
                             if core.ready(*id, limit) {
@@ -128,7 +128,7 @@ impl Subscribers {
                 if seen.contains(key) {
                     return true;
                 }
-                shared.core.lock().unwrap().remove(*id, false, shared.now());
+                shared.core().remove(*id, false, shared.now());
                 false
             });
         }
@@ -165,7 +165,7 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<(), E>>,
 {
-    if !shared.core.lock().unwrap().ready(id, limit) {
+    if !shared.core().ready(id, limit) {
         return Ok(false);
     }
     enable().await?;
@@ -229,8 +229,8 @@ mod tests {
         let packet = vec![
             1, 2, 7, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
         ];
-        shared.core.lock().unwrap().receive(id, &packet, 0);
-        assert_eq!(shared.core.lock().unwrap().poll().events.len(), 1);
+        shared.core().receive(id, &packet, 0);
+        assert_eq!(shared.core().poll().events.len(), 1);
         assert_eq!(
             subscribers
                 .before_write(&shared, &adapter, "new", 8, |_, _| {})
@@ -265,12 +265,12 @@ mod tests {
         assert_eq!(added, 1);
         assert_eq!(subscribers.id(&shared, "healthy"), Some(healthy));
         assert!(subscribers.id(&shared, "another").is_some());
-        assert_eq!(shared.core.lock().unwrap().limits().len(), 2);
+        assert_eq!(shared.core().limits().len(), 2);
         subscribers
             .refresh(&shared, &MockAdapter(vec![]), 8, |_, _| {})
             .await
             .unwrap();
-        assert!(shared.core.lock().unwrap().limits().is_empty());
+        assert!(shared.core().limits().is_empty());
     }
 
     #[tokio::test]
@@ -292,7 +292,7 @@ mod tests {
         );
         let id = subscribers.id(&shared, "fast").unwrap();
         assert_eq!(writers, vec![id]);
-        let mut core = shared.core.lock().unwrap();
+        let mut core = shared.core();
         assert!(core.enqueue(id, &[1, 2, 3]));
         assert_eq!(core.take_write(writers[0]), Some(vec![1, 2, 3]));
     }
@@ -365,12 +365,12 @@ mod tests {
                 let packet = vec![
                     1, 2, 7, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
                 ];
-                shared.core.lock().unwrap().receive(id, &packet, 0);
+                shared.core().receive(id, &packet, 0);
                 Ok::<_, ()>(())
             })
             .await
             .unwrap()
         );
-        assert_eq!(shared.core.lock().unwrap().poll().events.len(), 1);
+        assert_eq!(shared.core().poll().events.len(), 1);
     }
 }

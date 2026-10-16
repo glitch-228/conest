@@ -159,6 +159,30 @@ impl Core {
         self.links.contains_key(&id)
     }
 
+    /// A central that writes to this device's characteristic: its existing
+    /// link, or a new one ready at once. (BlueZ may deliver the first write
+    /// before telling anyone of the subscription, and tells only the first
+    /// subscriber's at all.)
+    pub fn admit_peripheral(&mut self, peer: u64, limit: usize, now: u64) -> Option<u64> {
+        if let Some(id) = self.peer_link(peer, Role::Peripheral) {
+            return Some(id);
+        }
+        let id = self.reserve(peer, Role::Peripheral, now)?;
+        if !self.ready(id, limit) {
+            self.remove(id, false, now);
+            return None;
+        }
+        Some(id)
+    }
+
+    /// Links in one role, oldest first.
+    pub fn role_links(&self, role: Role) -> Vec<u64> {
+        self.links
+            .iter()
+            .filter_map(|(&id, link)| (link.role == role).then_some(id))
+            .collect()
+    }
+
     pub fn ready(&mut self, id: u64, limit: usize) -> bool {
         let Some(link) = self.links.get_mut(&id) else {
             return false;
@@ -410,6 +434,22 @@ fn packet_size(bytes: &[u8]) -> Result<Option<usize>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_first_write_admits_its_central_once() {
+        let mut core = Core::default();
+        core.set_local(9);
+        let id = core.admit_peripheral(5, 180, 0).unwrap();
+        assert_eq!(core.admit_peripheral(5, 180, 1), Some(id));
+        assert_eq!(core.role_links(Role::Peripheral), vec![id]);
+        // Ready at once: packets can go out before any subscription event.
+        assert!(core.enqueue(id, &[1, 2, 3]));
+        // A zero MTU admits nothing and leaves nothing behind.
+        assert_eq!(core.admit_peripheral(6, 0, 2), None);
+        assert!(!core.has_peer(6));
+        // Our own address is never a peer.
+        assert_eq!(core.admit_peripheral(9, 180, 3), None);
+    }
 
     fn packet(version: u8, flags: u8) -> Vec<u8> {
         let mut p = vec![version, 0x11, 7];

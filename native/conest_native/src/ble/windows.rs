@@ -172,7 +172,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
     let radio = adapter.GetRadioAsync()?.await?;
     let local = adapter.BluetoothAddress()?;
     {
-        let mut core = state.core.lock().unwrap();
+        let mut core = state.core();
         core.set_local(local);
         core.status.adapter = Some("Windows Bluetooth".into());
         core.status.powered = true;
@@ -193,7 +193,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
         None
     };
     {
-        let mut core = state.core.lock().unwrap();
+        let mut core = state.core();
         core.status.peripheral = peripheral.is_some();
         if peripheral.is_none() {
             core.status.problem = Some(PERIPHERAL_WARNING.into());
@@ -229,12 +229,12 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
         tokio::select! {
             _ = tick.tick() => {
                 if radio.State()? != RadioState::On { bail!("Bluetooth is off. Turn it on in system settings."); }
-                state.core.lock().unwrap().expire(state.now());
+                state.core().expire(state.now());
                 let scan = Core::scan_due(state.now());
                 if scan != scanning {
                     if scan { watcher.Start()?; } else { watcher.Stop()?; }
                     scanning = scan;
-                    state.core.lock().unwrap().status.scanning = scan;
+                    state.core().status.scanning = scan;
                 }
                 if scanning && watcher.Status()? == BluetoothLEAdvertisementWatcherStatus::Aborted {
                     bail!("Bluetooth scanning was refused. Check Bluetooth permissions in Windows settings.");
@@ -242,7 +242,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                 if let Some((characteristic, provider, _)) = &peripheral {
                     let advertising = matches!(provider.AdvertisementStatus()?, GattServiceProviderAdvertisementStatus::Started | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData);
                     {
-                        let mut core = state.core.lock().unwrap();
+                        let mut core = state.core();
                         core.status.peripheral = advertising;
                         core.status.problem = if advertising { None } else { Some(PERIPHERAL_WARNING.into()) };
                     }
@@ -254,7 +254,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
             }
             Some(peer) = found.recv() => {
                 if !scanning || tasks.len() >= MAX_LINKS * 2 { continue; }
-                let id = state.core.lock().unwrap().reserve(peer, Role::Central, state.now());
+                let id = state.core().reserve(peer, Role::Central, state.now());
                 if let Some(id) = id { tasks.spawn(central(state.clone(), peer, id)); }
             }
             Some((args, _deferred)) = requests.recv() => {
@@ -282,7 +282,7 @@ async fn receive_write(
     let id = subscribers.id(state, &key);
     let value = bytes(&request.Value()?)?;
     if let (Some(id), Some(value), 0) = (id, value, request.Offset()?) {
-        state.core.lock().unwrap().receive(id, &value, state.now());
+        state.core().receive(id, &value, state.now());
         if request.Option()? == GattWriteOption::WriteWithResponse {
             request.Respond()?;
         }
@@ -370,7 +370,7 @@ async fn notify(
         loop {
             tick.tick().await;
             let next = {
-                let mut core = state.core.lock().unwrap();
+                let mut core = state.core();
                 if !core.contains(id) {
                     break;
                 }
@@ -391,7 +391,7 @@ async fn notify(
     }
     .await;
     let _ = result;
-    state.core.lock().unwrap().remove(id, false, state.now());
+    state.core().remove(id, false, state.now());
 }
 
 async fn central(state: Arc<Shared>, peer: u64, id: u64) {
@@ -472,7 +472,7 @@ async fn central(state: Arc<Shared>, peer: u64, id: u64) {
                 break;
             }
             let next = {
-                let mut core = state.core.lock().unwrap();
+                let mut core = state.core();
                 if !core.contains(id) {
                     break;
                 }

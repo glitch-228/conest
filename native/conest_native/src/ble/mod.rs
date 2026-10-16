@@ -9,7 +9,7 @@ mod linux;
 mod windows;
 
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, MutexGuard, PoisonError,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
@@ -25,6 +25,12 @@ pub struct Shared {
 }
 
 impl Shared {
+    /// The link state, also after a panic elsewhere poisoned its lock: a
+    /// panic inside an OS callback (WinRT, BlueZ) aborts the whole app.
+    pub fn core(&self) -> MutexGuard<'_, core::Core> {
+        self.core.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub fn now(&self) -> u64 {
         self.epoch.elapsed().as_millis().min(u64::MAX as u128) as u64
     }
@@ -52,7 +58,7 @@ impl Session {
             let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(_) => {
-                    state.core.lock().unwrap().status.problem = Some("Bluetooth could not start its worker.".into());
+                    state.core().status.problem = Some("Bluetooth could not start its worker.".into());
                     return;
                 }
             };
@@ -62,10 +68,17 @@ impl Session {
                     // advertising and bounded link tasks, even during setup.
                     let result = tokio::select! {
                         result = run(state.clone()) => result,
-                        _ = async { while !state.stopped() { tokio::time::sleep(Duration::from_millis(100)).await; } } => break,
+                        _ = async {
+                            while !state.stopped() { tokio::time::sleep(Duration::from_millis(100)).await; }
+                            // On Linux run() notices the stop itself and closes
+                            // the connections it opened; it is cut off only if
+                            // that takes too long.
+                            #[cfg(target_os = "linux")]
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                        } => break,
                     };
                     {
-                        let mut core = state.core.lock().unwrap();
+                        let mut core = state.core();
                         core.clear_links();
                         core.status.powered = false;
                         core.status.central = false;

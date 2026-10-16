@@ -1,5 +1,13 @@
 //! BlueZ GATT server + central. USB adapters use the same OS API.
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::{Context, bail};
 use bluer::{
@@ -14,7 +22,7 @@ use bluer::{
         },
     },
 };
-use futures_util::{FutureExt, StreamExt, stream::BoxStream};
+use futures_util::{FutureExt, StreamExt, future::join_all, stream::BoxStream};
 use tokio::{
     io::AsyncReadExt,
     task::JoinSet,
@@ -61,7 +69,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
     let adapter = adapter(&session).await?;
     let local = adapter.address().await?;
     {
-        let mut core = state.core.lock().unwrap();
+        let mut core = state.core();
         core.set_local(peer(local));
         core.status.adapter = Some(adapter.name().to_string());
         core.status.powered = true;
@@ -70,6 +78,9 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
     }
     let (control, handle) = characteristic_control();
     let write_state = state.clone();
+    // The notification channel's MTU once a subscriber opened it (0: none).
+    let hub_mtu = Arc::new(AtomicUsize::new(0));
+    let write_hub_mtu = hub_mtu.clone();
     let app = Application {
         services: vec![Service {
             uuid: Uuid::from_u128(SERVICE_UUID),
@@ -81,15 +92,25 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                     write_without_response: true,
                     method: CharacteristicWriteMethod::Fun(Box::new(move |value, request| {
                         let state = write_state.clone();
+                        let hub_mtu = write_hub_mtu.clone();
                         async move {
                             if request.offset != 0 || value.is_empty() || value.len() > MAX_PACKET {
                                 return Err(ReqError::InvalidValueLength);
                             }
-                            let mut core = state.core.lock().unwrap();
+                            // Admitted by its writes: BlueZ may deliver the
+                            // first before the subscription, and announces a
+                            // subscription only for the first central.
+                            let mut limit = usize::from(request.mtu).saturating_sub(3);
+                            let hub = hub_mtu.load(Ordering::Acquire);
+                            if hub > 0 {
+                                limit = limit.min(hub);
+                            }
+                            let now = state.now();
+                            let mut core = state.core();
                             let id = core
-                                .peer_link(peer(request.device_address), Role::Peripheral)
+                                .admit_peripheral(peer(request.device_address), limit, now)
                                 .ok_or(ReqError::NotPermitted)?;
-                            core.receive(id, &value, state.now());
+                            core.receive(id, &value, now);
                             Ok(())
                         }
                         .boxed()
@@ -124,7 +145,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
         None
     };
     {
-        let mut core = state.core.lock().unwrap();
+        let mut core = state.core();
         core.status.peripheral = advertisement.is_some();
         if advertisement.is_none() {
             core.status.problem = Some(format!(
@@ -147,11 +168,16 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
     let mut tasks = JoinSet::new();
     let mut tick = interval(Duration::from_millis(100));
     let mut powered_at = 0;
-    loop {
+    // Devices this side connected to, so that stopping (or failing) closes
+    // their connections: tasks dropped mid-way never reach their own close.
+    let connected: Arc<Mutex<HashMap<Address, Device>>> = Arc::default();
+    let mut hub: Option<tokio::task::AbortHandle> = None;
+    let outcome: anyhow::Result<()> = async { loop {
         tokio::select! {
             _ = tick.tick() => {
+                if state.stopped() { return Ok(()); }
                 let now = state.now();
-                state.core.lock().unwrap().expire(now);
+                state.core().expire(now);
                 if now.saturating_sub(powered_at) >= 2000 {
                     powered_at = now;
                     if !adapter.is_powered().await? { bail!("Bluetooth is off. Turn it on in system settings."); }
@@ -159,10 +185,10 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                 let scan = Core::scan_due(now);
                 if scan && discovery.is_none() {
                     discovery = Some(adapter.discover_devices().await.context("Bluetooth scanning is unavailable")?.boxed());
-                    state.core.lock().unwrap().status.scanning = true;
+                    state.core().status.scanning = true;
                 } else if !scan && discovery.is_some() {
                     discovery = None;
-                    state.core.lock().unwrap().status.scanning = false;
+                    state.core().status.scanning = false;
                 }
             }
             event = async { match &mut discovery { Some(d) => d.next().await, None => std::future::pending().await } } => {
@@ -175,8 +201,11 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                     // established neighbours on the adapter.
                     let Ok(Some(uuids)) = device.uuids().await else { continue; };
                     if !uuids.contains(&Uuid::from_u128(SERVICE_UUID)) { continue; }
-                    let id = state.core.lock().unwrap().reserve(peer(address), Role::Central, state.now());
-                    if let Some(id) = id { tasks.spawn(central(state.clone(), device, id)); }
+                    let id = state.core().reserve(peer(address), Role::Central, state.now());
+                    if let Some(id) = id {
+                        connected.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(address, device.clone());
+                        tasks.spawn(central(state.clone(), device, id, connected.clone()));
+                    }
                 } else if event.is_none() {
                     bail!("Bluetooth scanning stopped. Check the adapter and BlueZ service.");
                 }
@@ -184,14 +213,15 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
             event = control.next(), if app_handle.is_some() => {
                 match event {
                     Some(CharacteristicControlEvent::Notify(writer)) => {
-                        if tasks.len() >= MAX_LINKS * 2 { continue; }
-                        let id = state.core.lock().unwrap().reserve(peer(writer.device_address()), Role::Peripheral, state.now());
-                        if let Some(id) = id {
-                            // bluer already subtracts its conservative ATT
-                            // overhead from the notification writer's MTU.
-                            state.core.lock().unwrap().ready(id, writer.mtu());
-                            tasks.spawn(peripheral(state.clone(), writer, id));
-                        }
+                        // One notification channel serves every subscribed
+                        // central (BlueZ notifies all of them through it).
+                        // bluer already subtracts its conservative ATT
+                        // overhead from the writer's MTU.
+                        hub_mtu.store(writer.mtu(), Ordering::Release);
+                        let now = state.now();
+                        let _ = state.core().admit_peripheral(peer(writer.device_address()), writer.mtu(), now);
+                        if let Some(old) = hub.take() { old.abort(); }
+                        hub = Some(tasks.spawn(notify_hub(state.clone(), writer, hub_mtu.clone())));
                     }
                     Some(CharacteristicControlEvent::Write(request)) => request.reject(ReqError::NotSupported),
                     None => bail!("Bluetooth GATT server stopped."),
@@ -199,10 +229,28 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
             }
             _ = tasks.join_next(), if !tasks.is_empty() => {}
         }
-    }
+    } }.await;
+    tasks.abort_all();
+    let devices: Vec<Device> = connected
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain()
+        .map(|(_, device)| device)
+        .collect();
+    let _ = timeout(
+        Duration::from_millis(2500),
+        join_all(devices.iter().map(|device| device.disconnect())),
+    )
+    .await;
+    outcome
 }
 
-async fn central(state: Arc<Shared>, device: Device, id: u64) {
+async fn central(
+    state: Arc<Shared>,
+    device: Device,
+    id: u64,
+    connected: Arc<Mutex<HashMap<Address, Device>>>,
+) {
     let result: anyhow::Result<()> = async {
         let (characteristic, mut reader) = timeout(Duration::from_secs(15), async {
             if !device.is_connected().await? { device.connect().await?; }
@@ -218,7 +266,7 @@ async fn central(state: Arc<Shared>, device: Device, id: u64) {
             bail!("Bluetooth neighbour has no mesh characteristic")
         }).await??;
         // AcquireNotify negotiates the symmetric ATT MTU before this point.
-        if !state.core.lock().unwrap().ready(id, reader.mtu().saturating_sub(3)) { return Ok(()); }
+        if !state.core().ready(id, reader.mtu().saturating_sub(3)) { return Ok(()); }
         let mut tick = interval(Duration::from_millis(20));
         let mut buffer = [0; MAX_PACKET];
         loop {
@@ -226,11 +274,11 @@ async fn central(state: Arc<Shared>, device: Device, id: u64) {
                 read = reader.read(&mut buffer) => {
                     let count = read?;
                     if count == 0 { break; }
-                    state.core.lock().unwrap().receive(id, &buffer[..count], state.now());
+                    state.core().receive(id, &buffer[..count], state.now());
                 }
                 _ = tick.tick() => {
                     let next = {
-                        let mut core = state.core.lock().unwrap();
+                        let mut core = state.core();
                         if !core.contains(id) { break; }
                         core.take_write(id)
                     };
@@ -241,31 +289,60 @@ async fn central(state: Arc<Shared>, device: Device, id: u64) {
         Ok(())
     }.await;
     let disconnect = {
-        let mut core = state.core.lock().unwrap();
+        let mut core = state.core();
         core.remove(id, result.is_err(), state.now());
         !core.has_peer(peer(device.address()))
     };
     if disconnect {
+        connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&device.address());
         let _ = timeout(Duration::from_secs(2), device.disconnect()).await;
     }
 }
 
-async fn peripheral(state: Arc<Shared>, writer: CharacteristicWriter, id: u64) {
+/// Sends every subscribed central's packets through the one notification
+/// channel BlueZ gives the first subscriber. Whatever goes in reaches every
+/// subscriber; a packet queued for several links goes once.
+async fn notify_hub(state: Arc<Shared>, writer: CharacteristicWriter, hub_mtu: Arc<AtomicUsize>) {
     let mut tick = interval(Duration::from_millis(20));
-    loop {
+    let mut recent: VecDeque<(u64, u64)> = VecDeque::new();
+    'serve: loop {
         tokio::select! {
             _ = writer.closed() => break,
             _ = tick.tick() => {
-                let next = {
-                    let mut core = state.core.lock().unwrap();
-                    if !core.contains(id) { break; }
-                    core.take_write(id)
+                let now = state.now();
+                while recent.front().is_some_and(|(_, at)| now.saturating_sub(*at) > 2000) {
+                    recent.pop_front();
+                }
+                let next: Vec<Vec<u8>> = {
+                    let mut core = state.core();
+                    core.role_links(Role::Peripheral)
+                        .into_iter()
+                        .filter_map(|id| core.take_write(id))
+                        .collect()
                 };
-                if let Some(bytes) = next {
-                    if !matches!(timeout(Duration::from_secs(2), writer.send(&bytes)).await, Ok(Ok(()))) { break; }
+                for bytes in next {
+                    if bytes.len() > writer.mtu() { continue; }
+                    let mut hasher = DefaultHasher::new();
+                    bytes.hash(&mut hasher);
+                    let digest = hasher.finish();
+                    if recent.iter().any(|(seen, _)| *seen == digest) { continue; }
+                    if recent.len() >= 256 { recent.pop_front(); }
+                    recent.push_back((digest, now));
+                    if !matches!(timeout(Duration::from_secs(2), writer.send(&bytes)).await, Ok(Ok(()))) {
+                        break 'serve;
+                    }
                 }
             }
         }
     }
-    state.core.lock().unwrap().remove(id, false, state.now());
+    // Closed when the last central unsubscribed: its links have no way out.
+    hub_mtu.store(0, Ordering::Release);
+    let now = state.now();
+    let mut core = state.core();
+    for id in core.role_links(Role::Peripheral) {
+        core.remove(id, false, now);
+    }
 }
