@@ -588,13 +588,10 @@ jobs:
           path: ~/.cache/conest-lyrebird
           key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - run: flutter pub get
-      - name: Build Windows native library with visible Rust diagnostics
-        shell: bash
-        run: |
-          cargo build --locked \
-            --manifest-path native/conest_native/Cargo.toml \
-            --target-dir build/windows/x64/conest_native_target \
-            --release
+      # No separate cargo build first: the bundle's CMake build runs cargo
+      # under MSBuild's environment, whose compiler variables differ from
+      # this shell's, so each build invalidated the other's C dependencies
+      # (aws-lc, ring, zstd...) and both rebuilt them every run.
       - name: Build Windows debug bundle
         shell: bash
         run: |
