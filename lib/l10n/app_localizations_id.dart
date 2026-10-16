@@ -3499,6 +3499,9 @@ class AppLocalizationsId extends AppLocalizations {
   String get uiDeleteAlbum52E30F => 'Hapus album';
 
   @override
+  String get menuForwardAlbum => 'Teruskan album';
+
+  @override
   String uiValueSelectedB1DFAF(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,

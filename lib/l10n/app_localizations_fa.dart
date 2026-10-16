@@ -3502,6 +3502,9 @@ class AppLocalizationsFa extends AppLocalizations {
   String get uiDeleteAlbum52E30F => 'حذف آلبوم';
 
   @override
+  String get menuForwardAlbum => 'بازارسال آلبوم';
+
+  @override
   String uiValueSelectedB1DFAF(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,

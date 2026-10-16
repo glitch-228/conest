@@ -5088,6 +5088,10 @@
   "@uiDeleteAlbum52E30F": {
     "description": "App-owned interface/status text in lib/main.dart:18330. English: Delete album"
   },
+  "menuForwardAlbum": "Forward album",
+  "@menuForwardAlbum": {
+    "description": "Album menu: forward every item of the album, as one album, to another chat."
+  },
   "uiValueSelectedB1DFAF": "{value, plural, one{{value} selected} other{{value} selected}}",
   "@uiValueSelectedB1DFAF": {
     "description": "App-owned interface/status text in lib/main.dart:18413. English: {value} selected",

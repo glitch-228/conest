@@ -941,6 +941,7 @@
   "uiRetryFailed7B6CA4": "تلاش دوبارهٔ ناموفق‌ها",
   "uiCancelAlbumDB0A07": "لغو آلبوم",
   "uiDeleteAlbum52E30F": "حذف آلبوم",
+  "menuForwardAlbum": "بازارسال آلبوم",
   "uiValueSelectedB1DFAF": "{value, plural, one{{value} انتخاب‌شده} other{{value} انتخاب‌شده}}",
   "uiThisWillCancelValueActiveB3425E": "{value, plural, one{این کار {value} انتقال فعال را لغو و فهرست انتقال را پاک می‌کند. پیام‌های گفت‌وگو و فایل‌های کامل‌شده می‌مانند.} other{این کار {value} انتقال فعال را لغو و فهرست انتقال را پاک می‌کند. پیام‌های گفت‌وگو و فایل‌های کامل‌شده می‌مانند.}}",
   "uiNoTransfersYetB8E5C1": "هنوز انتقالی نیست.",

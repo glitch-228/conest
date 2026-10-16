@@ -3551,6 +3551,9 @@ class AppLocalizationsAr extends AppLocalizations {
   String get uiDeleteAlbum52E30F => 'حذف الألبوم';
 
   @override
+  String get menuForwardAlbum => 'إعادة توجيه الألبوم';
+
+  @override
   String uiValueSelectedB1DFAF(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,

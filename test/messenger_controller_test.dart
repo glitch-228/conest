@@ -10104,6 +10104,148 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   });
 
+  testWidgets('albums are forwarded as one album and voice notes as voice', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    late MessengerController carol;
+    late String carolId;
+    final root = Directory.systemTemp.createTempSync('conest_forward_album_');
+    addTearDown(() => root.deleteSync(recursive: true));
+    await tester.runAsync(() async {
+      final relayClient = _FakeRelayClient();
+      Future<Directory> Function() rootFor(String name) =>
+          () async =>
+              Directory('${root.path}/$name')..createSync(recursive: true);
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        attachmentRootProvider: rootFor('a'),
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        attachmentRootProvider: rootFor('b'),
+      );
+      carol = await _createController(
+        relayClient: relayClient,
+        displayName: 'Carol',
+        attachmentRootProvider: rootFor('c'),
+      );
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      carolId = carol.identity!.deviceId;
+      final bobContact = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+      for (var i = 0; i < 2; i++) {
+        await alice.sendAttachment(
+          contact: bobContact,
+          bytes: Uint8List.fromList(
+            List<int>.generate(3000, (j) => (i + j) % 251),
+          ),
+          fileName: 'part$i.pdf',
+          mimeType: 'application/pdf',
+          albumId: 'album-src',
+        );
+      }
+      final voice = Uint8List.fromList([
+        ...'OggS'.codeUnits,
+        ...List<int>.generate(2000, (j) => j % 251),
+      ]);
+      await alice.sendVoiceMessage(
+        contact: bobContact,
+        source: StagedAttachment(
+          id: 'voice-src',
+          fileName: 'voice-message.ogg',
+          mimeType: 'audio/ogg; codecs=opus',
+          sizeBytes: voice.length,
+          bytes: voice,
+        ),
+        metadata: const VoiceMessageMetadata(durationMs: 2000),
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: _createUpdateService(),
+          buildInfo: _createBuildInfo(),
+          themeController: app.ConestThemeController.memory(),
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+
+    int filesToCarol() =>
+        alice.messagesFor(carolId).where((m) => m.attachment != null).length;
+    Future<void> pickCarol(int files) async {
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Carol').last);
+      // The forward runs on the test clock (it starts from a tap).
+      for (var i = 0; i < 100 && filesToCarol() < files; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    await tester.tap(find.byTooltip('Album actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Forward album'));
+    await pickCarol(2);
+    final album = alice
+        .messagesFor(carolId)
+        .where((m) => m.attachment != null)
+        .toList();
+    expect(album.map((m) => m.attachment!.fileName), [
+      'part0.pdf',
+      'part1.pdf',
+    ]);
+    expect(album.map((m) => m.albumId).toSet(), hasLength(1));
+    expect(album.first.albumId, isNotNull);
+    expect(album.first.albumId, isNot('album-src'));
+
+    // The one message outside the album: the voice note.
+    final voiceMenu = find.byWidgetPredicate(
+      (widget) =>
+          widget is PopupMenuButton<String> &&
+          widget.tooltip == 'Message actions',
+    );
+    tester.state<PopupMenuButtonState<String>>(voiceMenu).showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Forward attachment'));
+    await tester.pumpAndSettle();
+    // The picker opens once the file is found on disk.
+    for (var i = 0; i < 50 && find.byType(Dialog).evaluate().isEmpty; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+    }
+    await pickCarol(3);
+    final forwardedVoice = alice
+        .messagesFor(carolId)
+        .lastWhere((m) => m.attachment != null)
+        .attachment!;
+    expect(forwardedVoice.fileName, 'voice-message.ogg');
+    expect(forwardedVoice.voiceMetadata?.durationMs, 2000);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    alice.dispose();
+    bob.dispose();
+    carol.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
   testWidgets('message bubbles support selection and copy message actions', (
     tester,
   ) async {

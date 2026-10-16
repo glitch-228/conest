@@ -1,4 +1,4 @@
-## Conest 0.3.12 nightly (October 16)
+## Conest 0.3.12 nightly (October 17)
 
 Read marks fixed, no crash goes unnoticed, much less battery used by
 group calls, Conest in five more languages, and the Bluetooth mesh on
@@ -21,9 +21,14 @@ desktops. Everything from the earlier October nightlies is included.
   sends the cleaned copy. Canon raw photos and 360° videos are no longer
   damaged by metadata removal.
 - Matrix emoji verification shows the emoji names in every language.
+- A forwarded voice message arrives as a voice message, not as a file.
 
 ### New
 
+- Forwarding: select several messages and forward them together, or
+  forward a whole album from its menu (it arrives as one album).
+  Messages from Matrix rooms can be forwarded into Conest chats and
+  groups too.
 - Crash reports: if Conest closes unexpectedly, the next start says so
   and shows what happened, to copy into a bug report. Nothing is sent
   anywhere.

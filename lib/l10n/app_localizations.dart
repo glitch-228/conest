@@ -5777,6 +5777,12 @@ abstract class AppLocalizations {
   /// **'Delete album'**
   String get uiDeleteAlbum52E30F;
 
+  /// Album menu: forward every item of the album, as one album, to another chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Forward album'**
+  String get menuForwardAlbum;
+
   /// App-owned interface/status text in lib/main.dart:18413. English: {value} selected
   ///
   /// In en, this message translates to:

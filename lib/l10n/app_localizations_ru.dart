@@ -3574,6 +3574,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get uiDeleteAlbum52E30F => 'Удалить альбом';
 
   @override
+  String get menuForwardAlbum => 'Переслать альбом';
+
+  @override
   String uiValueSelectedB1DFAF(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,

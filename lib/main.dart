@@ -7554,6 +7554,17 @@ Future<void> _forwardMessages(
   if (destination == null || !context.mounted) return;
   var sent = 0;
   var skipped = 0;
+  // Album items forwarded together stay one album at the destination.
+  final albums = <String, String>{};
+  String? albumFor(ChatMessage message) {
+    final id = message.albumId;
+    if (id == null || id.isEmpty) return null;
+    return albums.putIfAbsent(
+      id,
+      () => 'forward-album-${DateTime.now().microsecondsSinceEpoch}-$id',
+    );
+  }
+
   try {
     for (final message in ordered) {
       if (!context.mounted) return;
@@ -7574,6 +7585,8 @@ Future<void> _forwardMessages(
           mimeType: attachment.mimeType,
           sizeBytes: attachment.sizeBytes,
           presentation: attachment.presentation,
+          voice: attachment.voiceMetadata,
+          albumId: albumFor(message),
         );
         sent++;
       } else if (groupFile != null) {
@@ -7595,6 +7608,7 @@ Future<void> _forwardMessages(
                   groupFile.mimeType.startsWith('video/')
               ? AttachmentPresentation.media
               : AttachmentPresentation.file,
+          voice: groupFile.voiceMetadata,
         );
         sent++;
       } else if (message.body.trim().isNotEmpty) {
@@ -7644,6 +7658,7 @@ Future<void> _forwardAttachment(
     mimeType: descriptor.mimeType,
     sizeBytes: descriptor.sizeBytes,
     presentation: descriptor.presentation,
+    voice: descriptor.voiceMetadata,
   );
 }
 
@@ -7675,6 +7690,7 @@ Future<void> _forwardGroupFile(
             manifest.mimeType.startsWith('video/')
         ? AttachmentPresentation.media
         : AttachmentPresentation.file,
+    voice: manifest.voiceMetadata,
   );
 }
 
@@ -7802,7 +7818,8 @@ class _ForwardPickerDialogState extends State<_ForwardPickerDialog> {
   }
 }
 
-/// Sends a file (forwarded) to [destination].
+/// Sends a file (forwarded) to [destination]. A voice note ([voice]) goes
+/// as a voice note, and files sharing an [albumId] arrive as one album.
 Future<void> _sendFileTo(
   BuildContext context,
   MessengerController controller,
@@ -7812,29 +7829,58 @@ Future<void> _sendFileTo(
   required String mimeType,
   required int sizeBytes,
   required AttachmentPresentation presentation,
+  VoiceMessageMetadata? voice,
+  String? albumId,
 }) async {
+  // Voice notes are always Ogg/Opus (their metadata says so), but the
+  // stored type loses its "; codecs=opus" and reads as a generic file.
+  if (voice != null) mimeType = 'audio/ogg; codecs=opus';
   switch (destination) {
     case ContactRecord contact:
-      await controller.sendAttachmentSource(
-        contact: contact,
-        source: StagedAttachment(
-          id: 'forward-${DateTime.now().microsecondsSinceEpoch}',
-          fileName: fileName,
-          mimeType: mimeType,
-          sizeBytes: sizeBytes,
-          filePath: path,
-          presentation: presentation,
-        ),
-      );
-    case GroupRecord group:
-      await publishGroupFileAsking(
-        context,
-        controller,
-        groupId: group.groupId,
-        path: path,
+      final source = StagedAttachment(
+        id: 'forward-${DateTime.now().microsecondsSinceEpoch}',
         fileName: fileName,
         mimeType: mimeType,
+        sizeBytes: sizeBytes,
+        filePath: path,
+        presentation: voice != null
+            ? AttachmentPresentation.media
+            : presentation,
       );
+      if (voice != null) {
+        await controller.sendVoiceMessage(
+          contact: contact,
+          source: source,
+          metadata: voice,
+        );
+      } else {
+        await controller.sendAttachmentSource(
+          contact: contact,
+          source: source,
+          albumId: albumId,
+        );
+      }
+    case GroupRecord group:
+      if (voice != null) {
+        await controller.publishGroupFile(
+          groupId: group.groupId,
+          path: path,
+          fileName: fileName,
+          mimeType: mimeType,
+          voiceMetadata: voice,
+          // Recorded by the app: nothing personal in it.
+          keepMetadata: true,
+        );
+      } else {
+        await publishGroupFileAsking(
+          context,
+          controller,
+          groupId: group.groupId,
+          path: path,
+          fileName: fileName,
+          mimeType: mimeType,
+        );
+      }
   }
 }
 
@@ -7860,6 +7906,7 @@ Future<void> _forwardFile(
   required String mimeType,
   required int sizeBytes,
   required AttachmentPresentation presentation,
+  VoiceMessageMetadata? voice,
 }) async {
   final destination = await _pickForwardDestination(
     context,
@@ -7879,6 +7926,7 @@ Future<void> _forwardFile(
       mimeType: mimeType,
       sizeBytes: sizeBytes,
       presentation: presentation,
+      voice: voice,
     );
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -9231,6 +9279,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       selected: allSelected,
       onForwardAttachment: (descriptor) =>
           _forwardAttachment(context, controller, palette, descriptor),
+      onForwardAlbum: (album) =>
+          _forwardMessages(context, controller, palette, album),
       onToggleSelection: (album) {
         setState(() {
           final alreadyAll = album.every(
@@ -11217,6 +11267,8 @@ class _ChatPanelState extends State<_ChatPanel> {
       selected: allSelected,
       onForwardAttachment: (descriptor) =>
           _forwardAttachment(context, controller, palette, descriptor),
+      onForwardAlbum: (album) =>
+          _forwardMessages(context, controller, palette, album),
       onDeleteAttachment: (message) => _deleteMessage(context, message),
       onToggleSelection: (album) {
         setState(() {
@@ -18815,6 +18867,7 @@ class _AlbumBubble extends StatelessWidget {
     this.onToggleSelection,
     this.onForwardAttachment,
     this.onDeleteAttachment,
+    this.onForwardAlbum,
   });
 
   final List<ChatMessage> members;
@@ -18829,6 +18882,7 @@ class _AlbumBubble extends StatelessWidget {
   final Future<void> Function(AttachmentDescriptor descriptor)?
   onForwardAttachment;
   final Future<void> Function(ChatMessage message)? onDeleteAttachment;
+  final Future<void> Function(List<ChatMessage> members)? onForwardAlbum;
 
   @override
   Widget build(BuildContext context) {
@@ -18959,9 +19013,17 @@ class _AlbumBubble extends StatelessWidget {
                         case 'delete':
                           await controller.deleteAlbum(albumId);
                           break;
+                        case 'forward':
+                          await onForwardAlbum?.call(members);
+                          break;
                       }
                     },
                     itemBuilder: (_) => [
+                      if (onForwardAlbum != null)
+                        PopupMenuItem(
+                          value: 'forward',
+                          child: Text(l10nOf(context).menuForwardAlbum),
+                        ),
                       if (anyInFlight)
                         PopupMenuItem(
                           value: 'cancel',
