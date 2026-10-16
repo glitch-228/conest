@@ -61,6 +61,15 @@ android {
     }
 
     signingConfigs {
+        // Debug builds (the device lab) share one public debug key, so a
+        // newer CI build updates the one installed, keeping its data. Never
+        // used for releases: the debug package is separate from Conest's.
+        getByName("debug") {
+            storeFile = file("debug-shared.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("release") {
             if (conestReleaseSigningConfigured) {
                 storeFile = file(conestReleaseStoreFile!!)
