@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:conest/l10n/app_localizations.dart';
 import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/ui/matrix_verification_dialog.dart';
 import 'package:flutter/material.dart';
@@ -77,6 +78,43 @@ void main() {
     await tester.pump();
     expect(find.text('🐶'), findsOneWidget);
     expect(find.text('They match'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('emoji names show in every language', (tester) async {
+    api = _Api();
+    client = MatrixClientService(
+      api: api,
+      store: () async => (path: '/store', passphrase: 'p'),
+      onSession: (_) async {},
+    );
+    addTearDown(client.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: MatrixVerificationDialog(
+          client: client,
+          userId: '@a:x',
+          flowId: 'flow',
+          weStarted: true,
+        ),
+      ),
+    );
+    api.emit(state('ready'));
+    await tester.pump();
+    api.emit(state('started'));
+    await tester.pump(const Duration(seconds: 3));
+    // The names come from Matrix, in the key Matrix uses.
+    api.emit({
+      ...state('emojis'),
+      'emojis': [
+        {'symbol': '🐶', 'description': 'Dog'},
+      ],
+    });
+    await tester.pump();
+    expect(find.text('Dog'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

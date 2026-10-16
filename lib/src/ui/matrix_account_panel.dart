@@ -158,7 +158,7 @@ class _MatrixAccountPanelState extends State<MatrixAccountPanel> {
         builder: (context) => AlertDialog(
           title: Text(l10nOf(context).uiRecoveryIsAlreadySetUp371F7F),
           content: Text(
-            state.recovery == l10nOf(context).uiEnabledDF174A
+            state.recovery == 'Enabled'
                 ? l10nOf(context).uiYourEncryptedMatrixHistoryIsC16CD2
                 : l10nOf(context).uiThisAccountAlreadyHasA0CF3D8,
           ),

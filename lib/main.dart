@@ -335,7 +335,11 @@ class ConestAlreadyRunningApp extends StatelessWidget {
             );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: l10nOf(context).uiConest26885B,
+              // Evaluated below the app's own Localizations; these screens
+              // come before the chosen language is known: the system's.
+              onGenerateTitle: (context) => l10nOf(context).uiConest26885B,
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
               theme: palette.themeData(
                 courier: themeController.shell == ConestShell.courier,
               ),
@@ -489,7 +493,11 @@ class _ConestBootstrapAppState extends State<ConestBootstrapApp> {
                   );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: l10nOf(context).uiConest26885B,
+              // Evaluated below the app's own Localizations; these screens
+              // come before the chosen language is known: the system's.
+              onGenerateTitle: (context) => l10nOf(context).uiConest26885B,
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
               theme: palette.themeData(
                 courier: widget.themeController.shell == ConestShell.courier,
               ),
@@ -1081,7 +1089,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
             );
             return MaterialApp(
               debugShowCheckedModeBanner: false,
-              title: l10nOf(context).uiConest26885B,
+              onGenerateTitle: (context) => l10nOf(context).uiConest26885B,
               navigatorKey: _navigatorKey,
               localizationsDelegates: AppLocalizations.localizationsDelegates,
               supportedLocales: AppLocalizations.supportedLocales,

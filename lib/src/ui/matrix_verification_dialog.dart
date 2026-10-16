@@ -86,7 +86,7 @@ class _MatrixVerificationDialogState extends State<MatrixVerificationDialog> {
                 (
                   symbol: emoji['symbol'] as String? ?? '?',
                   description:
-                      emoji[l10nOf(context).uiDescriptionCB3291] as String? ??
+                      emoji['description'] as String? ??
                       '',
                 ),
           ];
