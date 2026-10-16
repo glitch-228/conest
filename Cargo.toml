@@ -6,3 +6,8 @@ members = [
   "native/conest_updater",
 ]
 resolver = "2"
+
+[profile.release]
+# Symbols are not shipped (the Linux native library was 120 MB with them);
+# panic reports still carry file and line.
+strip = "symbols"

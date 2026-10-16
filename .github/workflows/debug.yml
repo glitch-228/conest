@@ -84,6 +84,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - run: flutter pub get
       - name: Verify channel identity and automatic transfer handshake
         run: |
@@ -122,10 +123,11 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: matrix-native
+          shared-key: matrix-native
       - run: flutter pub get
       - name: Build the native library with the Matrix client
         run: |
@@ -187,10 +189,11 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: matrix-native
+          shared-key: matrix-native
       - run: flutter pub get
       - name: Build the native library with Tor
         run: |
@@ -200,6 +203,10 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-lyrebird
+          key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - name: Build lyrebird and fetch obfs4 bridges
         run: |
           tool/build_lyrebird.sh linux-x64 "$RUNNER_TEMP/lyrebird"
@@ -232,6 +239,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - run: flutter pub get
       - name: Start nostr-rs-relay and strfry
         run: |
@@ -292,6 +300,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - run: flutter pub get
       - name: Start GreenMail (accounts created on first login)
         run: |
@@ -324,6 +333,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - run: flutter pub get
       - name: Install Reticulum (pinned)
         run: |
@@ -346,6 +356,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - run: flutter pub get
       - name: Start meshtasticd in simulation (pinned 2.7.26)
         run: |
@@ -366,10 +377,37 @@ jobs:
         if: failure()
         run: docker logs meshtasticd | tail -200
 
+  relay-installer:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Relay installer (shellcheck, and a real install without systemd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -s sh tool/install_relay.sh
+      - name: Install the newest nightly relay in a fresh container, then run it
+        env:
+          KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PUBLIC_KEY }}
+        run: |
+          docker run --rm -e KEY -v "$PWD/tool:/tool:ro" debian:12 sh -ec '
+            apt-get update -qq
+            apt-get install -y -qq curl openssl ca-certificates >/dev/null
+            sh /tool/install_relay.sh --yes --channel nightly --release-key "$KEY"
+            test -x /opt/conest-relay/conest_relay
+            id conest-relay
+            /opt/conest-relay/conest_relay 127.0.0.1:7667 \
+              --identity-seed-path /tmp/seed --database-path /tmp/relay.db &
+            for i in $(seq 1 20); do
+              curl -fsS http://127.0.0.1:7667/health && exit 0
+              sleep 1
+            done
+            exit 1'
+
   android:
     name: Android debug battle-test APK
-    needs: [cadence, verify]
-    if: ${{ always() && !cancelled() && needs.cadence.result == 'success' && (needs.verify.result == 'success' || (inputs.quick_build && needs.verify.result == 'skipped')) }}
+    # Built alongside verify (which still decides the run's result) rather
+    # than after it.
+    needs: cadence
     runs-on: ubuntu-latest
     env:
       CON_ANDROID_TARGETS: arm64-v8a
@@ -379,14 +417,18 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      - run: cargo install cargo-ndk --version 4.1.2 --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk@4.1.2
       - uses: Swatinem/rust-cache@v2
         with:
           key: android-debug
@@ -394,6 +436,10 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-lyrebird
+          key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - run: flutter pub get
       - name: Build Tor's pluggable transports
         run: tool/build_lyrebird.sh android-arm64 build/app/lyrebirdJniLibs/arm64-v8a/liblyrebird.so
@@ -416,11 +462,14 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 14
+          # Already compressed.
+          compression-level: 0
 
   linux:
     name: Linux debug battle-test bundle
-    needs: [cadence, verify]
-    if: ${{ always() && !cancelled() && needs.cadence.result == 'success' && (needs.verify.result == 'success' || (inputs.quick_build && needs.verify.result == 'skipped')) }}
+    # Built alongside verify (which still decides the run's result) rather
+    # than after it.
+    needs: cadence
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -431,14 +480,21 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: linux-debug
+          # The bundle build reuses this target directory: cache it, not ./target.
+          workspaces: ". -> build/linux/x64/debug/conest_native_target"
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-lyrebird
+          key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - run: flutter pub get
       - name: Build Linux native library with visible Rust diagnostics
         run: |
@@ -507,11 +563,14 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
           retention-days: 14
+          # Already compressed.
+          compression-level: 0
 
   windows:
     name: Windows debug battle-test bundle
-    needs: [cadence, verify]
-    if: ${{ always() && !cancelled() && needs.cadence.result == 'success' && (needs.verify.result == 'success' || (inputs.quick_build && needs.verify.result == 'skipped')) }}
+    # Built alongside verify (which still decides the run's result) rather
+    # than after it.
+    needs: cadence
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -519,14 +578,20 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-debug
+          workspaces: ". -> build/windows/x64/conest_native_target"
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-lyrebird
+          key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - run: flutter pub get
       - name: Build Windows native library with visible Rust diagnostics
         shell: bash
@@ -556,3 +621,5 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
           retention-days: 14
+          # Already compressed.
+          compression-level: 0

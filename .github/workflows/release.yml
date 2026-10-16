@@ -1,9 +1,16 @@
 name: Release
 
+# Dispatched from the branch with the tag to release (pushed first):
+#   gh workflow run release.yml --ref feature/matrix-client -f tag=v0.3.12-nightly.YYYYMMDD.N
+# A run on the branch can use the branch's build caches; a run started by
+# the tag itself never can (tag runs see only their own and main's caches).
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (v*)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -18,19 +25,24 @@ jobs:
     name: Prepare release metadata
     # Debug builds are workflow artifacts only. Even an accidentally pushed
     # v*-debug tag must never create a GitHub release or signed updater feed.
-    if: ${{ !contains(github.ref_name, 'debug') }}
+    if: ${{ startsWith(inputs.tag, 'v') && !contains(inputs.tag, 'debug') }}
     runs-on: ubuntu-latest
     outputs:
+      sha: ${{ steps.meta.outputs.sha }}
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
       channel: ${{ steps.meta.outputs.channel }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
       sanitized: ${{ steps.meta.outputs.sanitized }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - id: meta
         shell: bash
         run: |
-          tag="${GITHUB_REF##refs/tags/}"
+          tag="${{ inputs.tag }}"
+          sha="$(git rev-parse HEAD)"
           version="${tag#v}"
           channel="stable"
           prerelease="false"
@@ -43,6 +55,7 @@ jobs:
           esac
           sanitized="$(printf '%s' "$tag" | tr -c 'A-Za-z0-9._-' '_')"
           {
+            echo "sha=$sha"
             echo "tag=$tag"
             echo "version=$version"
             echo "channel=$channel"
@@ -59,30 +72,47 @@ jobs:
       fail-fast: false
       matrix:
         target:
+          # Static (musl) builds run on any Linux, old or new.
           - label: linux-x64
             runner: ubuntu-latest
-            triple: x86_64-unknown-linux-gnu
+            triple: x86_64-unknown-linux-musl
             ext: ""
+            zig: true
+          - label: linux-arm64
+            runner: ubuntu-latest
+            triple: aarch64-unknown-linux-musl
+            ext: ""
+            zig: true
           - label: windows-x64
             runner: windows-latest
             triple: x86_64-pc-windows-msvc
             ext: ".exe"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target.triple }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: relay-${{ matrix.target.label }}
-      - name: Build relay
+      - if: ${{ matrix.target.zig }}
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - if: ${{ matrix.target.zig }}
+        run: pip install ziglang
+      - name: Build relay, updater and supervisor
+        shell: bash
         env:
           CONEST_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
-        run: cargo build --release -p conest_relay --target ${{ matrix.target.triple }} --locked
-      - name: Build updater
-        run: cargo build --release -p conest_updater --target ${{ matrix.target.triple }} --locked
-      - name: Build relay supervisor
-        run: cargo build --release -p conest_relay_supervisor --target ${{ matrix.target.triple }} --locked
+        run: |
+          build="build"
+          [ "${{ matrix.target.zig }}" = "true" ] && build="zigbuild"
+          for crate in conest_relay conest_updater conest_relay_supervisor; do
+            cargo $build --release -p "$crate" --target ${{ matrix.target.triple }} --locked
+          done
       - name: Stage binaries
         shell: bash
         run: |
@@ -114,6 +144,8 @@ jobs:
       CONEST_RELEASE_MANIFEST_PUBLIC_KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -131,10 +163,15 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: linux-app
+          # The bundle's native library builds in CMake's own target dir.
+          workspaces: |
+            .
+            . -> build/linux/x64/release/conest_native_target
       - name: Verify manifest public key is set
         shell: bash
         run: |
@@ -148,6 +185,10 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-lyrebird
+          key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - name: Flutter pub get
         run: flutter pub get
       - name: Build Linux bundle
@@ -156,7 +197,7 @@ jobs:
           flutter build linux --release \
             --dart-define=CONEST_BUILD_TAG=${{ needs.prepare.outputs.tag }} \
             --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
-            --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
+            --dart-define=CONEST_BUILD_COMMIT=${{ needs.prepare.outputs.sha }} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
@@ -170,6 +211,8 @@ jobs:
           mkdir -p "$stage"
           tool/build_lyrebird.sh linux-x64 "$stage/lyrebird"
           cp -a build/linux/x64/release/bundle/. "$stage/"
+          # The Flutter engine ships with its debug sections.
+          strip --strip-debug "$stage"/lib/*.so
           cp target/release/conest_updater "$stage/conest_updater"
           chmod 755 "$stage/conest_updater"
           chmod 755 "$stage/conest"
@@ -190,14 +233,20 @@ jobs:
       CONEST_RELEASE_MANIFEST_PUBLIC_KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-app
+          workspaces: |
+            .
+            . -> build/windows/x64/conest_native_target
       - name: Verify manifest public key is set
         shell: bash
         run: |
@@ -211,6 +260,10 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-lyrebird
+          key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - name: Flutter pub get
         run: flutter pub get
       - name: Build Windows bundle
@@ -220,7 +273,7 @@ jobs:
           flutter build windows --release \
             --dart-define=CONEST_BUILD_TAG=${{ needs.prepare.outputs.tag }} \
             --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
-            --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
+            --dart-define=CONEST_BUILD_COMMIT=${{ needs.prepare.outputs.sha }} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
@@ -256,14 +309,18 @@ jobs:
       CON_ANDROID_TARGETS: arm64-v8a
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       # super_clipboard's super_native_extensions builds an Android JNI
       # shared library from Rust via cargokit. Without a local Rust
       # toolchain, the build falls back to a download of precompiled
@@ -272,8 +329,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --version 4.1.2 --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk@4.1.2
       - uses: Swatinem/rust-cache@v2
         with:
           key: android-app
@@ -303,6 +361,10 @@ jobs:
         with:
           go-version: "1.24"
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-lyrebird
+          key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - name: Build Tor's pluggable transports
         run: tool/build_lyrebird.sh android-arm64 build/app/lyrebirdJniLibs/arm64-v8a/liblyrebird.so
       - name: Flutter pub get
@@ -313,7 +375,7 @@ jobs:
             --target-platform android-arm64 \
             --dart-define=CONEST_BUILD_TAG=${{ needs.prepare.outputs.tag }} \
             --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
-            --dart-define=CONEST_BUILD_COMMIT=${{ github.sha }} \
+            --dart-define=CONEST_BUILD_COMMIT=${{ needs.prepare.outputs.sha }} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
@@ -345,12 +407,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
           fetch-tags: true
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
+          cache: true
       - name: Flutter pub get
         run: flutter pub get
       - uses: actions/download-artifact@v4
@@ -371,6 +435,8 @@ jobs:
           find downloads/relay-linux-x64 -name "conest_updater-linux-x64-*" -exec cp -v {} dist/ \;
           find downloads/relay-windows-x64 -name "conest_updater-windows-x64-*" -exec cp -v {} dist/ \;
           find downloads/relay-linux-x64 -name "conest_relay_supervisor-linux-x64-*" -exec cp -v {} dist/ \;
+          find downloads/relay-linux-arm64 -name "conest_relay-linux-arm64-*" -exec cp -v {} dist/ \;
+          find downloads/relay-linux-arm64 -name "conest_relay_supervisor-linux-arm64-*" -exec cp -v {} dist/ \;
           find downloads/relay-windows-x64 -name "conest_relay_supervisor-windows-x64-*" -exec cp -v {} dist/ \;
           ls -la dist/
       - name: Generate signed release manifest
@@ -409,6 +475,16 @@ jobs:
           dart run tool/verify_release_manifest.dart \
             --dist dist \
             --public-key "$CONEST_RELEASE_MANIFEST_PUBLIC_KEY"
+      - name: The relay installer, with the release key it checks against
+        env:
+          CONEST_RELEASE_MANIFEST_PUBLIC_KEY: ${{ secrets.CONEST_RELEASE_MANIFEST_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed "s#@RELEASE_PUBLIC_KEY@#${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}#" \
+            tool/install_relay.sh > dist/install-relay.sh
+          if grep -q '@RELEASE_PUBLIC_KEY@' dist/install-relay.sh; then exit 1; fi
+          sh -n dist/install-relay.sh
       - name: Compose release notes
         id: notes
         shell: bash
@@ -437,13 +513,13 @@ jobs:
                 echo
                 git log --no-merges --format='- %s' "$prev_tag..$tag"
               else
-                echo "Built from commit \`${GITHUB_SHA}\`."
+                echo "Built from commit \`${{ needs.prepare.outputs.sha }}\`."
               fi
             fi
             echo
             echo "---"
             echo
-            echo "Built from commit \`${GITHUB_SHA}\`. Each desktop and mobile asset is covered by \`RELEASE-MANIFEST.json\` and its Ed25519 signature \`RELEASE-MANIFEST.ed25519.sig\`. The Conest desktop and Android updater both verify this signature before applying an update."
+            echo "Built from commit \`${{ needs.prepare.outputs.sha }}\`. Each desktop and mobile asset is covered by \`RELEASE-MANIFEST.json\` and its Ed25519 signature \`RELEASE-MANIFEST.ed25519.sig\`. The Conest desktop and Android updater both verify this signature before applying an update."
           } > release-notes.md
           echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
       - name: Create GitHub release
@@ -464,6 +540,9 @@ jobs:
             dist/conest_updater-windows-x64-*
             dist/conest_relay_supervisor-linux-x64-*
             dist/conest_relay_supervisor-windows-x64-*
+            dist/conest_relay-linux-arm64-*
+            dist/conest_relay_supervisor-linux-arm64-*
+            dist/install-relay.sh
             dist/RELEASE-MANIFEST.json
             dist/RELEASE-MANIFEST.ed25519.sig
             dist/SHA256SUMS.txt

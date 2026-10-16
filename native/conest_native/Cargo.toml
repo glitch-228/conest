@@ -8,7 +8,7 @@ repository = "https://github.com/glitch-228/conest"
 publish = false
 
 [lib]
-crate-type = ["cdylib", "staticlib", "rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 # Qualification-only: lets CONEST_IROH_TEST_RELAY_ONLY strip IP transports so

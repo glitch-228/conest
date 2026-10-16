@@ -15,6 +15,17 @@ REPOSITORY=https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transport
 
 target=$1
 output=$(realpath -m "$2")
+
+# A finished build is kept per target and commit (CI caches this folder).
+cache_dir=${CONEST_LYREBIRD_CACHE:-$HOME/.cache/conest-lyrebird}
+cached="$cache_dir/$target-$COMMIT"
+if [ -s "$cached" ]; then
+  mkdir -p "$(dirname "$output")"
+  cp "$cached" "$output"
+  chmod +x "$output"
+  echo "Reused $VERSION for $target from $cached"
+  exit 0
+fi
 work=$(mktemp -d)
 trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
 
@@ -76,4 +87,6 @@ mkdir -p "$(dirname "$output")"
 (cd "$work/lyrebird" &&
   go build -trimpath -buildvcs=false -ldflags="$ldflags" \
     -o "$output" ./cmd/lyrebird)
+mkdir -p "$cache_dir"
+cp "$output" "$cached"
 echo "Built $VERSION for $target at $output"

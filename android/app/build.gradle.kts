@@ -49,6 +49,15 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         manifestPlaceholders["conestAppLabel"] = "Conest"
+        // Only the ABIs Conest's own native code is built for: other ABIs'
+        // plugin libraries (such as ML Kit's barcode reader) only add size.
+        ndk {
+            abiFilters += (System.getenv("CON_ANDROID_TARGETS")
+                ?: "arm64-v8a,armeabi-v7a,x86,x86_64")
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+        }
     }
 
     signingConfigs {
