@@ -7894,7 +7894,7 @@
   "@bluetoothMeshNeedsAttention": {
     "description": "Bluetooth mesh settings: it runs, but the adapter reports a problem (shown below)"
   },
-  "forwardSelectedTitle": "{count, plural, =1{Forward 1 message} other{Forward {count} messages}}",
+  "forwardSelectedTitle": "{count, plural, one{Forward 1 message} other{Forward {count} messages}}",
   "@forwardSelectedTitle": {
     "description": "Forward dialog title for several selected messages",
     "placeholders": {
@@ -7903,7 +7903,7 @@
       }
     }
   },
-  "forwardedSummary": "{count, plural, =1{1 message forwarded} other{{count} messages forwarded}}",
+  "forwardedSummary": "{count, plural, one{1 message forwarded} other{{count} messages forwarded}}",
   "@forwardedSummary": {
     "description": "After forwarding several messages",
     "placeholders": {
@@ -7912,7 +7912,7 @@
       }
     }
   },
-  "forwardSkipped": "{count, plural, =1{1 file is not on this device yet and was left out} other{{count} files are not on this device yet and were left out}}",
+  "forwardSkipped": "{count, plural, one{1 file is not on this device yet and was left out} other{{count} files are not on this device yet and were left out}}",
   "@forwardSkipped": {
     "description": "Selected files that could not be forwarded because they have not been downloaded",
     "placeholders": {
