@@ -5198,4 +5198,8 @@ class AppLocalizationsId extends AppLocalizations {
   String connectionsAsOf(String when) {
     return 'per $when';
   }
+
+  @override
+  String get bluetoothMeshNeedsAttention =>
+      'Jaringan Bluetooth perlu diperiksa';
 }

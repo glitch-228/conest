@@ -1350,5 +1350,6 @@
   "connectionsRouteWorks": "可用",
   "connectionsRouteBlocked": "在此网络上被屏蔽",
   "connectionsRouteFailing": "失败",
-  "connectionsAsOf": "截至 {when}"
+  "connectionsAsOf": "截至 {when}",
+  "bluetoothMeshNeedsAttention": "蓝牙网状网络需要处理"
 }

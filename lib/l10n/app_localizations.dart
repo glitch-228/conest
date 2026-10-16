@@ -8266,6 +8266,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'as of {when}'**
   String connectionsAsOf(String when);
+
+  /// Bluetooth mesh settings: it runs, but the adapter reports a problem (shown below)
+  ///
+  /// In en, this message translates to:
+  /// **'Bluetooth mesh needs attention'**
+  String get bluetoothMeshNeedsAttention;
 }
 
 class _AppLocalizationsDelegate

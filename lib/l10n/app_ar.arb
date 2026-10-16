@@ -1350,5 +1350,6 @@
   "connectionsRouteWorks": "يعمل",
   "connectionsRouteBlocked": "محجوب على هذه الشبكة",
   "connectionsRouteFailing": "يفشل",
-  "connectionsAsOf": "حتى {when}"
+  "connectionsAsOf": "حتى {when}",
+  "bluetoothMeshNeedsAttention": "شبكة البلوتوث تحتاج إلى انتباه"
 }

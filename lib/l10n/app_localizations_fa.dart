@@ -5209,4 +5209,7 @@ class AppLocalizationsFa extends AppLocalizations {
   String connectionsAsOf(String when) {
     return 'تا $when';
   }
+
+  @override
+  String get bluetoothMeshNeedsAttention => 'شبکهٔ بلوتوث نیاز به بررسی دارد';
 }

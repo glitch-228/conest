@@ -128,14 +128,23 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
             title: Text(switch (channel?.state) {
               BitchatCarrierState.running when channel?.lastError == null =>
                 l10nOf(context).uiBluetoothMeshOn5A96FE,
+              BitchatCarrierState.running => l10nOf(
+                context,
+              ).bluetoothMeshNeedsAttention,
               BitchatCarrierState.starting => l10nOf(
                 context,
               ).uiStartingBluetoothE6928A,
               _ => l10nOf(context).uiBluetoothUnavailableF4B751,
             }),
-            subtitle: channel?.lastError == null
+            subtitle:
+                channel?.lastError == null && channel?.adapterStatus == null
                 ? null
-                : Text(channel!.lastError!, maxLines: 2),
+                : Text(
+                    [
+                      ?channel?.adapterStatus,
+                      ?channel?.lastError,
+                    ].join('\n'),
+                  ),
           ),
         if (config != null)
           SwitchListTile.adaptive(

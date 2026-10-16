@@ -1350,5 +1350,6 @@
   "connectionsRouteWorks": "berfungsi",
   "connectionsRouteBlocked": "diblokir di jaringan ini",
   "connectionsRouteFailing": "gagal",
-  "connectionsAsOf": "per {when}"
+  "connectionsAsOf": "per {when}",
+  "bluetoothMeshNeedsAttention": "Jaringan Bluetooth perlu diperiksa"
 }

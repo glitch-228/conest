@@ -36,6 +36,8 @@ jobs:
         with:
           key: rust-tests
       - run: cargo test --workspace --locked
+      - name: Bluetooth hostile-input sabotage checks
+        run: python3 tool/m37_rust_sabotage.py
       - name: M36 audio behavior negative checks
         if: github.ref == 'refs/heads/agent/m36-group-calls'
         run: python3 tool/m36_rust_sabotage.py

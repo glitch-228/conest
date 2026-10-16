@@ -29,6 +29,8 @@ use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 
 use crate::api::{NativeInboundDatagram, NativeInboundEnvelope, NativeTransport};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::ble::{Session as BleSession, Shared as BleShared, core::Core as BleCore};
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
 use crate::audio::VoiceAudioSession;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -51,6 +53,107 @@ static VOICE_MESSAGE_RECORDINGS: LazyLock<Mutex<HashMap<u64, VoiceMessageRecorde
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_HANDLE: LazyLock<Mutex<u64>> = LazyLock::new(|| Mutex::new(1));
 static LAST_ERROR: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+static BLE_SESSIONS: LazyLock<Mutex<HashMap<u64, BleSession>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn ble_shared(handle: u64) -> Option<Arc<BleShared>> {
+    BLE_SESSIONS.lock().ok()?.get(&handle).map(|s| s.shared.clone())
+}
+
+/// Starts a worker, never waits for Bluetooth hardware. Adapter errors and
+/// recovery arrive in status/poll. Only one session may own the OS adapter.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_ble_open() -> u64 {
+    let Ok(mut sessions) = BLE_SESSIONS.lock() else { return 0; };
+    if !sessions.is_empty() { record_error("Bluetooth mesh is already open."); return 0; }
+    let session = match BleSession::open() {
+        Ok(session) => session,
+        Err(error) => { record_error(error); return 0; }
+    };
+    let Ok(mut next) = NEXT_HANDLE.lock() else { return 0; };
+    let handle = *next;
+    let Some(value) = next.checked_add(1) else { return 0; };
+    *next = value;
+    sessions.insert(handle, session);
+    handle
+}
+
+/// At most 32 packet events, plus authoritative link and adapter snapshots.
+/// Returned strings use conest_string_free, like the rest of this ABI.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_ble_poll_events(handle: u64) -> *mut c_char {
+    let Some(state) = ble_shared(handle) else { return std::ptr::null_mut(); };
+    let Ok(mut core) = state.core.lock() else { return std::ptr::null_mut(); };
+    json_string(&core.poll())
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_ble_link_limits(handle: u64) -> *mut c_char {
+    let Some(state) = ble_shared(handle) else { return std::ptr::null_mut(); };
+    let Ok(core) = state.core.lock() else { return std::ptr::null_mut(); };
+    json_string(&core.limits())
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_ble_status(handle: u64) -> *mut c_char {
+    let Some(state) = ble_shared(handle) else { return std::ptr::null_mut(); };
+    let Ok(core) = state.core.lock() else { return std::ptr::null_mut(); };
+    json_string(&core.status)
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+unsafe fn ble_link(link: *const u8, length: usize) -> Option<u64> {
+    if link.is_null() || length != 20 { return None; }
+    // Caller provides exactly length readable bytes. Bound before slicing.
+    BleCore::parse_id(std::str::from_utf8(unsafe { slice::from_raw_parts(link, length) }).ok()?)
+}
+
+/// Queues a single ATT write. Link identifiers use an explicit byte length;
+/// none of these entry points scan a caller's memory for a terminating NUL.
+/// Safety: non-null pointers reference the stated number of readable bytes.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_ble_send_to(handle: u64, link: *const u8, link_len: usize, bytes: *const u8, len: usize) -> bool {
+    if bytes.is_null() || len == 0 || len > crate::ble::core::MAX_WRITE { return false; }
+    let Some(id) = (unsafe { ble_link(link, link_len) }) else { return false; };
+    let Some(state) = ble_shared(handle) else { return false; };
+    let Ok(mut core) = state.core.lock() else { return false; };
+    core.enqueue(id, unsafe { slice::from_raw_parts(bytes, len) })
+}
+
+/// Safety: non-null pointers reference the stated number of readable bytes.
+/// A null except pointer means all links; a malformed non-null one fails.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_ble_broadcast(handle: u64, bytes: *const u8, len: usize, except: *const u8, except_len: usize) -> u32 {
+    if bytes.is_null() || len == 0 || len > crate::ble::core::MAX_WRITE { return 0; }
+    let excluded = if except.is_null() {
+        if except_len != 0 { return 0; }
+        None
+    } else {
+        let Some(id) = (unsafe { ble_link(except, except_len) }) else { return 0; };
+        Some(id)
+    };
+    let Some(state) = ble_shared(handle) else { return 0; };
+    let Ok(mut core) = state.core.lock() else { return 0; };
+    core.broadcast(unsafe { slice::from_raw_parts(bytes, len) }, excluded) as u32
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_ble_close(handle: u64) {
+    // Remove under the registry lock, then release the lock before joining
+    // the worker. Dart calls close on a helper isolate.
+    let session = BLE_SESSIONS.lock().ok().and_then(|mut s| s.remove(&handle));
+    drop(session);
+}
 
 const ATTACHMENT_KEY_LEN: usize = 32;
 const ATTACHMENT_NONCE_LEN: usize = 24;

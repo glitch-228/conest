@@ -8,6 +8,8 @@ mod audio;
 pub mod beam;
 mod crash;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
+mod ble;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod desktop_camera;
 mod ffi;
 pub mod matrix;

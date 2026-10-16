@@ -5325,4 +5325,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String connectionsAsOf(String when) {
     return 'на $when';
   }
+
+  @override
+  String get bluetoothMeshNeedsAttention => 'Bluetooth-сеть требует внимания';
 }

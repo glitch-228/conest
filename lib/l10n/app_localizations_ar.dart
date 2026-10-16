@@ -5327,4 +5327,7 @@ class AppLocalizationsAr extends AppLocalizations {
   String connectionsAsOf(String when) {
     return 'حتى $when';
   }
+
+  @override
+  String get bluetoothMeshNeedsAttention => 'شبكة البلوتوث تحتاج إلى انتباه';
 }

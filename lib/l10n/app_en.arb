@@ -7889,5 +7889,9 @@
         "type": "String"
       }
     }
+  },
+  "bluetoothMeshNeedsAttention": "Bluetooth mesh needs attention",
+  "@bluetoothMeshNeedsAttention": {
+    "description": "Bluetooth mesh settings: it runs, but the adapter reports a problem (shown below)"
   }
 }

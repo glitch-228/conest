@@ -1350,5 +1350,6 @@
   "connectionsRouteWorks": "کار می‌کند",
   "connectionsRouteBlocked": "در این شبکه مسدود است",
   "connectionsRouteFailing": "خطا دارد",
-  "connectionsAsOf": "تا {when}"
+  "connectionsAsOf": "تا {when}",
+  "bluetoothMeshNeedsAttention": "شبکهٔ بلوتوث نیاز به بررسی دارد"
 }

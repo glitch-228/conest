@@ -4981,4 +4981,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String connectionsAsOf(String when) {
     return '截至 $when';
   }
+
+  @override
+  String get bluetoothMeshNeedsAttention => '蓝牙网状网络需要处理';
 }

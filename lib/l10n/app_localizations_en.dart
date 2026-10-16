@@ -5210,4 +5210,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String connectionsAsOf(String when) {
     return 'as of $when';
   }
+
+  @override
+  String get bluetoothMeshNeedsAttention => 'Bluetooth mesh needs attention';
 }

@@ -1350,5 +1350,6 @@
   "connectionsRouteWorks": "работает",
   "connectionsRouteBlocked": "заблокировано в этой сети",
   "connectionsRouteFailing": "сбои",
-  "connectionsAsOf": "на {when}"
+  "connectionsAsOf": "на {when}",
+  "bluetoothMeshNeedsAttention": "Bluetooth-сеть требует внимания"
 }
