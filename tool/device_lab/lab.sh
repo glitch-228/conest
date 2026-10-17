@@ -131,7 +131,7 @@ start_android() { # group title or "", invites…
   done
   adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
   local args="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=600 --debug-expect-contacts=2 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-android)"
-  [ -n "$group" ] && args="$args --debug-group=$group"
+  if [ -n "$group" ]; then args="$args --debug-group=$group"; else args="$args --debug-expect-group=lab-all"; fi
   for invite in "$@"; do args="$args --debug-accept-invite=$invite"; done
   adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
     --es conestDebugArgs "'$args'" >/dev/null
@@ -143,7 +143,7 @@ start_android() { # group title or "", invites…
 start_linux() { # group title or "", invites…
   local group=$1; shift
   local args=()
-  [ -n "$group" ] && args+=("--debug-group=$group")
+  if [ -n "$group" ]; then args+=("--debug-group=$group"); else args+=("--debug-expect-group=lab-all"); fi
   for invite in "$@"; do args+=("--debug-accept-invite=$invite"); done
   "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
     "${args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-serve=540 --debug-expect-contacts=2 \
@@ -162,7 +162,7 @@ start_windows() { # group title or "", invites…
   win "if exist \"$win_report\" del \"$win_report\"" || true
   win "if exist \"$win_report.invite\" del \"$win_report.invite\"" || true
   local extra=""
-  [ -n "$group" ] && extra="--debug-group=$group"
+  if [ -n "$group" ]; then extra="--debug-group=$group"; else extra="--debug-expect-group=lab-all"; fi
   for invite in "$@"; do extra="$extra \"--debug-accept-invite=$(cmd_escape "$invite")\""; done
   cat >"$out/start-windows.cmd" <<EOF
 @echo off
