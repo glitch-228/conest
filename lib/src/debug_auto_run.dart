@@ -269,6 +269,21 @@ Future<String> runDebugRequest(
                 port: int.parse(node.substring(at + 1)),
               );
           }
+          // Ready (an address) before the invite is made: an invite carries
+          // only the carriers that have one, and email or Tor get theirs
+          // after signing up or connecting.
+          final kind = switch (carrier) {
+            'email' => TransportKind.deltaChat,
+            _ => TransportKind.values.byName(carrier),
+          };
+          bool ready() => controller.carrierStatuses.any(
+            (status) => status.kind == kind && status.ready,
+          );
+          final deadline = DateTime.now().add(const Duration(seconds: 85));
+          while (!ready() && DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+          }
+          if (!ready()) throw StateError('$carrier did not become ready');
         }).timeout(const Duration(seconds: 90));
         return null;
       });
