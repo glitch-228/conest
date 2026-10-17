@@ -34,6 +34,18 @@ void main() {
       again.inboxSecret,
       again.previousInboxSecret,
     ], isNot(contains(config.inboxSecret)));
+    // Away for two weeks or more: nothing old is kept.
+    final late = config.withInboxRotated(start.add(const Duration(days: 15)))!;
+    expect(late.previousInboxSecret, isNull);
+    // A rotation time ahead of the clock (it was wrong then) is not kept
+    // either, nor does it hold the secret forever.
+    final ahead = BitchatCarrierConfig(
+      address: config.address,
+      inboxSecret: config.inboxSecret,
+      inboxSecretAt: start.add(const Duration(days: 30)),
+    ).withInboxRotated(start)!;
+    expect(ahead.inboxSecret, isNot(config.inboxSecret));
+    expect(ahead.previousInboxSecret, isNull);
     // Saved and read back.
     final restored = BitchatCarrierConfig.fromJson(again.toJson())!;
     expect(restored.inboxSecret, again.inboxSecret);
@@ -280,6 +292,64 @@ void main() {
     );
 
     setUp(() => clock = DateTime.utc(2026, 10, 5, 12, 30));
+
+    test(
+      'a running device rotates its inbox and stops hearing old secrets',
+      () async {
+        final area = FakeBleNeighbourhood()..connect('a', 'd');
+        final daveGot = <(String, Uint8List)>[];
+        final start = DateTime.utc(2026, 10, 1);
+        final first = BitchatCarrierConfig(
+          address: daveAddress,
+          inboxSecret: 'a' * 32,
+          inboxSecretAt: start,
+        );
+        final dave = BitchatCarrierChannel(
+          config: first,
+          connector: () async => area.node('d'),
+          keyFor: (_) async => const [],
+          onFrame: (sender, frame) => daveGot.add((sender, frame)),
+          now: () => clock,
+        )..start();
+        final alice = await channel(area, 'a', aliceAddress, daveAddress, []);
+        while (dave.state != BitchatCarrierState.running) {
+          await Future<void>.delayed(Duration.zero);
+        }
+        Future<int> heard(String secret) async {
+          final before = daveGot.length;
+          await alice.sendInboxFrame(
+            daveAddress,
+            frame(100),
+            Uint8List.fromList(List.generate(8, (i) => i + daveGot.length)),
+            bitchatInboxKey(secret),
+          );
+          for (var i = 0; i < 50 && daveGot.length == before; i++) {
+            await Future<void>.delayed(Duration.zero);
+          }
+          return daveGot.length - before;
+        }
+
+        expect(await heard('a' * 32), 1);
+        // A week on: the new secret and the last one both reach it.
+        final second = first.withInboxRotated(
+          start.add(const Duration(days: 8)),
+        )!;
+        dave.useInboxSecrets(second);
+        expect(dave.config.inviteHint, contains(second.inboxSecret!));
+        expect(await heard(second.inboxSecret!), 1);
+        expect(await heard('a' * 32), 1);
+        // Another week: the first secret is no longer heard.
+        final third = second.withInboxRotated(
+          start.add(const Duration(days: 16)),
+        )!;
+        dave.useInboxSecrets(third);
+        expect(await heard('a' * 32), 0);
+        expect(await heard(third.inboxSecret!), 1);
+        expect(daveGot.first.$1, startsWith('$bitchatInboxSender|'));
+        await alice.stop();
+        await dave.stop();
+      },
+    );
 
     test('a frame crosses two relays and arrives once', () async {
       final area = FakeBleNeighbourhood()

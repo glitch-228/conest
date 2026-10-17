@@ -115,11 +115,21 @@ class BitchatCarrierConfig {
   /// [inboxLifetime] (or missing); null when it is current.
   BitchatCarrierConfig? withInboxRotated(DateTime now) {
     final at = inboxSecretAt;
+    final age = at == null ? null : now.toUtc().difference(at);
+    // A time ahead of the clock (it was wrong then) counts as old, so it
+    // cannot hold one secret forever.
     if (inboxSecret != null &&
-        at != null &&
-        now.toUtc().difference(at) < inboxLifetime) {
+        age != null &&
+        age < inboxLifetime &&
+        age > const Duration(days: -1)) {
       return null;
     }
+    // Away for two lifetimes or more: the current secret is as old as a
+    // previous one would be, and nothing is kept.
+    final keepCurrent =
+        age != null &&
+        age < inboxLifetime * 2 &&
+        age > const Duration(days: -1);
     return BitchatCarrierConfig(
       address: address,
       visible: visible,
@@ -128,7 +138,7 @@ class BitchatCarrierConfig {
       identityAt: identityAt,
       gateway: gateway,
       inboxSecret: hexEncode(randomBitchatBytes(16)),
-      previousInboxSecret: inboxSecret,
+      previousInboxSecret: keepCurrent ? inboxSecret : null,
       inboxSecretAt: now.toUtc(),
     );
   }
@@ -287,18 +297,28 @@ class BitchatCarrierChannel
         PeerAwareCarrierChannel,
         InboxCarrierChannel {
   BitchatCarrierChannel({
-    required this.config,
+    required BitchatCarrierConfig config,
     required BitchatConnector connector,
     required BitchatKeyLookup keyFor,
     required this.onFrame,
     this.onStatusChanged,
     this.onPublic,
     DateTime Function()? now,
-  }) : _connector = connector,
+  }) : _config = config,
+       _connector = connector,
        _keyFor = keyFor,
        _now = now ?? DateTime.now;
 
-  final BitchatCarrierConfig config;
+  BitchatCarrierConfig _config;
+  BitchatCarrierConfig get config => _config;
+
+  /// Listens under [next]'s inbox secrets from now on (a rotation while
+  /// running), and invites give out its current one.
+  void useInboxSecrets(BitchatCarrierConfig next) {
+    _config = next;
+    _inboxes = _inboxesFor(next);
+    _tableMinute = null;
+  }
   final BitchatConnector _connector;
   final BitchatKeyLookup _keyFor;
   final DateTime Function() _now;
@@ -829,7 +849,9 @@ class BitchatCarrierChannel
   /// neighbours (clocks differ); rebuilt every minute.
   /// This device's inboxes, for first requests from would-be contacts:
   /// under the current inbox secret and the previous one.
-  late final List<_Pair> _inboxes = [
+  late List<_Pair> _inboxes = _inboxesFor(config);
+
+  static List<_Pair> _inboxesFor(BitchatCarrierConfig config) => [
     for (final secret in [config.inboxSecret, config.previousInboxSecret])
       if (secret != null) _Pair(config.address, bitchatInboxKey(secret)),
   ];

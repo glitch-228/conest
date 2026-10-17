@@ -20741,6 +20741,80 @@ void main() {
       expect(carol.contacts, isEmpty);
     });
 
+    test(
+      'a mesh request is not sent on an inbox secret likely expired',
+      () async {
+        final area = FakeBleNeighbourhood()..connect('alice', 'relay');
+        BitchatNode(
+          links: area.node('relay'),
+          onPrivate: (_, _) => BitchatPrivate.notMine,
+        );
+        final relay = _FakeRelayClient();
+        var bobBehind = Duration.zero;
+        Future<MessengerController> device(
+          String name, {
+          DateTime Function()? now,
+        }) async {
+          final controller = await _createController(
+            relayClient: relay,
+            displayName: name,
+            bitchatConnector: () async => area.node(name.toLowerCase()),
+            nowProvider: now,
+          );
+          addTearDown(controller.dispose);
+          await controller.updateGlobalConnectivity(
+            controller.identity!.connectivity.copyWith(
+              lanEnabled: false,
+              transportPolicies: {
+                for (final kind in TransportKind.values)
+                  kind: kind == TransportKind.bitchat
+                      ? TransportPolicy.automatic
+                      : TransportPolicy.disabled,
+              },
+            ),
+          );
+          await controller.enableBitchatCarrier();
+          return controller;
+        }
+
+        Future<void> until(bool Function() done, String what) async {
+          final deadline = DateTime.now().add(const Duration(seconds: 15));
+          while (!done() && DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+          expect(done(), isTrue, reason: what);
+        }
+
+        final alice = await device('Alice');
+        // Bob took Alice's invite 15 days ago, out of her range.
+        final bob = await device(
+          'Bob',
+          now: () => DateTime.now().toUtc().subtract(bobBehind),
+        );
+        await until(
+          () => alice.bitchatChannel?.localAddress != null,
+          'Alice is on the mesh',
+        );
+        final invite = (await alice.buildInvite()).encodePayload();
+        bobBehind = const Duration(days: 15);
+        await bob.addContactFromInvite(
+          alias: 'Alice',
+          payload: invite,
+          codephrase: '',
+        );
+        bobBehind = Duration.zero;
+        // Now in range, and asking again: by now Alice no longer listens on
+        // that secret (two rotations), so nothing goes to an inbox that may
+        // be someone else's guess.
+        area.connect('relay', 'bob');
+        final aliceId = alice.identity!.deviceId;
+        await bob.retryContactPairingNow(aliceId);
+        await Future<void>.delayed(const Duration(seconds: 2));
+        expect(alice.pendingContactRequests, isEmpty);
+        expect(bob.contacts.single.bitchatInboxSecret, isNotNull);
+      },
+    );
+
     test('two devices talk through a relaying phone', () async {
       final area = FakeBleNeighbourhood()
         ..connect('alice', 'relay')

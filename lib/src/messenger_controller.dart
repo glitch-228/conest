@@ -5092,6 +5092,8 @@ class MessengerController extends ChangeNotifier {
   Future<void> disableBitchatCarrier() async {
     await unregisterCarrierTransport(TransportKind.bitchat);
     _bitchatChannel = null;
+    _bitchatInboxTimer?.cancel();
+    _bitchatInboxTimer = null;
     await _closeBitchatIdentity();
     _snapshot = _snapshot.copyWith(
       carrierAccounts: {..._snapshot.carrierAccounts}
@@ -5110,16 +5112,7 @@ class MessengerController extends ChangeNotifier {
     }
     // A new inbox secret once a week (invites carry it): whoever held an
     // older invite cannot tell this device's inbox ids for long.
-    if (config.withInboxRotated(_now()) case final rotated?) {
-      config = rotated;
-      _snapshot = _snapshot.copyWith(
-        carrierAccounts: {
-          ..._snapshot.carrierAccounts,
-          TransportKind.bitchat.name: rotated.toJson(),
-        },
-      );
-      await _saveSnapshotSilently(notify: false);
-    }
+    config = await _rotateBitchatInbox(config);
     final adapter =
         _carrierTransports[TransportKind.bitchat] ??
         createBitchatCarrierAdapter(sealer: carrierSealer, now: _now);
@@ -5135,6 +5128,16 @@ class MessengerController extends ChangeNotifier {
     await adapter.detach();
     adapter.attach(channel);
     _bitchatChannel = channel;
+    // A phone left running for weeks rotates too.
+    _bitchatInboxTimer?.cancel();
+    _bitchatInboxTimer = Timer.periodic(const Duration(hours: 1), (_) async {
+      final current = bitchatCarrierConfig;
+      if (_disposed || current == null || _bitchatChannel != channel) return;
+      final rotated = await _rotateBitchatInbox(current);
+      if (!identical(rotated, current) && _bitchatChannel == channel) {
+        channel.useInboxSecrets(rotated);
+      }
+    });
     await _useBitchatIdentity();
     await registerCarrierTransport(adapter, advertise: advertise);
   }
@@ -5186,6 +5189,8 @@ class MessengerController extends ChangeNotifier {
   Set<String> _acceptedBitchatAddresses() {
     final counts = <String, int>{};
     for (final contact in _snapshot.contacts) {
+      // Archived, declined or removed records claim nothing.
+      if (!contact.canSendOutbound && !_pairingWithKeys(contact)) continue;
       if (contact.carrierAddress(TransportKind.bitchat) case final address?) {
         counts[address] = (counts[address] ?? 0) + 1;
       }
@@ -6233,6 +6238,7 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _bitchatIdentitySwitch = Future<void>.value();
   Timer? _bitchatRenewTimer;
+  Timer? _bitchatInboxTimer;
 
   Future<void> _switchBitchatIdentity() async {
     if (_disposed) return;
@@ -6292,6 +6298,23 @@ class MessengerController extends ChangeNotifier {
       });
     }
     notifyListeners();
+  }
+
+  /// [config] with a new inbox secret, saved, when its current one is due
+  /// (see [BitchatCarrierConfig.withInboxRotated]); [config] otherwise.
+  Future<BitchatCarrierConfig> _rotateBitchatInbox(
+    BitchatCarrierConfig config,
+  ) async {
+    final rotated = config.withInboxRotated(_now());
+    if (rotated == null) return config;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.bitchat.name: rotated.toJson(),
+      },
+    );
+    await _saveSnapshotSilently(notify: false);
+    return rotated;
   }
 
   Future<void> _closeBitchatIdentity() async {
@@ -10904,7 +10927,7 @@ class MessengerController extends ChangeNotifier {
       publicKeyBase64: isPending ? '' : invite.publicKeyBase64,
       routeHints: prunePeerEndpointsByKind(invite.routeHints),
       safetyNumber: safetyNumber,
-      trustedAt: DateTime.now().toUtc(),
+      trustedAt: _now(),
       pendingVerification: isPending,
       replacesDeviceId: predecessor?.deviceId,
       unverifiedPublicKeyBase64: isPending ? invite.publicKeyBase64 : null,
@@ -11036,7 +11059,7 @@ class MessengerController extends ChangeNotifier {
       publicKeyBase64: isPending ? '' : profile.publicKeyBase64,
       routeHints: prunePeerEndpointsByKind(profile.routeHints),
       safetyNumber: safetyNumber,
-      trustedAt: DateTime.now().toUtc(),
+      trustedAt: _now(),
       pendingVerification: isPending,
       replacesDeviceId: predecessor?.deviceId,
       unverifiedPublicKeyBase64: isPending ? profile.publicKeyBase64 : null,
@@ -11084,7 +11107,9 @@ class MessengerController extends ChangeNotifier {
     final revived = contact.copyWith(
       revivedAt: _now().toUtc(),
       carrierAddresses: {...hints.carriers, ...contact.carrierAddresses},
+      // The new invite's secret, or none: an old one has likely expired.
       bitchatInboxSecret: hints.bitchatInboxSecret,
+      clearBitchatInboxSecret: hints.bitchatInboxSecret == null,
       matrixAddress: contact.matrixAddress ?? hints.matrixAddress,
       retiredPairingRequestIds: retired.length > 8
           ? retired.sublist(retired.length - 8)
@@ -32391,8 +32416,14 @@ class MessengerController extends ChangeNotifier {
       if (kind == TransportKind.bitchat) {
         final secret = contact.bitchatInboxSecret;
         final address = contact.carrierAddress(TransportKind.bitchat);
+        // The target stops listening on a secret two rotations after its
+        // invite was taken.
+        final secretAge = _now().difference(
+          contact.revivedAt ?? contact.trustedAt,
+        );
         if (secret == null ||
             address == null ||
+            secretAge >= BitchatCarrierConfig.inboxLifetime * 2 ||
             _acceptedBitchatAddresses().contains(address)) {
           throw StateError('The mesh cannot reach this contact yet.');
         }
@@ -32465,6 +32496,13 @@ class MessengerController extends ChangeNotifier {
   /// Frames to this device's mesh inbox admitted, as (window start, count)
   /// overall and per request (sender id): room for a few whole requests at
   /// once (one is many frames), and one sender cannot use it all up.
+  ///
+  /// Accepted risk (review, October 17): sender ids are fresh per request,
+  /// so someone holding a current invite can still use up the overall
+  /// budgets and keep mesh contact requests out for a window. Only mesh
+  /// first contact is affected (contacts, and requests over other
+  /// carriers, are not), and it ends once the inbox secret rotates past
+  /// that invite. Proof of work per request would close it.
   (DateTime, int)? _inboxFrames;
   final Map<String, (DateTime, int)> _inboxFramesBySender = {};
   static const int _inboxFramesPerWindow = 400;
@@ -34249,6 +34287,8 @@ class MessengerController extends ChangeNotifier {
     unawaited(_userNotices.close());
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
+    _bitchatInboxTimer?.cancel();
+    _bitchatInboxTimer = null;
     for (final timer in _routeReceiptTimers.values) {
       timer.cancel();
     }

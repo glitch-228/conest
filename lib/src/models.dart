@@ -2034,6 +2034,7 @@ class ContactRecord {
     DateTime? inTouchAt,
     DateTime? siblingsHeardAt,
     bool clearRemoteRemovedAt = false,
+    bool clearBitchatInboxSecret = false,
     ContactRoutingPreferences? routing,
     String? signingPublicKeyBase64,
     String? irohEndpointId,
@@ -2100,7 +2101,9 @@ class ContactRecord {
           ? null
           : matrixAddress ?? this.matrixAddress,
       matrixAddressAt: matrixAddressAt ?? this.matrixAddressAt,
-      bitchatInboxSecret: bitchatInboxSecret ?? this.bitchatInboxSecret,
+      bitchatInboxSecret: clearBitchatInboxSecret
+          ? null
+          : bitchatInboxSecret ?? this.bitchatInboxSecret,
       carrierAddresses: carrierAddresses ?? this.carrierAddresses,
       capabilities: capabilities ?? this.capabilities,
       featureCapabilities: featureCapabilities ?? this.featureCapabilities,
