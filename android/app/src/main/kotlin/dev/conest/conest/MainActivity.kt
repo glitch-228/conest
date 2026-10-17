@@ -142,11 +142,21 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "stopTransferForeground" -> {
-                    startService(
-                        Intent(this, ConestBackgroundService::class.java).apply {
-                            action = ConestBackgroundService.ACTION_STOP_TRANSFER
+                    // Nothing to stop when the service is not running, and
+                    // starting a service from the background throws on
+                    // Android 8+ (each transfer that ended with the screen
+                    // off was recorded as a crash).
+                    if (ConestBackgroundService.isRunning()) {
+                        try {
+                            startService(
+                                Intent(this, ConestBackgroundService::class.java).apply {
+                                    action = ConestBackgroundService.ACTION_STOP_TRANSFER
+                                }
+                            )
+                        } catch (error: IllegalStateException) {
+                            ConestBackgroundService.stopTransferDirectly()
                         }
-                    )
+                    }
                     result.success(null)
                 }
                 "showMessageNotification" -> {

@@ -5002,13 +5002,34 @@ class MessengerController extends ChangeNotifier {
       transportPath: await _torTransportPath(),
       knownAddress: config.address,
       onFrame: adapter.receiveFrame,
-      onStatusChanged: notifyListeners,
+      onStatusChanged: _torStatusChanged,
       onAddress: _saveTorAddress,
     );
     await adapter.detach();
     adapter.attach(channel);
     _torChannel = channel;
     await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  String? _loggedTorError;
+  int _loggedTorQuarter = -1;
+
+  /// Tor's progress and failures go to the error history: a carrier that
+  /// never became ready used to say nothing at all.
+  void _torStatusChanged() {
+    notifyListeners();
+    final tor = _torChannel;
+    if (tor == null) return;
+    final error = tor.lastError;
+    if (error != null && error != _loggedTorError) {
+      recordError('tor', 'Tor did not start: ${_boundedLogValue(error, 300)}');
+    }
+    _loggedTorError = error;
+    final quarter = (tor.progress * 4).floor();
+    if (quarter != _loggedTorQuarter) {
+      _loggedTorQuarter = quarter;
+      appendDebugLog('Tor bootstrap ${(tor.progress * 100).round()}%.');
+    }
   }
 
   void _saveTorAddress(String address) {
@@ -7138,7 +7159,18 @@ class MessengerController extends ChangeNotifier {
   /// Each running carrier's state: ready (it has an address) or not, and
   /// its last error. For the debug harness and diagnostics.
   List<CarrierStatus> get carrierStatuses => [
-    for (final adapter in _carrierTransports.values) adapter.status,
+    for (final adapter in _carrierTransports.values)
+      switch (adapter.channel) {
+        // Tor keeps its own error and bootstrap progress.
+        final TorCarrierChannel tor when !adapter.status.ready => CarrierStatus(
+          kind: adapter.kind,
+          ready: false,
+          lastError:
+              tor.lastError ??
+              'bootstrapping, ${(tor.progress * 100).round()}%',
+        ),
+        _ => adapter.status,
+      },
   ];
   final Map<TransportKind, StreamSubscription<TransportInboundEnvelope>>
   _carrierInboundSubscriptions = {};

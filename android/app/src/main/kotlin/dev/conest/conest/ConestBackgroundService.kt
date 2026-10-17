@@ -342,6 +342,23 @@ class ConestBackgroundService : Service() {
         @Volatile
         private var currentInstance: ConestBackgroundService? = null
 
+        fun isRunning(): Boolean = currentInstance != null
+
+        /// Ends the transfer notice on the running service without a
+        /// service intent (refused from the background on Android 8+).
+        fun stopTransferDirectly() {
+            val service = currentInstance ?: return
+            service.transferActive = false
+            if (!service.backgroundEnabled && !service.callsEnabled &&
+                !service.hasCall()
+            ) {
+                service.stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE)
+                service.stopSelf()
+            } else {
+                service.promoteToForeground()
+            }
+        }
+
         fun shouldKeepFlutterRuntime(): Boolean {
             val service = currentInstance ?: return false
             return service.backgroundEnabled ||

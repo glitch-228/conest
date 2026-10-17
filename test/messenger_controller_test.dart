@@ -21351,6 +21351,32 @@ void main() {
   });
 
   group('Tor carrier', () {
+    test('a Tor that cannot start says why', () async {
+      final tor = FakeTorNetwork()..blocked = true;
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        torApi: tor.device(),
+        keepErrorHistory: true,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableTorCarrier();
+      for (
+        var i = 0;
+        i < 50 && !alice.exportErrorHistory().contains('Tor did not start');
+        i++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      // Not silence: the error history and the carrier's state say why.
+      expect(alice.exportErrorHistory(), contains('Tor is blocked.'));
+      final status = alice.carrierStatuses.singleWhere(
+        (status) => status.kind == TransportKind.tor,
+      );
+      expect(status.ready, isFalse);
+      expect(status.lastError, contains('Tor is blocked.'));
+    });
+
     test('two devices talk through their onion services', () async {
       final tor = FakeTorNetwork();
       final relay = _FakeRelayClient();
