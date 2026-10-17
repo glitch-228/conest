@@ -307,14 +307,20 @@ extension GroupCallController on MessengerController {
     }
   }
 
+  /// [error] for the log. Forward-secret controls keep their details out of
+  /// release logs; the error's type is always shown, and debug builds (the
+  /// device lab) show it whole, or their failures cannot be told apart.
   String _envelopeProcessingError(String kind, Object error) =>
-      const {
+      !const {
         _ratchetBundleKind,
         'ratchet_hello',
         'ratchet_bulk_key',
       }.contains(kind)
-      ? 'Invalid forward-secret control.'
-      : _boundedLogValue(error.toString(), 180);
+      ? _boundedLogValue(error.toString(), 180)
+      : _debugBuildId != null
+      ? 'Invalid forward-secret control: '
+            '${_boundedLogValue(error.toString(), 180)}'
+      : 'Invalid forward-secret control (${error.runtimeType}).';
 
   Future<void> _handleGroupCallSignal(RelayEnvelope envelope) async {
     final me = identity;
