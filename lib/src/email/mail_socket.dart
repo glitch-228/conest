@@ -45,6 +45,7 @@ MailConnector chatmailFallback({
   Future<MailSocket> Function(String host, String alpn) viaHttpsPort =
       _connectViaHttpsPort,
   Duration greetingWait = const Duration(seconds: 15),
+  void Function(String line)? log,
 }) {
   // Servers this run reached only on 443: tried there first next time, not
   // after the blocked port's whole timeout.
@@ -56,11 +57,16 @@ MailConnector chatmailFallback({
       _ => null,
     };
     if (!tls || alpn == null) return direct(host, port, tls: tls);
+    final watch = Stopwatch()..start();
+    String took() =>
+        '${(watch.elapsedMilliseconds / 1000).toStringAsFixed(1)} s';
     if (viaHttps.contains(host)) {
       try {
         return await viaHttpsPort(host, alpn);
-      } catch (_) {
+      } catch (error) {
+        log?.call('$host:443 ($alpn) failed after ${took()}: $error');
         viaHttps.remove(host);
+        watch.reset();
       }
     }
     try {
@@ -68,11 +74,17 @@ MailConnector chatmailFallback({
       // stays silent is blocked too, and its silence is not waited out.
       return await _speaking(await direct(host, port, tls: tls), greetingWait);
     } catch (error) {
+      log?.call(
+        '$host:$port failed after ${took()}: $error; trying port 443 ($alpn)',
+      );
+      watch.reset();
       try {
         final socket = await viaHttpsPort(host, alpn);
+        log?.call('$host reached over port 443 ($alpn) in ${took()}');
         viaHttps.add(host);
         return socket;
-      } catch (_) {
+      } catch (httpsError) {
+        log?.call('$host:443 ($alpn) failed after ${took()}: $httpsError');
         // The mail port's error says more than 443's.
         Error.throwWithStackTrace(error, StackTrace.current);
       }

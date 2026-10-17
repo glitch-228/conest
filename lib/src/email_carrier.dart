@@ -198,15 +198,19 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.idleTimeout = const Duration(minutes: 25),
     this.pollInterval = const Duration(minutes: 1),
     DateTime Function()? now,
+    void Function(String line)? log,
   }) : _config = config,
+       _log = log,
        // Chatmail servers also listen on 443, for networks that block the
        // mail ports.
-       _connector = connector ?? (config.chatmail ? chatmailFallback() : null),
+       _connector =
+           connector ?? (config.chatmail ? chatmailFallback(log: log) : null),
        _now = now ?? DateTime.now;
 
   EmailCarrierConfig _config;
   final MailConnector? _connector;
   final DateTime Function() _now;
+  final void Function(String line)? _log;
 
   /// TLS from the first byte; off only for servers on this machine.
   final bool tls;
@@ -257,15 +261,22 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     EmailCarrierConfig config, {
     MailConnector? connector,
     bool tls = true,
+    void Function(String line)? log,
   }) async {
+    final watch = Stopwatch()..start();
+    String took() =>
+        '${(watch.elapsedMilliseconds / 1000).toStringAsFixed(1)} s';
     final client = await ImapClient.connect(
       config.imapHost,
       config.imapPort,
       tls: tls,
-      connector: connector ?? (config.chatmail ? chatmailFallback() : null),
+      connector:
+          connector ?? (config.chatmail ? chatmailFallback(log: log) : null),
     );
+    log?.call('IMAP ${config.imapHost} answered in ${took()}');
     try {
       await client.login(config.mail, config.password);
+      log?.call('IMAP login at ${config.imapHost} done in ${took()}');
     } finally {
       await client.logout();
     }
@@ -387,6 +398,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
       } catch (error) {
         if (!current()) break;
         _lastError = describeNetworkError(error);
+        _log?.call(
+          'reading mail failed: $error; next try in ${backoff.inSeconds} s',
+        );
         _setState(EmailCarrierState.failed);
         final wake = Completer<void>();
         _wake = wake;

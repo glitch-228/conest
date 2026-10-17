@@ -32,7 +32,9 @@ void main() {
     () async {
       final direct = <String>[];
       final viaHttps = <String>[];
+      final log = <String>[];
       final connect = chatmailFallback(
+        log: log.add,
         direct: (host, port, {required tls}) async {
           direct.add('$host:$port');
           if (port == 465) {
@@ -48,6 +50,11 @@ void main() {
 
       final smtp = await connect('mail.test', 465, tls: true) as _Socket;
       expect(smtp.where, 'mail.test:443/smtp');
+      // Each step is told, so a device that cannot sign up shows where.
+      expect(log, [
+        allOf(contains('mail.test:465 failed'), contains('trying port 443')),
+        contains('mail.test reached over port 443 (smtp)'),
+      ]);
       // Next time straight to 443: no second wait on the blocked port.
       await connect('mail.test', 465, tls: true);
       expect(direct, ['mail.test:465']);

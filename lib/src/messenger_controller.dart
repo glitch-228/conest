@@ -7076,10 +7076,19 @@ class MessengerController extends ChangeNotifier {
     // A connection dropped by the network (common while a phone switches
     // networks) is tried again before giving up; a refused login is not.
     for (var attempt = 1; ; attempt++) {
+      final started = _now();
       try {
-        await EmailCarrierChannel.checkLogin(config, connector: _mailConnector);
+        await EmailCarrierChannel.checkLogin(
+          config,
+          connector: _mailConnector,
+          log: (line) => appendDebugLog('Email sign-up: $line'),
+        );
         break;
       } catch (error) {
+        appendDebugLog(
+          'Email sign-up attempt $attempt failed after '
+          '${_now().difference(started).inSeconds} s: $error',
+        );
         if (attempt == 3 || !isTransientNetworkError(error)) rethrow;
         await Future<void>.delayed(Duration(seconds: attempt));
       }
@@ -7119,6 +7128,7 @@ class MessengerController extends ChangeNotifier {
       config: config,
       connector: _mailConnector,
       now: _now,
+      log: (line) => appendDebugLog('Email: $line'),
       onFrame: adapter.receiveFrame,
       onCursor: (validity, uid) => _saveEmailCursor(config.mail, validity, uid),
       onStatusChanged: notifyListeners,
