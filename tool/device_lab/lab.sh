@@ -116,7 +116,7 @@ adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || 
 args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=600 --debug-expect-contacts=2 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-android)"
 adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
   --es conestDebugArgs "'$args_a'" >/dev/null
-wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite"
+wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite" 300
 invite_a=$(adb exec-out run-as "$PACKAGE" cat "$android_report.invite")
 invite_args=("--debug-accept-invite=$invite_a")
 echo "Android is up."
@@ -129,7 +129,7 @@ linux_report="$PWD/$out/linux.json"
   --debug-wait="$WAIT" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
   --debug-exit >"$out/linux.log" 2>&1 &
 linux_pid=$!
-wait_for "the Linux invite" "test -s '$linux_report.invite'"
+wait_for "the Linux invite" "test -s '$linux_report.invite'" 300
 invite_b=$(cat "$linux_report.invite")
 echo "Linux is up."
 

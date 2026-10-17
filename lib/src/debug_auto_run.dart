@@ -245,26 +245,31 @@ Future<String> runDebugRequest(
   }
   if (controller.hasIdentity) {
     for (final carrier in request.carriers) {
+      // At most 90 s each: a carrier that hangs (the phone's chatmail sign-up
+      // once did) must not keep the invite, and so every device, waiting.
       await step('carrier $carrier', () async {
-        switch (carrier) {
-          case 'nostr':
-            await controller.enableNostrCarrier();
-          case 'tor':
-            await controller.enableTorCarrier();
-          case 'email':
-            await controller.enableChatmailCarrier(
-              defaultChatmailDomains.first,
-            );
-          case 'bitchat':
-            await controller.enableBitchatCarrier();
-          case 'reticulum':
-            final node = request.reticulum ?? DebugRunRequest.defaultReticulum;
-            final at = node.lastIndexOf(':');
-            await controller.enableReticulumCarrier(
-              host: node.substring(0, at),
-              port: int.parse(node.substring(at + 1)),
-            );
-        }
+        await Future<void>(() async {
+          switch (carrier) {
+            case 'nostr':
+              await controller.enableNostrCarrier();
+            case 'tor':
+              await controller.enableTorCarrier();
+            case 'email':
+              await controller.enableChatmailCarrier(
+                defaultChatmailDomains.first,
+              );
+            case 'bitchat':
+              await controller.enableBitchatCarrier();
+            case 'reticulum':
+              final node =
+                  request.reticulum ?? DebugRunRequest.defaultReticulum;
+              final at = node.lastIndexOf(':');
+              await controller.enableReticulumCarrier(
+                host: node.substring(0, at),
+                port: int.parse(node.substring(at + 1)),
+              );
+          }
+        }).timeout(const Duration(seconds: 90));
         return null;
       });
     }
