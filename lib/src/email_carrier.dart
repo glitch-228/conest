@@ -199,7 +199,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.pollInterval = const Duration(minutes: 1),
     DateTime Function()? now,
   }) : _config = config,
-       _connector = connector,
+       // Chatmail servers also listen on 443, for networks that block the
+       // mail ports.
+       _connector = connector ?? (config.chatmail ? chatmailFallback() : null),
        _now = now ?? DateTime.now;
 
   EmailCarrierConfig _config;
@@ -260,7 +262,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
       config.imapHost,
       config.imapPort,
       tls: tls,
-      connector: connector,
+      connector: connector ?? (config.chatmail ? chatmailFallback() : null),
     );
     try {
       await client.login(config.mail, config.password);

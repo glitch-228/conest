@@ -20,13 +20,62 @@ Future<MailSocket> connectMailSocket(
   String host,
   int port, {
   required bool tls,
+  String? alpn,
 }) async {
   const timeout = Duration(seconds: 20);
   final Socket socket = tls
-      ? await SecureSocket.connect(host, port, timeout: timeout)
+      ? await SecureSocket.connect(
+          host,
+          port,
+          timeout: timeout,
+          supportedProtocols: alpn == null ? null : [alpn],
+        )
       : await Socket.connect(host, port, timeout: timeout);
   return _IoMailSocket(socket);
 }
+
+/// Chatmail servers also take IMAP and SMTP on port 443, told apart by
+/// ALPN, for networks that block the mail ports (seen on the device lab:
+/// a phone and a PC that could not reach port 465 at all).
+MailConnector chatmailFallback({
+  MailConnector direct = connectMailSocket,
+  Future<MailSocket> Function(String host, String alpn) viaHttpsPort =
+      _connectViaHttpsPort,
+}) {
+  // Servers this run reached only on 443: tried there first next time, not
+  // after the blocked port's whole timeout.
+  final viaHttps = <String>{};
+  return (String host, int port, {required bool tls}) async {
+    final alpn = switch (port) {
+      993 => 'imap',
+      465 => 'smtp',
+      _ => null,
+    };
+    if (!tls || alpn == null) return direct(host, port, tls: tls);
+    if (viaHttps.contains(host)) {
+      try {
+        return await viaHttpsPort(host, alpn);
+      } catch (_) {
+        viaHttps.remove(host);
+      }
+    }
+    try {
+      return await direct(host, port, tls: tls);
+    } catch (error) {
+      try {
+        final socket = await viaHttpsPort(host, alpn);
+        viaHttps.add(host);
+        return socket;
+      } catch (_) {
+        // The mail port's error says more than 443's.
+        Error.throwWithStackTrace(error, StackTrace.current);
+      }
+    }
+  };
+}
+
+Future<MailSocket> _connectViaHttpsPort(String host, String alpn) =>
+    connectMailSocket(host, 443, tls: true, alpn: alpn);
 
 class _IoMailSocket implements MailSocket {
   _IoMailSocket(this._socket) {
