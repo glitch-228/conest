@@ -3551,6 +3551,7 @@ class MessengerController extends ChangeNotifier {
   Future<TransportExchangeReport> runTransportExchangeTest(
     ContactRecord contact, {
     Duration remoteTimeout = const Duration(seconds: 90),
+    Duration probeTimeout = const Duration(seconds: 15),
   }) async {
     if (_debugBuildId == null) {
       throw StateError('Only debug builds run full transport tests.');
@@ -3571,6 +3572,8 @@ class MessengerController extends ChangeNotifier {
         await _sendDebugTransportTest(current, {
           'type': 'request',
           'testId': testId,
+          // The other side probes as patiently (carriers are slow).
+          'probeSeconds': probeTimeout.inSeconds,
         });
       } catch (error) {
         remoteError = 'the request did not go: $error';
@@ -3578,7 +3581,7 @@ class MessengerController extends ChangeNotifier {
     }
     RouteTestReport local;
     try {
-      local = await testContactRoutes(current);
+      local = await testContactRoutes(current, replyTimeout: probeTimeout);
     } catch (error) {
       local = RouteTestReport(measuredAt: _now().toUtc(), results: const []);
       recordError('test', 'Route test to ${current.alias} failed: $error');
@@ -3668,7 +3671,13 @@ class MessengerController extends ChangeNotifier {
           final me = _requireIdentity();
           Map<String, Object?> reply;
           try {
-            final report = await testContactRoutes(contact);
+            final asked = decoded['probeSeconds'];
+            final report = await testContactRoutes(
+              contact,
+              replyTimeout: Duration(
+                seconds: asked is int ? asked.clamp(5, 120) : 15,
+              ),
+            );
             reply = {
               'type': 'report',
               'testId': testId,

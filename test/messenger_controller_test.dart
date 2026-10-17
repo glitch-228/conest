@@ -18655,8 +18655,15 @@ void main() {
       'args:--debug-run=messages --debug-name=phone --debug-approve '
       '--debug-serve=5 --debug-group=lab-all --debug-relay=1.2.3.4:7667 '
       '--debug-accept-invite=AAA --debug-accept-invite=BBB '
-      '--debug-no-reserve --debug-linger=90',
+      '--debug-no-reserve --debug-linger=90 '
+      '--debug-carriers=nostr,bogus,tor,email '
+      '--debug-reticulum=node.example:4242 '
+      '--debug-matrix=http://10.0.0.2:8008,lab-a,secret',
     )!;
+    // Unknown carriers are left out.
+    expect(parsed.carriers, ['nostr', 'tor', 'email']);
+    expect(parsed.reticulum, 'node.example:4242');
+    expect(parsed.matrix, 'http://10.0.0.2:8008,lab-a,secret');
     expect(parsed.noReserve, isTrue);
     expect(parsed.linger, const Duration(seconds: 90));
     expect(parsed.what, 'messages');

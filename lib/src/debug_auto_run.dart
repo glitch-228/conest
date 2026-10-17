@@ -10,6 +10,11 @@
 ///          [--debug-group=TITLE]          then make a group of everyone
 ///          [--debug-no-reserve]           files even on a nearly full disk
 ///          [--debug-linger=SECONDS]       stay online after the tests
+///          [--debug-carriers=nostr,tor,email,bitchat,reticulum]
+///                                         switch these carriers on first
+///          [--debug-reticulum=HOST:PORT]  the Reticulum node to use
+///          [--debug-matrix=URL,USER,PASSWORD]  sign in to Matrix (lab
+///                                         accounts on a lab homeserver)
 ///          [--debug-report=PATH] [--debug-wait=20] [--debug-exit]
 ///   adb shell am start -n dev.conest.conest.debug/dev.conest.conest.MainActivity \
 ///       --es conestDebugArgs "--debug-run=all --debug-name=phone --debug-approve"
@@ -26,6 +31,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'email_carrier.dart' show defaultChatmailDomains;
 import 'messenger_controller.dart';
 import 'models.dart';
 
@@ -43,6 +49,9 @@ class DebugRunRequest {
     this.group,
     this.noReserve = false,
     this.linger = Duration.zero,
+    this.carriers = const [],
+    this.reticulum,
+    this.matrix,
   });
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', or 'none'
@@ -77,6 +86,27 @@ class DebugRunRequest {
   /// Stay online after the tests (answering the others, taking their late
   /// receipts) before the report is written.
   final Duration linger;
+
+  /// Carriers to switch on before pairing, so the invite and the contact
+  /// exchange carry their addresses: some of [carrierNames].
+  final List<String> carriers;
+
+  /// HOST:PORT of the Reticulum node (rnsd) for the reticulum carrier.
+  final String? reticulum;
+
+  /// URL,USER,PASSWORD of a lab Matrix account.
+  final String? matrix;
+
+  static const List<String> carrierNames = [
+    'nostr',
+    'tor',
+    'email',
+    'bitchat',
+    'reticulum',
+  ];
+
+  /// Public Reticulum testnet node, used when none is given.
+  static const String defaultReticulum = 'reticulum.betweentheborders.com:4242';
 
   static const Set<String> kinds = {
     'routes',
@@ -128,6 +158,12 @@ class DebugRunRequest {
           : null,
       noReserve: args.contains('--debug-no-reserve'),
       linger: seconds('debug-linger', Duration.zero, 3600),
+      carriers: [
+        for (final name in (value('debug-carriers') ?? '').split(','))
+          if (carrierNames.contains(name.trim())) name.trim(),
+      ],
+      reticulum: value('debug-reticulum'),
+      matrix: value('debug-matrix'),
     );
   }
 
@@ -177,6 +213,41 @@ Future<String> runDebugRequest(
     });
   }
   if (controller.hasIdentity) {
+    for (final carrier in request.carriers) {
+      await step('carrier $carrier', () async {
+        switch (carrier) {
+          case 'nostr':
+            await controller.enableNostrCarrier();
+          case 'tor':
+            await controller.enableTorCarrier();
+          case 'email':
+            await controller.enableChatmailCarrier(
+              defaultChatmailDomains.first,
+            );
+          case 'bitchat':
+            await controller.enableBitchatCarrier();
+          case 'reticulum':
+            final node = request.reticulum ?? DebugRunRequest.defaultReticulum;
+            final at = node.lastIndexOf(':');
+            await controller.enableReticulumCarrier(
+              host: node.substring(0, at),
+              port: int.parse(node.substring(at + 1)),
+            );
+        }
+        return null;
+      });
+    }
+    final matrix = request.matrix?.split(',');
+    if (matrix != null && matrix.length == 3) {
+      await step('matrix', () async {
+        await controller.signInToMatrix(
+          homeserver: matrix[0],
+          user: matrix[1],
+          password: matrix[2],
+        );
+        return matrix[1];
+      });
+    }
     await step('invite', () async {
       final code = (await controller.buildInvite()).encodePayload();
       await _writeWhole('$path.invite', code);
@@ -241,7 +312,15 @@ Future<String> runDebugRequest(
   if (what == 'routes' || what == 'all') {
     for (final contact in _contacts(controller)) {
       try {
-        final report = await controller.runTransportExchangeTest(contact);
+        // Carriers (mail, Tor, Nostr) can take far longer than 15 s.
+        final probes = request.wait * 3 > const Duration(seconds: 15)
+            ? request.wait * 3
+            : const Duration(seconds: 15);
+        final report = await controller.runTransportExchangeTest(
+          contact,
+          probeTimeout: probes,
+          remoteTimeout: probes + const Duration(seconds: 45),
+        );
         contacts.add({
           'contact': contact.alias,
           'deviceId': contact.deviceId,
