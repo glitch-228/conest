@@ -17,6 +17,34 @@ use std::time::{Duration, Instant};
 pub const SERVICE_UUID: u128 = 0xf47b5e2d_4a9e_4c5a_9b3f_8e1d2c3a4b5c;
 pub const CHARACTERISTIC_UUID: u128 = 0xa1b2c3d4_e5f6_4a5b_8c9d_0e1f2a3b4c5d;
 pub const PERIPHERAL_WARNING: &str = "This Bluetooth adapter cannot advertise: nearby phones can't find this computer, but it can still connect to them.";
+pub const KEEPS_STOPPING: &str = "The system's Bluetooth service kept stopping while the mesh ran, which also disconnects other Bluetooth devices (headphones). The mesh is paused; turn it off and on to try again.";
+
+/// Gives up after the Bluetooth service (BlueZ, WinRT) went away under a
+/// running mesh [DROPS_TO_PAUSE] times within [DROP_WINDOW]: BlueZ 5.87
+/// was seen crashing every 10 to 30 s while the mesh ran, and every
+/// restart dropped the user's headphones. Retrying forever kept it going.
+#[derive(Default)]
+pub struct DropGuard {
+    drops: std::collections::VecDeque<Instant>,
+}
+
+pub const DROPS_TO_PAUSE: usize = 3;
+pub const DROP_WINDOW: Duration = Duration::from_secs(180);
+
+impl DropGuard {
+    /// Notes a mesh that was up and failed; true when it should pause.
+    pub fn dropped(&mut self, at: Instant) -> bool {
+        while self
+            .drops
+            .front()
+            .is_some_and(|first| at.saturating_duration_since(*first) > DROP_WINDOW)
+        {
+            self.drops.pop_front();
+        }
+        self.drops.push_back(at);
+        self.drops.len() >= DROPS_TO_PAUSE
+    }
+}
 
 pub struct Shared {
     pub core: Mutex<core::Core>,
@@ -63,6 +91,7 @@ impl Session {
                 }
             };
             runtime.block_on(async {
+                let mut guard = DropGuard::default();
                 while !state.stopped() {
                     // Cancellation drops all platform guards, event handlers,
                     // advertising and bounded link tasks, even during setup.
@@ -77,14 +106,29 @@ impl Session {
                             tokio::time::sleep(Duration::from_secs(3)).await;
                         } => break,
                     };
-                    {
+                    let pause = {
                         let mut core = state.core();
+                        // It was up (it found a powered adapter) and failed.
+                        let pause = core.status.powered
+                            && result.is_err()
+                            && guard.dropped(Instant::now());
                         core.clear_links();
                         core.status.powered = false;
                         core.status.central = false;
                         core.status.peripheral = false;
                         core.status.scanning = false;
-                        core.status.problem = Some(result.err().map_or_else(|| "Bluetooth disconnected.".into(), |e| e.to_string()));
+                        core.status.problem = Some(if pause {
+                            KEEPS_STOPPING.into()
+                        } else {
+                            result.err().map_or_else(|| "Bluetooth disconnected.".into(), |e| e.to_string())
+                        });
+                        pause
+                    };
+                    if pause {
+                        while !state.stopped() {
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                        }
+                        break;
                     }
                     for _ in 0..50 {
                         if state.stopped() { break; }
@@ -114,6 +158,29 @@ impl Drop for Session {
         self.shared.stop.store(true, Ordering::Release);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod drop_guard_tests {
+    use super::*;
+
+    #[test]
+    fn the_mesh_pauses_when_the_bluetooth_service_keeps_stopping() {
+        let start = Instant::now();
+        let mut guard = DropGuard::default();
+        assert!(!guard.dropped(start));
+        assert!(!guard.dropped(start + Duration::from_secs(20)));
+        assert!(guard.dropped(start + Duration::from_secs(40)));
+    }
+
+    #[test]
+    fn rare_drops_do_not_pause_it() {
+        let start = Instant::now();
+        let mut guard = DropGuard::default();
+        for minute in 0..10 {
+            assert!(!guard.dropped(start + Duration::from_secs(minute * 100)));
         }
     }
 }
