@@ -153,9 +153,14 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
             ));
         }
     }
+    // No service UUIDs in the filter (the mesh service is checked per device
+    // below): BlueZ 5.87 calls a filter UUID as a function when a device
+    // advertising any service is found (adapter.c is_filter_match passes
+    // queue_find's arguments swapped; fixed upstream after 5.87), so
+    // bluetoothd crashed every few seconds and dropped every other
+    // Bluetooth device, headphones included.
     adapter
         .set_discovery_filter(DiscoveryFilter {
-            uuids: [Uuid::from_u128(SERVICE_UUID)].into_iter().collect(),
             transport: DiscoveryTransport::Le,
             duplicate_data: false,
             ..Default::default()
@@ -183,10 +188,8 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                     if !adapter.is_powered().await? { bail!("Bluetooth is off. Turn it on in system settings."); }
                 }
                 // One discovery session for the whole run, not the 20 s in
-                // every 30 the other platforms scan: BlueZ 5.87 crashed
-                // (a freed callback, while handling a found device) every
-                // 10 to 30 s as sessions started and stopped, dropping every
-                // other Bluetooth device. BlueZ duty-cycles the radio itself.
+                // every 30 the other platforms scan: BlueZ duty-cycles the
+                // radio itself, and each restart is more D-Bus traffic.
                 if discovery.is_none() {
                     discovery = Some(adapter.discover_devices().await.context("Bluetooth scanning is unavailable")?.boxed());
                     state.core().status.scanning = true;
