@@ -18,6 +18,7 @@
 ///          [--debug-carriers=nostr,tor,email,bitchat,reticulum]
 ///                                         switch these carriers on first
 ///          [--debug-reticulum=HOST:PORT]  the Reticulum node to use
+///          [--debug-chatmail=DOMAIN]      the chatmail server for email
 ///          [--debug-matrix=URL,USER,PASSWORD]  sign in to Matrix (lab
 ///                                         accounts on a lab homeserver)
 ///          [--debug-only-transport=KIND]  every other transport off (LAN
@@ -59,6 +60,7 @@ class DebugRunRequest {
     this.linger = Duration.zero,
     this.carriers = const [],
     this.reticulum,
+    this.chatmail,
     this.matrix,
     this.onlyTransport,
     this.expectContacts = 0,
@@ -104,6 +106,10 @@ class DebugRunRequest {
 
   /// HOST:PORT of the Reticulum node (rnsd) for the reticulum carrier.
   final String? reticulum;
+
+  /// The chatmail server for the email carrier (a network may block the
+  /// default one).
+  final String? chatmail;
 
   /// URL,USER,PASSWORD of a lab Matrix account.
   final String? matrix;
@@ -187,6 +193,7 @@ class DebugRunRequest {
           if (carrierNames.contains(name.trim())) name.trim(),
       ],
       reticulum: value('debug-reticulum'),
+      chatmail: value('debug-chatmail'),
       matrix: value('debug-matrix'),
       onlyTransport: TransportKind.values
           .where((kind) => kind.name == value('debug-only-transport'))
@@ -270,7 +277,7 @@ Future<String> runDebugRequest(
               await controller.enableTorCarrier();
             case 'email':
               await controller.enableChatmailCarrier(
-                defaultChatmailDomains.first,
+                request.chatmail ?? defaultChatmailDomains.first,
               );
             case 'bitchat':
               await controller.enableBitchatCarrier();

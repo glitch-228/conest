@@ -43,6 +43,8 @@ relay_arg=()
 # none). Meshtastic and MeshCore need radios and are not in the lab.
 CARRIERS=${CARRIERS-nostr,tor,email,bitchat,reticulum}
 RETICULUM=${RETICULUM:-}
+# The chatmail server for email (a network may block the default).
+CHATMAIL=${CHATMAIL:-}
 # A lab homeserver with an account per device named lab-android,
 # lab-linux and lab-windows, all with MATRIX_PASSWORD (empty: no Matrix).
 # One transport only (a TransportKind name, such as nostr or tor): every
@@ -66,6 +68,7 @@ carrier_args() { # device name
   carriers=${!var-$CARRIERS}
   [ -n "$carriers" ] && args+=("--debug-carriers=$carriers")
   [ -n "$RETICULUM" ] && args+=("--debug-reticulum=$RETICULUM")
+  [ -n "$CHATMAIL" ] && args+=("--debug-chatmail=$CHATMAIL")
   [ -n "$MATRIX_URL" ] && args+=("--debug-matrix=$MATRIX_URL,$1,$MATRIX_PASSWORD")
   [ -n "$ONLY" ] && args+=("--debug-only-transport=$ONLY")
   echo "${args[*]:-}"
@@ -215,13 +218,19 @@ fi
 
 # --- Reports ------------------------------------------------------------------------
 [ -n "$linux_pid" ] && { wait "$linux_pid" || echo "Linux run ended with an error (see linux.log)."; }
-wait_for "the Windows report" "win \"if exist \\\"$win_report\\\" (exit 0) else (exit 1)\"" 300
-sshpass -e scp -q "$WINDOWS:conest-lab/conest-debug-windows-x64/lab-report.json" "$out/windows.json" ||
-  win "type \"$win_report\"" >"$out/windows.json"
-if [ "$ANDROID" = 1 ]; then
-  wait_for "the Android report" "adb shell run-as $PACKAGE test -s $android_report" 300
-  adb exec-out run-as "$PACKAGE" cat "$android_report" >"$out/android.json"
+# A missing report must not cost the others (or the clean-up below).
+if wait_for "the Windows report" "win \"if exist \\\"$win_report\\\" (exit 0) else (exit 1)\"" 300; then
+  sshpass -e scp -q "$WINDOWS:conest-lab/conest-debug-windows-x64/lab-report.json" "$out/windows.json" ||
+    win "type \"$win_report\"" >"$out/windows.json"
 fi
+if [ "$ANDROID" = 1 ]; then
+  if wait_for "the Android report" "adb shell run-as $PACKAGE test -s $android_report" 300; then
+    adb exec-out run-as "$PACKAGE" cat "$android_report" >"$out/android.json"
+  fi
+  adb shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
+fi
+# The lab build only (by its folder): the user's own Conest keeps running.
+win "powershell -NoProfile -Command \"Get-Process conest -ErrorAction SilentlyContinue | Where-Object Path -Like '*\\conest-lab\\*' | Stop-Process -Force\"" >/dev/null 2>&1 || true
 win "schtasks /Delete /F /TN ConestLab" >/dev/null || true
 win "netsh advfirewall firewall delete rule name=ConestLab" >/dev/null || true
 echo "Reports in $out"
