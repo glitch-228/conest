@@ -128,7 +128,9 @@ class DebugRunRequest {
   ];
 
   /// Public Reticulum testnet node, used when none is given.
-  static const String defaultReticulum = 'reticulum.betweentheborders.com:4242';
+  // reticulum.betweentheborders.com:4242 closed every connection within
+  // two seconds (October 17); this hub keeps them.
+  static const String defaultReticulum = 'rns.beleth.net:4242';
 
   static const Set<String> kinds = {
     'routes',

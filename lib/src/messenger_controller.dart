@@ -7259,6 +7259,16 @@ class MessengerController extends ChangeNotifier {
             ?tor.progressDetail,
           ].join(': '),
         ),
+        // Reticulum has its address from the start: ready only while its
+        // link is up, or a node that drops every link looks fine.
+        final ReticulumCarrierChannel reticulum
+            when reticulum.state != ReticulumCarrierState.connected =>
+          CarrierStatus(
+            kind: adapter.kind,
+            ready: false,
+            address: adapter.status.address,
+            lastError: reticulum.lastError ?? reticulum.state.name,
+          ),
         _ => adapter.status,
       },
   ];

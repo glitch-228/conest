@@ -16677,6 +16677,41 @@ void main() {
       }
     }
 
+    test('Reticulum is ready only while its link is up', () async {
+      final bus = FakeRnsBus();
+      // A node that drops every link (seen on a public node).
+      var drop = true;
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        reticulumConnector: (config) async {
+          final link = bus.attach();
+          if (drop) {
+            unawaited(
+              Future<void>.delayed(
+                const Duration(milliseconds: 10),
+                link.close,
+              ),
+            );
+          }
+          return link;
+        },
+      );
+      addTearDown(controller.dispose);
+      await controller.enableReticulumCarrier(host: 'node.test');
+      CarrierStatus status() => controller.carrierStatuses.singleWhere(
+        (status) => status.kind == TransportKind.reticulum,
+      );
+      await until(() => controller.reticulumChannel?.lastError != null);
+      expect(status().ready, isFalse);
+      expect(status().lastError, contains('closed'));
+      // Its address is there all along, for invites.
+      expect(status().address, isNotNull);
+      drop = false;
+      await until(() => status().ready);
+      expect(status().ready, isTrue);
+    });
+
     test('a contact is added over Reticulum alone', () async {
       final bus = FakeRnsBus();
       final relay = _FakeRelayClient();
