@@ -18988,7 +18988,9 @@ void main() {
         what: 'none',
         name: 'phone',
         approve: true,
-        serve: Duration(seconds: 4),
+        // Ends as soon as the laptop paired, not after 30 s.
+        serve: Duration(seconds: 30),
+        expectContacts: 1,
         wait: Duration.zero,
         // Paired and talked to with every other transport off.
         onlyTransport: TransportKind.conestRelay,
@@ -19000,13 +19002,15 @@ void main() {
     for (var i = 0; i < 100 && !inviteFile.existsSync(); i++) {
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
+    final started = DateTime.now();
     final laptopPath = await runDebugRequest(
       laptop,
       DebugRunRequest(
         what: 'messages',
         name: 'laptop',
         invites: [inviteFile.readAsStringSync()],
-        serve: const Duration(seconds: 4),
+        serve: const Duration(seconds: 30),
+        expectContacts: 1,
         group: 'lab-all',
         wait: const Duration(seconds: 1),
         onlyTransport: TransportKind.conestRelay,
@@ -19015,6 +19019,11 @@ void main() {
       defaultReportPath: () async => '${root.path}/laptop.json',
     );
     await phoneRun;
+    expect(
+      DateTime.now().difference(started),
+      lessThan(const Duration(seconds: 25)),
+      reason: 'no fixed waits once paired',
+    );
     expect(phone.identity!.displayName, 'phone');
     for (final device in [phone, laptop]) {
       final connectivity = device.identity!.connectivity;
@@ -19030,6 +19039,14 @@ void main() {
     }
     final report = jsonDecode(File(laptopPath).readAsStringSync()) as Map;
     expect(laptop.contacts.single.canSendOutbound, isTrue);
+    // How long pairing and each message took.
+    expect((report['pairedAfterMs'] as Map).values.single, isA<int>());
+    final timed = [
+      for (final step in report['steps'] as List)
+        if ((step['step'] as String).startsWith('message ')) step['result'],
+    ];
+    expect(timed, hasLength(3));
+    expect(timed, everyElement(isA<int>()));
     final chats = report['chats'] as List;
     final direct = chats.firstWhere((chat) => chat['contact'] != null) as Map;
     expect(direct['messages'] as List, hasLength(3));

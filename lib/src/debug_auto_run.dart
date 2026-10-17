@@ -9,7 +9,10 @@
 ///          [--debug-serve=SECONDS]        wait this long for the others
 ///          [--debug-group=TITLE]          then make a group of everyone
 ///          [--debug-no-reserve]           files even on a nearly full disk
-///          [--debug-linger=SECONDS]       stay online after the tests
+///          [--debug-linger=SECONDS]       stay online after the tests (until
+///                                         every contact says it is done)
+///          [--debug-expect-contacts=N]    stop waiting once N contacts can
+///                                         be written to
 ///          [--debug-carriers=nostr,tor,email,bitchat,reticulum]
 ///                                         switch these carriers on first
 ///          [--debug-reticulum=HOST:PORT]  the Reticulum node to use
@@ -56,6 +59,7 @@ class DebugRunRequest {
     this.reticulum,
     this.matrix,
     this.onlyTransport,
+    this.expectContacts = 0,
   });
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', or 'none'
@@ -103,6 +107,10 @@ class DebugRunRequest {
 
   /// The one transport left on for the whole run (pairing included).
   final TransportKind? onlyTransport;
+
+  /// Contacts this device waits for (at most [serve]) before testing: the
+  /// wait ends as soon as that many can be written to.
+  final int expectContacts;
 
   static const List<String> carrierNames = [
     'nostr',
@@ -174,6 +182,8 @@ class DebugRunRequest {
       onlyTransport: TransportKind.values
           .where((kind) => kind.name == value('debug-only-transport'))
           .firstOrNull,
+      expectContacts: (int.tryParse(value('debug-expect-contacts') ?? '') ?? 0)
+          .clamp(0, 64),
     );
   }
 
@@ -309,9 +319,26 @@ Future<String> runDebugRequest(
       return result.toString();
     });
   }
-  // Waits for the other devices (and approves them) before testing.
+  // Waits for the other devices (and approves them) before testing, until
+  // the expected contacts can all be written to. When each became ready,
+  // from the start: how long adding a contact took.
   final serveUntil = DateTime.now().add(request.serve);
+  final pairedAfter = <String, int>{};
+  void notePaired() {
+    for (final contact in _contacts(controller)) {
+      pairedAfter.putIfAbsent(
+        contact.alias,
+        () => DateTime.now().toUtc().difference(startedAt).inMilliseconds,
+      );
+    }
+  }
+
   do {
+    notePaired();
+    if (request.expectContacts > 0 &&
+        _contacts(controller).length >= request.expectContacts) {
+      break;
+    }
     if (request.approve) {
       for (final pending in controller.pendingContactRequests) {
         await step('approve ${pending.id}', () async {
@@ -321,9 +348,10 @@ Future<String> runDebugRequest(
       }
     }
     if (DateTime.now().isBefore(serveUntil)) {
-      await Future<void>.delayed(const Duration(seconds: 1));
+      await Future<void>.delayed(const Duration(milliseconds: 250));
     }
   } while (DateTime.now().isBefore(serveUntil));
+  notePaired();
   final title = request.group;
   if (title != null) {
     // Everyone this device invited, accepted, or the group misses them
@@ -377,7 +405,7 @@ Future<String> runDebugRequest(
     }
   }
   if (what == 'messages' || what == 'all') {
-    await _sendMessages(controller, step);
+    await _sendMessages(controller, step, request.wait);
   }
   if (what == 'files' || what == 'all') {
     await _sendFiles(controller, step);
@@ -406,7 +434,25 @@ Future<String> runDebugRequest(
       return null;
     });
   }
-  await Future<void>.delayed(request.linger);
+  // Done: say so to every contact, over the transport being tested, then
+  // stay (answering, taking late receipts) until each has said so too.
+  for (final contact in _contacts(controller)) {
+    await step('done ${contact.alias}', () async {
+      await controller.sendMessage(contact: contact, body: _doneBody);
+      return null;
+    });
+  }
+  final lingerUntil = DateTime.now().add(request.linger);
+  bool allDone() => _contacts(controller).every(
+    (contact) => controller
+        .messagesFor(contact.deviceId)
+        .any((m) => !m.outbound && m.body == _doneBody),
+  );
+  while (!allDone() && DateTime.now().isBefore(lingerUntil)) {
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+  }
+  // A moment for this device's own last receipts to arrive.
+  await Future<void>.delayed(request.wait);
   final report = {
     'kind': what,
     'build': controller.debugBuildId,
@@ -416,6 +462,7 @@ Future<String> runDebugRequest(
     'finishedAt': DateTime.now().toUtc().toIso8601String(),
     'steps': steps,
     'contacts': contacts,
+    'pairedAfterMs': pairedAfter,
     'carriers': {'start': carriersAtStart, 'end': _carrierReport(controller)},
     'chats': _chatReport(controller),
     'errorHistory': controller.exportErrorHistory(),
@@ -442,15 +489,33 @@ Iterable<GroupRecord> _labGroups(MessengerController controller) =>
 typedef _Step =
     Future<void> Function(String name, Future<Object?> Function() work);
 
-Future<void> _sendMessages(MessengerController controller, _Step step) async {
+Future<void> _sendMessages(
+  MessengerController controller,
+  _Step step,
+  Duration wait,
+) async {
   final me = controller.identity?.displayName ?? 'lab';
   for (final contact in _contacts(controller)) {
     for (var i = 1; i <= 3; i++) {
+      // One at a time, each waited for (at most [wait]): the step's result
+      // is how long it took to be confirmed, in ms, or null.
       await step('message ${contact.alias} $i', () async {
-        await controller.sendMessage(
-          contact: contact,
-          body: 'lab $i from $me to ${contact.alias}',
-        );
+        final body = 'lab $i from $me to ${contact.alias}';
+        final sentAt = DateTime.now();
+        await controller.sendMessage(contact: contact, body: body);
+        final until = sentAt.add(wait);
+        while (DateTime.now().isBefore(until)) {
+          final message = controller
+              .messagesFor(contact.deviceId)
+              .where((m) => m.outbound && m.body == body)
+              .lastOrNull;
+          if (message != null &&
+              (message.state == DeliveryState.delivered ||
+                  message.state == DeliveryState.read)) {
+            return DateTime.now().difference(sentAt).inMilliseconds;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
         return null;
       });
     }
@@ -684,6 +749,9 @@ List<Map<String, Object?>> _carrierReport(MessengerController controller) => [
       if (matrix.lastError != null) 'error': matrix.lastError,
     },
 ];
+
+/// Sent to every contact when this device's tests are over.
+const String _doneBody = 'lab-done';
 
 /// What came of every lab message and file, per chat.
 List<Map<String, Object?>> _chatReport(MessengerController controller) {

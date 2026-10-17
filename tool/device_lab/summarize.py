@@ -127,10 +127,21 @@ def verdict(folder: str) -> str:
                 else:
                     direct_in += 1
         failed = sum(1 for s in report.get("steps", []) if not s.get("ok"))
+        paired = report.get("pairedAfterMs") or {}
+        times = sorted(
+            s["result"] for s in report.get("steps", [])
+            if s.get("step", "").startswith("message ")
+            and isinstance(s.get("result"), int))
+        timing = ""
+        if paired:
+            timing += f", paired after {max(paired.values()) / 1000:.1f} s"
+        if times:
+            timing += f", messages confirmed in {times[len(times) // 2]} ms (median)"
         parts.append(
             f"{name}: {contacts} contacts, 1:1 {direct_ok}/{direct_out} "
             f"confirmed {direct_in} in, group {group_ok}/{group_out} "
-            f"confirmed {group_in} in" + (f", {failed} failed steps" if failed else ""))
+            f"confirmed {group_in} in{timing}"
+            + (f", {failed} failed steps" if failed else ""))
     missing = {"android", "linux", "windows"} - set(reports)
     if missing:
         parts.append("no report from " + ", ".join(sorted(missing)))

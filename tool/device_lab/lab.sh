@@ -113,7 +113,7 @@ for permission in BLUETOOTH_SCAN BLUETOOTH_CONNECT BLUETOOTH_ADVERTISE \
   adb shell pm grant "$PACKAGE" "android.permission.$permission" 2>/dev/null || true
 done
 adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
-args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=600 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-android)"
+args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=600 --debug-expect-contacts=2 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-android)"
 adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
   --es conestDebugArgs "'$args_a'" >/dev/null
 wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite"
@@ -125,7 +125,7 @@ fi
 # --- B: Linux -------------------------------------------------------------------
 linux_report="$PWD/$out/linux.json"
 "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
-  "${invite_args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-serve=540 \
+  "${invite_args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-serve=540 --debug-expect-contacts=2 \
   --debug-wait="$WAIT" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
   --debug-exit >"$out/linux.log" 2>&1 &
 linux_pid=$!
@@ -147,7 +147,7 @@ win_invites=""
 win_invites="$win_invites\"--debug-accept-invite=$(cmd_escape "$invite_b")\""
 cat >"$out/start-windows.cmd" <<EOF
 @echo off
-"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $win_invites --debug-no-reserve --debug-linger=$LINGER --debug-serve=30 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
+"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $win_invites --debug-no-reserve --debug-linger=$LINGER --debug-serve=540 --debug-expect-contacts=2 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
 EOF
 sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
 # LAN tests need inbound connections to the lab exe (only it, and only
