@@ -56,8 +56,7 @@ impl Subscribers {
         mut admit: F,
     ) -> Result<usize, A::Error> {
         let count = adapter.count()?.min(MAX_LINKS);
-        self.links
-            .retain(|_, id| shared.core().contains(*id));
+        self.links.retain(|_, id| shared.core().contains(*id));
         let mut seen = BTreeSet::new();
         let mut complete = wanted.is_none();
         let mut added = 0;

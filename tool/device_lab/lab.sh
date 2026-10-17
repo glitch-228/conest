@@ -47,9 +47,12 @@ RETICULUM=${RETICULUM:-}
 # lab-linux and lab-windows, all with MATRIX_PASSWORD (empty: no Matrix).
 MATRIX_URL=${MATRIX_URL:-}
 MATRIX_PASSWORD=${MATRIX_PASSWORD:-}
+# Per device: ANDROID_CARRIERS, LINUX_CARRIERS, WINDOWS_CARRIERS.
 carrier_args() { # device name
-  local args=()
-  [ -n "$CARRIERS" ] && args+=("--debug-carriers=$CARRIERS")
+  local args=() var carriers
+  var=$(echo "${1#lab-}" | tr '[:lower:]' '[:upper:]')_CARRIERS
+  carriers=${!var-$CARRIERS}
+  [ -n "$carriers" ] && args+=("--debug-carriers=$carriers")
   [ -n "$RETICULUM" ] && args+=("--debug-reticulum=$RETICULUM")
   [ -n "$MATRIX_URL" ] && args+=("--debug-matrix=$MATRIX_URL,$1,$MATRIX_PASSWORD")
   echo "${args[*]:-}"
