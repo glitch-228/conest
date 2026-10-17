@@ -28922,6 +28922,9 @@ class MessengerController extends ChangeNotifier {
     // Through the target's inbox (bitchatInboxKey): its pair ids need keys
     // it does not have before the request.
     TransportKind.bitchat,
+    // Packets are encrypted to the destination's identity key from the
+    // invite and name the sender's destination, which the invite binds.
+    TransportKind.reticulum,
   };
 
   /// This device's carrier addresses for its invite.

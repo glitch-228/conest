@@ -16677,6 +16677,74 @@ void main() {
       }
     }
 
+    test('a contact is added over Reticulum alone', () async {
+      final bus = FakeRnsBus();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> device(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          reticulumConnector: bus.connect,
+        );
+        addTearDown(controller.dispose);
+        // Every other route off: the request can only go by Reticulum.
+        await controller.updateGlobalConnectivity(
+          controller.identity!.connectivity.copyWith(
+            lanEnabled: false,
+            transportPolicies: {
+              for (final kind in TransportKind.values)
+                kind: kind == TransportKind.reticulum
+                    ? TransportPolicy.automatic
+                    : TransportPolicy.disabled,
+            },
+          ),
+        );
+        await controller.enableReticulumCarrier(host: 'node.test');
+        return controller;
+      }
+
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      await until(() => alice.reticulumChannel?.localAddress != null);
+      final invite = (await alice.buildInvite()).encodePayload();
+      expect(
+        ContactInvite.decodePayload(
+          invite,
+        ).carrierHints[TransportKind.reticulum],
+        alice.reticulumChannel!.localAddress,
+      );
+      await bob.addContactFromInvite(
+        alias: 'Alice',
+        payload: invite,
+        codephrase: '',
+      );
+      final bobId = bob.identity!.deviceId;
+      await until(
+        () =>
+            alice.pendingContactRequests.any((r) => r.senderDeviceId == bobId),
+      );
+      expect(
+        alice.pendingContactRequests.any((r) => r.senderDeviceId == bobId),
+        isTrue,
+        reason: 'the request reaches Alice over Reticulum',
+      );
+      await alice.approvePendingContactRequest(
+        alice.pendingContactRequests
+            .firstWhere((r) => r.senderDeviceId == bobId)
+            .id,
+      );
+      await until(() => bob.contacts.single.canSendOutbound);
+      expect(bob.contacts.single.canSendOutbound, isTrue);
+      await bob.sendMessage(
+        contact: bob.contacts.single,
+        body: 'over Reticulum',
+      );
+      await until(
+        () => alice.messagesFor(bobId).any((m) => m.body == 'over Reticulum'),
+      );
+      expect(alice.messagesFor(bobId).single.route, MessageRoute.reticulum);
+    });
+
     test('two devices talk over a Reticulum network', () async {
       final bus = FakeRnsBus();
       final relay = _FakeRelayClient();
