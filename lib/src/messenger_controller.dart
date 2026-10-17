@@ -5131,7 +5131,11 @@ class MessengerController extends ChangeNotifier {
   /// for each contact with mesh [address] (normally one).
   Future<List<Uint8List>> _bitchatPairKeys(String address) async => [
     for (final contact in [
-      ..._snapshot.contacts.where((contact) => contact.canSendOutbound),
+      // Contacts still pairing too (keys from the invite they gave): their
+      // acceptance comes under the pair's ids.
+      ..._snapshot.contacts.where(
+        (contact) => contact.canSendOutbound || _pairingWithKeys(contact),
+      ),
       // Group members who are not contacts reach us over the mesh too,
       // unless they claim a contact's address (to see when we write to
       // that contact).
@@ -7273,7 +7277,8 @@ class MessengerController extends ChangeNotifier {
       if (channel is! PeerAwareCarrierChannel) continue;
       channel.updatePeers({
         for (final contact in _snapshot.contacts)
-          if (contact.canSendOutbound &&
+          // Contacts still pairing too: their acceptance comes this way.
+          if ((contact.canSendOutbound || _pairingWithKeys(contact)) &&
               contact.routing.effectivePolicy(kind, global) !=
                   TransportPolicy.disabled)
             ?contact.carrierAddress(kind),
@@ -28893,6 +28898,9 @@ class MessengerController extends ChangeNotifier {
     TransportKind.deltaChat,
     TransportKind.matrix,
     TransportKind.tor,
+    // Through the target's inbox (bitchatInboxKey): its pair ids need keys
+    // it does not have before the request.
+    TransportKind.bitchat,
   };
 
   /// This device's carrier addresses for its invite.
@@ -32282,11 +32290,21 @@ class MessengerController extends ChangeNotifier {
                   .firstOrNull ??
               known;
     final me = _requireIdentity();
-    if (contact != null &&
+    final firstContact =
+        contact != null &&
         !contact.canSendOutbound &&
         _pairingWithKeys(contact) &&
         _firstContactCarriers.contains(kind) &&
-        _isFirstContactRequest(envelope)) {
+        _isFirstContactRequest(envelope);
+    if (kind == TransportKind.bitchat) {
+      // A first request goes through the target's mesh inbox; anything else
+      // under the pair's ids.
+      final address = contact?.carrierAddresses[TransportKind.bitchat]?.value;
+      if (address != null) {
+        _bitchatChannel?.sendToInbox(address, firstContact);
+      }
+    }
+    if (firstContact) {
       // Asking a contact that has not accepted us yet: sealed to its
       // identity key from the invite, opened only by that device.
       return _crypto.sealFirstContact(
@@ -32446,10 +32464,17 @@ class MessengerController extends ChangeNotifier {
           : kind == TransportKind.matrix
           ? MatrixAddress.decode(hint)?.userId
           : carrierSenderIdentity(hint);
+      // On the mesh a request comes to this device's inbox under a random
+      // sender id: nothing to bind but that the signed invite inside has a
+      // mesh address for the answer. A replay only repeats the request.
+      final bound =
+          kind == TransportKind.bitchat && sender == bitchatInboxSender
+          ? hint != null && isValidBitchatAddress(hint)
+          : hintSender == sender;
       if (invite == null ||
           invite.deviceId != envelope.senderDeviceId ||
           invite.accountId != envelope.senderAccountId ||
-          hintSender != sender) {
+          !bound) {
         appendDebugLog('Rejected a ${kind.label} first contact: not bound.');
         return null;
       }

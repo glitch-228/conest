@@ -30,6 +30,21 @@ const Duration bitchatIdPeriod = Duration(hours: 1);
 
 const String _addressPrefix = 'bc1:';
 
+/// The sender frames to this device's inbox come from: unknown until the
+/// request inside is opened (they travel under random sender ids).
+const String bitchatInboxSender = 'bc1:inbox';
+
+/// What a would-be contact's first request travels under: a key from the
+/// target's mesh address alone, which only its invite gives out, so the
+/// target recognises the request without knowing the sender yet. Its ids
+/// change every [bitchatIdPeriod] as pair ids do.
+Uint8List bitchatInboxKey(String address) => Uint8List.fromList(
+  Hmac(
+    sha256,
+    utf8.encode(address),
+  ).convert(utf8.encode('conest.bitchat.inbox')).bytes,
+);
+
 /// A device's address on the Bluetooth mesh: a random id, sent only to
 /// contacts and never over the air. What goes over the air are ids derived
 /// from it and the pair's key, which change every [bitchatIdPeriod].
@@ -371,7 +386,10 @@ class BitchatCarrierChannel
     if (frame.length + _macBytes > bitchatPayloadBytes) {
       throw ArgumentError('The frame is too large for one bitchat packet.');
     }
-    var pairs = _pairs[address];
+    final toInbox = _inboxTargets.contains(address);
+    var pairs = toInbox
+        ? [_Pair(address, bitchatInboxKey(address))]
+        : _pairs[address];
     if (pairs == null) {
       final keys = await _keyFor(address);
       if (keys.isEmpty) throw StateError('No contact has this mesh address.');
@@ -382,7 +400,10 @@ class BitchatCarrierChannel
     // each and only the right one can read it.
     for (final pair in pairs) {
       final period = pair.period(timestamp);
-      final sender = _id(pair.key, 's', config.address, period);
+      // To an inbox: a random sender id each time, linking nothing.
+      final sender = toInbox
+          ? randomBitchatBytes(8)
+          : _id(pair.key, 's', config.address, period);
       final recipient = _id(pair.key, 'r', address, period);
       await node.send(
         BitchatPacket(
@@ -428,7 +449,13 @@ class BitchatCarrierChannel
     final entry = _recipients(now)[hexEncode(packet.recipientId!)];
     if (entry == null) return BitchatPrivate.notMine;
     final (pair, period) = entry;
-    if (!_equal(packet.senderId, _id(pair.key, 's', pair.address, period)) ||
+    final inbox = identical(pair, _inbox);
+    // An inbox frame's sender is random; a pair's is the contact's id.
+    if ((!inbox &&
+            !_equal(
+              packet.senderId,
+              _id(pair.key, 's', pair.address, period),
+            )) ||
         payload.length <= _macBytes) {
       // Addressed to this device but not from the contact: not relayed.
       return BitchatPrivate.rejected;
@@ -448,7 +475,7 @@ class BitchatCarrierChannel
       final key = hexEncode(mac);
       if (!_readMacs.add(key)) return BitchatPrivate.rejected;
       if (_readMacs.length > _maxReadMacs) _readMacs.remove(_readMacs.first);
-      onFrame(pair.address, frame);
+      onFrame(inbox ? bitchatInboxSender : pair.address, frame);
       return BitchatPrivate.accepted;
     }
     return BitchatPrivate.rejected;
@@ -672,11 +699,32 @@ class BitchatCarrierChannel
 
   /// Ids this device answers to, for each pair's current period and its
   /// neighbours (clocks differ); rebuilt every minute.
+  /// This device's inbox, for first requests from would-be contacts.
+  late final _Pair _inbox = _Pair(
+    config.address,
+    bitchatInboxKey(config.address),
+  );
+
+  /// Mesh addresses whose next frames go to their inbox: a first request,
+  /// marked by the app when it seals one (the target cannot know this
+  /// device's pair ids yet).
+  final Set<String> _inboxTargets = {};
+
+  /// Sends the next frames to [address] through its inbox ([on]) or as a
+  /// contact pair again.
+  void sendToInbox(String address, bool on) {
+    if (on) {
+      _inboxTargets.add(address);
+    } else {
+      _inboxTargets.remove(address);
+    }
+  }
+
   Map<String, (_Pair, int)> _recipients(int now) {
     final minute = now ~/ 60000;
     if (_tableMinute == minute) return _table;
     _table = {
-      for (final pair in _pairs.values.expand((pairs) => pairs))
+      for (final pair in [_inbox, ..._pairs.values.expand((pairs) => pairs)])
         for (final candidate in [
           pair.period(now) - 1,
           pair.period(now),

@@ -20562,6 +20562,93 @@ void main() {
       },
     );
 
+    test('a contact is added over the mesh alone, through its inbox', () async {
+      final area = FakeBleNeighbourhood()
+        ..connect('alice', 'relay')
+        ..connect('relay', 'bob')
+        ..connect('relay', 'carol');
+      BitchatNode(
+        links: area.node('relay'),
+        onPrivate: (_, _) => BitchatPrivate.notMine,
+      );
+      final relay = _FakeRelayClient();
+      Future<MessengerController> device(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          bitchatConnector: () async => area.node(name.toLowerCase()),
+        );
+        addTearDown(controller.dispose);
+        // Every other route off: the request can only go by the mesh.
+        // (Before the mesh starts: a policy change restarts it.)
+        await controller.updateGlobalConnectivity(
+          controller.identity!.connectivity.copyWith(
+            lanEnabled: false,
+            transportPolicies: {
+              for (final kind in TransportKind.values)
+                kind: kind == TransportKind.bitchat
+                    ? TransportPolicy.automatic
+                    : TransportPolicy.disabled,
+            },
+          ),
+        );
+        await controller.enableBitchatCarrier();
+        return controller;
+      }
+
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      final carol = await device('Carol');
+      Future<void> until(bool Function() done, String what) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 15));
+        while (!done() && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(done(), isTrue, reason: what);
+      }
+
+      await until(
+        () => alice.bitchatChannel?.localAddress != null,
+        'Alice is on the mesh',
+      );
+      final invite = (await alice.buildInvite()).encodePayload();
+      expect(
+        ContactInvite.decodePayload(invite).carrierHints[TransportKind.bitchat],
+        alice.bitchatChannel!.localAddress,
+      );
+      await bob.addContactFromInvite(
+        alias: 'Alice',
+        payload: invite,
+        codephrase: '',
+      );
+      final bobId = bob.identity!.deviceId;
+      await until(
+        () =>
+            alice.pendingContactRequests.any((r) => r.senderDeviceId == bobId),
+        'the request reaches Alice through her mesh inbox',
+      );
+      await alice.approvePendingContactRequest(
+        alice.pendingContactRequests
+            .firstWhere((r) => r.senderDeviceId == bobId)
+            .id,
+      );
+      await until(
+        () => bob.contacts.single.canSendOutbound,
+        'Bob hears Alice accepted',
+      );
+      await bob.sendMessage(
+        contact: bob.contacts.single,
+        body: 'over the mesh',
+      );
+      await until(
+        () => alice.messagesFor(bobId).any((m) => m.body == 'over the mesh'),
+        'a message follows',
+      );
+      // Carol, on the same mesh, got nothing she could read.
+      expect(carol.pendingContactRequests, isEmpty);
+      expect(carol.contacts, isEmpty);
+    });
+
     test('two devices talk through a relaying phone', () async {
       final area = FakeBleNeighbourhood()
         ..connect('alice', 'relay')
