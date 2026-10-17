@@ -45,6 +45,10 @@ CARRIERS=${CARRIERS-nostr,tor,email,bitchat,reticulum}
 RETICULUM=${RETICULUM:-}
 # A lab homeserver with an account per device named lab-android,
 # lab-linux and lab-windows, all with MATRIX_PASSWORD (empty: no Matrix).
+# One transport only (a TransportKind name, such as nostr or tor): every
+# other one, LAN too, is off on every device from before pairing, so
+# contacts are added and messages sent over it alone.
+ONLY=${ONLY:-}
 MATRIX_URL=${MATRIX_URL:-}
 MATRIX_PASSWORD=${MATRIX_PASSWORD:-}
 # Per device: ANDROID_CARRIERS, LINUX_CARRIERS, WINDOWS_CARRIERS.
@@ -55,6 +59,7 @@ carrier_args() { # device name
   [ -n "$carriers" ] && args+=("--debug-carriers=$carriers")
   [ -n "$RETICULUM" ] && args+=("--debug-reticulum=$RETICULUM")
   [ -n "$MATRIX_URL" ] && args+=("--debug-matrix=$MATRIX_URL,$1,$MATRIX_PASSWORD")
+  [ -n "$ONLY" ] && args+=("--debug-only-transport=$ONLY")
   echo "${args[*]:-}"
 }
 

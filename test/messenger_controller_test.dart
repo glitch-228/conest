@@ -18658,8 +18658,10 @@ void main() {
       '--debug-no-reserve --debug-linger=90 '
       '--debug-carriers=nostr,bogus,tor,email '
       '--debug-reticulum=node.example:4242 '
-      '--debug-matrix=http://10.0.0.2:8008,lab-a,secret',
+      '--debug-matrix=http://10.0.0.2:8008,lab-a,secret '
+      '--debug-only-transport=conestRelay',
     )!;
+    expect(parsed.onlyTransport, TransportKind.conestRelay);
     // Unknown carriers are left out.
     expect(parsed.carriers, ['nostr', 'tor', 'email']);
     expect(parsed.reticulum, 'node.example:4242');
@@ -18720,6 +18722,9 @@ void main() {
         approve: true,
         serve: Duration(seconds: 4),
         wait: Duration.zero,
+        // Paired and talked to with every other transport off.
+        onlyTransport: TransportKind.conestRelay,
+        relay: 'relay.example:7667',
       ),
       defaultReportPath: () async => '${root.path}/phone.json',
     );
@@ -18736,13 +18741,27 @@ void main() {
         serve: const Duration(seconds: 4),
         group: 'lab-all',
         wait: const Duration(seconds: 1),
+        onlyTransport: TransportKind.conestRelay,
+        relay: 'relay.example:7667',
       ),
       defaultReportPath: () async => '${root.path}/laptop.json',
     );
     await phoneRun;
     expect(phone.identity!.displayName, 'phone');
-    expect(laptop.contacts.single.canSendOutbound, isTrue);
+    for (final device in [phone, laptop]) {
+      final connectivity = device.identity!.connectivity;
+      expect(connectivity.lanEnabled, isFalse);
+      expect(
+        connectivity.policyFor(TransportKind.iroh),
+        TransportPolicy.disabled,
+      );
+      expect(
+        connectivity.policyFor(TransportKind.conestRelay),
+        TransportPolicy.automatic,
+      );
+    }
     final report = jsonDecode(File(laptopPath).readAsStringSync()) as Map;
+    expect(laptop.contacts.single.canSendOutbound, isTrue);
     final chats = report['chats'] as List;
     final direct = chats.firstWhere((chat) => chat['contact'] != null) as Map;
     expect(direct['messages'] as List, hasLength(3));

@@ -15,6 +15,9 @@
 ///          [--debug-reticulum=HOST:PORT]  the Reticulum node to use
 ///          [--debug-matrix=URL,USER,PASSWORD]  sign in to Matrix (lab
 ///                                         accounts on a lab homeserver)
+///          [--debug-only-transport=KIND]  every other transport off (LAN
+///                                         too), from before pairing: adds
+///                                         contacts and talks over KIND
 ///          [--debug-report=PATH] [--debug-wait=20] [--debug-exit]
 ///   adb shell am start -n dev.conest.conest.debug/dev.conest.conest.MainActivity \
 ///       --es conestDebugArgs "--debug-run=all --debug-name=phone --debug-approve"
@@ -52,6 +55,7 @@ class DebugRunRequest {
     this.carriers = const [],
     this.reticulum,
     this.matrix,
+    this.onlyTransport,
   });
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', or 'none'
@@ -96,6 +100,9 @@ class DebugRunRequest {
 
   /// URL,USER,PASSWORD of a lab Matrix account.
   final String? matrix;
+
+  /// The one transport left on for the whole run (pairing included).
+  final TransportKind? onlyTransport;
 
   static const List<String> carrierNames = [
     'nostr',
@@ -164,6 +171,9 @@ class DebugRunRequest {
       ],
       reticulum: value('debug-reticulum'),
       matrix: value('debug-matrix'),
+      onlyTransport: TransportKind.values
+          .where((kind) => kind.name == value('debug-only-transport'))
+          .firstOrNull,
     );
   }
 
@@ -212,6 +222,17 @@ Future<String> runDebugRequest(
       return controller.identity?.deviceId;
     });
   }
+  // Before the invite, so it carries the relay's address (without LAN,
+  // pairing has to find this device there).
+  final relay = request.relay;
+  if (relay != null && controller.hasIdentity) {
+    await step('relay', () async {
+      final at = relay.lastIndexOf(':');
+      final port = int.parse(relay.substring(at + 1));
+      await controller.addRelay(host: relay.substring(0, at), port: port);
+      return relay;
+    });
+  }
   if (controller.hasIdentity) {
     for (final carrier in request.carriers) {
       await step('carrier $carrier', () async {
@@ -248,6 +269,24 @@ Future<String> runDebugRequest(
         return matrix[1];
       });
     }
+    final only = request.onlyTransport;
+    final me = controller.identity;
+    if (only != null && me != null) {
+      await step('only $only', () async {
+        await controller.updateGlobalConnectivity(
+          me.connectivity.copyWith(
+            lanEnabled: only == TransportKind.lan,
+            transportPolicies: {
+              for (final kind in TransportKind.values)
+                kind: kind == only
+                    ? TransportPolicy.automatic
+                    : TransportPolicy.disabled,
+            },
+          ),
+        );
+        return only.name;
+      });
+    }
     await step('invite', () async {
       final code = (await controller.buildInvite()).encodePayload();
       await _writeWhole('$path.invite', code);
@@ -258,15 +297,6 @@ Future<String> runDebugRequest(
     await step('no-reserve', () async {
       await controller.updateStorageReserveEnabled(false);
       return null;
-    });
-  }
-  final relay = request.relay;
-  if (relay != null) {
-    await step('relay', () async {
-      final at = relay.lastIndexOf(':');
-      final port = int.parse(relay.substring(at + 1));
-      await controller.addRelay(host: relay.substring(0, at), port: port);
-      return relay;
     });
   }
   for (final (index, code) in request.invites.indexed) {
