@@ -4,7 +4,8 @@
 # messages, files and every route between each pair and in the group.
 #
 #   SSHPASS=… WINDOWS=user@host LINUX_BUNDLE=~/conest-lab/linux \
-#     RELAY=host:7667 tool/device_lab/lab.sh
+#     RELAY=host:7667 [MATRIX_URL=http://lan-ip:8008 MATRIX_PASSWORD=…] \
+#     tool/device_lab/lab.sh
 #
 # Needs the CI debug artifacts installed:
 #   Android: the debug APK (package dev.conest.conest.debug);
@@ -38,6 +39,21 @@ mkdir -p "$out"
 
 relay_arg=()
 [ -n "$RELAY" ] && relay_arg=("--debug-relay=$RELAY")
+# Every carrier the devices can run, switched on before pairing (empty:
+# none). Meshtastic and MeshCore need radios and are not in the lab.
+CARRIERS=${CARRIERS-nostr,tor,email,bitchat,reticulum}
+RETICULUM=${RETICULUM:-}
+# A lab homeserver with an account per device named lab-android,
+# lab-linux and lab-windows, all with MATRIX_PASSWORD (empty: no Matrix).
+MATRIX_URL=${MATRIX_URL:-}
+MATRIX_PASSWORD=${MATRIX_PASSWORD:-}
+carrier_args() { # device name
+  local args=()
+  [ -n "$CARRIERS" ] && args+=("--debug-carriers=$CARRIERS")
+  [ -n "$RETICULUM" ] && args+=("--debug-reticulum=$RETICULUM")
+  [ -n "$MATRIX_URL" ] && args+=("--debug-matrix=$MATRIX_URL,$1,$MATRIX_PASSWORD")
+  echo "${args[*]:-}"
+}
 
 win() { sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"; }
 
@@ -56,8 +72,13 @@ android_report=files/conest-debug-report.json
 invite_args=()
 if [ "$ANDROID" = 1 ]; then
 adb shell am force-stop "$PACKAGE"
+# The Bluetooth mesh asks for these; nobody is there to tap Allow.
+for permission in BLUETOOTH_SCAN BLUETOOTH_CONNECT BLUETOOTH_ADVERTISE \
+  ACCESS_FINE_LOCATION POST_NOTIFICATIONS NEARBY_WIFI_DEVICES; do
+  adb shell pm grant "$PACKAGE" "android.permission.$permission" 2>/dev/null || true
+done
 adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
-args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=300 --debug-wait=$WAIT ${relay_arg[*]:-}"
+args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=600 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-android)"
 adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
   --es conestDebugArgs "'$args_a'" >/dev/null
 wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite"
@@ -69,8 +90,8 @@ fi
 # --- B: Linux -------------------------------------------------------------------
 linux_report="$PWD/$out/linux.json"
 "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
-  "${invite_args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-serve=240 \
-  --debug-wait="$WAIT" "${relay_arg[@]}" --debug-report="$linux_report" \
+  "${invite_args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-serve=540 \
+  --debug-wait="$WAIT" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
   --debug-exit >"$out/linux.log" 2>&1 &
 linux_pid=$!
 wait_for "the Linux invite" "test -s '$linux_report.invite'"
@@ -88,7 +109,7 @@ win_invites=""
 win_invites="$win_invites\"--debug-accept-invite=$invite_b\""
 cat >"$out/start-windows.cmd" <<EOF
 @echo off
-"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $win_invites --debug-no-reserve --debug-linger=$LINGER --debug-serve=30 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} --debug-report="$win_report" --debug-exit
+"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $win_invites --debug-no-reserve --debug-linger=$LINGER --debug-serve=30 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
 EOF
 sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
 # LAN tests need inbound connections to the lab exe (only it, and only
