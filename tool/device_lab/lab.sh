@@ -56,6 +56,9 @@ MATRIX_PASSWORD=${MATRIX_PASSWORD:-}
 # machine's PORT local on the phone (adb reverse) and on Windows (an ssh
 # tunnel for the run); use MATRIX_URL=http://localhost:PORT with it.
 MATRIX_TUNNEL=${MATRIX_TUNNEL:-}
+# TUNNELS="PORT …" does the same for other lab services on this machine
+# (a Reticulum node: RETICULUM=localhost:PORT), past its firewall.
+TUNNELS=${TUNNELS:-}
 # Per device: ANDROID_CARRIERS, LINUX_CARRIERS, WINDOWS_CARRIERS.
 carrier_args() { # device name
   local args=() var carriers
@@ -85,12 +88,17 @@ if [ "${FRESH:-0}" = 1 ]; then
 fi
 
 tunnel_pid=""
-if [ -n "$MATRIX_TUNNEL" ]; then
-  [ "${ANDROID:-1}" = 1 ] && adb reverse "tcp:$MATRIX_TUNNEL" "tcp:$MATRIX_TUNNEL" >/dev/null
+tunnel_ports=$(echo $MATRIX_TUNNEL $TUNNELS)
+if [ -n "$tunnel_ports" ]; then
+  forwards=()
+  for port in $tunnel_ports; do
+    [ "${ANDROID:-1}" = 1 ] && adb reverse "tcp:$port" "tcp:$port" >/dev/null
+    forwards+=(-R "$port:localhost:$port")
+  done
   sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
-    -N -R "$MATRIX_TUNNEL:localhost:$MATRIX_TUNNEL" "$WINDOWS" 2>/dev/null &
+    -N "${forwards[@]}" "$WINDOWS" 2>/dev/null &
   tunnel_pid=$!
-  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; adb reverse --remove "tcp:$MATRIX_TUNNEL" 2>/dev/null || true' EXIT
+  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; for port in $tunnel_ports; do adb reverse --remove "tcp:$port" 2>/dev/null; done; true' EXIT
 fi
 
 wait_for() { # description, command that succeeds when ready, tries
