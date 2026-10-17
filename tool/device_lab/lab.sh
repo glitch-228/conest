@@ -73,7 +73,12 @@ win() { sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"; }
 # FRESH=1: every device starts from empty lab data (new identities, no
 # contacts), so pairing is tested again. Only the lab instances' data.
 if [ "${FRESH:-0}" = 1 ]; then
-  [ "${ANDROID:-1}" = 1 ] && adb shell pm clear "$PACKAGE" >/dev/null
+  # pm clear needs a permission some phones (Xiaomi) withhold from adb;
+  # the debug app's own data can be removed with run-as instead.
+  if [ "${ANDROID:-1}" = 1 ]; then
+    adb shell am force-stop "$PACKAGE"
+    adb shell "run-as $PACKAGE sh -c 'for f in * .[!.]*; do [ \"\$f\" = lib ] || rm -rf \"\$f\"; done'" 2>/dev/null || true
+  fi
   rm -rf "$LINUX_BUNDLE/conest_data"
   win "if exist \"$WINDOWS_DIR\\conest_data\" rmdir /S /Q \"$WINDOWS_DIR\\conest_data\"" || true
 fi
