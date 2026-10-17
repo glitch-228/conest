@@ -5133,9 +5133,20 @@ class MessengerController extends ChangeNotifier {
     _bitchatInboxTimer = Timer.periodic(const Duration(hours: 1), (_) async {
       final current = bitchatCarrierConfig;
       if (_disposed || current == null || _bitchatChannel != channel) return;
-      final rotated = await _rotateBitchatInbox(current);
-      if (!identical(rotated, current) && _bitchatChannel == channel) {
-        channel.useInboxSecrets(rotated);
+      try {
+        await _rotateBitchatInbox(current);
+      } catch (error) {
+        // Kept in memory and saved with the next change; the channel
+        // switches all the same.
+        appendDebugLog('Saving the new mesh inbox secret failed: $error');
+      }
+      // Whatever the snapshot holds now, also after a save that failed
+      // last time.
+      final latest = bitchatCarrierConfig;
+      if (latest != null &&
+          _bitchatChannel == channel &&
+          latest.inboxSecret != channel.config.inboxSecret) {
+        channel.useInboxSecrets(latest);
       }
     });
     await _useBitchatIdentity();
