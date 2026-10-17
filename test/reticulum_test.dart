@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -320,6 +321,49 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
       expect(bobGot.single.$2, frame);
       expect(bobGot.single.$1, alice.localAddress!.split('|').first);
+    });
+
+    test('a restarted carrier announces with a newer time', () async {
+      // A node keeps a path only for an announce emitted later (in whole
+      // seconds) than the one it has; a restart builds a new channel.
+      final bus = FakeRnsBus();
+      final config = ReticulumCarrierConfig(
+        identityKeyHex: hexEncode(
+          await (await RnsIdentity.generate()).privateKey(),
+        ),
+        nameHashHex: ReticulumCarrierConfig.newNameHashHex(),
+        host: 'node.test',
+        port: 4242,
+      );
+      final listener = bus.attach();
+      final announces = <int>[];
+      listener.packets.listen((bytes) async {
+        final packet = RnsPacket.unpack(bytes);
+        if (packet == null) return;
+        if (await RnsAnnounce.validate(packet) case final announce?) {
+          announces.add(announce.emittedAt);
+        }
+      });
+      Future<void> run() async {
+        final before = announces.length;
+        final channel = await ReticulumCarrierChannel.create(
+          config: config,
+          connector: bus.connect,
+          onFrame: (_, _) {},
+        );
+        channel.start();
+        final deadline = DateTime.now().add(const Duration(seconds: 5));
+        while (announces.length == before &&
+            DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        await channel.stop();
+      }
+
+      await run();
+      await run();
+      expect(announces, hasLength(2));
+      expect(announces[1], greaterThan(announces[0]));
     });
 
     test('addresses are checked against their key', () async {

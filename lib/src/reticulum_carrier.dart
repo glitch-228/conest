@@ -386,7 +386,7 @@ class ReticulumCarrierChannel implements ManagedCarrierChannel {
         _setState(ReticulumCarrierState.connected);
         final closed = link.closed;
         while (current()) {
-          await endpoint.announce();
+          await _announceAfterLast(endpoint);
           final wake = Completer<void>();
           _wake = wake;
           final ended = await Future.any<bool>([
@@ -422,6 +422,28 @@ class ReticulumCarrierChannel implements ManagedCarrierChannel {
           ? const Duration(minutes: 2)
           : backoff * 2;
     }
+  }
+
+  /// When each destination last announced, in whole seconds (its emission
+  /// time): across channels, since a restart builds a new one.
+  static final Map<String, int> _lastAnnounceSecond = {};
+
+  /// Announces on [endpoint], later than this destination's last announce
+  /// by at least a second: a node takes a re-announce only when its
+  /// emission time is newer (seconds), so after the carrier restarted
+  /// within the same second it kept the path through the dead link, and
+  /// this device could not be reached for the rest of the run (seen on the
+  /// device lab).
+  Future<void> _announceAfterLast(RnsEndpoint endpoint) async {
+    final key = hexEncode(_destination);
+    final last = _lastAnnounceSecond[key];
+    for (var waited = 0; last != null && waited < 25; waited++) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now ~/ 1000 > last) break;
+      await Future<void>.delayed(Duration(milliseconds: 1000 - now % 1000 + 5));
+    }
+    await endpoint.announce();
+    _lastAnnounceSecond[key] = DateTime.now().millisecondsSinceEpoch ~/ 1000;
   }
 
   void _receive(Uint8List data) {
