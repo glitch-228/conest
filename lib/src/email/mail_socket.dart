@@ -23,13 +23,16 @@ Future<MailSocket> connectMailSocket(
   String? alpn,
 }) async {
   const timeout = Duration(seconds: 20);
+  // The whole connection, TLS handshake included: connect's own timeout
+  // covers only reaching the port, and a network that lets the connection
+  // open but stalls the handshake left the phone's account setup hanging.
   final Socket socket = tls
       ? await SecureSocket.connect(
           host,
           port,
           timeout: timeout,
           supportedProtocols: alpn == null ? null : [alpn],
-        )
+        ).timeout(timeout + const Duration(seconds: 10))
       : await Socket.connect(host, port, timeout: timeout);
   return _IoMailSocket(socket);
 }
@@ -41,6 +44,7 @@ MailConnector chatmailFallback({
   MailConnector direct = connectMailSocket,
   Future<MailSocket> Function(String host, String alpn) viaHttpsPort =
       _connectViaHttpsPort,
+  Duration greetingWait = const Duration(seconds: 15),
 }) {
   // Servers this run reached only on 443: tried there first next time, not
   // after the blocked port's whole timeout.
@@ -60,7 +64,9 @@ MailConnector chatmailFallback({
       }
     }
     try {
-      return await direct(host, port, tls: tls);
+      // The server speaks first (IMAP and SMTP): a port that connects but
+      // stays silent is blocked too, and its silence is not waited out.
+      return await _speaking(await direct(host, port, tls: tls), greetingWait);
     } catch (error) {
       try {
         final socket = await viaHttpsPort(host, alpn);
@@ -72,6 +78,72 @@ MailConnector chatmailFallback({
       }
     }
   };
+}
+
+/// [socket] once its first bytes came within [wait] (handed on to the
+/// reader unchanged); closed, and a timeout, otherwise.
+Future<MailSocket> _speaking(MailSocket socket, Duration wait) async {
+  final first = Completer<Uint8List>();
+  final rest = StreamController<Uint8List>();
+  late final StreamSubscription<Uint8List> subscription;
+  subscription = socket.input.listen(
+    (chunk) {
+      if (!first.isCompleted) {
+        first.complete(chunk);
+      } else {
+        rest.add(chunk);
+      }
+    },
+    onError: (Object error, StackTrace stack) {
+      if (!first.isCompleted) {
+        first.completeError(error, stack);
+      } else {
+        rest.addError(error, stack);
+      }
+    },
+    onDone: () {
+      if (!first.isCompleted) {
+        first.completeError(const SocketException('closed before speaking'));
+      }
+      rest.close();
+    },
+  );
+  try {
+    final chunk = await first.future.timeout(wait);
+    return _Replayed(socket, chunk, rest.stream, subscription);
+  } catch (_) {
+    await subscription.cancel();
+    await socket.close();
+    rethrow;
+  }
+}
+
+class _Replayed implements MailSocket {
+  _Replayed(this._socket, Uint8List first, Stream<Uint8List> rest, this._sub)
+    : input = _prepend(first, rest);
+
+  final MailSocket _socket;
+  final StreamSubscription<Uint8List> _sub;
+
+  @override
+  final Stream<Uint8List> input;
+
+  static Stream<Uint8List> _prepend(
+    Uint8List first,
+    Stream<Uint8List> rest,
+  ) async* {
+    yield first;
+    yield* rest;
+  }
+
+  @override
+  void write(List<int> bytes) => _socket.write(bytes);
+
+  @override
+  Future<void> close() async {
+    await _sub.cancel();
+    await _socket.close();
+  }
 }
 
 Future<MailSocket> _connectViaHttpsPort(String host, String alpn) =>
