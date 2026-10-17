@@ -3554,6 +3554,12 @@ class AppLocalizationsAr extends AppLocalizations {
   String get menuForwardAlbum => 'إعادة توجيه الألبوم';
 
   @override
+  String get menuSelect => 'تحديد';
+
+  @override
+  String get menuSelectAlbum => 'تحديد الألبوم';
+
+  @override
   String uiValueSelectedB1DFAF(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,

@@ -3577,6 +3577,12 @@ class AppLocalizationsRu extends AppLocalizations {
   String get menuForwardAlbum => 'Переслать альбом';
 
   @override
+  String get menuSelect => 'Выбрать';
+
+  @override
+  String get menuSelectAlbum => 'Выбрать альбом';
+
+  @override
   String uiValueSelectedB1DFAF(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,

@@ -9281,6 +9281,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
           _forwardAttachment(context, controller, palette, descriptor),
       onForwardAlbum: (album) =>
           _forwardMessages(context, controller, palette, album),
+      selectedIds: _selectedMessageIds,
+      onToggleMember: _toggleMessageSelection,
       onToggleSelection: (album) {
         setState(() {
           final alreadyAll = album.every(
@@ -11269,6 +11271,8 @@ class _ChatPanelState extends State<_ChatPanel> {
           _forwardAttachment(context, controller, palette, descriptor),
       onForwardAlbum: (album) =>
           _forwardMessages(context, controller, palette, album),
+      selectedIds: _selectedMessageIds,
+      onToggleMember: _toggleMessageSelection,
       onDeleteAttachment: (message) => _deleteMessage(context, message),
       onToggleSelection: (album) {
         setState(() {
@@ -18868,6 +18872,8 @@ class _AlbumBubble extends StatelessWidget {
     this.onForwardAttachment,
     this.onDeleteAttachment,
     this.onForwardAlbum,
+    this.selectedIds = const <String>{},
+    this.onToggleMember,
   });
 
   final List<ChatMessage> members;
@@ -18883,6 +18889,135 @@ class _AlbumBubble extends StatelessWidget {
   onForwardAttachment;
   final Future<void> Function(ChatMessage message)? onDeleteAttachment;
   final Future<void> Function(List<ChatMessage> members)? onForwardAlbum;
+
+  /// Selected messages: a file of the album can be selected on its own.
+  final Set<String> selectedIds;
+  final void Function(ChatMessage member)? onToggleMember;
+
+  RelativeRect _menuAt(BuildContext context, Offset at) {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    return RelativeRect.fromRect(
+      at & const Size(1, 1),
+      Offset.zero & overlay.size,
+    );
+  }
+
+  /// One file's menu (right-click): forward, save, select or delete it.
+  Future<void> _showMemberMenu(
+    BuildContext context,
+    Offset at,
+    ChatMessage member,
+    _AttachmentRow row,
+  ) async {
+    final strings = l10nOf(context);
+    final attachment = member.attachment!;
+    final value = await showMenu<String>(
+      context: context,
+      position: _menuAt(context, at),
+      items: [
+        if (onForwardAttachment != null)
+          PopupMenuItem(
+            value: 'forward',
+            child: Text(strings.menuForwardAttachment),
+          ),
+        if (controller.attachmentAvailableLocally(attachment.id))
+          PopupMenuItem(value: 'save', child: Text(strings.menuSaveAttachment)),
+        if (onToggleMember != null)
+          PopupMenuItem(value: 'select', child: Text(strings.menuSelect)),
+        if (onDeleteAttachment != null)
+          PopupMenuItem(value: 'delete', child: Text(strings.menuDelete)),
+      ],
+    );
+    switch (value) {
+      case 'forward':
+        await onForwardAttachment?.call(attachment);
+      case 'save':
+        await row._saveLocalFileToDisk();
+      case 'select':
+        onToggleMember?.call(member);
+      case 'delete':
+        await onDeleteAttachment?.call(member);
+    }
+  }
+
+  /// The album's menu, from its button or a right-click on the album.
+  List<PopupMenuEntry<String>> _albumMenuItems(
+    BuildContext context,
+    bool anyInFlight,
+  ) {
+    final strings = l10nOf(context);
+    return [
+      if (onToggleSelection != null)
+        PopupMenuItem(value: 'select', child: Text(strings.menuSelectAlbum)),
+      if (onForwardAlbum != null)
+        PopupMenuItem(value: 'forward', child: Text(strings.menuForwardAlbum)),
+      if (anyInFlight)
+        PopupMenuItem(
+          value: 'cancel',
+          child: Text(strings.uiCancelAlbumDB0A07),
+        ),
+      PopupMenuItem(value: 'delete', child: Text(strings.uiDeleteAlbum52E30F)),
+    ];
+  }
+
+  Future<void> _onAlbumMenu(String? value) async {
+    final albumId = members.isNotEmpty ? members.first.albumId : null;
+    switch (value) {
+      case 'select':
+        onToggleSelection?.call(members);
+      case 'forward':
+        await onForwardAlbum?.call(members);
+      case 'cancel':
+        if (albumId != null) await controller.cancelAlbum(albumId);
+      case 'delete':
+        if (albumId != null) await controller.deleteAlbum(albumId);
+    }
+  }
+
+  /// One file of the album: selectable on its own (long-press, or a tap
+  /// while selecting) with its own right-click menu.
+  Widget _albumItem(BuildContext context, ChatMessage m) {
+    final row = _AttachmentRow(
+      descriptor: m.attachment!,
+      outbound: outbound,
+      controller: controller,
+      palette: palette,
+      messageState: m.state,
+      onForward: onForwardAttachment == null
+          ? null
+          : () => onForwardAttachment!(m.attachment!),
+      onDelete: onDeleteAttachment == null
+          ? null
+          : () => onDeleteAttachment!(m),
+    );
+    final toggle = onToggleMember;
+    final Widget item = selectionMode && toggle != null
+        ? GestureDetector(
+            key: ValueKey('album-item-${m.id}'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => toggle(m),
+            // While selecting, a tap selects instead of opening the file.
+            child: AbsorbPointer(child: row),
+          )
+        : GestureDetector(
+            key: ValueKey('album-item-${m.id}'),
+            onLongPress: toggle == null ? null : () => toggle(m),
+            onSecondaryTapUp: (details) =>
+                _showMemberMenu(context, details.globalPosition, m, row),
+            child: row,
+          );
+    if (!selectedIds.contains(m.id)) return item;
+    return Stack(
+      children: [
+        Positioned.fill(child: item),
+        PositionedDirectional(
+          top: 4,
+          end: 4,
+          child: Icon(Icons.check_circle, color: palette.primary, size: 22),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -18911,6 +19046,15 @@ class _AlbumBubble extends StatelessWidget {
       onLongPress: onToggleSelection != null
           ? () => onToggleSelection!(members)
           : null,
+      onSecondaryTapUp: albumId == null || albumId.isEmpty
+          ? null
+          : (details) async => _onAlbumMenu(
+              await showMenu<String>(
+                context: context,
+                position: _menuAt(context, details.globalPosition),
+                items: _albumMenuItems(context, anyInFlight),
+              ),
+            ),
       child: Align(
         alignment: outbound
             ? AlignmentDirectional.centerEnd
@@ -18939,20 +19083,7 @@ class _AlbumBubble extends StatelessWidget {
                     childAspectRatio: 1.0,
                     children: [
                       for (final m in members)
-                        if (m.attachment != null)
-                          _AttachmentRow(
-                            descriptor: m.attachment!,
-                            outbound: outbound,
-                            controller: controller,
-                            palette: palette,
-                            messageState: m.state,
-                            onForward: onForwardAttachment == null
-                                ? null
-                                : () => onForwardAttachment!(m.attachment!),
-                            onDelete: onDeleteAttachment == null
-                                ? null
-                                : () => onDeleteAttachment!(m),
-                          ),
+                        if (m.attachment != null) _albumItem(context, m),
                     ],
                   ),
                   if (caption.trim().isNotEmpty) ...[
@@ -19005,35 +19136,8 @@ class _AlbumBubble extends StatelessWidget {
                           ? palette.outboundMeta
                           : palette.inboundMeta,
                     ),
-                    onSelected: (value) async {
-                      switch (value) {
-                        case 'cancel':
-                          await controller.cancelAlbum(albumId);
-                          break;
-                        case 'delete':
-                          await controller.deleteAlbum(albumId);
-                          break;
-                        case 'forward':
-                          await onForwardAlbum?.call(members);
-                          break;
-                      }
-                    },
-                    itemBuilder: (_) => [
-                      if (onForwardAlbum != null)
-                        PopupMenuItem(
-                          value: 'forward',
-                          child: Text(l10nOf(context).menuForwardAlbum),
-                        ),
-                      if (anyInFlight)
-                        PopupMenuItem(
-                          value: 'cancel',
-                          child: Text(l10nOf(context).uiCancelAlbumDB0A07),
-                        ),
-                      PopupMenuItem(
-                        value: 'delete',
-                        child: Text(l10nOf(context).uiDeleteAlbum52E30F),
-                      ),
-                    ],
+                    onSelected: _onAlbumMenu,
+                    itemBuilder: (_) => _albumMenuItems(context, anyInFlight),
                   ),
                 ),
             ],

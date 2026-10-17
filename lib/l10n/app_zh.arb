@@ -942,6 +942,8 @@
   "uiCancelAlbumDB0A07": "取消相册",
   "uiDeleteAlbum52E30F": "删除相册",
   "menuForwardAlbum": "转发相册",
+  "menuSelect": "选择",
+  "menuSelectAlbum": "选择相册",
   "uiValueSelectedB1DFAF": "{value, plural, other{已选 {value} 项}}",
   "uiThisWillCancelValueActiveB3425E": "{value, plural, other{这将取消 {value} 项正在进行的传输并清空传输列表。聊天消息和已下载完成的文件将保留。}}",
   "uiNoTransfersYetB8E5C1": "暂无传输。",

@@ -3357,6 +3357,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get menuForwardAlbum => '转发相册';
 
   @override
+  String get menuSelect => '选择';
+
+  @override
+  String get menuSelectAlbum => '选择相册';
+
+  @override
   String uiValueSelectedB1DFAF(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,

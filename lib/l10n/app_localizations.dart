@@ -5783,6 +5783,18 @@ abstract class AppLocalizations {
   /// **'Forward album'**
   String get menuForwardAlbum;
 
+  /// Menu item: select this message or file (selection mode).
+  ///
+  /// In en, this message translates to:
+  /// **'Select'**
+  String get menuSelect;
+
+  /// Album menu: select every file of the album.
+  ///
+  /// In en, this message translates to:
+  /// **'Select album'**
+  String get menuSelectAlbum;
+
   /// App-owned interface/status text in lib/main.dart:18413. English: {value} selected
   ///
   /// In en, this message translates to:

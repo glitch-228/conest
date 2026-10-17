@@ -6,6 +6,7 @@ import 'dart:math';
 import 'file_privacy_controller_cases.dart';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/gestures.dart' show kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10125,6 +10126,119 @@ void main() {
     alice.dispose();
     bob.dispose();
     carol.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  testWidgets('album files are selected one by one and have menus', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    late MessengerController alice;
+    late MessengerController bob;
+    final ids = <String>[];
+    final root = Directory.systemTemp.createTempSync('conest_album_pick_');
+    addTearDown(() => root.deleteSync(recursive: true));
+    await tester.runAsync(() async {
+      final relayClient = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        attachmentRootProvider: () async =>
+            Directory('${root.path}/a')..createSync(recursive: true),
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        attachmentRootProvider: () async =>
+            Directory('${root.path}/b')..createSync(recursive: true),
+      );
+      await _pairControllers(alice, bob);
+      final bobContact = alice.contacts.single;
+      await alice.sendMessage(contact: bobContact, body: 'album caption');
+      for (var i = 0; i < 2; i++) {
+        await alice.sendAttachment(
+          contact: bobContact,
+          bytes: Uint8List.fromList(
+            List<int>.generate(3000, (j) => (i + j) % 251),
+          ),
+          fileName: 'part$i.pdf',
+          mimeType: 'application/pdf',
+          albumId: 'album-pick',
+          caption: i == 0 ? 'two files' : '',
+        );
+      }
+      ids.addAll(
+        alice
+            .messagesFor(bob.identity!.deviceId)
+            .where((m) => m.albumId == 'album-pick')
+            .map((m) => m.id),
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: _createUpdateService(),
+          buildInfo: _createBuildInfo(),
+          themeController: app.ConestThemeController.memory(),
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    expect(ids, hasLength(2));
+
+    // Near a corner: in transfer, the card's middle holds its pause and
+    // cancel buttons, whose tooltips take a long press.
+    Offset corner(String id) =>
+        tester.getTopLeft(find.byKey(ValueKey('album-item-$id'))) +
+        const Offset(6, 6);
+    // One file, not the album.
+    await tester.longPressAt(corner(ids[0]));
+    await tester.pump();
+    expect(find.text('1 selected'), findsOneWidget);
+    // While selecting, a tap on the other file adds just that one.
+    await tester.tap(find.byKey(ValueKey('album-item-${ids[1]}')));
+    await tester.pump();
+    expect(find.text('2 selected'), findsOneWidget);
+    await tester.tap(find.byKey(ValueKey('album-item-${ids[1]}')));
+    await tester.pump();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.tap(find.byKey(ValueKey('album-item-${ids[0]}')));
+    await tester.pump();
+
+    // Right-click on a file: its own menu.
+    await tester.tap(
+      find.byKey(ValueKey('album-item-${ids[0]}')),
+      buttons: kSecondaryButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Forward attachment'), findsOneWidget);
+    expect(find.text('Select'), findsOneWidget);
+    await tester.tap(find.text('Select'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.tap(find.byKey(ValueKey('album-item-${ids[0]}')));
+    await tester.pump();
+
+    // Right-click on the album (its caption): the album's menu.
+    await tester.tap(find.text('two files'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Select album'), findsOneWidget);
+    expect(find.text('Forward album'), findsOneWidget);
+    await tester.tap(find.text('Select album'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    alice.dispose();
+    bob.dispose();
     await tester.pump(const Duration(milliseconds: 100));
   });
 
@@ -21231,10 +21345,18 @@ void main() {
         final aliceId = alice.identity!.deviceId;
         await alice.sendMessage(contact: alice.contacts.single, body: 'once');
         await settle([alice, bob]);
-        final copy = relay.storedEnvelopes.lastWhere(
+        // The first copy is the one Bob took: a retry after the session
+        // setup may encrypt the message afresh, and a later copy (another
+        // encryption) cannot be told from a replay without decrypting it.
+        final copy = relay.storedEnvelopes.firstWhere(
           (envelope) =>
               envelope.kind == 'direct_message' &&
-              envelope.senderDeviceId == aliceId,
+              envelope.senderDeviceId == aliceId &&
+              envelope.messageId ==
+                  bob
+                      .messagesFor(aliceId)
+                      .firstWhere((m) => m.body == 'once')
+                      .id,
         );
         expect(copy.protocolVersion, 3);
         // A restart empties every in-memory cache of decrypted messages.

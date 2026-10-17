@@ -3502,6 +3502,12 @@ class AppLocalizationsId extends AppLocalizations {
   String get menuForwardAlbum => 'Teruskan album';
 
   @override
+  String get menuSelect => 'Pilih';
+
+  @override
+  String get menuSelectAlbum => 'Pilih album';
+
+  @override
   String uiValueSelectedB1DFAF(int value) {
     String _temp0 = intl.Intl.pluralLogic(
       value,

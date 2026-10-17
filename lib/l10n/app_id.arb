@@ -942,6 +942,8 @@
   "uiCancelAlbumDB0A07": "Batalkan album",
   "uiDeleteAlbum52E30F": "Hapus album",
   "menuForwardAlbum": "Teruskan album",
+  "menuSelect": "Pilih",
+  "menuSelectAlbum": "Pilih album",
   "uiValueSelectedB1DFAF": "{value, plural, other{{value} dipilih}}",
   "uiThisWillCancelValueActiveB3425E": "{value, plural, other{Ini membatalkan {value} transfer aktif dan menghapus daftar transfer. Pesan obrolan dan berkas yang selesai diunduh tetap ada.}}",
   "uiNoTransfersYetB8E5C1": "Belum ada transfer.",

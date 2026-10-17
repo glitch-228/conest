@@ -5092,6 +5092,14 @@
   "@menuForwardAlbum": {
     "description": "Album menu: forward every item of the album, as one album, to another chat."
   },
+  "menuSelect": "Select",
+  "@menuSelect": {
+    "description": "Menu item: select this message or file (selection mode)."
+  },
+  "menuSelectAlbum": "Select album",
+  "@menuSelectAlbum": {
+    "description": "Album menu: select every file of the album."
+  },
   "uiValueSelectedB1DFAF": "{value, plural, one{{value} selected} other{{value} selected}}",
   "@uiValueSelectedB1DFAF": {
     "description": "App-owned interface/status text in lib/main.dart:18413. English: {value} selected",
