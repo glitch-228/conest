@@ -771,6 +771,15 @@ List<Map<String, Object?>> _chatReport(MessengerController controller) {
       for (final trace in message.routeTrace)
         '${trace.route.name}:${trace.mark.name}',
     ],
+    // When each mark came, in ms after the message was written; for one
+    // that came in, when it arrived (both clocks: they are NTP-synced).
+    'timeline': [
+      for (final trace in message.routeTrace)
+        '${trace.route.name}:${trace.mark.name}'
+            '+${trace.at.difference(message.createdAt).inMilliseconds}',
+    ],
+    if (!message.outbound)
+      'arrivedAt': message.arrivedAt.toUtc().toIso8601String(),
     'recipients': {
       for (final entry in message.recipientStates.entries)
         entry.key: entry.value.name,
