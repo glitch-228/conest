@@ -260,16 +260,22 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
     );
     final errors = <Object>[];
     var stored = 0;
-    await Future.wait(
+    // Sent once any relay stored it: one slow or unreachable relay must not
+    // hold every message for its whole publish timeout (15 s on a phone
+    // that could not reach one of three). The others finish meanwhile.
+    final firstStored = Completer<void>();
+    final all = Future.wait(
       to.relays.map((url) async {
         try {
           await _relayFor(url).publish(event);
           stored++;
+          if (!firstStored.isCompleted) firstStored.complete();
         } catch (error) {
           errors.add(error);
         }
       }),
     );
+    await Future.any([firstStored.future, all]);
     if (stored == 0) {
       final rateLimited = errors.whereType<NostrRelayException>().any(
         (error) => error.rateLimited,

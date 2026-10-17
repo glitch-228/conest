@@ -189,6 +189,21 @@ void main() {
     expect(bobGot.last.$2, [1, 2, 3]);
   });
 
+  test('a relay that never answers does not hold up the others', () async {
+    relays.relay('wss://good.test');
+    relays.relay('wss://silent.test').silent = true;
+    final bob = channel(['wss://silent.test', 'wss://good.test'], []);
+    final alice = channel(['wss://good.test'], [])..start();
+    final started = DateTime.now();
+    await alice.sendFrame(bob.localAddress!, frame);
+    // Not the silent relay's 15 s publish timeout.
+    expect(
+      DateTime.now().difference(started),
+      lessThan(const Duration(seconds: 3)),
+    );
+    expect(relays.relay('wss://good.test').stored, isNotEmpty);
+  });
+
   test('sending fails only when no relay stores the frame', () async {
     relays.relay('wss://good.test');
     relays.relay('wss://bad.test').rejectWith = 'blocked: no';

@@ -66,6 +66,10 @@ class FakeNostrRelay {
 
   /// Rejects published events with this message when set.
   String? rejectWith;
+
+  /// Never answers a published event (stores nothing, says nothing), as a
+  /// relay the device cannot really reach.
+  bool silent = false;
   final List<NostrEvent> stored = [];
 
   /// Public keys that signed in (NIP-42) to this relay.
@@ -155,6 +159,7 @@ class _Connection implements NostrSocket {
     final message = jsonDecode(raw) as List<dynamic>;
     switch (message) {
       case ['EVENT', final Map<String, dynamic> json]:
+        if (_relay.silent) return;
         final event = NostrEvent.fromJson(json);
         if (event != null) _relay._publish(this, event);
       case ['REQ', final String id, final Map<String, dynamic> filter]:
