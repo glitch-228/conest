@@ -18927,8 +18927,9 @@ void main() {
       '--debug-carriers=nostr,bogus,tor,email '
       '--debug-reticulum=node.example:4242 '
       '--debug-matrix=http://10.0.0.2:8008,lab-a,secret '
-      '--debug-only-transport=conestRelay',
+      '--debug-only-transport=conestRelay --debug-expect-group=lab-all',
     )!;
+    expect(parsed.expectGroup, 'lab-all');
     expect(parsed.onlyTransport, TransportKind.conestRelay);
     // Unknown carriers are left out.
     expect(parsed.carriers, ['nostr', 'tor', 'email']);
@@ -18991,6 +18992,8 @@ void main() {
         // Ends as soon as the laptop paired, not after 30 s.
         serve: Duration(seconds: 30),
         expectContacts: 1,
+        // The laptop makes the group; the phone waits to be in it.
+        expectGroup: 'lab-all',
         wait: Duration.zero,
         // Paired and talked to with every other transport off.
         onlyTransport: TransportKind.conestRelay,
@@ -19012,13 +19015,21 @@ void main() {
         serve: const Duration(seconds: 30),
         expectContacts: 1,
         group: 'lab-all',
-        wait: const Duration(seconds: 1),
+        // Each message waits up to this long for its receipt.
+        wait: const Duration(seconds: 3),
         onlyTransport: TransportKind.conestRelay,
         relay: 'relay.example:7667',
       ),
       defaultReportPath: () async => '${root.path}/laptop.json',
     );
-    await phoneRun;
+    final phoneReport =
+        jsonDecode(File(await phoneRun).readAsStringSync()) as Map;
+    expect(
+      (phoneReport['steps'] as List).firstWhere(
+        (step) => step['step'] == 'joined lab-all',
+      )['ok'],
+      isTrue,
+    );
     expect(
       DateTime.now().difference(started),
       lessThan(const Duration(seconds: 25)),

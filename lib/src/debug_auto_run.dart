@@ -13,6 +13,8 @@
 ///                                         every contact says it is done)
 ///          [--debug-expect-contacts=N]    stop waiting once N contacts can
 ///                                         be written to
+///          [--debug-expect-group=TITLE]   wait (at most the serve time) to be
+///                                         in that lab group, made elsewhere
 ///          [--debug-carriers=nostr,tor,email,bitchat,reticulum]
 ///                                         switch these carriers on first
 ///          [--debug-reticulum=HOST:PORT]  the Reticulum node to use
@@ -60,6 +62,7 @@ class DebugRunRequest {
     this.matrix,
     this.onlyTransport,
     this.expectContacts = 0,
+    this.expectGroup,
   });
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', or 'none'
@@ -111,6 +114,10 @@ class DebugRunRequest {
   /// Contacts this device waits for (at most [serve]) before testing: the
   /// wait ends as soon as that many can be written to.
   final int expectContacts;
+
+  /// A lab group another device makes: this one waits to be in it before
+  /// the group tests, or it tests a group it has not joined yet.
+  final String? expectGroup;
 
   static const List<String> carrierNames = [
     'nostr',
@@ -184,6 +191,11 @@ class DebugRunRequest {
           .firstOrNull,
       expectContacts: (int.tryParse(value('debug-expect-contacts') ?? '') ?? 0)
           .clamp(0, 64),
+      expectGroup: switch (value('debug-expect-group')) {
+        final title? when title.startsWith('lab-') && title.length <= 64 =>
+          title,
+        _ => null,
+      },
     );
   }
 
@@ -390,6 +402,19 @@ Future<String> runDebugRequest(
         members: _contacts(controller),
       );
       return group.groupId;
+    });
+  }
+  if (request.expectGroup case final expected?) {
+    await step('joined $expected', () async {
+      final until = DateTime.now().add(request.serve);
+      while (!_labGroups(controller).any((group) => group.title == expected) &&
+          DateTime.now().isBefore(until)) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      if (!_labGroups(controller).any((group) => group.title == expected)) {
+        throw StateError('not in $expected');
+      }
+      return DateTime.now().toUtc().difference(startedAt).inMilliseconds;
     });
   }
   await Future<void>.delayed(request.wait);
