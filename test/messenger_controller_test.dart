@@ -20566,6 +20566,7 @@ void main() {
       final area = FakeBleNeighbourhood()
         ..connect('alice', 'relay')
         ..connect('relay', 'bob')
+        ..connect('relay', 'dave')
         ..connect('relay', 'carol');
       BitchatNode(
         links: area.node('relay'),
@@ -20598,6 +20599,7 @@ void main() {
 
       final alice = await device('Alice');
       final bob = await device('Bob');
+      final dave = await device('Dave');
       final carol = await device('Carol');
       Future<void> until(bool Function() done, String what) async {
         final deadline = DateTime.now().add(const Duration(seconds: 15));
@@ -20616,16 +20618,28 @@ void main() {
         ContactInvite.decodePayload(invite).carrierHints[TransportKind.bitchat],
         alice.bitchatChannel!.localAddress,
       );
-      await bob.addContactFromInvite(
-        alias: 'Alice',
-        payload: invite,
-        codephrase: '',
-      );
+      // Two at once: their requests are kept apart (one sender id each).
+      await Future.wait([
+        bob.addContactFromInvite(
+          alias: 'Alice',
+          payload: invite,
+          codephrase: '',
+        ),
+        dave.addContactFromInvite(
+          alias: 'Alice',
+          payload: invite,
+          codephrase: '',
+        ),
+      ]);
       final bobId = bob.identity!.deviceId;
+      final daveId = dave.identity!.deviceId;
       await until(
         () =>
-            alice.pendingContactRequests.any((r) => r.senderDeviceId == bobId),
-        'the request reaches Alice through her mesh inbox',
+            alice.pendingContactRequests.any(
+              (r) => r.senderDeviceId == bobId,
+            ) &&
+            alice.pendingContactRequests.any((r) => r.senderDeviceId == daveId),
+        'both requests reach Alice through her mesh inbox',
       );
       await alice.approvePendingContactRequest(
         alice.pendingContactRequests

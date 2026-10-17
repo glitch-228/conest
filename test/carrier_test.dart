@@ -252,6 +252,47 @@ void main() {
       expect(sealer.opened, 0);
     });
 
+    test(
+      'a first request goes to the inbox under one sender id, alone',
+      () async {
+        // Two envelopes to one address at once: the first request (sealed for
+        // the inbox) and another; the choice is per envelope, not per address.
+        final inboxSealer = _InboxSealer();
+        final mesh = _InboxChannel('bc1:me');
+        final adapter = CarrierTransportAdapter(
+          kind: TransportKind.nostr,
+          sealer: inboxSealer,
+          framing: CarrierFraming.nostr,
+          frameSpacing: const Duration(milliseconds: 5),
+        )..attach(mesh);
+        await adapter.start();
+        final route = (await adapter.discoverRoutes(peer)).single;
+        Future<void> send(String id, int size) => adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: TransportEnvelope(
+            id: id,
+            recipientDeviceId: 'dev-bob',
+            bytes: pattern(size),
+            createdAt: DateTime.utc(2026),
+          ),
+        );
+        inboxSealer.inboxSizes.add(40 * 1024);
+        await Future.wait([
+          send('request', 40 * 1024),
+          send('other', 30 * 1024),
+        ]);
+        expect(mesh.inbox.length, greaterThan(1));
+        expect(mesh.inbox.map((frame) => frame.$3).toSet(), hasLength(1));
+        expect(mesh.plain, isNotEmpty);
+        // Every request frame by the inbox, none of the other envelope's.
+        final inboxBytes = mesh.inbox.fold<int>(0, (n, f) => n + f.$2.length);
+        final plainBytes = mesh.plain.fold<int>(0, (n, f) => n + f.$2.length);
+        expect(inboxBytes, greaterThan(40 * 1024));
+        expect(plainBytes, lessThan(inboxBytes));
+      },
+    );
+
     test('stopping mid-envelope sends no further frames', () async {
       final slow = CarrierTransportAdapter(
         kind: TransportKind.nostr,
@@ -830,4 +871,48 @@ class _StaticAdapter implements TransportAdapter {
 
   @override
   Stream<TransportInboundEnvelope> get inboundEnvelopes => const Stream.empty();
+}
+
+/// Seals by XOR; envelopes of the sizes in [inboxSizes] are first requests.
+class _InboxSealer extends _XorSealer implements InboxCarrierSealer {
+  final Set<int> inboxSizes = {};
+  final Expando<bool> _marked = Expando();
+
+  @override
+  Future<Uint8List> seal(
+    TransportKind kind,
+    String peerDeviceId,
+    Uint8List envelope,
+  ) async {
+    final sealed = await super.seal(kind, peerDeviceId, envelope);
+    if (inboxSizes.contains(envelope.length)) _marked[sealed] = true;
+    return sealed;
+  }
+
+  @override
+  bool sealedForInbox(Uint8List sealed) => _marked[sealed] == true;
+}
+
+class _InboxChannel implements InboxCarrierChannel {
+  _InboxChannel(this.localAddress);
+
+  final List<(String, Uint8List)> plain = [];
+  final List<(String, Uint8List, String)> inbox = [];
+
+  @override
+  final String localAddress;
+
+  @override
+  String get routeLabel => 'fake mesh';
+
+  @override
+  Future<void> sendFrame(String address, Uint8List frame) async =>
+      plain.add((address, frame));
+
+  @override
+  Future<void> sendInboxFrame(
+    String address,
+    Uint8List frame,
+    Uint8List senderId,
+  ) async => inbox.add((address, frame, senderId.join(',')));
 }

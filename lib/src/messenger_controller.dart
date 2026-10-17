@@ -5131,11 +5131,14 @@ class MessengerController extends ChangeNotifier {
   /// for each contact with mesh [address] (normally one).
   Future<List<Uint8List>> _bitchatPairKeys(String address) async => [
     for (final contact in [
-      // Contacts still pairing too (keys from the invite they gave): their
-      // acceptance comes under the pair's ids.
-      ..._snapshot.contacts.where(
-        (contact) => contact.canSendOutbound || _pairingWithKeys(contact),
-      ),
+      ..._snapshot.contacts.where((contact) => contact.canSendOutbound),
+      // Contacts still pairing too (keys from the invite they gave), for
+      // their acceptance; not one claiming a contact's address, which would
+      // see when we write to that contact.
+      if (!_acceptedBitchatAddresses().contains(address))
+        ..._snapshot.contacts.where(
+          (contact) => !contact.canSendOutbound && _pairingWithKeys(contact),
+        ),
       // Group members who are not contacts reach us over the mesh too,
       // unless they claim a contact's address (to see when we write to
       // that contact).
@@ -5164,6 +5167,15 @@ class MessengerController extends ChangeNotifier {
     ?_bitchatChannel?.localAddress,
     for (final contact in _snapshot.contacts)
       ?contact.carrierAddress(TransportKind.bitchat),
+  };
+
+  /// Mesh addresses of this device and of contacts that accepted: a
+  /// contact still pairing that claims one of these gets no pair key.
+  Set<String> _acceptedBitchatAddresses() => {
+    ?_bitchatChannel?.localAddress,
+    for (final contact in _snapshot.contacts)
+      if (contact.canSendOutbound)
+        ?contact.carrierAddress(TransportKind.bitchat),
   };
 
   // bitchat chats: the identity bitchat users see, and what was said.
@@ -7192,6 +7204,9 @@ class MessengerController extends ChangeNotifier {
   /// key; new carrier adapters are built with it.
   late final CarrierSealer carrierSealer = _ControllerCarrierSealer(this);
 
+  /// First requests sealed for a mesh inbox (see [InboxCarrierSealer]).
+  final Expando<bool> _inboxSeals = Expando('inbox seals');
+
   /// The carrier adapter of [kind], if one is registered.
   CarrierTransportAdapter? carrierTransport(TransportKind kind) =>
       _carrierTransports[kind];
@@ -7277,8 +7292,14 @@ class MessengerController extends ChangeNotifier {
       if (channel is! PeerAwareCarrierChannel) continue;
       channel.updatePeers({
         for (final contact in _snapshot.contacts)
-          // Contacts still pairing too: their acceptance comes this way.
-          if ((contact.canSendOutbound || _pairingWithKeys(contact)) &&
+          // Contacts still pairing too: their acceptance comes this way
+          // (on the mesh not one claiming a contact's address).
+          if ((contact.canSendOutbound ||
+                  (_pairingWithKeys(contact) &&
+                      (kind != TransportKind.bitchat ||
+                          !_acceptedBitchatAddresses().contains(
+                            contact.carrierAddress(kind),
+                          )))) &&
               contact.routing.effectivePolicy(kind, global) !=
                   TransportPolicy.disabled)
             ?contact.carrierAddress(kind),
@@ -32296,22 +32317,18 @@ class MessengerController extends ChangeNotifier {
         _pairingWithKeys(contact) &&
         _firstContactCarriers.contains(kind) &&
         _isFirstContactRequest(envelope);
-    if (kind == TransportKind.bitchat) {
-      // A first request goes through the target's mesh inbox; anything else
-      // under the pair's ids.
-      final address = contact?.carrierAddresses[TransportKind.bitchat]?.value;
-      if (address != null) {
-        _bitchatChannel?.sendToInbox(address, firstContact);
-      }
-    }
     if (firstContact) {
       // Asking a contact that has not accepted us yet: sealed to its
       // identity key from the invite, opened only by that device.
-      return _crypto.sealFirstContact(
+      final sealed = await _crypto.sealFirstContact(
         recipientPublicKeyBase64: contact.publicKeyBase64,
         context: '${kind.name}|${contact.deviceId}',
         plaintext: envelope,
       );
+      // On the mesh it goes to the target's inbox: its pair ids need keys
+      // it does not have yet.
+      if (kind == TransportKind.bitchat) _inboxSeals[sealed] = true;
+      return sealed;
     }
     // A contact still pairing gets the pairwise seal for everything else
     // (an encrypted acceptance in a mutual add): it holds our keys too.
@@ -32347,6 +32364,12 @@ class MessengerController extends ChangeNotifier {
       return MatrixAddress.decode(contact.matrixAddress)?.userId == sender;
     }
     final address = contact.carrierAddress(kind);
+    // A mesh address must be one: "bc1:inbox…" is what strangers' requests
+    // come as, and a peer claiming it would let them all past the limits.
+    if (kind == TransportKind.bitchat &&
+        (address == null || !isValidBitchatAddress(address))) {
+      return false;
+    }
     return address != null && carrierSenderIdentity(address) == sender;
   }
 
@@ -32363,7 +32386,46 @@ class MessengerController extends ChangeNotifier {
         _carrierGroupPeers().any(
           (member) => _carrierSenderMatches(kind, member, sender),
         ) ||
-        _admitCarrierStranger(kind, global);
+        (kind == TransportKind.bitchat &&
+                sender.startsWith('$bitchatInboxSender|')
+            ? _admitInboxRequest(sender, global)
+            : _admitCarrierStranger(kind, global));
+  }
+
+  /// Frames to this device's mesh inbox admitted, as (window start, count)
+  /// overall and per request (sender id): room for a few whole requests at
+  /// once (one is many frames), and one sender cannot use it all up.
+  (DateTime, int)? _inboxFrames;
+  final Map<String, (DateTime, int)> _inboxFramesBySender = {};
+  static const int _inboxFramesPerWindow = 400;
+  static const int _inboxFramesPerSender = 64;
+  (DateTime, int)? _inboxOpens;
+  static const int _inboxOpensPerWindow = 60;
+
+  bool _admitInboxRequest(String sender, GlobalConnectivityPreferences global) {
+    if (global.policyFor(TransportKind.bitchat) == TransportPolicy.disabled) {
+      return false;
+    }
+    final now = _now();
+    _inboxFramesBySender.removeWhere(
+      (_, window) => now.difference(window.$1) > _strangerFrameWindow,
+    );
+    if (_inboxFramesBySender.length >= 256 &&
+        !_inboxFramesBySender.containsKey(sender)) {
+      return false;
+    }
+    (DateTime, int)? counted((DateTime, int)? window, int limit) {
+      final (start, count) = window ?? (now, 0);
+      if (now.difference(start) > _strangerFrameWindow) return (now, 1);
+      return count >= limit ? null : (start, count + 1);
+    }
+
+    final mine = counted(_inboxFramesBySender[sender], _inboxFramesPerSender);
+    final all = counted(_inboxFrames, _inboxFramesPerWindow);
+    if (mine == null || all == null) return false;
+    _inboxFramesBySender[sender] = mine;
+    _inboxFrames = all;
+    return true;
   }
 
   /// Whether [envelope] (a serialized envelope) is a first-contact request:
@@ -32428,6 +32490,20 @@ class MessengerController extends ChangeNotifier {
   ) async {
     final me = _snapshot.identity;
     if (me == null || !_firstContactCarriers.contains(kind)) return null;
+    // Inbox requests are opened at a bounded rate: a single-frame one skips
+    // the reassembly budget, and any invite holder can make them.
+    if (kind == TransportKind.bitchat &&
+        sender.startsWith('$bitchatInboxSender|')) {
+      final now = _now();
+      final (start, count) = _inboxOpens ?? (now, 0);
+      if (now.difference(start) > _strangerFrameWindow) {
+        _inboxOpens = (now, 1);
+      } else if (count >= _inboxOpensPerWindow) {
+        return null;
+      } else {
+        _inboxOpens = (start, count + 1);
+      }
+    }
     final clear = await _crypto.openFirstContact(
       context: '${kind.name}|${me.deviceId}',
       sealed: sealed,
@@ -32468,7 +32544,8 @@ class MessengerController extends ChangeNotifier {
       // sender id: nothing to bind but that the signed invite inside has a
       // mesh address for the answer. A replay only repeats the request.
       final bound =
-          kind == TransportKind.bitchat && sender == bitchatInboxSender
+          kind == TransportKind.bitchat &&
+              sender.startsWith('$bitchatInboxSender|')
           ? hint != null && isValidBitchatAddress(hint)
           : hintSender == sender;
       if (invite == null ||
@@ -34964,10 +35041,14 @@ class _ControllerMatrixSealer implements MatrixCarrierSealer {
   ) => _controller._openFromCarrier(TransportKind.matrix, senderUserId, sealed);
 }
 
-class _ControllerCarrierSealer implements CarrierSealer {
+class _ControllerCarrierSealer implements CarrierSealer, InboxCarrierSealer {
   _ControllerCarrierSealer(this._controller);
 
   final MessengerController _controller;
+
+  @override
+  bool sealedForInbox(Uint8List sealed) =>
+      _controller._inboxSeals[sealed] == true;
 
   @override
   bool acceptsSender(TransportKind kind, String sender) =>

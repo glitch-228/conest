@@ -30,8 +30,9 @@ const Duration bitchatIdPeriod = Duration(hours: 1);
 
 const String _addressPrefix = 'bc1:';
 
-/// The sender frames to this device's inbox come from: unknown until the
-/// request inside is opened (they travel under random sender ids).
+/// What frames to this device's inbox are reported as coming from, before
+/// the request inside is opened: this prefix and the envelope's random
+/// sender id (MAC-checked), so requests are kept apart.
 const String bitchatInboxSender = 'bc1:inbox';
 
 /// What a would-be contact's first request travels under: a key from the
@@ -45,9 +46,12 @@ Uint8List bitchatInboxKey(String address) => Uint8List.fromList(
   ).convert(utf8.encode('conest.bitchat.inbox')).bytes,
 );
 
-/// A device's address on the Bluetooth mesh: a random id, sent only to
-/// contacts and never over the air. What goes over the air are ids derived
-/// from it and the pair's key, which change every [bitchatIdPeriod].
+/// A device's address on the Bluetooth mesh: a random id, given to
+/// contacts and in this device's invites, never over the air. What goes
+/// over the air are ids derived from it and the pair's key (or, for a first
+/// request, its inbox key), which change every [bitchatIdPeriod]. Whoever
+/// holds the address (an invite) can compute the inbox ids, until the mesh
+/// is turned off and on for a new address.
 bool isValidBitchatAddress(String address) =>
     address.length == _addressPrefix.length + 32 &&
     address.startsWith(_addressPrefix) &&
@@ -199,7 +203,10 @@ class _Pair {
 /// cannot tell apart from bitchat's own private messages or link to a
 /// device; only the contact can recognise and check them.
 class BitchatCarrierChannel
-    implements ManagedCarrierChannel, PeerAwareCarrierChannel {
+    implements
+        ManagedCarrierChannel,
+        PeerAwareCarrierChannel,
+        InboxCarrierChannel {
   BitchatCarrierChannel({
     required this.config,
     required BitchatConnector connector,
@@ -386,10 +393,7 @@ class BitchatCarrierChannel
     if (frame.length + _macBytes > bitchatPayloadBytes) {
       throw ArgumentError('The frame is too large for one bitchat packet.');
     }
-    final toInbox = _inboxTargets.contains(address);
-    var pairs = toInbox
-        ? [_Pair(address, bitchatInboxKey(address))]
-        : _pairs[address];
+    var pairs = _pairs[address];
     if (pairs == null) {
       final keys = await _keyFor(address);
       if (keys.isEmpty) throw StateError('No contact has this mesh address.');
@@ -399,28 +403,66 @@ class BitchatCarrierChannel
     // Normally one pair; when contacts share an address, the frame goes to
     // each and only the right one can read it.
     for (final pair in pairs) {
-      final period = pair.period(timestamp);
-      // To an inbox: a random sender id each time, linking nothing.
-      final sender = toInbox
-          ? randomBitchatBytes(8)
-          : _id(pair.key, 's', config.address, period);
-      final recipient = _id(pair.key, 'r', address, period);
-      await node.send(
-        BitchatPacket(
-          type: BitchatType.noiseEncrypted,
-          senderId: sender,
-          recipientId: recipient,
-          timestamp: timestamp,
-          payload: Uint8List.fromList([
-            ...frame,
-            ..._mac(pair.key, sender, recipient, timestamp, frame),
-          ]),
-          // bitchat signs its private packets but nobody checks their
-          // signatures; random bytes make these look the same.
-          signature: randomBitchatBytes(64),
-        ),
+      await _sendUnder(
+        node,
+        pair,
+        address,
+        _id(pair.key, 's', config.address, pair.period(timestamp)),
+        timestamp,
+        frame,
       );
     }
+  }
+
+  @override
+  Future<void> sendInboxFrame(
+    String address,
+    Uint8List frame,
+    Uint8List senderId,
+  ) async {
+    final node = _node;
+    if (node == null) throw StateError('The Bluetooth mesh is not running.');
+    if (!isValidBitchatAddress(address) || senderId.length != 8) {
+      throw ArgumentError('Not a Bluetooth mesh address.');
+    }
+    if (frame.length + _macBytes > bitchatPayloadBytes) {
+      throw ArgumentError('The frame is too large for one bitchat packet.');
+    }
+    await _sendUnder(
+      node,
+      _Pair(address, bitchatInboxKey(address)),
+      address,
+      senderId,
+      _now().millisecondsSinceEpoch,
+      frame,
+    );
+  }
+
+  Future<void> _sendUnder(
+    BitchatNode node,
+    _Pair pair,
+    String address,
+    Uint8List sender,
+    int timestamp,
+    Uint8List frame,
+  ) async {
+    final period = pair.period(timestamp);
+    final recipient = _id(pair.key, 'r', address, period);
+    await node.send(
+      BitchatPacket(
+        type: BitchatType.noiseEncrypted,
+        senderId: sender,
+        recipientId: recipient,
+        timestamp: timestamp,
+        payload: Uint8List.fromList([
+          ...frame,
+          ..._mac(pair.key, sender, recipient, timestamp, frame),
+        ]),
+        // bitchat signs its private packets but nobody checks their
+        // signatures; random bytes make these look the same.
+        signature: randomBitchatBytes(64),
+      ),
+    );
   }
 
   BitchatPrivate _private(BitchatPacket packet, Uint8List payload) {
@@ -473,9 +515,15 @@ class BitchatCarrierChannel
       ),
     )) {
       final key = hexEncode(mac);
-      if (!_readMacs.add(key)) return BitchatPrivate.rejected;
-      if (_readMacs.length > _maxReadMacs) _readMacs.remove(_readMacs.first);
-      onFrame(inbox ? bitchatInboxSender : pair.address, frame);
+      final read = inbox ? _inboxMacs : _readMacs;
+      if (!read.add(key)) return BitchatPrivate.rejected;
+      if (read.length > (inbox ? 1024 : _maxReadMacs)) read.remove(read.first);
+      onFrame(
+        inbox
+            ? '$bitchatInboxSender|${hexEncode(packet.senderId)}'
+            : pair.address,
+        frame,
+      );
       return BitchatPrivate.accepted;
     }
     return BitchatPrivate.rejected;
@@ -705,20 +753,9 @@ class BitchatCarrierChannel
     bitchatInboxKey(config.address),
   );
 
-  /// Mesh addresses whose next frames go to their inbox: a first request,
-  /// marked by the app when it seals one (the target cannot know this
-  /// device's pair ids yet).
-  final Set<String> _inboxTargets = {};
-
-  /// Sends the next frames to [address] through its inbox ([on]) or as a
-  /// contact pair again.
-  void sendToInbox(String address, bool on) {
-    if (on) {
-      _inboxTargets.add(address);
-    } else {
-      _inboxTargets.remove(address);
-    }
-  }
+  /// MACs of inbox frames read: apart from contacts' (which only contacts
+  /// can make), so invite holders flooding the inbox cannot flush those.
+  final LinkedHashSet<String> _inboxMacs = LinkedHashSet();
 
   Map<String, (_Pair, int)> _recipients(int now) {
     final minute = now ~/ 60000;

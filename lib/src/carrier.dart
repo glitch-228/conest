@@ -270,6 +270,25 @@ abstract interface class CarrierChannel {
   Future<void> sendFrame(String address, Uint8List frame);
 }
 
+/// A channel that can bring a first request to a would-be contact's inbox
+/// (the Bluetooth mesh), which recognises it without knowing the sender.
+abstract interface class InboxCarrierChannel implements CarrierChannel {
+  /// Sends one frame of an envelope to [address]'s inbox, under
+  /// [senderId]: one random id per envelope, so the receiver keeps each
+  /// request apart and nothing links the envelope to this device.
+  Future<void> sendInboxFrame(
+    String address,
+    Uint8List frame,
+    Uint8List senderId,
+  );
+}
+
+/// A sealer that tells which of the envelopes it sealed go to a would-be
+/// contact's inbox.
+abstract interface class InboxCarrierSealer {
+  bool sealedForInbox(Uint8List sealed);
+}
+
 /// A channel whose network confirms that a frame reached the other device
 /// (a radio's delivery acknowledgement).
 abstract interface class AcknowledgingCarrierChannel implements CarrierChannel {
@@ -544,6 +563,16 @@ class CarrierTransportAdapter implements TransportAdapter {
     final sendId = carrierSendId(peer.deviceId, envelope.id);
     final sealed = await _sealer.seal(kind, peer.deviceId, envelope.bytes);
     final frames = carrierBinaryFrames(framing, sealed, random: _random);
+    // A first request over a channel with inboxes: decided per envelope,
+    // so other envelopes to the same address meanwhile are not affected.
+    final sealer = _sealer;
+    final random = _random ?? Random.secure();
+    final inboxSender =
+        channel is InboxCarrierChannel &&
+            sealer is InboxCarrierSealer &&
+            (sealer as InboxCarrierSealer).sealedForInbox(sealed)
+        ? Uint8List.fromList(List.generate(8, (_) => random.nextInt(256)))
+        : null;
     // Registered before the first frame: confirmations of early frames
     // can come while later ones are still going out.
     final pending = _RadioEnvelope(envelope.id, peer.deviceId);
@@ -570,6 +599,12 @@ class CarrierTransportAdapter implements TransportAdapter {
         while (_unconfirmedFrames.length > _maxUnconfirmedFrames) {
           _unconfirmedFrames.remove(_unconfirmedFrames.keys.first);
         }
+      } else if (inboxSender != null) {
+        await (channel as InboxCarrierChannel).sendInboxFrame(
+          address,
+          frames[index],
+          inboxSender,
+        );
       } else {
         await channel.sendFrame(address, frames[index]);
       }
