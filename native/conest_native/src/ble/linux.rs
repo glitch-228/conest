@@ -31,7 +31,7 @@ use tokio::{
 
 use super::{
     CHARACTERISTIC_UUID, PERIPHERAL_WARNING, SERVICE_UUID, Shared,
-    core::{Core, MAX_LINKS, MAX_PACKET, Role},
+    core::{MAX_LINKS, MAX_PACKET, Role},
 };
 
 fn peer(address: Address) -> u64 {
@@ -182,13 +182,14 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                     powered_at = now;
                     if !adapter.is_powered().await? { bail!("Bluetooth is off. Turn it on in system settings."); }
                 }
-                let scan = Core::scan_due(now);
-                if scan && discovery.is_none() {
+                // One discovery session for the whole run, not the 20 s in
+                // every 30 the other platforms scan: BlueZ 5.87 crashed
+                // (a freed callback, while handling a found device) every
+                // 10 to 30 s as sessions started and stopped, dropping every
+                // other Bluetooth device. BlueZ duty-cycles the radio itself.
+                if discovery.is_none() {
                     discovery = Some(adapter.discover_devices().await.context("Bluetooth scanning is unavailable")?.boxed());
                     state.core().status.scanning = true;
-                } else if !scan && discovery.is_some() {
-                    discovery = None;
-                    state.core().status.scanning = false;
                 }
             }
             event = async { match &mut discovery { Some(d) => d.next().await, None => std::future::pending().await } } => {
