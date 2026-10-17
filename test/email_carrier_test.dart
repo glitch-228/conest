@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:conest/src/email/carrier_mail.dart';
 import 'package:conest/src/email/delta_content.dart';
+import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/email/smtp.dart';
 import 'package:conest/src/email_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -59,6 +62,35 @@ void main() {
   }
 
   final frame = Uint8List.fromList(List<int>.generate(5000, (i) => i % 11));
+
+  test(
+    'a connection that fails is closed at once, not after the wait',
+    () async {
+      // The server counts open connections per account; failed ones left open
+      // through the backoff piled up until it refused new ones.
+      final sockets = <_BreakableSocket>[];
+      final bob = EmailCarrierChannel(
+        config: account('bob'),
+        connector: (host, port, {required bool tls}) async {
+          final socket = _BreakableSocket(
+            await server.connect(host, port, tls: tls),
+          );
+          sockets.add(socket);
+          return socket;
+        },
+        onFrame: (_, _) {},
+        pollInterval: const Duration(milliseconds: 200),
+      );
+      channels.add(bob);
+      bob.start();
+      await until(() => bob.state == EmailCarrierState.connected);
+      sockets.single.breakNow();
+      await until(() => bob.state == EmailCarrierState.failed);
+      // The first backoff is 2 s; the broken connection is closed well before.
+      await until(() => sockets.first.closed);
+      expect(sockets, hasLength(1), reason: 'still waiting out the backoff');
+    },
+  );
 
   test('a frame arrives as encrypted mail and the mail is deleted', () async {
     final aliceGot = <(String, Uint8List)>[];
@@ -326,4 +358,33 @@ void main() {
       expect(restored.toString(), isNot(contains(a.password)));
     });
   });
+}
+
+/// A mail connection a test can break, which records being closed.
+class _BreakableSocket implements MailSocket {
+  _BreakableSocket(this._inner) {
+    _inner.input.listen(
+      _input.add,
+      onError: _input.addError,
+      onDone: _input.close,
+    );
+  }
+
+  final MailSocket _inner;
+  final _input = StreamController<Uint8List>();
+  bool closed = false;
+
+  void breakNow() => _input.addError(const SocketException('broken'));
+
+  @override
+  Stream<Uint8List> get input => _input.stream;
+
+  @override
+  void write(List<int> bytes) => _inner.write(bytes);
+
+  @override
+  Future<void> close() async {
+    closed = true;
+    await _inner.close();
+  }
 }

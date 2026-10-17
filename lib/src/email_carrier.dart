@@ -345,6 +345,8 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     var backoff = const Duration(seconds: 2);
     while (current()) {
       ImapClient? client;
+      // What it was doing, for the log when it fails.
+      var step = 'connecting';
       try {
         _setState(EmailCarrierState.connecting);
         client = await ImapClient.connect(
@@ -353,7 +355,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           tls: tls,
           connector: _connector,
         );
+        step = 'logging in';
         await client.login(_config.mail, _config.password);
+        step = 'opening the inbox';
         final (validity, next) = await client.select('INBOX');
         if (!current()) break;
         if (validity != _config.uidValidity) {
@@ -371,6 +375,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         backoff = const Duration(seconds: 2);
         var storageBackoff = const Duration(seconds: 2);
         while (current()) {
+          step = 'reading new mail';
           if (await _readNew(client, generation)) {
             final wake = Completer<void>();
             _wake = wake;
@@ -389,6 +394,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           if (client.takeNewMail()) continue;
           final wake = Completer<void>();
           _wake = wake;
+          step = 'waiting for mail';
           if (client.supportsIdle) {
             await client.idle(idleTimeout, stop: wake.future);
           } else {
@@ -396,10 +402,16 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           }
         }
       } catch (error) {
+        // Closed now, not after the wait (nor with a LOGOUT a stalled link
+        // would hold up): the server counts open connections per account
+        // and refused new ones once failed ones piled up (device lab).
+        await client?.close().catchError((Object _) {});
+        client = null;
         if (!current()) break;
         _lastError = describeNetworkError(error);
         _log?.call(
-          'reading mail failed: $error; next try in ${backoff.inSeconds} s',
+          'reading mail failed while $step: $error; '
+          'next try in ${backoff.inSeconds} s',
         );
         _setState(EmailCarrierState.failed);
         final wake = Completer<void>();
