@@ -16780,6 +16780,87 @@ void main() {
       expect(alice.messagesFor(bobId).single.route, MessageRoute.reticulum);
     });
 
+    // Through a real Reticulum transport node (rnsd), where paths are
+    // learnt from announces, unlike the fake bus where every packet
+    // reaches everyone.
+    test(
+      'a contact is added through a real Reticulum node',
+      () async {
+        final node = Platform.environment['CONEST_RNSD']!;
+        final at = node.lastIndexOf(':');
+        final relay = _FakeRelayClient();
+        Future<MessengerController> device(String name) async {
+          final controller = await _createController(
+            relayClient: relay,
+            displayName: name,
+          );
+          addTearDown(controller.dispose);
+          await controller.updateGlobalConnectivity(
+            controller.identity!.connectivity.copyWith(
+              lanEnabled: false,
+              transportPolicies: {
+                for (final kind in TransportKind.values)
+                  kind: kind == TransportKind.reticulum
+                      ? TransportPolicy.automatic
+                      : TransportPolicy.disabled,
+              },
+            ),
+          );
+          await controller.enableReticulumCarrier(
+            host: node.substring(0, at),
+            port: int.parse(node.substring(at + 1)),
+          );
+          return controller;
+        }
+
+        Future<void> waitFor(bool Function() done, String what) async {
+          final deadline = DateTime.now().add(const Duration(seconds: 60));
+          while (!done() && DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+          expect(done(), isTrue, reason: what);
+        }
+
+        bool linked(MessengerController controller) => controller
+            .carrierStatuses
+            .any((s) => s.kind == TransportKind.reticulum && s.ready);
+        final alice = await device('Alice');
+        final bob = await device('Bob');
+        await waitFor(() => linked(alice) && linked(bob), 'both linked');
+        final invite = (await alice.buildInvite()).encodePayload();
+        await bob.addContactFromInvite(
+          alias: 'Alice',
+          payload: invite,
+          codephrase: '',
+        );
+        final bobId = bob.identity!.deviceId;
+        await waitFor(
+          () => alice.pendingContactRequests.any(
+            (r) => r.senderDeviceId == bobId,
+          ),
+          'the request reaches Alice through the node',
+        );
+        await alice.approvePendingContactRequest(
+          alice.pendingContactRequests
+              .firstWhere((r) => r.senderDeviceId == bobId)
+              .id,
+        );
+        await waitFor(
+          () => bob.contacts.single.canSendOutbound,
+          'Bob hears Alice accepted',
+        );
+        await bob.sendMessage(contact: bob.contacts.single, body: 'via rnsd');
+        await waitFor(
+          () => alice.messagesFor(bobId).any((m) => m.body == 'via rnsd'),
+          'a message follows',
+        );
+      },
+      skip: Platform.environment['CONEST_RNSD'] == null
+          ? 'CONEST_RNSD (host:port of an rnsd) is not set'
+          : null,
+      timeout: const Timeout(Duration(minutes: 4)),
+    );
+
     test('two devices talk over a Reticulum network', () async {
       final bus = FakeRnsBus();
       final relay = _FakeRelayClient();
