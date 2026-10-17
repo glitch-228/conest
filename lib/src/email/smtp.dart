@@ -52,7 +52,10 @@ abstract final class SmtpSender {
 
     try {
       await expect(220);
-      await expect(250, 'EHLO localhost');
+      // An address literal: servers that require a fully qualified name
+      // (chatmail on port 443) refuse a bare "localhost", and the
+      // device's own name is nobody's business.
+      await expect(250, 'EHLO [127.0.0.1]');
       await expect(
         235,
         'AUTH PLAIN ${base64Encode(utf8.encode('\u0000$user\u0000$password'))}',

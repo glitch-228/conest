@@ -116,6 +116,16 @@ class FakeMailServer {
       }
       final upper = line.toUpperCase();
       if (upper.startsWith('EHLO')) {
+        // As chatmail's Postfix: a fully qualified name or an address
+        // literal, never a bare "localhost".
+        final name = line.length > 5 ? line.substring(5).trim() : '';
+        if (!name.contains('.') &&
+            !(name.startsWith('[') && name.endsWith(']'))) {
+          reply(
+            '504 5.5.2 <$name>: Helo command rejected: need fully-qualified hostname',
+          );
+          return;
+        }
         reply('250-fake');
         reply('250 AUTH PLAIN');
       } else if (upper.startsWith('AUTH PLAIN ')) {
