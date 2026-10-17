@@ -20682,10 +20682,14 @@ void main() {
         'Alice is on the mesh',
       );
       final invite = (await alice.buildInvite()).encodePayload();
-      expect(
-        ContactInvite.decodePayload(invite).carrierHints[TransportKind.bitchat],
-        alice.bitchatChannel!.localAddress,
-      );
+      // The mesh address, with the inbox secret for a first request.
+      final hint = parseBitchatInviteHint(
+        ContactInvite.decodePayload(
+          invite,
+        ).carrierHints[TransportKind.bitchat]!,
+      )!;
+      expect(hint.address, alice.bitchatChannel!.localAddress);
+      expect(hint.inboxSecret, alice.bitchatCarrierConfig!.inboxSecret);
       // Two at once: their requests are kept apart (one sender id each).
       await Future.wait([
         bob.addContactFromInvite(
@@ -20701,6 +20705,12 @@ void main() {
       ]);
       final bobId = bob.identity!.deviceId;
       final daveId = dave.identity!.deviceId;
+      // Bob keeps the plain address, and the secret apart.
+      expect(
+        bob.contacts.single.carrierAddress(TransportKind.bitchat),
+        hint.address,
+      );
+      expect(bob.contacts.single.bitchatInboxSecret, hint.inboxSecret);
       await until(
         () =>
             alice.pendingContactRequests.any(

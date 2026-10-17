@@ -12,6 +12,46 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/fake_ble_mesh.dart';
 
 void main() {
+  test('the mesh inbox secret rotates weekly and the last one still works', () {
+    final start = DateTime.utc(2026, 10, 1);
+    final config = BitchatCarrierConfig.create(start);
+    expect(config.inboxSecret, isNotNull);
+    expect(config.inviteHint, '${config.address}|${config.inboxSecret}');
+    // Fresh: not rotated.
+    expect(config.withInboxRotated(start.add(const Duration(days: 6))), isNull);
+    final rotated = config.withInboxRotated(
+      start.add(const Duration(days: 8)),
+    )!;
+    expect(rotated.address, config.address);
+    expect(rotated.inboxSecret, isNot(config.inboxSecret));
+    expect(rotated.previousInboxSecret, config.inboxSecret);
+    // Two rotations on, the first secret is gone.
+    final again = rotated.withInboxRotated(
+      start.add(const Duration(days: 16)),
+    )!;
+    expect(again.previousInboxSecret, rotated.inboxSecret);
+    expect([
+      again.inboxSecret,
+      again.previousInboxSecret,
+    ], isNot(contains(config.inboxSecret)));
+    // Saved and read back.
+    final restored = BitchatCarrierConfig.fromJson(again.toJson())!;
+    expect(restored.inboxSecret, again.inboxSecret);
+    expect(restored.previousInboxSecret, again.previousInboxSecret);
+    expect(restored.inboxSecretAt, again.inboxSecretAt);
+    // Different secrets, different inbox keys.
+    expect(
+      bitchatInboxKey(config.inboxSecret!),
+      isNot(bitchatInboxKey(rotated.inboxSecret!)),
+    );
+    // The invite hint parses back; a hint without a secret has none.
+    final parsed = parseBitchatInviteHint(again.inviteHint)!;
+    expect(parsed.address, again.address);
+    expect(parsed.inboxSecret, again.inboxSecret);
+    expect(parseBitchatInviteHint(again.address)!.inboxSecret, isNull);
+    expect(parseBitchatInviteHint('bc1:inbox|00'), isNull);
+  });
+
   group('packets', () {
     final sender = Uint8List.fromList(List.generate(8, (i) => i + 1));
     final recipient = Uint8List.fromList(List.filled(8, 0xab));

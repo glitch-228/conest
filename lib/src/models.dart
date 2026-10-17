@@ -1848,6 +1848,7 @@ class ContactRecord {
     this.irohEndpointId,
     this.matrixAddress,
     this.matrixAddressAt,
+    this.bitchatInboxSecret,
     this.carrierAddresses = const <TransportKind, CarrierAddress>{},
     this.capabilities = const <TransportKind>[],
     this.featureCapabilities = const <ApplicationCapability>[],
@@ -1884,6 +1885,11 @@ class ContactRecord {
   /// Creation time of the exchange that last set or cleared
   /// [matrixAddress]; older exchanges arriving late are ignored.
   final DateTime? matrixAddressAt;
+
+  /// The Bluetooth mesh inbox secret from this contact's invite (hex): what
+  /// a first request over the mesh travels under, before the pair's keys.
+  /// It rotates; an invite older than two rotations no longer reaches it.
+  final String? bitchatInboxSecret;
 
   /// Addresses on carriers other than Matrix (which keeps [matrixAddress]),
   /// learned from authenticated contact exchanges.
@@ -2034,6 +2040,7 @@ class ContactRecord {
     String? matrixAddress,
     bool clearMatrixAddress = false,
     DateTime? matrixAddressAt,
+    String? bitchatInboxSecret,
     Map<TransportKind, CarrierAddress>? carrierAddresses,
     List<TransportKind>? capabilities,
     List<ApplicationCapability>? featureCapabilities,
@@ -2093,6 +2100,7 @@ class ContactRecord {
           ? null
           : matrixAddress ?? this.matrixAddress,
       matrixAddressAt: matrixAddressAt ?? this.matrixAddressAt,
+      bitchatInboxSecret: bitchatInboxSecret ?? this.bitchatInboxSecret,
       carrierAddresses: carrierAddresses ?? this.carrierAddresses,
       capabilities: capabilities ?? this.capabilities,
       featureCapabilities: featureCapabilities ?? this.featureCapabilities,
@@ -2214,6 +2222,7 @@ class ContactRecord {
       if (matrixAddress != null) 'matrixAddress': matrixAddress,
       if (matrixAddressAt != null)
         'matrixAddressAt': matrixAddressAt!.toUtc().toIso8601String(),
+      if (bitchatInboxSecret != null) 'bitchatInboxSecret': bitchatInboxSecret,
       if (carrierAddresses.isNotEmpty)
         'carrierAddresses': {
           for (final entry in carrierAddresses.entries)
@@ -2340,6 +2349,11 @@ class ContactRecord {
       matrixAddressAt: DateTime.tryParse(
         json['matrixAddressAt'] as String? ?? '',
       )?.toUtc(),
+      bitchatInboxSecret: switch (json['bitchatInboxSecret']) {
+        final String secret when RegExp(r'^[0-9a-f]{32}$').hasMatch(secret) =>
+          secret,
+        _ => null,
+      },
       carrierAddresses: _carrierAddressesFromJson(json['carrierAddresses']),
       capabilities: (json['capabilities'] as List<dynamic>? ?? const [])
           .whereType<String>()

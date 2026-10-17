@@ -124,6 +124,38 @@ void main() {
       },
     );
 
+    test('strangers have their own pool and cannot spoil a request', () {
+      final reassembler = CarrierReassembler(
+        framing: CarrierFraming.nostr,
+        maxPending: 4,
+        strangerPrefix: 'in|',
+        maxStrangerPending: 3,
+      );
+      List<Uint8List> twoFrames() =>
+          carrierBinaryFrames(CarrierFraming.nostr, pattern(30 * 1024));
+      final contact = twoFrames();
+      final request = twoFrames();
+      expect(reassembler.addBinary('contact', contact.first), isNull);
+      expect(reassembler.addBinary('in|victim', request.first), isNull);
+      // Same sender id and frame id, another count: its own entry, so the
+      // request in progress is neither deleted nor overwritten.
+      final forged = Uint8List.fromList(request.last)..[10] = 3;
+      expect(reassembler.addBinary('in|victim', forged), isNull);
+      final garbage = Uint8List.fromList(request.first);
+      garbage[garbage.length - 1] ^= 0xff;
+      expect(reassembler.addBinary('in|victim', garbage), isNull);
+      expect(
+        reassembler.addBinary('in|victim', request.last),
+        // The first chunk received for each index stayed.
+        carrierBinaryFrameAssembled(request),
+      );
+      // A flood of strangers never pushes out a contact's partial envelope.
+      for (var flood = 0; flood < 20; flood++) {
+        expect(reassembler.addBinary('in|$flood', twoFrames().first), isNull);
+      }
+      expect(reassembler.addBinary('contact', contact.last), isNotNull);
+    });
+
     test('partial envelopes expire', () {
       var now = DateTime.utc(2026, 10, 4);
       final reassembler = CarrierReassembler(
@@ -876,7 +908,7 @@ class _StaticAdapter implements TransportAdapter {
 /// Seals by XOR; envelopes of the sizes in [inboxSizes] are first requests.
 class _InboxSealer extends _XorSealer implements InboxCarrierSealer {
   final Set<int> inboxSizes = {};
-  final Expando<bool> _marked = Expando();
+  final Expando<Uint8List> _marked = Expando();
 
   @override
   Future<Uint8List> seal(
@@ -885,12 +917,14 @@ class _InboxSealer extends _XorSealer implements InboxCarrierSealer {
     Uint8List envelope,
   ) async {
     final sealed = await super.seal(kind, peerDeviceId, envelope);
-    if (inboxSizes.contains(envelope.length)) _marked[sealed] = true;
+    if (inboxSizes.contains(envelope.length)) {
+      _marked[sealed] = Uint8List.fromList(List.filled(32, 7));
+    }
     return sealed;
   }
 
   @override
-  bool sealedForInbox(Uint8List sealed) => _marked[sealed] == true;
+  Uint8List? inboxKeyFor(Uint8List sealed) => _marked[sealed];
 }
 
 class _InboxChannel implements InboxCarrierChannel {
@@ -914,5 +948,15 @@ class _InboxChannel implements InboxCarrierChannel {
     String address,
     Uint8List frame,
     Uint8List senderId,
+    Uint8List inboxKey,
   ) async => inbox.add((address, frame, senderId.join(',')));
+}
+
+/// The envelope [frames] carry, put back together.
+Uint8List carrierBinaryFrameAssembled(List<Uint8List> frames) {
+  final builder = BytesBuilder(copy: false);
+  for (final frame in frames) {
+    builder.add(Uint8List.sublistView(frame, carrierBinaryFrameHeaderBytes));
+  }
+  return builder.takeBytes();
 }

@@ -36,15 +36,32 @@ const String _addressPrefix = 'bc1:';
 const String bitchatInboxSender = 'bc1:inbox';
 
 /// What a would-be contact's first request travels under: a key from the
-/// target's mesh address alone, which only its invite gives out, so the
+/// target's inbox secret (hex), which only its invites give out, so the
 /// target recognises the request without knowing the sender yet. Its ids
-/// change every [bitchatIdPeriod] as pair ids do.
-Uint8List bitchatInboxKey(String address) => Uint8List.fromList(
+/// change every [bitchatIdPeriod] as pair ids do; the secret itself every
+/// [BitchatCarrierConfig.inboxLifetime], so an old invite stops reaching it.
+Uint8List bitchatInboxKey(String secret) => Uint8List.fromList(
   Hmac(
     sha256,
-    utf8.encode(address),
+    utf8.encode(secret),
   ).convert(utf8.encode('conest.bitchat.inbox')).bytes,
 );
+
+bool _isInboxSecret(Object? value) =>
+    value is String && RegExp(r'^[0-9a-f]{32}$').hasMatch(value);
+
+/// A mesh address as an invite gives it: the address and the inbox secret,
+/// "bc1:…|…". Its sender identity (before the "|") is the address.
+({String address, String? inboxSecret})? parseBitchatInviteHint(String hint) {
+  final split = hint.indexOf('|');
+  final address = split < 0 ? hint : hint.substring(0, split);
+  if (!isValidBitchatAddress(address)) return null;
+  final secret = split < 0 ? null : hint.substring(split + 1);
+  return (
+    address: address,
+    inboxSecret: _isInboxSecret(secret) ? secret : null,
+  );
+}
 
 /// A device's address on the Bluetooth mesh: a random id, given to
 /// contacts and in this device's invites, never over the air. What goes
@@ -69,14 +86,57 @@ class BitchatCarrierConfig {
     this.identitySeed,
     this.identityAt,
     this.gateway = false,
+    this.inboxSecret,
+    this.previousInboxSecret,
+    this.inboxSecretAt,
   });
 
   /// A new address, so turning the mesh off and on again unlinks the past.
-  factory BitchatCarrierConfig.create() => BitchatCarrierConfig(
+  factory BitchatCarrierConfig.create([DateTime? now]) => BitchatCarrierConfig(
     address: '$_addressPrefix${hexEncode(randomBitchatBytes(16))}',
+    inboxSecret: hexEncode(randomBitchatBytes(16)),
+    inboxSecretAt: (now ?? DateTime.now()).toUtc(),
   );
 
   final String address;
+
+  /// What this device's invites give out for first requests over the mesh
+  /// (see [bitchatInboxKey]); [previousInboxSecret] is still listened on,
+  /// so invites from the last [inboxLifetime] keep working.
+  final String? inboxSecret;
+  final String? previousInboxSecret;
+  final DateTime? inboxSecretAt;
+
+  /// How long one inbox secret is given out: whoever held an invite can
+  /// tell this device's inbox ids for at most two of these.
+  static const Duration inboxLifetime = Duration(days: 7);
+
+  /// With a new inbox secret when the current one is older than
+  /// [inboxLifetime] (or missing); null when it is current.
+  BitchatCarrierConfig? withInboxRotated(DateTime now) {
+    final at = inboxSecretAt;
+    if (inboxSecret != null &&
+        at != null &&
+        now.toUtc().difference(at) < inboxLifetime) {
+      return null;
+    }
+    return BitchatCarrierConfig(
+      address: address,
+      visible: visible,
+      nickname: nickname,
+      identitySeed: identitySeed,
+      identityAt: identityAt,
+      gateway: gateway,
+      inboxSecret: hexEncode(randomBitchatBytes(16)),
+      previousInboxSecret: inboxSecret,
+      inboxSecretAt: now.toUtc(),
+    );
+  }
+
+  /// This device's mesh address as its invites give it, with the inbox
+  /// secret.
+  String get inviteHint =>
+      inboxSecret == null ? address : '$address|$inboxSecret';
 
   /// Announces a bitchat identity, so bitchat users nearby see this device
   /// and can write to it. Off: it only relays and reads the mesh chat.
@@ -113,6 +173,9 @@ class BitchatCarrierConfig {
     identitySeed: hexEncode(randomBitchatBytes(32)),
     identityAt: now.toUtc(),
     gateway: gateway,
+    inboxSecret: inboxSecret,
+    previousInboxSecret: previousInboxSecret,
+    inboxSecretAt: inboxSecretAt,
   );
 
   BitchatCarrierConfig copyWith({
@@ -126,6 +189,9 @@ class BitchatCarrierConfig {
     identitySeed: identitySeed,
     identityAt: identityAt,
     gateway: gateway ?? this.gateway,
+    inboxSecret: inboxSecret,
+    previousInboxSecret: previousInboxSecret,
+    inboxSecretAt: inboxSecretAt,
   );
 
   Map<String, Object?> toJson() => {
@@ -135,6 +201,10 @@ class BitchatCarrierConfig {
     if (identitySeed != null) 'identitySeed': identitySeed,
     if (identityAt != null) 'identityAt': identityAt!.toIso8601String(),
     if (gateway) 'gateway': true,
+    if (inboxSecret != null) 'inboxSecret': inboxSecret,
+    if (previousInboxSecret != null) 'previousInboxSecret': previousInboxSecret,
+    if (inboxSecretAt != null)
+      'inboxSecretAt': inboxSecretAt!.toIso8601String(),
   };
 
   static BitchatCarrierConfig? fromJson(Object? json) {
@@ -156,6 +226,15 @@ class BitchatCarrierConfig {
           ? DateTime.tryParse(json['identityAt'] as String? ?? '')?.toUtc()
           : null,
       gateway: json['gateway'] == true,
+      inboxSecret: _isInboxSecret(json['inboxSecret'])
+          ? json['inboxSecret'] as String
+          : null,
+      previousInboxSecret: _isInboxSecret(json['previousInboxSecret'])
+          ? json['previousInboxSecret'] as String
+          : null,
+      inboxSecretAt: DateTime.tryParse(
+        json['inboxSecretAt'] as String? ?? '',
+      )?.toUtc(),
     );
   }
 }
@@ -419,6 +498,7 @@ class BitchatCarrierChannel
     String address,
     Uint8List frame,
     Uint8List senderId,
+    Uint8List inboxKey,
   ) async {
     final node = _node;
     if (node == null) throw StateError('The Bluetooth mesh is not running.');
@@ -430,7 +510,7 @@ class BitchatCarrierChannel
     }
     await _sendUnder(
       node,
-      _Pair(address, bitchatInboxKey(address)),
+      _Pair(address, inboxKey),
       address,
       senderId,
       _now().millisecondsSinceEpoch,
@@ -491,7 +571,7 @@ class BitchatCarrierChannel
     final entry = _recipients(now)[hexEncode(packet.recipientId!)];
     if (entry == null) return BitchatPrivate.notMine;
     final (pair, period) = entry;
-    final inbox = identical(pair, _inbox);
+    final inbox = _inboxes.any((candidate) => identical(candidate, pair));
     // An inbox frame's sender is random; a pair's is the contact's id.
     if ((!inbox &&
             !_equal(
@@ -747,11 +827,12 @@ class BitchatCarrierChannel
 
   /// Ids this device answers to, for each pair's current period and its
   /// neighbours (clocks differ); rebuilt every minute.
-  /// This device's inbox, for first requests from would-be contacts.
-  late final _Pair _inbox = _Pair(
-    config.address,
-    bitchatInboxKey(config.address),
-  );
+  /// This device's inboxes, for first requests from would-be contacts:
+  /// under the current inbox secret and the previous one.
+  late final List<_Pair> _inboxes = [
+    for (final secret in [config.inboxSecret, config.previousInboxSecret])
+      if (secret != null) _Pair(config.address, bitchatInboxKey(secret)),
+  ];
 
   /// MACs of inbox frames read: apart from contacts' (which only contacts
   /// can make), so invite holders flooding the inbox cannot flush those.
@@ -761,7 +842,10 @@ class BitchatCarrierChannel
     final minute = now ~/ 60000;
     if (_tableMinute == minute) return _table;
     _table = {
-      for (final pair in [_inbox, ..._pairs.values.expand((pairs) => pairs)])
+      for (final pair in [
+        ..._inboxes,
+        ..._pairs.values.expand((pairs) => pairs),
+      ])
         for (final candidate in [
           pair.period(now) - 1,
           pair.period(now),
@@ -840,4 +924,6 @@ CarrierTransportAdapter createBitchatCarrierAdapter({
   sendAttemptTimeout: const Duration(seconds: 90),
   isValidAddress: isValidBitchatAddress,
   now: now,
+  // Requests to this device's inbox: kept apart from contacts' frames.
+  strangerSenderPrefix: '$bitchatInboxSender|',
 );

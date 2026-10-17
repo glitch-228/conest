@@ -151,6 +151,8 @@ class CarrierReassembler {
     this.expiry = const Duration(minutes: 10),
     this.maxPending = 64,
     this.maxPendingPerSender = 8,
+    this.strangerPrefix,
+    this.maxStrangerPending = 12,
   }) : _now = now ?? DateTime.now;
 
   final CarrierFraming framing;
@@ -159,6 +161,15 @@ class CarrierReassembler {
   final int maxPending;
   final int maxPendingPerSender;
   final Map<String, _PendingEnvelope> _pending = {};
+
+  /// Senders starting with this are strangers (requests to a mesh inbox,
+  /// which anyone holding an invite can make): kept apart in a small pool
+  /// of their own, so they never push out contacts' partial envelopes, and
+  /// keyed with the frame count, so another sender reusing an id cannot
+  /// delete or overwrite a request in progress.
+  final String? strangerPrefix;
+  final int maxStrangerPending;
+  final Map<String, _PendingEnvelope> _strangers = {};
 
   /// Adds a JSON frame (see [carrierJsonFrames]); returns the complete
   /// sealed envelope once its last frame arrives.
@@ -221,6 +232,27 @@ class CarrierReassembler {
     _pending.removeWhere(
       (_, entry) => now.difference(entry.startedAt) > expiry,
     );
+    if (strangerPrefix case final prefix? when sender.startsWith(prefix)) {
+      _strangers.removeWhere(
+        (_, entry) => now.difference(entry.startedAt) > expiry,
+      );
+      final key = '$sender|$id|$count';
+      final entry = _strangers.putIfAbsent(key, () {
+        if (_strangers.length >= maxStrangerPending) {
+          _strangers.remove(_strangers.keys.first);
+        }
+        return _PendingEnvelope(count, now);
+      });
+      // The first chunk received for an index stays.
+      entry.chunks.putIfAbsent(index, () => chunk);
+      if (entry.chunks.length < count) return null;
+      _strangers.remove(key);
+      final builder = BytesBuilder(copy: false);
+      for (var part = 0; part < count; part++) {
+        builder.add(entry.chunks[part]!);
+      }
+      return builder.takeBytes();
+    }
     final key = '$sender|$id';
     final entry = _pending.putIfAbsent(key, () {
       // One sender can only displace its own oldest partial envelope.
@@ -280,13 +312,16 @@ abstract interface class InboxCarrierChannel implements CarrierChannel {
     String address,
     Uint8List frame,
     Uint8List senderId,
+    Uint8List inboxKey,
   );
 }
 
 /// A sealer that tells which of the envelopes it sealed go to a would-be
-/// contact's inbox.
+/// contact's inbox, and under which key.
 abstract interface class InboxCarrierSealer {
-  bool sealedForInbox(Uint8List sealed);
+  /// The target's inbox key for [sealed], a first request; null for any
+  /// other envelope.
+  Uint8List? inboxKeyFor(Uint8List sealed);
 }
 
 /// A channel whose network confirms that a frame reached the other device
@@ -377,11 +412,16 @@ class CarrierTransportAdapter implements TransportAdapter {
     bool Function(String address)? isValidAddress,
     DateTime Function()? now,
     Random? random,
+    String? strangerSenderPrefix,
   }) : _sealer = sealer,
        _isValidAddress = isValidAddress ?? isPlausibleCarrierAddress,
        _now = now ?? DateTime.now,
        _random = random,
-       _reassembler = CarrierReassembler(framing: framing, now: now);
+       _reassembler = CarrierReassembler(
+         framing: framing,
+         now: now,
+         strangerPrefix: strangerSenderPrefix,
+       );
 
   @override
   final TransportKind kind;
@@ -567,12 +607,13 @@ class CarrierTransportAdapter implements TransportAdapter {
     // so other envelopes to the same address meanwhile are not affected.
     final sealer = _sealer;
     final random = _random ?? Random.secure();
-    final inboxSender =
-        channel is InboxCarrierChannel &&
-            sealer is InboxCarrierSealer &&
-            (sealer as InboxCarrierSealer).sealedForInbox(sealed)
-        ? Uint8List.fromList(List.generate(8, (_) => random.nextInt(256)))
+    final inboxKey =
+        channel is InboxCarrierChannel && sealer is InboxCarrierSealer
+        ? (sealer as InboxCarrierSealer).inboxKeyFor(sealed)
         : null;
+    final inboxSender = inboxKey == null
+        ? null
+        : Uint8List.fromList(List.generate(8, (_) => random.nextInt(256)));
     // Registered before the first frame: confirmations of early frames
     // can come while later ones are still going out.
     final pending = _RadioEnvelope(envelope.id, peer.deviceId);
@@ -604,6 +645,7 @@ class CarrierTransportAdapter implements TransportAdapter {
           address,
           frames[index],
           inboxSender,
+          inboxKey!,
         );
       } else {
         await channel.sendFrame(address, frames[index]);
