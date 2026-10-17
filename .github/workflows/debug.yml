@@ -437,6 +437,19 @@ jobs:
           path: ~/.cache/conest-lyrebird
           key: lyrebird-${{ runner.os }}-${{ github.job }}-${{ hashFiles('tool/build_lyrebird.sh') }}
       - run: flutter pub get
+      - name: Install the Android NDK (retried)
+        # Gradle downloads it on its own otherwise, and that download came
+        # back corrupt in two of four runs ("Archive is not a ZIP archive").
+        # The version Flutter's Gradle plugin asks for (flutter.ndkVersion).
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          for attempt in 1 2 3; do
+            yes | "$sdkmanager" --install "ndk;28.2.13676358" > /dev/null && exit 0
+            echo "NDK install attempt $attempt failed; retrying."
+            rm -rf "$ANDROID_HOME/ndk/28.2.13676358"
+            sleep 10
+          done
+          exit 1
       - name: Build Tor's pluggable transports
         run: tool/build_lyrebird.sh android-arm64 build/app/lyrebirdJniLibs/arm64-v8a/liblyrebird.so
       - name: Build isolated debug APK
