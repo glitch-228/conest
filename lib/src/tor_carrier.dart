@@ -257,6 +257,10 @@ class TorCarrierChannel implements ManagedCarrierChannel {
   /// Bootstrap progress, 0 to 1.
   double get progress => _progress;
 
+  /// Tor's own words on the bootstrap (what it waits for, what blocks it).
+  String? get progressDetail => _detail;
+  String? _detail;
+
   @override
   String? get localAddress => _address;
 
@@ -334,8 +338,12 @@ class TorCarrierChannel implements ManagedCarrierChannel {
     switch (event['type']) {
       case 'bootstrap':
         final fraction = event['fraction'];
+        final detail = event['detail'];
         if (fraction is num) {
           _progress = fraction.toDouble().clamp(0, 1);
+          if (detail is String && detail.isNotEmpty) {
+            _detail = detail.length > 300 ? detail.substring(0, 300) : detail;
+          }
           onStatusChanged?.call();
         }
       case 'frame':

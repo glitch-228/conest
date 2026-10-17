@@ -21370,6 +21370,8 @@ void main() {
       }
       // Not silence: the error history and the carrier's state say why.
       expect(alice.exportErrorHistory(), contains('Tor is blocked.'));
+      // Tor's own words on where it got to.
+      expect(alice.exportErrorHistory(), contains('connecting to a guard'));
       final status = alice.carrierStatuses.singleWhere(
         (status) => status.kind == TransportKind.tor,
       );

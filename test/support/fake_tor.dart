@@ -45,7 +45,11 @@ class FakeTorApi implements TorApi {
   }) async {
     starts++;
     lastBridges = bridges;
-    _events.add({'type': 'bootstrap', 'fraction': 0.5});
+    _events.add({
+      'type': 'bootstrap',
+      'fraction': 0.5,
+      'detail': '50%: connecting to a guard',
+    });
     if (_network.blocked) throw StateError('Tor is blocked.');
     final address = _network._addressFor(stateDirectory);
     _address = address;

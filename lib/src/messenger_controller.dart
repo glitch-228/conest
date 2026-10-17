@@ -5013,6 +5013,7 @@ class MessengerController extends ChangeNotifier {
 
   String? _loggedTorError;
   int _loggedTorQuarter = -1;
+  String? _loggedTorDetail;
 
   /// Tor's progress and failures go to the error history: a carrier that
   /// never became ready used to say nothing at all.
@@ -5026,9 +5027,14 @@ class MessengerController extends ChangeNotifier {
     }
     _loggedTorError = error;
     final quarter = (tor.progress * 4).floor();
-    if (quarter != _loggedTorQuarter) {
+    final detail = tor.progressDetail;
+    if (quarter != _loggedTorQuarter || detail != _loggedTorDetail) {
       _loggedTorQuarter = quarter;
-      appendDebugLog('Tor bootstrap ${(tor.progress * 100).round()}%.');
+      _loggedTorDetail = detail;
+      appendDebugLog(
+        'Tor bootstrap ${(tor.progress * 100).round()}%'
+        '${detail == null ? '' : ': $detail'}.',
+      );
     }
   }
 
@@ -7165,9 +7171,10 @@ class MessengerController extends ChangeNotifier {
         final TorCarrierChannel tor when !adapter.status.ready => CarrierStatus(
           kind: adapter.kind,
           ready: false,
-          lastError:
-              tor.lastError ??
-              'bootstrapping, ${(tor.progress * 100).round()}%',
+          lastError: [
+            tor.lastError ?? 'bootstrapping, ${(tor.progress * 100).round()}%',
+            ?tor.progressDetail,
+          ].join(': '),
         ),
         _ => adapter.status,
       },
