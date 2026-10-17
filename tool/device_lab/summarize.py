@@ -40,6 +40,14 @@ def main(folder: str) -> None:
         print(f"  steps: {len(report.get('steps', []))}, failed: "
               + (", ".join(f"{s['step']} ({s.get('error', '')[:80]})"
                            for s in failed) or "none"))
+        carriers = report.get("carriers") or {}
+        for moment in ("start", "end"):
+            states = carriers.get(moment) or []
+            if states:
+                print(f"  carriers at {moment}: " + ", ".join(
+                    f"{c['kind']} {'ready' if c.get('ready') else 'NOT READY'}"
+                    + (f" ({c['error'][:60]})" if c.get("error") else "")
+                    for c in states))
         for chat in report.get("chats", []):
             label = chat.get("group") or who(chat.get("deviceId"))
             sent = collections.Counter()

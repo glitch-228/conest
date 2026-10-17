@@ -123,6 +123,47 @@ void main() {
   );
 
   test(
+    'a relay name a DNS filter answers with 0.0.0.0 is no address',
+    () async {
+      // Android refuses to send there ("Operation not permitted"); the error
+      // used to escape the request and was recorded as a crash.
+      const client = RelayClient();
+      final started = DateTime.now();
+      await expectLater(
+        client.storeEnvelope(
+          host: '0.0.0.0',
+          port: 7667,
+          protocol: PeerRouteProtocol.udp,
+          recipientDeviceId: 'dev-b',
+          envelope: RelayEnvelope(
+            kind: 'debug_udp_blocked',
+            messageId: 'msg-blocked',
+            conversationId: 'conv',
+            senderAccountId: 'acc-a',
+            senderDeviceId: 'dev-a',
+            recipientDeviceId: 'dev-b',
+            createdAt: DateTime.utc(2026, 10, 17),
+            payloadBase64: 'aGVsbG8=',
+          ),
+          timeout: const Duration(seconds: 3),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('No usable address'),
+          ),
+        ),
+      );
+      // At once, not after waiting out the send attempts.
+      expect(
+        DateTime.now().difference(started),
+        lessThan(const Duration(seconds: 1)),
+      );
+    },
+  );
+
+  test(
     'relay client can store and fetch through HTTP local relay protocol',
     () async {
       final reserved = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);

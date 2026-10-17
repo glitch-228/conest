@@ -685,9 +685,16 @@ class RelayClient {
     // Prefer IPv4 (still the LAN/relay common case today) but fall back to IPv6
     // so dual-stack hosts and IPv6-only LANs (e.g. some mobile hotspots) keep
     // working.
+    // 0.0.0.0 and :: are what DNS filters answer for names they block:
+    // nothing to send to (Android refuses, "Operation not permitted").
+    bool sendable(InternetAddress a) => a.rawAddress.any((byte) => byte != 0);
     final orderedAddresses = <InternetAddress>[
-      ...addresses.where((a) => a.type == InternetAddressType.IPv4),
-      ...addresses.where((a) => a.type == InternetAddressType.IPv6),
+      ...addresses.where(
+        (a) => a.type == InternetAddressType.IPv4 && sendable(a),
+      ),
+      ...addresses.where(
+        (a) => a.type == InternetAddressType.IPv6 && sendable(a),
+      ),
     ];
     if (orderedAddresses.isEmpty) {
       throw StateError('No usable address found for UDP relay host $host.');
@@ -718,7 +725,15 @@ class RelayClient {
       try {
         for (var attempt = 0; attempt < 3; attempt++) {
           final responseFuture = responses.stream.first.timeout(perAttempt);
-          socket.send(requestBytes, address, port);
+          try {
+            socket.send(requestBytes, address, port);
+          } catch (error) {
+            // Unreachable from here (no route, a refused address): the next
+            // address, not an error escaping the request.
+            responseFuture.ignore();
+            lastError = error;
+            break;
+          }
           try {
             final datagram = await responseFuture;
             if (datagram.data.length > maxResponseBytes) {

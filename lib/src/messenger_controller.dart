@@ -7134,6 +7134,12 @@ class MessengerController extends ChangeNotifier {
 
   /// Carriers other than Matrix, by kind, once their account is set up.
   final Map<TransportKind, CarrierTransportAdapter> _carrierTransports = {};
+
+  /// Each running carrier's state: ready (it has an address) or not, and
+  /// its last error. For the debug harness and diagnostics.
+  List<CarrierStatus> get carrierStatuses => [
+    for (final adapter in _carrierTransports.values) adapter.status,
+  ];
   final Map<TransportKind, StreamSubscription<TransportInboundEnvelope>>
   _carrierInboundSubscriptions = {};
   final Map<TransportKind, StreamSubscription<CarrierDeliveryReceipt>>

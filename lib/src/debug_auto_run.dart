@@ -325,6 +325,15 @@ Future<String> runDebugRequest(
     }
   } while (DateTime.now().isBefore(serveUntil));
   final title = request.group;
+  if (title != null) {
+    // Everyone this device invited, accepted, or the group misses them
+    // (Android once took longer than Windows' 30 s to accept).
+    final until = DateTime.now().add(const Duration(minutes: 2));
+    while (_contacts(controller).length < request.invites.length &&
+        DateTime.now().isBefore(until)) {
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
+  }
   if (title != null &&
       !controller.visibleGroups.any((group) => group.title == title)) {
     await step('group', () async {
@@ -336,6 +345,7 @@ Future<String> runDebugRequest(
     });
   }
   await Future<void>.delayed(request.wait);
+  final carriersAtStart = _carrierReport(controller);
 
   final what = request.what;
   final contacts = <Map<String, Object?>>[];
@@ -406,6 +416,7 @@ Future<String> runDebugRequest(
     'finishedAt': DateTime.now().toUtc().toIso8601String(),
     'steps': steps,
     'contacts': contacts,
+    'carriers': {'start': carriersAtStart, 'end': _carrierReport(controller)},
     'chats': _chatReport(controller),
     'errorHistory': controller.exportErrorHistory(),
   };
@@ -657,6 +668,22 @@ Future<void> _interact(
     });
   }
 }
+
+/// Each carrier's state: ready or not, and its last error.
+List<Map<String, Object?>> _carrierReport(MessengerController controller) => [
+  for (final status in controller.carrierStatuses)
+    {
+      'kind': status.kind.name,
+      'ready': status.ready,
+      if (status.lastError != null) 'error': status.lastError,
+    },
+  if (controller.matrixStatus case final matrix?)
+    {
+      'kind': 'matrix',
+      'ready': matrix.signedIn && matrix.syncing,
+      if (matrix.lastError != null) 'error': matrix.lastError,
+    },
+];
 
 /// What came of every lab message and file, per chat.
 List<Map<String, Object?>> _chatReport(MessengerController controller) {
