@@ -51,6 +51,11 @@ RETICULUM=${RETICULUM:-}
 ONLY=${ONLY:-}
 MATRIX_URL=${MATRIX_URL:-}
 MATRIX_PASSWORD=${MATRIX_PASSWORD:-}
+# Conest sends Matrix passwords over plain HTTP only to this machine
+# (localhost). MATRIX_TUNNEL=PORT makes a lab homeserver on this Linux
+# machine's PORT local on the phone (adb reverse) and on Windows (an ssh
+# tunnel for the run); use MATRIX_URL=http://localhost:PORT with it.
+MATRIX_TUNNEL=${MATRIX_TUNNEL:-}
 # Per device: ANDROID_CARRIERS, LINUX_CARRIERS, WINDOWS_CARRIERS.
 carrier_args() { # device name
   local args=() var carriers
@@ -64,6 +69,15 @@ carrier_args() { # device name
 }
 
 win() { sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"; }
+
+tunnel_pid=""
+if [ -n "$MATRIX_TUNNEL" ]; then
+  [ "${ANDROID:-1}" = 1 ] && adb reverse "tcp:$MATRIX_TUNNEL" "tcp:$MATRIX_TUNNEL" >/dev/null
+  sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
+    -N -R "$MATRIX_TUNNEL:localhost:$MATRIX_TUNNEL" "$WINDOWS" 2>/dev/null &
+  tunnel_pid=$!
+  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; adb reverse --remove "tcp:$MATRIX_TUNNEL" 2>/dev/null || true' EXIT
+fi
 
 wait_for() { # description, command that succeeds when ready, tries
   for _ in $(seq 1 "${3:-120}"); do
@@ -111,10 +125,13 @@ echo "Linux is up."
 # ssh session.
 win_report="$WINDOWS_DIR\\lab-report.json"
 win "if exist \"$win_report\" del \"$win_report\""
-# Invites hold | and other characters cmd reads: each is quoted.
+# Invites hold | and other characters cmd reads: each is quoted, and
+# their % (percent-encoded carrier addresses) doubled, or a batch file
+# expands %…% as variables and the invite's signature no longer matches.
+cmd_escape() { printf '%s' "${1//%/%%}"; }
 win_invites=""
-[ "$ANDROID" = 1 ] && win_invites="\"--debug-accept-invite=$invite_a\" "
-win_invites="$win_invites\"--debug-accept-invite=$invite_b\""
+[ "$ANDROID" = 1 ] && win_invites="\"--debug-accept-invite=$(cmd_escape "$invite_a")\" "
+win_invites="$win_invites\"--debug-accept-invite=$(cmd_escape "$invite_b")\""
 cat >"$out/start-windows.cmd" <<EOF
 @echo off
 "$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $win_invites --debug-no-reserve --debug-linger=$LINGER --debug-serve=30 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
