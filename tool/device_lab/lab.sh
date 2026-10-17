@@ -77,7 +77,8 @@ if [ "${FRESH:-0}" = 1 ]; then
   # the debug app's own data can be removed with run-as instead.
   if [ "${ANDROID:-1}" = 1 ]; then
     adb shell am force-stop "$PACKAGE"
-    adb shell "run-as $PACKAGE sh -c 'for f in * .[!.]*; do [ \"\$f\" = lib ] || rm -rf \"\$f\"; done'" 2>/dev/null || true
+    adb shell "su -c 'pm clear $PACKAGE'" >/dev/null 2>&1 ||
+      adb shell "run-as $PACKAGE sh -c 'for f in * .[!.]*; do [ \"\$f\" = lib ] || rm -rf \"\$f\"; done'" 2>/dev/null || true
   fi
   rm -rf "$LINUX_BUNDLE/conest_data"
   win "if exist \"$WINDOWS_DIR\\conest_data\" rmdir /S /Q \"$WINDOWS_DIR\\conest_data\"" || true
@@ -101,74 +102,111 @@ wait_for() { # description, command that succeeds when ready, tries
   return 1
 }
 
-# --- A: Android (ANDROID=0 leaves it out) ---------------------------------------
+# --- Devices ------------------------------------------------------------------
+# Each device takes the invites it is given (and so sends those contact
+# requests) and approves the requests it gets. ORDER=reverse turns who
+# asks whom around, so both directions of adding a contact get tested:
+#   normal:  Android; Linux takes Android's; Windows takes both, makes the group
+#   reverse: Windows; Linux takes Windows'; Android takes both, makes the group
 ANDROID=${ANDROID:-1}
+ORDER=${ORDER:-normal}
 android_report=files/conest-debug-report.json
-invite_args=()
-if [ "$ANDROID" = 1 ]; then
-adb shell am force-stop "$PACKAGE"
-# The Bluetooth mesh asks for these; nobody is there to tap Allow.
-for permission in BLUETOOTH_SCAN BLUETOOTH_CONNECT BLUETOOTH_ADVERTISE \
-  ACCESS_FINE_LOCATION POST_NOTIFICATIONS NEARBY_WIFI_DEVICES; do
-  adb shell pm grant "$PACKAGE" "android.permission.$permission" 2>/dev/null || true
-done
-adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
-args_a="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=600 --debug-expect-contacts=2 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-android)"
-adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
-  --es conestDebugArgs "'$args_a'" >/dev/null
-wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite" 300
-invite_a=$(adb exec-out run-as "$PACKAGE" cat "$android_report.invite")
-invite_args=("--debug-accept-invite=$invite_a")
-echo "Android is up."
-fi
-
-# --- B: Linux -------------------------------------------------------------------
 linux_report="$PWD/$out/linux.json"
-"$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
-  "${invite_args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-serve=540 --debug-expect-contacts=2 \
-  --debug-wait="$WAIT" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
-  --debug-exit >"$out/linux.log" 2>&1 &
-linux_pid=$!
-wait_for "the Linux invite" "test -s '$linux_report.invite'" 300
-invite_b=$(cat "$linux_report.invite")
-echo "Linux is up."
-
-# --- C: Windows -----------------------------------------------------------------
-# Started by a scheduled task, so it runs on the user's desktop, not in the
-# ssh session.
 win_report="$WINDOWS_DIR\\lab-report.json"
-win "if exist \"$win_report\" del \"$win_report\""
 # Invites hold | and other characters cmd reads: each is quoted, and
 # their % (percent-encoded carrier addresses) doubled, or a batch file
 # expands %…% as variables and the invite's signature no longer matches.
 cmd_escape() { printf '%s' "${1//%/%%}"; }
-win_invites=""
-[ "$ANDROID" = 1 ] && win_invites="\"--debug-accept-invite=$(cmd_escape "$invite_a")\" "
-win_invites="$win_invites\"--debug-accept-invite=$(cmd_escape "$invite_b")\""
-cat >"$out/start-windows.cmd" <<EOF
+adb_root() { adb shell "su -c '$1'" >/dev/null 2>&1 || adb shell "$1" >/dev/null 2>&1; }
+linux_pid=""
+
+start_android() { # group title or "", invites…
+  local group=$1; shift
+  adb shell am force-stop "$PACKAGE"
+  # The Bluetooth mesh asks for these and nobody is there to tap Allow;
+  # some phones (Xiaomi) refuse pm grant from adb, but not as root.
+  for permission in BLUETOOTH_SCAN BLUETOOTH_CONNECT BLUETOOTH_ADVERTISE \
+    ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION POST_NOTIFICATIONS NEARBY_WIFI_DEVICES; do
+    adb_root "pm grant $PACKAGE android.permission.$permission"
+  done
+  adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
+  local args="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=600 --debug-expect-contacts=2 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-android)"
+  [ -n "$group" ] && args="$args --debug-group=$group"
+  for invite in "$@"; do args="$args --debug-accept-invite=$invite"; done
+  adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
+    --es conestDebugArgs "'$args'" >/dev/null
+  wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite" 300
+  invite_android=$(adb exec-out run-as "$PACKAGE" cat "$android_report.invite")
+  echo "Android is up."
+}
+
+start_linux() { # group title or "", invites…
+  local group=$1; shift
+  local args=()
+  [ -n "$group" ] && args+=("--debug-group=$group")
+  for invite in "$@"; do args+=("--debug-accept-invite=$invite"); done
+  "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
+    "${args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-serve=540 --debug-expect-contacts=2 \
+    --debug-wait="$WAIT" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
+    --debug-exit >"$out/linux.log" 2>&1 &
+  linux_pid=$!
+  wait_for "the Linux invite" "test -s '$linux_report.invite'" 300
+  invite_linux=$(cat "$linux_report.invite")
+  echo "Linux is up."
+}
+
+start_windows() { # group title or "", invites…
+  local group=$1; shift
+  # Started by a scheduled task, so it runs on the user's desktop, not in
+  # the ssh session.
+  win "if exist \"$win_report\" del \"$win_report\"" || true
+  win "if exist \"$win_report.invite\" del \"$win_report.invite\"" || true
+  local extra=""
+  [ -n "$group" ] && extra="--debug-group=$group"
+  for invite in "$@"; do extra="$extra \"--debug-accept-invite=$(cmd_escape "$invite")\""; done
+  cat >"$out/start-windows.cmd" <<EOF
 @echo off
-"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $win_invites --debug-no-reserve --debug-linger=$LINGER --debug-serve=540 --debug-expect-contacts=2 --debug-group=lab-all --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
+"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $extra --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-serve=540 --debug-expect-contacts=2 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
 EOF
-sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
-# LAN tests need inbound connections to the lab exe (only it, and only
-# for the run).
-win "netsh advfirewall firewall add rule name=ConestLab dir=in action=allow program=\"$WINDOWS_DIR\\conest.exe\" enable=yes" >/dev/null ||
-  echo "Could not add the Windows firewall rule (LAN may be one-way)."
-# A task, so it runs on the user's desktop; allowed on battery (a laptop
-# on battery otherwise leaves it queued).
-cat >"$out/lab-task.ps1" <<'PS1'
+  sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
+  # LAN tests need inbound connections to the lab exe (only it, and only
+  # for the run).
+  win "netsh advfirewall firewall add rule name=ConestLab dir=in action=allow program=\"$WINDOWS_DIR\\conest.exe\" enable=yes" >/dev/null ||
+    echo "Could not add the Windows firewall rule (LAN may be one-way)."
+  # A task, so it runs on the user's desktop; allowed on battery (a laptop
+  # on battery otherwise leaves it queued).
+  cat >"$out/lab-task.ps1" <<'PS1'
 $a = New-ScheduledTaskAction -Execute "$env:USERPROFILE\conest-lab\start-lab.cmd"
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 $p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 Register-ScheduledTask -TaskName ConestLab -Action $a -Settings $s -Principal $p -Force | Out-Null
 Start-ScheduledTask -TaskName ConestLab
 PS1
-sshpass -e scp -q "$out/lab-task.ps1" "$WINDOWS:conest-lab/lab-task.ps1"
-win "powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\\conest-lab\\lab-task.ps1" >/dev/null
-echo "Windows started."
+  sshpass -e scp -q "$out/lab-task.ps1" "$WINDOWS:conest-lab/lab-task.ps1"
+  win "powershell -NoProfile -ExecutionPolicy Bypass -File %USERPROFILE%\\conest-lab\\lab-task.ps1" >/dev/null
+  wait_for "the Windows invite" "win \"if exist \\\"$win_report.invite\\\" (exit 0) else (exit 1)\"" 300
+  invite_windows=$(win "type \"$win_report.invite\"" | tr -d '\r\n')
+  echo "Windows started."
+}
+
+if [ "$ORDER" = reverse ]; then
+  start_windows ""
+  start_linux "" "$invite_windows"
+  if [ "$ANDROID" = 1 ]; then
+    start_android lab-all "$invite_windows" "$invite_linux"
+  fi
+else
+  invites=()
+  if [ "$ANDROID" = 1 ]; then
+    start_android ""
+    invites=("$invite_android")
+  fi
+  start_linux "" "${invites[@]}"
+  start_windows lab-all "${invites[@]}" "$invite_linux"
+fi
 
 # --- Reports ------------------------------------------------------------------------
-wait "$linux_pid" || echo "Linux run ended with an error (see linux.log)."
+[ -n "$linux_pid" ] && { wait "$linux_pid" || echo "Linux run ended with an error (see linux.log)."; }
 wait_for "the Windows report" "win \"if exist \\\"$win_report\\\" (exit 0) else (exit 1)\"" 300
 sshpass -e scp -q "$WINDOWS:conest-lab/conest-debug-windows-x64/lab-report.json" "$out/windows.json" ||
   win "type \"$win_report\"" >"$out/windows.json"
