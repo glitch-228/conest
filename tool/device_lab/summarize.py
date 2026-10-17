@@ -95,7 +95,52 @@ def main(folder: str) -> None:
             print(f"    {count:4d} x {line}")
 
 
+def verdict(folder: str) -> str:
+    """One line: contacts each device has, and 1:1 and group texts that
+    went out and were confirmed, and that came in."""
+    reports = {}
+    for path in sorted(pathlib.Path(folder).glob("*.json")):
+        try:
+            reports[path.stem] = json.loads(path.read_text())
+        except (ValueError, OSError):
+            pass
+    parts = []
+    for name, report in reports.items():
+        direct_out = direct_ok = direct_in = group_out = group_ok = group_in = 0
+        contacts = 0
+        for chat in report.get("chats", []):
+            group = chat.get("group") is not None
+            contacts += 0 if group else 1
+            for m in chat.get("messages", []):
+                if m.get("file"):
+                    continue
+                if m.get("outbound"):
+                    ok = m.get("state") in ("delivered", "read")
+                    if group:
+                        group_out += 1
+                        group_ok += ok
+                    else:
+                        direct_out += 1
+                        direct_ok += ok
+                elif group:
+                    group_in += 1
+                else:
+                    direct_in += 1
+        failed = sum(1 for s in report.get("steps", []) if not s.get("ok"))
+        parts.append(
+            f"{name}: {contacts} contacts, 1:1 {direct_ok}/{direct_out} "
+            f"confirmed {direct_in} in, group {group_ok}/{group_out} "
+            f"confirmed {group_in} in" + (f", {failed} failed steps" if failed else ""))
+    missing = {"android", "linux", "windows"} - set(reports)
+    if missing:
+        parts.append("no report from " + ", ".join(sorted(missing)))
+    return "; ".join(parts)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    if len(sys.argv) == 3 and sys.argv[1] == "--verdict":
+        print(verdict(sys.argv[2]))
+    elif len(sys.argv) == 2:
+        main(sys.argv[1])
+    else:
         sys.exit(__doc__)
-    main(sys.argv[1])

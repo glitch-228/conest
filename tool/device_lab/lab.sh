@@ -70,6 +70,14 @@ carrier_args() { # device name
 
 win() { sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"; }
 
+# FRESH=1: every device starts from empty lab data (new identities, no
+# contacts), so pairing is tested again. Only the lab instances' data.
+if [ "${FRESH:-0}" = 1 ]; then
+  [ "${ANDROID:-1}" = 1 ] && adb shell pm clear "$PACKAGE" >/dev/null
+  rm -rf "$LINUX_BUNDLE/conest_data"
+  win "if exist \"$WINDOWS_DIR\\conest_data\" rmdir /S /Q \"$WINDOWS_DIR\\conest_data\"" || true
+fi
+
 tunnel_pid=""
 if [ -n "$MATRIX_TUNNEL" ]; then
   [ "${ANDROID:-1}" = 1 ] && adb reverse "tcp:$MATRIX_TUNNEL" "tcp:$MATRIX_TUNNEL" >/dev/null
