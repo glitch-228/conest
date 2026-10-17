@@ -7273,18 +7273,42 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
     };
   }
 
+  /// Asks a member who is not a contact to become one (an ordinary
+  /// contact request, sent with the keys and routes the group knows).
+  Future<void> _addAsContact(String deviceId) async {
+    try {
+      await widget.controller.requestContactFromGroup(
+        groupId: group.groupId,
+        memberDeviceId: deviceId,
+      );
+      if (mounted) setState(() {});
+    } catch (error) {
+      widget.controller.setStatus(error.toString());
+    }
+  }
+
   Widget? _memberTrailing(String deviceId, GroupMemberRole? role) {
     final canChangeRole =
         _canAssignRoles && role != null && role != GroupMemberRole.owner;
     final canRemove =
         deviceId != _currentDeviceId &&
         widget.controller.canRemoveGroupMember(group.groupId, deviceId);
-    if (!canChangeRole && !canRemove) {
+    final canAdd =
+        deviceId != _currentDeviceId &&
+        !widget.controller.contacts.any((c) => c.deviceId == deviceId);
+    if (!canChangeRole && !canRemove && !canAdd) {
       return null;
     }
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (canAdd)
+          IconButton(
+            key: ValueKey('group-add-contact-$deviceId'),
+            onPressed: () => _addAsContact(deviceId),
+            icon: const Icon(Icons.person_add_alt_1_outlined),
+            tooltip: l10nOf(context).contactAdd,
+          ),
         if (canChangeRole)
           PopupMenuButton<GroupMemberRole>(
             tooltip: l10nOf(context).uiChangeRole2B9BFD,

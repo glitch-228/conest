@@ -5832,6 +5832,160 @@ void main() {
     );
   });
 
+  testWidgets('group members who are not contacts have an Add contact button', (
+    tester,
+  ) async {
+    late MessengerController alice;
+    late MessengerController bob;
+    late MessengerController carol;
+    late GroupRecord bobsGroup;
+    await tester.runAsync(() async {
+      final relay = _FakeRelayClient();
+      alice = await _createController(relayClient: relay, displayName: 'Alice');
+      bob = await _createController(relayClient: relay, displayName: 'Bob');
+      carol = await _createController(relayClient: relay, displayName: 'Carol');
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      final group = await alice.createGroup(
+        title: 'Friends',
+        members: alice.contacts.toList(),
+      );
+      for (var i = 0; i < 100; i++) {
+        await bob.pollNow();
+        final mine = bob.groups.where((g) => g.groupId == group.groupId);
+        if (mine.isNotEmpty &&
+            mine.single.memberProfileFor(carol.identity!.deviceId) != null) {
+          bobsGroup = mine.single;
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+    final carolId = carol.identity!.deviceId;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: app.GroupDetailsDialog(
+            controller: bob,
+            palette: app.ConestPalette(),
+            group: bobsGroup,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    // Alice is a contact already; Carol is not.
+    expect(
+      find.byKey(ValueKey('group-add-contact-${alice.identity!.deviceId}')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(ValueKey('group-add-contact-$carolId')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 200)),
+    );
+    await tester.pump();
+    expect(bob.contacts.any((c) => c.deviceId == carolId), isTrue);
+    expect(find.byKey(ValueKey('group-add-contact-$carolId')), findsNothing);
+  });
+
+  test(
+    'a group member who is not a contact can be added from the group',
+    () async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      final carol = await _createController(
+        relayClient: relay,
+        displayName: 'Carol',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      addTearDown(carol.dispose);
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      Future<void> until(bool Function() ready, String what) async {
+        for (var i = 0; i < 100 && !ready(); i++) {
+          await Future.wait([alice.pollNow(), bob.pollNow(), carol.pollNow()]);
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(ready(), isTrue, reason: what);
+      }
+
+      final group = await alice.createGroup(
+        title: 'Friends',
+        members: alice.contacts.toList(),
+      );
+      final carolId = carol.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      await until(
+        () =>
+            bob.groups.any(
+              (g) =>
+                  g.groupId == group.groupId &&
+                  g.memberProfileFor(carolId) != null,
+            ) &&
+            carol.groups.any((g) => g.groupId == group.groupId),
+        'both are in the group',
+      );
+      expect(bob.contacts.any((c) => c.deviceId == carolId), isFalse);
+
+      // Not someone outside the group, nor themselves.
+      await expectLater(
+        bob.requestContactFromGroup(
+          groupId: group.groupId,
+          memberDeviceId: 'dev-nobody',
+        ),
+        throwsArgumentError,
+      );
+      final result = await bob.requestContactFromGroup(
+        groupId: group.groupId,
+        memberDeviceId: carolId,
+      );
+      expect(result.exchangeStatus, ContactExchangeStatus.pendingApproval);
+      await until(
+        () =>
+            carol.pendingContactRequests.any((r) => r.senderDeviceId == bobId),
+        'Carol sees an ordinary contact request from Bob',
+      );
+      final request = carol.pendingContactRequests.firstWhere(
+        (r) => r.senderDeviceId == bobId,
+      );
+      await carol.approvePendingContactRequest(request.id);
+      await until(
+        () =>
+            bob.contacts.any((c) => c.deviceId == carolId && c.canSendOutbound),
+        'Bob hears Carol accepted',
+      );
+      await bob.sendMessage(
+        contact: bob.contacts.firstWhere((c) => c.deviceId == carolId),
+        body: 'hi from the group',
+      );
+      await until(
+        () =>
+            carol.messagesFor(bobId).any((m) => m.body == 'hi from the group'),
+        'a direct message reaches Carol',
+      );
+      // Already a contact now.
+      await expectLater(
+        bob.requestContactFromGroup(
+          groupId: group.groupId,
+          memberDeviceId: carolId,
+        ),
+        throwsArgumentError,
+      );
+    },
+  );
+
   test(
     'group files get receipts and stay finished with nobody reachable',
     () async {

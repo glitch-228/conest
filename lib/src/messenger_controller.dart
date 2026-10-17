@@ -10825,6 +10825,24 @@ class MessengerController extends ChangeNotifier {
           ? null
           : DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
     );
+    return _storeNewContact(
+      contact,
+      attemptReciprocalExchange: attemptReciprocalExchange,
+      recipientKnowsIdentity: recipientKnowsIdentity,
+      approvalGranted: approvalGranted,
+      pairingRequestId: pairingRequestId,
+    );
+  }
+
+  /// Saves a newly trusted [contact] with its chat, then asks it to pair
+  /// (or answers its request, when [approvalGranted]).
+  Future<ContactAdditionResult> _storeNewContact(
+    ContactRecord contact, {
+    bool attemptReciprocalExchange = true,
+    bool recipientKnowsIdentity = false,
+    bool approvalGranted = false,
+    String? pairingRequestId,
+  }) async {
     final conversations = List<ConversationRecord>.from(_snapshot.conversations)
       ..add(
         ConversationRecord(
@@ -10876,6 +10894,75 @@ class MessengerController extends ChangeNotifier {
           ? ContactExchangeStatus.automatic
           : ContactExchangeStatus.pendingApproval,
     );
+  }
+
+  /// Asks a member of [groupId] who is not a contact yet to become one.
+  /// Their keys and routes come from the group's (signed) member profile,
+  /// as for group messages; they see an ordinary contact request.
+  Future<ContactAdditionResult> requestContactFromGroup({
+    required String groupId,
+    required String memberDeviceId,
+    String alias = '',
+  }) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    final profile = group.memberProfileFor(memberDeviceId);
+    if (memberDeviceId == me.deviceId ||
+        profile == null ||
+        !group.hasActiveMember(memberDeviceId) ||
+        profile.publicKeyBase64.isEmpty) {
+      throw ArgumentError('That person is not a member of this group.');
+    }
+    if (_contactByDeviceId(memberDeviceId) case final known?
+        when !known.isHiddenDevice) {
+      throw ArgumentError('${known.alias} is already a contact.');
+    }
+    final safetyNumber = await _crypto.deriveSafetyNumber([
+      base64Decode(me.publicKeyBase64),
+      base64Decode(profile.publicKeyBase64),
+    ]);
+    final predecessor = _findPossibleContactPredecessor(
+      displayName: profile.displayName,
+      publicKeyBase64: profile.publicKeyBase64,
+    );
+    final isPending = predecessor != null;
+    final contact = ContactRecord(
+      accountId: profile.accountId,
+      deviceId: profile.deviceId,
+      alias: alias.trim().isEmpty ? profile.displayName : alias.trim(),
+      displayName: profile.displayName,
+      bio: profile.bio,
+      relayCapable: profile.relayCapable,
+      publicKeyBase64: isPending ? '' : profile.publicKeyBase64,
+      routeHints: prunePeerEndpointsByKind(profile.routeHints),
+      safetyNumber: safetyNumber,
+      trustedAt: DateTime.now().toUtc(),
+      pendingVerification: isPending,
+      replacesDeviceId: predecessor?.deviceId,
+      unverifiedPublicKeyBase64: isPending ? profile.publicKeyBase64 : null,
+      signingPublicKeyBase64: profile.signingPublicKeyBase64,
+      irohEndpointId: profile.irohEndpointId,
+      capabilities: profile.capabilities,
+      featureCapabilities: profile.featureCapabilities,
+      featureCapabilityVersion: profile.featureCapabilityVersion,
+      pairingState: ContactPairingState.queued,
+      pairingRequestId: _randomId('pair'),
+      // As the group shows them (the contact exchange after pairing
+      // brings the rest).
+      carrierAddresses: {
+        for (final MapEntry(:key, :value) in profile.carrierAddresses.entries)
+          if (key != TransportKind.matrix)
+            key: CarrierAddress(
+              value: value,
+              at: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+            ),
+      },
+      matrixAddress: profile.carrierAddresses[TransportKind.matrix],
+      matrixAddressAt: profile.carrierAddresses[TransportKind.matrix] == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    );
+    return _storeNewContact(contact);
   }
 
   /// Adds [contact] again after it removed us, or after a declined or
