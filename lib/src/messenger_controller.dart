@@ -16880,6 +16880,13 @@ class MessengerController extends ChangeNotifier {
   PeerEndpoint? pickPrimaryRelayForLongPollForTesting(IdentityRecord me) =>
       _pickPrimaryRelayForLongPoll(me);
 
+  /// The relay this device holds a waiting fetch on (on battery the only
+  /// one it watches promptly), for diagnostics.
+  PeerEndpoint? get watchedRelay => switch (_snapshot.identity) {
+    final me? => _pickPrimaryRelayForLongPoll(me),
+    null => null,
+  };
+
   PeerEndpoint? _pickPrimaryRelayForLongPoll(
     IdentityRecord me, {
     int slot = 0,

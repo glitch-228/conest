@@ -508,6 +508,13 @@ Future<String> runDebugRequest(
     'steps': steps,
     'contacts': contacts,
     'pairedAfterMs': pairedAfter,
+    // This device's relays in order, and the one it holds a waiting fetch
+    // on (on battery, the only one it watches promptly).
+    'relays': [
+      for (final relay in controller.identity?.configuredRelays ?? const [])
+        relay.label,
+    ],
+    'watchedRelay': controller.watchedRelay?.label,
     'carriers': {'start': carriersAtStart, 'end': _carrierReport(controller)},
     'chats': _chatReport(controller),
     'errorHistory': controller.exportErrorHistory(),
