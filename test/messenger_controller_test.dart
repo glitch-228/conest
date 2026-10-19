@@ -499,7 +499,37 @@ class _FakeRelayClient extends RelayClient {
     Duration waitFor = Duration.zero,
     Duration leaseFor = const Duration(seconds: 60),
     String? expectedIdentityPublicKeyBase64,
-  }) async => RelayFetchBatch(
+  }) async {
+    leasedFetches.add((timeout, leaseFor));
+    if (fetchDelay > Duration.zero) await Future<void>.delayed(fetchDelay);
+    return _plainLeasedBatch(
+      host,
+      port,
+      protocol,
+      recipientDeviceId,
+      limit,
+      timeout,
+      waitFor,
+      expectedIdentityPublicKeyBase64,
+    );
+  }
+
+  /// Each leased fetch's (timeout, lease) as asked for.
+  final List<(Duration, Duration)> leasedFetches = [];
+
+  /// How long a leased fetch takes (a slow link).
+  Duration fetchDelay = Duration.zero;
+
+  Future<RelayFetchBatch> _plainLeasedBatch(
+    String host,
+    int port,
+    PeerRouteProtocol protocol,
+    String recipientDeviceId,
+    int limit,
+    Duration timeout,
+    Duration waitFor,
+    String? expectedIdentityPublicKeyBase64,
+  ) async => RelayFetchBatch(
     envelopes: await (() {
       if (waitFor > Duration.zero) waitingFetchHosts.add(host);
       return fetchEnvelopes(
@@ -23046,6 +23076,39 @@ void main() {
       await resend();
       expect(copies(), greaterThan(once));
     });
+
+    test(
+      'relay fetches lease briefly and wait longer on a slow link',
+      () async {
+        // A fetch whose reply is lost leaves its envelopes leased: they came
+        // back a minute later, too late to decrypt, on the device lab.
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        addTearDown(alice.dispose);
+        await alice.pollNow();
+        expect(relay.leasedFetches, isNotEmpty);
+        expect(relay.leasedFetches.last.$2, const Duration(seconds: 20));
+        expect(relay.leasedFetches.last.$1, const Duration(seconds: 4));
+        relay.fetchDelay = const Duration(seconds: 3);
+        await alice.pollNow();
+        await alice.pollNow();
+        relay.fetchDelay = Duration.zero;
+        relay.leasedFetches.clear();
+        await alice.pollNow();
+        // Three of its recent round trips: more than the default 4 s (LAN
+        // routes keep their own short limit).
+        expect(
+          relay.leasedFetches
+              .map((fetch) => fetch.$1)
+              .reduce((a, b) => a > b ? a : b),
+          greaterThan(const Duration(seconds: 4)),
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
 
     test('a lost session recovers through a reset bundle', () async {
       final relay = _FakeRelayClient();

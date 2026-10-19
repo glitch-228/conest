@@ -16962,10 +16962,12 @@ class MessengerController extends ChangeNotifier {
             expectedIdentityPublicKeyBase64: expectedRelayKey,
             timeout: route.kind == PeerRouteKind.lan
                 ? const Duration(milliseconds: 900)
-                : const Duration(seconds: 4),
+                : _relayFetchTimeout(route),
+            leaseFor: _relayLease,
           );
           final envelopes = batch.envelopes;
           stopwatch.stop();
+          _noteRelayFetchTime(route, stopwatch.elapsed);
           _routeHealthTracker.recordSuccess(
             route,
             fetch: true,
@@ -17005,6 +17007,9 @@ class MessengerController extends ChangeNotifier {
           _routeHealthTracker.recordFailure(route, error: error.toString());
           if (route.kind == PeerRouteKind.relay) {
             attemptedRelay = true;
+            if (_debugBuildId != null) {
+              appendDebugLog('Relay fetch from ${route.host} failed: $error');
+            }
           }
         }
       }
@@ -17109,6 +17114,37 @@ class MessengerController extends ChangeNotifier {
   /// stopped and started again) ends instead of running twice.
   int _longPollGeneration = 0;
 
+  /// How long a relay keeps fetched envelopes for this device before it
+  /// hands them out again. A fetch whose reply is lost on a slow link
+  /// leaves them leased: after 60 s they arrived too late to decrypt
+  /// (Olm keeps a few ratchet chains only) on the device lab.
+  static const Duration _relayLease = Duration(seconds: 20);
+
+  /// Round trips of relay fetches that do not wait, per route (a long
+  /// poll's time is mostly its wait).
+  final Map<String, Duration> _relayFetchTimes = {};
+
+  void _noteRelayFetchTime(PeerEndpoint route, Duration elapsed) {
+    final previous = _relayFetchTimes[route.routeKey];
+    _relayFetchTimes[route.routeKey] = previous == null
+        ? elapsed
+        : previous * 0.5 + elapsed * 0.5;
+  }
+
+  /// How long a relay fetch may take: three of its recent round trips,
+  /// between 4 and 15 s, so a slow link gets its reply instead of losing
+  /// the envelopes to a lease.
+  Duration _relayFetchTimeout(PeerEndpoint route) {
+    final time = _relayFetchTimes[route.routeKey];
+    if (time == null) return const Duration(seconds: 4);
+    final scaled = time * 3;
+    if (scaled < const Duration(seconds: 4)) return const Duration(seconds: 4);
+    if (scaled > const Duration(seconds: 15)) {
+      return const Duration(seconds: 15);
+    }
+    return scaled;
+  }
+
   void _stopLongPoll() {
     _longPollRunning = false;
   }
@@ -17151,6 +17187,8 @@ class MessengerController extends ChangeNotifier {
           protocol: route.protocol,
           recipientDeviceId: me.deviceId,
           waitFor: const Duration(seconds: 25),
+          timeout: _relayFetchTimeout(route),
+          leaseFor: _relayLease,
           expectedIdentityPublicKeyBase64: expectedRelayKey,
         );
         stopwatch.stop();
@@ -17162,6 +17200,12 @@ class MessengerController extends ChangeNotifier {
       } catch (error) {
         stopwatch.stop();
         _routeHealthTracker.recordFailure(route, error: error.toString());
+        if (_debugBuildId != null) {
+          appendDebugLog(
+            'Relay long poll to ${route.host} failed after '
+            '${stopwatch.elapsedMilliseconds} ms: $error',
+          );
+        }
         await Future<void>.delayed(const Duration(seconds: 2));
         continue;
       }

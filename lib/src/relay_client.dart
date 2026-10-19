@@ -166,8 +166,10 @@ class RelayClient {
     Duration leaseFor = const Duration(seconds: 60),
     String? expectedIdentityPublicKeyBase64,
   }) async {
+    // A long poll may take its wait plus [timeout] for the reply (a slow
+    // link needs more than the usual 4 s).
     final effectiveTimeout = waitFor > Duration.zero
-        ? waitFor + const Duration(seconds: 4)
+        ? waitFor + timeout
         : timeout;
     final _RelayCallResult result;
     try {
