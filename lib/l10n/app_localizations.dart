@@ -8350,6 +8350,102 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Or ask someone you trust who uses Tor to share a bridge line with you.'**
   String get torGetBridgesFriend;
+
+  /// Onboarding transports step: title.
+  ///
+  /// In en, this message translates to:
+  /// **'Reach people beyond this network'**
+  String get transportsTitle;
+
+  /// Onboarding transports step: why internet transports matter.
+  ///
+  /// In en, this message translates to:
+  /// **'Devices on this network reach you directly. For anyone else, Conest needs at least one way over the internet, and three are better, since networks block some of them. Here is what works on this network now.'**
+  String get transportsIntro;
+
+  /// Onboarding transports step: shown while probing.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking what works on this network…'**
+  String get transportsChecking;
+
+  /// Onboarding transports step: how many internet transports will be set up.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{None set up yet: 1 needed, 3 recommended} one{{count} set up: 3 recommended} other{{count} set up: 3 recommended}}'**
+  String transportsCount(int count);
+
+  /// Onboarding transports step: already working.
+  ///
+  /// In en, this message translates to:
+  /// **'Working'**
+  String get transportStateOn;
+
+  /// Onboarding transports step: answers here, can be switched on now.
+  ///
+  /// In en, this message translates to:
+  /// **'Works here'**
+  String get transportStateWorks;
+
+  /// Onboarding transports step: does not answer on this network.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocked here'**
+  String get transportStateBlocked;
+
+  /// Onboarding transports step: needs an address, account or bridges, in Settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Set up later in Settings'**
+  String get transportStateNeedsSetup;
+
+  /// Onboarding transports step: cost note for the email transport.
+  ///
+  /// In en, this message translates to:
+  /// **'Checks a mailbox: a little more data and battery.'**
+  String get transportsEmailCost;
+
+  /// Onboarding transports step: warning title when finishing with no internet transport.
+  ///
+  /// In en, this message translates to:
+  /// **'Only nearby devices could reach you'**
+  String get transportsSkipTitle;
+
+  /// Onboarding transports step: warning text when finishing with no internet transport.
+  ///
+  /// In en, this message translates to:
+  /// **'Without a way over the internet, only devices on this network can reach you, and you only them. You can set one up later in Settings, under Connectivity.'**
+  String get transportsSkipBody;
+
+  /// Onboarding transports step: continue without an internet transport.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue anyway'**
+  String get transportsSkipConfirm;
+
+  /// Chat list banner when no internet transport works.
+  ///
+  /// In en, this message translates to:
+  /// **'Only devices on this network can reach you now. Set up a way over the internet.'**
+  String get transportsBanner;
+
+  /// Chat list banner: opens Settings to set up an internet transport.
+  ///
+  /// In en, this message translates to:
+  /// **'Set up'**
+  String get transportsBannerAction;
+
+  /// Chat list banner: hide it for now.
+  ///
+  /// In en, this message translates to:
+  /// **'Not now'**
+  String get transportsBannerDismiss;
+
+  /// Onboarding transports step: a transport could not be switched on.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} could not be switched on: {error}'**
+  String transportsTurnOnFailed(String name, String error);
 }
 
 class _AppLocalizationsDelegate

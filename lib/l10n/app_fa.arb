@@ -1364,5 +1364,21 @@
   "torGetBridgesWeb": "وب‌سایت: bridges.torproject.org",
   "torGetBridgesTelegram": "تلگرام: به ‎@GetBridgesBot پیام دهید",
   "torGetBridgesEmail": "ایمیل: از یک نشانی Gmail یا Riseup به bridges@torproject.org بنویسید",
-  "torGetBridgesFriend": "یا از کسی که به او اعتماد دارید و از Tor استفاده می‌کند بخواهید یک خط پل با شما به اشتراک بگذارد."
+  "torGetBridgesFriend": "یا از کسی که به او اعتماد دارید و از Tor استفاده می‌کند بخواهید یک خط پل با شما به اشتراک بگذارد.",
+  "transportsTitle": "دسترسی به افراد بیرون از این شبکه",
+  "transportsIntro": "دستگاه‌های این شبکه مستقیماً به شما می‌رسند. برای دیگران، Conest دست‌کم به یک راه از طریق اینترنت نیاز دارد و سه راه بهتر است، چون شبکه‌ها برخی از آن‌ها را مسدود می‌کنند. این‌ها اکنون در این شبکه کار می‌کنند.",
+  "transportsChecking": "در حال بررسی آنچه در این شبکه کار می‌کند…",
+  "transportsCount": "{count, plural, =0{هنوز هیچ‌کدام: ۱ لازم است، ۳ توصیه می‌شود} one{{count} راه آماده: ۳ توصیه می‌شود} other{{count} راه آماده: ۳ توصیه می‌شود}}",
+  "transportStateOn": "کار می‌کند",
+  "transportStateWorks": "اینجا کار می‌کند",
+  "transportStateBlocked": "اینجا مسدود است",
+  "transportStateNeedsSetup": "بعداً در تنظیمات راه‌اندازی کنید",
+  "transportsEmailCost": "صندوق نامه را بررسی می‌کند: کمی داده و باتری بیشتر.",
+  "transportsSkipTitle": "فقط دستگاه‌های نزدیک می‌توانند به شما برسند",
+  "transportsSkipBody": "بدون راهی از طریق اینترنت، فقط دستگاه‌های این شبکه می‌توانند به شما برسند و شما هم فقط به آن‌ها. بعداً می‌توانید در تنظیمات، بخش اتصال، راهی راه‌اندازی کنید.",
+  "transportsSkipConfirm": "به هر حال ادامه دهید",
+  "transportsBanner": "اکنون فقط دستگاه‌های این شبکه می‌توانند به شما برسند. راهی از طریق اینترنت راه‌اندازی کنید.",
+  "transportsBannerAction": "راه‌اندازی",
+  "transportsBannerDismiss": "اکنون نه",
+  "transportsTurnOnFailed": "{name} روشن نشد: {error}"
 }

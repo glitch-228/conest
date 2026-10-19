@@ -41,6 +41,7 @@ import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
 import 'src/ui/file_metadata_consent.dart';
+import 'src/ui/internet_transports.dart';
 import 'src/network_errors.dart';
 import 'src/matrix_service.dart';
 import 'src/messenger_controller.dart';
@@ -3592,11 +3593,22 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                         ],
                       );
+                      // Only devices on this network reach this one: say so
+                      // above the chats, in every shell.
+                      final reachable = Column(
+                        children: [
+                          InternetReachBanner(
+                            controller: widget.controller,
+                            onSetUp: () => unawaited(_showSettings()),
+                          ),
+                          Expanded(child: home),
+                        ],
+                      );
                       // Standard mode on a phone: chats, calls and settings
                       // as tabs, as the popular messengers have them.
                       if (isWide ||
                           widget.controller.userMode != UserMode.normal) {
-                        return home;
+                        return reachable;
                       }
                       return _PhoneTabs(
                         tab: _phoneTab,
@@ -3607,7 +3619,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             setState(() => _phoneTab = tab);
                           }
                         },
-                        chats: home,
+                        chats: reachable,
                         calls: CallsList(
                           controller: widget.controller,
                           onOpenContact: (contact) {

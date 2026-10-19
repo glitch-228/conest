@@ -5266,4 +5266,68 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get torGetBridgesFriend =>
       'Atau minta orang yang Anda percaya dan memakai Tor untuk membagikan satu baris bridge.';
+
+  @override
+  String get transportsTitle => 'Menjangkau orang di luar jaringan ini';
+
+  @override
+  String get transportsIntro =>
+      'Perangkat di jaringan ini menjangkau Anda secara langsung. Untuk orang lain, Conest memerlukan setidaknya satu jalur lewat internet, dan tiga lebih baik, karena jaringan memblokir sebagian. Inilah yang berfungsi di jaringan ini sekarang.';
+
+  @override
+  String get transportsChecking =>
+      'Memeriksa apa yang berfungsi di jaringan ini…';
+
+  @override
+  String transportsCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count siap: disarankan 3',
+      zero: 'Belum ada: perlu 1, disarankan 3',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get transportStateOn => 'Berfungsi';
+
+  @override
+  String get transportStateWorks => 'Berfungsi di sini';
+
+  @override
+  String get transportStateBlocked => 'Diblokir di sini';
+
+  @override
+  String get transportStateNeedsSetup => 'Atur nanti di Pengaturan';
+
+  @override
+  String get transportsEmailCost =>
+      'Memeriksa kotak surat: sedikit lebih banyak data dan baterai.';
+
+  @override
+  String get transportsSkipTitle =>
+      'Hanya perangkat di dekat Anda yang bisa menjangkau Anda';
+
+  @override
+  String get transportsSkipBody =>
+      'Tanpa jalur lewat internet, hanya perangkat di jaringan ini yang bisa menjangkau Anda, dan Anda hanya bisa menjangkau mereka. Anda bisa mengaturnya nanti di Pengaturan, bagian Konektivitas.';
+
+  @override
+  String get transportsSkipConfirm => 'Tetap lanjutkan';
+
+  @override
+  String get transportsBanner =>
+      'Saat ini hanya perangkat di jaringan ini yang bisa menjangkau Anda. Atur jalur lewat internet.';
+
+  @override
+  String get transportsBannerAction => 'Atur';
+
+  @override
+  String get transportsBannerDismiss => 'Nanti saja';
+
+  @override
+  String transportsTurnOnFailed(String name, String error) {
+    return '$name tidak bisa dinyalakan: $error';
+  }
 }

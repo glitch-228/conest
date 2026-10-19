@@ -5409,4 +5409,70 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get torGetBridgesFriend =>
       'أو اطلب من شخص تثق به ويستخدم Tor أن يشاركك سطر جسر.';
+
+  @override
+  String get transportsTitle => 'الوصول إلى أشخاص خارج هذه الشبكة';
+
+  @override
+  String get transportsIntro =>
+      'الأجهزة على هذه الشبكة تصل إليك مباشرة. أما لغيرها، فيحتاج Conest إلى طريق واحد على الأقل عبر الإنترنت، وثلاثة أفضل، لأن الشبكات تحجب بعضها. هذا ما يعمل على هذه الشبكة الآن.';
+
+  @override
+  String get transportsChecking => 'جارٍ التحقق مما يعمل على هذه الشبكة…';
+
+  @override
+  String transportsCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count طريق جاهز: يُنصح بـ 3',
+      many: '$count طريقًا جاهزًا: يُنصح بـ 3',
+      few: '$count طرق جاهزة: يُنصح بـ 3',
+      two: 'طريقان جاهزان: يُنصح بـ 3',
+      one: 'طريق واحد جاهز: يُنصح بـ 3',
+      zero: 'لا شيء بعد: يلزم 1، ويُنصح بـ 3',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get transportStateOn => 'يعمل';
+
+  @override
+  String get transportStateWorks => 'يعمل هنا';
+
+  @override
+  String get transportStateBlocked => 'محجوب هنا';
+
+  @override
+  String get transportStateNeedsSetup => 'يُعدّ لاحقًا في الإعدادات';
+
+  @override
+  String get transportsEmailCost =>
+      'يفحص صندوق بريد: بيانات وبطارية أكثر قليلًا.';
+
+  @override
+  String get transportsSkipTitle => 'لن تصل إليك إلا الأجهزة القريبة';
+
+  @override
+  String get transportsSkipBody =>
+      'بدون طريق عبر الإنترنت، لن تصل إليك إلا الأجهزة على هذه الشبكة، ولن تصل أنت إلا إليها. يمكنك إعداد طريق لاحقًا في الإعدادات، ضمن الاتصال.';
+
+  @override
+  String get transportsSkipConfirm => 'المتابعة على أي حال';
+
+  @override
+  String get transportsBanner =>
+      'الآن لا تصل إليك إلا الأجهزة على هذه الشبكة. أعدّ طريقًا عبر الإنترنت.';
+
+  @override
+  String get transportsBannerAction => 'إعداد';
+
+  @override
+  String get transportsBannerDismiss => 'ليس الآن';
+
+  @override
+  String transportsTurnOnFailed(String name, String error) {
+    return 'تعذّر تشغيل $name: $error';
+  }
 }

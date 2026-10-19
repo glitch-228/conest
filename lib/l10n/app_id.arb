@@ -1364,5 +1364,21 @@
   "torGetBridgesWeb": "Situs web: bridges.torproject.org",
   "torGetBridgesTelegram": "Telegram: kirim pesan ke @GetBridgesBot",
   "torGetBridgesEmail": "Email: kirim ke bridges@torproject.org dari alamat Gmail atau Riseup",
-  "torGetBridgesFriend": "Atau minta orang yang Anda percaya dan memakai Tor untuk membagikan satu baris bridge."
+  "torGetBridgesFriend": "Atau minta orang yang Anda percaya dan memakai Tor untuk membagikan satu baris bridge.",
+  "transportsTitle": "Menjangkau orang di luar jaringan ini",
+  "transportsIntro": "Perangkat di jaringan ini menjangkau Anda secara langsung. Untuk orang lain, Conest memerlukan setidaknya satu jalur lewat internet, dan tiga lebih baik, karena jaringan memblokir sebagian. Inilah yang berfungsi di jaringan ini sekarang.",
+  "transportsChecking": "Memeriksa apa yang berfungsi di jaringan ini…",
+  "transportsCount": "{count, plural, =0{Belum ada: perlu 1, disarankan 3} other{{count} siap: disarankan 3}}",
+  "transportStateOn": "Berfungsi",
+  "transportStateWorks": "Berfungsi di sini",
+  "transportStateBlocked": "Diblokir di sini",
+  "transportStateNeedsSetup": "Atur nanti di Pengaturan",
+  "transportsEmailCost": "Memeriksa kotak surat: sedikit lebih banyak data dan baterai.",
+  "transportsSkipTitle": "Hanya perangkat di dekat Anda yang bisa menjangkau Anda",
+  "transportsSkipBody": "Tanpa jalur lewat internet, hanya perangkat di jaringan ini yang bisa menjangkau Anda, dan Anda hanya bisa menjangkau mereka. Anda bisa mengaturnya nanti di Pengaturan, bagian Konektivitas.",
+  "transportsSkipConfirm": "Tetap lanjutkan",
+  "transportsBanner": "Saat ini hanya perangkat di jaringan ini yang bisa menjangkau Anda. Atur jalur lewat internet.",
+  "transportsBannerAction": "Atur",
+  "transportsBannerDismiss": "Nanti saja",
+  "transportsTurnOnFailed": "{name} tidak bisa dinyalakan: {error}"
 }

@@ -5280,4 +5280,67 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get torGetBridgesFriend =>
       'Or ask someone you trust who uses Tor to share a bridge line with you.';
+
+  @override
+  String get transportsTitle => 'Reach people beyond this network';
+
+  @override
+  String get transportsIntro =>
+      'Devices on this network reach you directly. For anyone else, Conest needs at least one way over the internet, and three are better, since networks block some of them. Here is what works on this network now.';
+
+  @override
+  String get transportsChecking => 'Checking what works on this network…';
+
+  @override
+  String transportsCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count set up: 3 recommended',
+      one: '$count set up: 3 recommended',
+      zero: 'None set up yet: 1 needed, 3 recommended',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get transportStateOn => 'Working';
+
+  @override
+  String get transportStateWorks => 'Works here';
+
+  @override
+  String get transportStateBlocked => 'Blocked here';
+
+  @override
+  String get transportStateNeedsSetup => 'Set up later in Settings';
+
+  @override
+  String get transportsEmailCost =>
+      'Checks a mailbox: a little more data and battery.';
+
+  @override
+  String get transportsSkipTitle => 'Only nearby devices could reach you';
+
+  @override
+  String get transportsSkipBody =>
+      'Without a way over the internet, only devices on this network can reach you, and you only them. You can set one up later in Settings, under Connectivity.';
+
+  @override
+  String get transportsSkipConfirm => 'Continue anyway';
+
+  @override
+  String get transportsBanner =>
+      'Only devices on this network can reach you now. Set up a way over the internet.';
+
+  @override
+  String get transportsBannerAction => 'Set up';
+
+  @override
+  String get transportsBannerDismiss => 'Not now';
+
+  @override
+  String transportsTurnOnFailed(String name, String error) {
+    return '$name could not be switched on: $error';
+  }
 }

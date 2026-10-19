@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
 import 'package:conest/l10n/app_localizations.dart';
+import 'package:conest/src/ui/internet_transports.dart';
 import 'package:conest/src/ui/tor_carrier_panel.dart';
 import 'package:conest/src/app_locales.dart';
 import 'package:conest/src/ui/calls_list.dart';
@@ -18573,17 +18574,29 @@ void main() {
       expect((await vault.load()).localeCode, isNull);
     });
 
-    testWidgets('the choice screen sets the mode', (tester) async {
+    Widget localized(Widget child) => MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: child,
+    );
+
+    testWidgets('after the mode, the ways that work here are offered', (
+      tester,
+    ) async {
+      // On this network: one Nostr relay answers, no chatmail server does.
+      final nostr = FakeNostrRelays()..relay(nostrRelayCandidates[2]);
       final alice = (await tester.runAsync(
         () => _createController(
           relayClient: _FakeRelayClient(),
           displayName: 'Alice',
+          internetRelayHost: null,
+          nostrConnector: nostr.connect,
+          mailConnector: (host, port, {required bool tls}) async =>
+              throw const SocketException('Connection timed out'),
         ),
       ))!;
       addTearDown(alice.dispose);
-      await tester.pumpWidget(
-        MaterialApp(home: UserModeScreen(controller: alice)),
-      );
+      await tester.pumpWidget(localized(UserModeScreen(controller: alice)));
       await tester.tap(find.byKey(const ValueKey('user-mode-advanced')));
       await tester.pump();
       await tester.scrollUntilVisible(
@@ -18591,17 +18604,142 @@ void main() {
         200,
       );
       await tester.tap(find.byKey(const ValueKey('user-mode-continue')));
-      await tester.pump();
+      await tester.runAsync(() async {
+        for (var i = 0; i < 100; i++) {
+          await tester.pump();
+          if (find
+              .byKey(const ValueKey('transports-count'))
+              .evaluate()
+              .isNotEmpty) {
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      // Nostr answers: offered ticked. Email is blocked here: not offered.
+      final nostrRow = tester.widget<CheckboxListTile>(
+        find.byKey(const ValueKey('transport-nostr')),
+      );
+      expect(nostrRow.value, isTrue);
       expect(
-        find.textContaining('Each is off until you turn it on'),
+        find.descendant(
+          of: find.byKey(const ValueKey('transport-deltaChat')),
+          matching: find.text('Blocked here'),
+        ),
         findsOneWidget,
       );
-      await tester.ensureVisible(find.byKey(const ValueKey('user-mode-start')));
+      expect(find.text('1 set up: 3 recommended'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('transports-start')),
+      );
+      await tester.pump();
       await tester.runAsync(() async {
-        await tester.tap(find.byKey(const ValueKey('user-mode-start')));
-        await _waitForIroh(() => !alice.needsUserModeChoice);
+        await tester.tap(find.byKey(const ValueKey('transports-start')));
+        await _waitForIroh(() => alice.nostrCarrierConfig != null);
       });
+      await tester.pump();
       expect(alice.userMode, UserMode.advanced);
+      expect(alice.nostrCarrierConfig?.relays, [nostrRelayCandidates[2]]);
+    });
+
+    testWidgets('finishing with no way over the internet asks first', (
+      tester,
+    ) async {
+      final nostr = FakeNostrRelays(); // every relay refuses
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          internetRelayHost: null,
+          nostrConnector: nostr.connect,
+          mailConnector: (host, port, {required bool tls}) async =>
+              throw const SocketException('Connection timed out'),
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.pumpWidget(
+        localized(
+          Scaffold(
+            body: SingleChildScrollView(
+              child: TransportsStep(
+                controller: alice,
+                onBack: () {},
+                onDone: () => alice.setUserMode(UserMode.normal),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(() async {
+        for (var i = 0; i < 100; i++) {
+          await tester.pump();
+          if (find
+              .byKey(const ValueKey('transports-count'))
+              .evaluate()
+              .isNotEmpty) {
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      expect(
+        find.text('None set up yet: 1 needed, 3 recommended'),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('transports-start')),
+      );
+      await tester.tap(find.byKey(const ValueKey('transports-start')));
+      await tester.pumpAndSettle();
+      expect(find.text('Only nearby devices could reach you'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('transports-skip-confirm')));
+      await tester.pump();
+      await tester.runAsync(
+        () => _waitForIroh(() => alice.userMode == UserMode.normal),
+      );
+      expect(alice.userMode, UserMode.normal);
+    });
+
+    testWidgets('the chat list says when only this network can reach us', (
+      tester,
+    ) async {
+      final nostr = FakeNostrRelays()..relay('wss://r.test');
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          internetRelayHost: null,
+          nostrConnector: nostr.connect,
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      expect(alice.internetTransportsWorking, 0);
+      var setUp = 0;
+      await tester.pumpWidget(
+        localized(
+          Scaffold(
+            body: InternetReachBanner(
+              controller: alice,
+              onSetUp: () => setUp++,
+              grace: const Duration(milliseconds: 10),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(
+        find.byKey(const ValueKey('internet-reach-banner')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('internet-reach-set-up')));
+      expect(setUp, 1);
+      // A way over the internet works: the banner goes.
+      await tester.runAsync(() async {
+        await alice.enableNostrCarrier(relays: ['wss://r.test']);
+        await _waitForIroh(() => alice.internetTransportsWorking > 0);
+      });
+      await tester.pump();
+      expect(find.byKey(const ValueKey('internet-reach-banner')), findsNothing);
     });
 
     testWidgets('standard mode on a phone has chats and calls tabs', (
@@ -21978,6 +22116,70 @@ void main() {
       await bob.sendMessage(contact: bob.contacts.single, body: 'b1');
       await settle([alice, bob]);
     }
+
+    test('offers repeated while the hello is slow lose no messages', () async {
+      // Over a slow route the offering side repeats its offer before the
+      // hello that opens the session reaches it; each offer makes the other
+      // side start another session (device lab, relay only).
+      final relay = _FakeRelayClient();
+      var clock = DateTime.utc(2026, 10, 19, 12);
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        ratchetEngine: FakeRatchetEngine(),
+        nowProvider: () => clock,
+        keepErrorHistory: true,
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      final offerer =
+          alice.identity!.deviceId.compareTo(bob.identity!.deviceId) < 0
+          ? alice
+          : bob;
+      final starter = identical(offerer, alice) ? bob : alice;
+      var holdHellos = true;
+      relay.shouldFailStore = (_, _, _, recipient, envelope) =>
+          holdHellos &&
+          envelope.kind == 'ratchet_hello' &&
+          recipient == offerer.identity!.deviceId;
+      await _pairControllers(alice, bob);
+      for (var offer = 0; offer < 6; offer++) {
+        clock = clock.add(const Duration(minutes: 3));
+        await settle([alice, bob], rounds: 3);
+      }
+      holdHellos = false;
+      await settle([alice, bob]);
+      for (var i = 0; i < 3; i++) {
+        await offerer.sendMessage(
+          contact: offerer.contacts.single,
+          body: 'from offerer $i',
+        );
+        await starter.sendMessage(
+          contact: starter.contacts.single,
+          body: 'from starter $i',
+        );
+      }
+      await settle([alice, bob], rounds: 12);
+      final offererId = offerer.identity!.deviceId;
+      final starterId = starter.identity!.deviceId;
+      final failures = [
+        offerer.exportErrorHistory(),
+        starter.exportErrorHistory(),
+      ].join('\n');
+      expect(
+        starter.messagesFor(offererId).map((m) => m.body),
+        containsAll(['from offerer 0', 'from offerer 1', 'from offerer 2']),
+        reason: failures,
+      );
+      expect(
+        offerer.messagesFor(starterId).map((m) => m.body),
+        containsAll(['from starter 0', 'from starter 1', 'from starter 2']),
+        reason: failures,
+      );
+      expect(failures, isNot(contains('No ratchet session can decrypt')));
+    });
 
     test('ratchet peers switch to forward-secret envelopes', () async {
       final relay = _FakeRelayClient();

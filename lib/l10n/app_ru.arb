@@ -1364,5 +1364,21 @@
   "torGetBridgesWeb": "Сайт: bridges.torproject.org",
   "torGetBridgesTelegram": "Telegram: напишите @GetBridgesBot",
   "torGetBridgesEmail": "Почта: напишите на bridges@torproject.org с адреса Gmail или Riseup",
-  "torGetBridgesFriend": "Или попросите человека, которому доверяете и который пользуется Tor, поделиться строкой моста."
+  "torGetBridgesFriend": "Или попросите человека, которому доверяете и который пользуется Tor, поделиться строкой моста.",
+  "transportsTitle": "Связь за пределами этой сети",
+  "transportsIntro": "Устройства в этой сети связываются с вами напрямую. Для всех остальных Conest нужен хотя бы один путь через интернет, а лучше три, потому что сети блокируют некоторые из них. Вот что работает в этой сети сейчас.",
+  "transportsChecking": "Проверяем, что работает в этой сети…",
+  "transportsCount": "{count, plural, =0{Пока ни одного: нужен 1, рекомендуется 3} one{Настроен {count}: рекомендуется 3} few{Настроено {count}: рекомендуется 3} many{Настроено {count}: рекомендуется 3} other{Настроено {count}: рекомендуется 3}}",
+  "transportStateOn": "Работает",
+  "transportStateWorks": "Работает здесь",
+  "transportStateBlocked": "Заблокировано здесь",
+  "transportStateNeedsSetup": "Настраивается в Настройках",
+  "transportsEmailCost": "Проверяет почтовый ящик: чуть больше трафика и заряда.",
+  "transportsSkipTitle": "Связаться с вами смогут только устройства поблизости",
+  "transportsSkipBody": "Без пути через интернет связаться с вами смогут только устройства в этой сети, а вы — только с ними. Настроить путь можно позже: Настройки, раздел «Подключение».",
+  "transportsSkipConfirm": "Всё равно продолжить",
+  "transportsBanner": "Сейчас с вами могут связаться только устройства в этой сети. Настройте путь через интернет.",
+  "transportsBannerAction": "Настроить",
+  "transportsBannerDismiss": "Не сейчас",
+  "transportsTurnOnFailed": "Не удалось включить {name}: {error}"
 }

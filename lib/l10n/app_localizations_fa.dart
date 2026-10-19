@@ -5279,4 +5279,68 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get torGetBridgesFriend =>
       'یا از کسی که به او اعتماد دارید و از Tor استفاده می‌کند بخواهید یک خط پل با شما به اشتراک بگذارد.';
+
+  @override
+  String get transportsTitle => 'دسترسی به افراد بیرون از این شبکه';
+
+  @override
+  String get transportsIntro =>
+      'دستگاه‌های این شبکه مستقیماً به شما می‌رسند. برای دیگران، Conest دست‌کم به یک راه از طریق اینترنت نیاز دارد و سه راه بهتر است، چون شبکه‌ها برخی از آن‌ها را مسدود می‌کنند. این‌ها اکنون در این شبکه کار می‌کنند.';
+
+  @override
+  String get transportsChecking => 'در حال بررسی آنچه در این شبکه کار می‌کند…';
+
+  @override
+  String transportsCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count راه آماده: ۳ توصیه می‌شود',
+      one: '$count راه آماده: ۳ توصیه می‌شود',
+      zero: 'هنوز هیچ‌کدام: ۱ لازم است، ۳ توصیه می‌شود',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get transportStateOn => 'کار می‌کند';
+
+  @override
+  String get transportStateWorks => 'اینجا کار می‌کند';
+
+  @override
+  String get transportStateBlocked => 'اینجا مسدود است';
+
+  @override
+  String get transportStateNeedsSetup => 'بعداً در تنظیمات راه‌اندازی کنید';
+
+  @override
+  String get transportsEmailCost =>
+      'صندوق نامه را بررسی می‌کند: کمی داده و باتری بیشتر.';
+
+  @override
+  String get transportsSkipTitle =>
+      'فقط دستگاه‌های نزدیک می‌توانند به شما برسند';
+
+  @override
+  String get transportsSkipBody =>
+      'بدون راهی از طریق اینترنت، فقط دستگاه‌های این شبکه می‌توانند به شما برسند و شما هم فقط به آن‌ها. بعداً می‌توانید در تنظیمات، بخش اتصال، راهی راه‌اندازی کنید.';
+
+  @override
+  String get transportsSkipConfirm => 'به هر حال ادامه دهید';
+
+  @override
+  String get transportsBanner =>
+      'اکنون فقط دستگاه‌های این شبکه می‌توانند به شما برسند. راهی از طریق اینترنت راه‌اندازی کنید.';
+
+  @override
+  String get transportsBannerAction => 'راه‌اندازی';
+
+  @override
+  String get transportsBannerDismiss => 'اکنون نه';
+
+  @override
+  String transportsTurnOnFailed(String name, String error) {
+    return '$name روشن نشد: $error';
+  }
 }

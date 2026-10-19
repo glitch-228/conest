@@ -5047,4 +5047,64 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get torGetBridgesFriend => '或者请您信任的、正在使用 Tor 的人与您分享一行网桥。';
+
+  @override
+  String get transportsTitle => '联系此网络之外的人';
+
+  @override
+  String get transportsIntro =>
+      '此网络上的设备可以直接联系您。对于其他人，Conest 至少需要一条经由互联网的途径，最好三条，因为网络会封锁其中一些。以下是此网络上目前可用的途径。';
+
+  @override
+  String get transportsChecking => '正在检查此网络上哪些途径可用…';
+
+  @override
+  String transportsCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '已设置 $count 个：推荐 3 个',
+      zero: '尚未设置：至少需要 1 个，推荐 3 个',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get transportStateOn => '可用';
+
+  @override
+  String get transportStateWorks => '此处可用';
+
+  @override
+  String get transportStateBlocked => '此处被封锁';
+
+  @override
+  String get transportStateNeedsSetup => '稍后在设置中配置';
+
+  @override
+  String get transportsEmailCost => '会检查邮箱：多用一点流量和电量。';
+
+  @override
+  String get transportsSkipTitle => '只有附近的设备能联系到您';
+
+  @override
+  String get transportsSkipBody =>
+      '没有经由互联网的途径时，只有此网络上的设备能联系您，您也只能联系它们。您可以稍后在设置的“连接”中进行设置。';
+
+  @override
+  String get transportsSkipConfirm => '仍然继续';
+
+  @override
+  String get transportsBanner => '现在只有此网络上的设备能联系您。请设置一条经由互联网的途径。';
+
+  @override
+  String get transportsBannerAction => '设置';
+
+  @override
+  String get transportsBannerDismiss => '以后再说';
+
+  @override
+  String transportsTurnOnFailed(String name, String error) {
+    return '无法开启 $name：$error';
+  }
 }

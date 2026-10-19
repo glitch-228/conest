@@ -29235,6 +29235,157 @@ class MessengerController extends ChangeNotifier {
     ]).take(_maxInviteRouteHints).toList(growable: false);
   }
 
+  /// How each way beyond the local network fares here, for the transports
+  /// step of onboarding: what already works, what can be switched on in
+  /// one tap because it answers on this network (Nostr, email), and what
+  /// needs setting up. Probes run in parallel, at most [timeout] each.
+  Future<List<InternetTransportCheck>> checkInternetTransports({
+    List<String> nostrCandidates = nostrRelayCandidates,
+    List<String> chatmailCandidates = defaultChatmailDomains,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final identity = _requireIdentity();
+    bool ready(TransportKind kind) {
+      if (kind != TransportKind.matrix) {
+        return carrierStatuses.any(
+          (status) => status.kind == kind && status.ready,
+        );
+      }
+      final matrix = matrixStatus;
+      return matrix != null && matrix.signedIn && matrix.syncing;
+    }
+
+    Future<InternetTransportCheck> relay() async {
+      final relays = identity.configuredRelays
+          .where((route) => route.kind == PeerRouteKind.relay)
+          .toList();
+      if (relays.isEmpty) {
+        return const InternetTransportCheck(
+          TransportKind.conestRelay,
+          InternetTransportState.needsSetup,
+        );
+      }
+      final answers = await Future.wait([
+        for (final route in relays)
+          _relayClient
+              .health(
+                host: route.host,
+                port: route.port,
+                protocol: route.protocol,
+                timeout: timeout,
+              )
+              .catchError((Object _) => false),
+      ]);
+      return InternetTransportCheck(
+        TransportKind.conestRelay,
+        answers.contains(true)
+            ? InternetTransportState.on
+            : InternetTransportState.blocked,
+      );
+    }
+
+    Future<InternetTransportCheck> oneTap(
+      TransportKind kind,
+      Future<List<String>> Function() probe,
+    ) async {
+      if (ready(kind)) {
+        return InternetTransportCheck(kind, InternetTransportState.on);
+      }
+      final answering = await probe();
+      return InternetTransportCheck(
+        kind,
+        answering.isEmpty
+            ? InternetTransportState.blocked
+            : InternetTransportState.works,
+      );
+    }
+
+    final iroh = _transportRegistry?.adapterFor(TransportKind.iroh);
+    final irohStatus = iroh is IrohTransportAdapter ? iroh.status : null;
+    final checks = await Future.wait([
+      Future.value(
+        InternetTransportCheck(
+          TransportKind.iroh,
+          irohStatus == null || !irohStatus.relayEnabled
+              ? InternetTransportState.needsSetup
+              : irohStatus.relayUrl != null
+              ? InternetTransportState.on
+              : InternetTransportState.blocked,
+        ),
+      ),
+      relay(),
+      oneTap(
+        TransportKind.nostr,
+        () => reachableNostrRelays(
+          nostrCandidates,
+          connector: _nostrConnector,
+          timeout: timeout,
+          enough: 1,
+        ),
+      ),
+      oneTap(
+        TransportKind.deltaChat,
+        () => reachableChatmailServers(
+          chatmailCandidates,
+          connector: _mailConnector,
+          timeout: timeout,
+          enough: 1,
+        ),
+      ),
+      for (final kind in const [
+        TransportKind.tor,
+        TransportKind.matrix,
+        TransportKind.reticulum,
+      ])
+        Future.value(
+          InternetTransportCheck(
+            kind,
+            ready(kind)
+                ? InternetTransportState.on
+                : InternetTransportState.needsSetup,
+          ),
+        ),
+    ]);
+    return checks;
+  }
+
+  /// Ways beyond the local network working now: Iroh with a relay, a Conest
+  /// relay that answered in the last hour, and every ready carrier but the
+  /// Bluetooth mesh (which only reaches nearby phones). Zero means only
+  /// devices on this network can reach this one.
+  int get internetTransportsWorking {
+    final identity = _snapshot.identity;
+    if (identity == null) return 0;
+    var count = 0;
+    final iroh = _transportRegistry?.adapterFor(TransportKind.iroh);
+    if (iroh is IrohTransportAdapter && iroh.status?.relayUrl != null) {
+      count++;
+    }
+    // The user's own internet relays only: this device's local relay node
+    // answers too, and it reaches nobody beyond this network.
+    final recent = _now().subtract(const Duration(hours: 1));
+    if (identity.configuredRelays
+        .where((route) => route.kind == PeerRouteKind.relay)
+        .any(
+          (route) =>
+              _snapshot
+                  .relayHealthScores[relayHealthEndpointKey(route)]
+                  ?.lastSuccessAt
+                  ?.isAfter(recent) ??
+              false,
+        )) {
+      count++;
+    }
+    count += carrierStatuses
+        .where((status) => status.ready && status.kind != TransportKind.bitchat)
+        .length;
+    if (matrixStatus case final matrix?
+        when matrix.signedIn && matrix.syncing) {
+      count++;
+    }
+    return count;
+  }
+
   /// Whether an invite from this device can be answered from another
   /// network: Iroh with its relays, a Conest relay, or a carrier is on.
   bool get invitesReachOverInternet {

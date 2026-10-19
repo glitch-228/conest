@@ -4,9 +4,10 @@ import '../../l10n/app_localizations.dart';
 import '../app_locales.dart';
 import '../messenger_controller.dart';
 import '../models.dart';
+import 'internet_transports.dart';
 
-/// After creating an identity: how much of Conest to show, then (unless
-/// the simplest mode was chosen) a word on the ways Conest can reach people.
+/// After creating an identity: how much of Conest to show, then the ways
+/// to reach people beyond this network (checked on it), in every mode.
 class UserModeScreen extends StatefulWidget {
   const UserModeScreen({super.key, required this.controller});
 
@@ -42,7 +43,13 @@ class _UserModeScreenState extends State<UserModeScreen> {
             child: ListView(
               padding: const EdgeInsets.all(24),
               children: _showRoutes
-                  ? _routes(theme, l10n)
+                  ? [
+                      TransportsStep(
+                        controller: widget.controller,
+                        onBack: () => setState(() => _showRoutes = false),
+                        onDone: _finish,
+                      ),
+                    ]
                   : _modes(theme, l10n),
             ),
           ),
@@ -68,45 +75,8 @@ class _UserModeScreenState extends State<UserModeScreen> {
     const SizedBox(height: 12),
     FilledButton(
       key: const ValueKey('user-mode-continue'),
-      onPressed: _saving
-          ? null
-          : () {
-              if (_mode == UserMode.minimal) {
-                _finish();
-              } else {
-                setState(() => _showRoutes = true);
-              }
-            },
-      child: Text(
-        _mode == UserMode.minimal ? l10n.actionStart : l10n.actionContinue,
-      ),
-    ),
-  ];
-
-  List<Widget> _routes(ThemeData theme, AppLocalizations l10n) => [
-    Text(l10n.routesTitle, style: theme.textTheme.headlineSmall),
-    const SizedBox(height: 12),
-    Text(l10n.routesDirect),
-    const SizedBox(height: 12),
-    Text(l10n.routesOthers),
-    if (_mode == UserMode.advanced) ...[
-      const SizedBox(height: 12),
-      Text(l10n.routesAdvanced),
-    ],
-    const SizedBox(height: 24),
-    Row(
-      children: [
-        TextButton(
-          onPressed: _saving ? null : () => setState(() => _showRoutes = false),
-          child: Text(l10n.actionBack),
-        ),
-        const Spacer(),
-        FilledButton(
-          key: const ValueKey('user-mode-start'),
-          onPressed: _saving ? null : _finish,
-          child: Text(l10n.actionStart),
-        ),
-      ],
+      onPressed: _saving ? null : () => setState(() => _showRoutes = true),
+      child: Text(l10n.actionContinue),
     ),
   ];
 }

@@ -190,3 +190,25 @@ Map<TransportKind, TransportPolicy> defaultTransportPolicies({
       _ => TransportPolicy.automatic,
     },
 };
+
+/// How a way beyond the local network fares on the current network.
+enum InternetTransportState {
+  /// Set up and working.
+  on,
+
+  /// Not set up, and it answers here: one tap switches it on.
+  works,
+
+  /// Tried, and it does not answer on this network.
+  blocked,
+
+  /// Needs an address, an account or bridges first.
+  needsSetup,
+}
+
+class InternetTransportCheck {
+  const InternetTransportCheck(this.kind, this.state);
+
+  final TransportKind kind;
+  final InternetTransportState state;
+}

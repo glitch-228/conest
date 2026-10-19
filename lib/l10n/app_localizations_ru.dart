@@ -5401,4 +5401,70 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get torGetBridgesFriend =>
       'Или попросите человека, которому доверяете и который пользуется Tor, поделиться строкой моста.';
+
+  @override
+  String get transportsTitle => 'Связь за пределами этой сети';
+
+  @override
+  String get transportsIntro =>
+      'Устройства в этой сети связываются с вами напрямую. Для всех остальных Conest нужен хотя бы один путь через интернет, а лучше три, потому что сети блокируют некоторые из них. Вот что работает в этой сети сейчас.';
+
+  @override
+  String get transportsChecking => 'Проверяем, что работает в этой сети…';
+
+  @override
+  String transportsCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Настроено $count: рекомендуется 3',
+      many: 'Настроено $count: рекомендуется 3',
+      few: 'Настроено $count: рекомендуется 3',
+      one: 'Настроен $count: рекомендуется 3',
+      zero: 'Пока ни одного: нужен 1, рекомендуется 3',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get transportStateOn => 'Работает';
+
+  @override
+  String get transportStateWorks => 'Работает здесь';
+
+  @override
+  String get transportStateBlocked => 'Заблокировано здесь';
+
+  @override
+  String get transportStateNeedsSetup => 'Настраивается в Настройках';
+
+  @override
+  String get transportsEmailCost =>
+      'Проверяет почтовый ящик: чуть больше трафика и заряда.';
+
+  @override
+  String get transportsSkipTitle =>
+      'Связаться с вами смогут только устройства поблизости';
+
+  @override
+  String get transportsSkipBody =>
+      'Без пути через интернет связаться с вами смогут только устройства в этой сети, а вы — только с ними. Настроить путь можно позже: Настройки, раздел «Подключение».';
+
+  @override
+  String get transportsSkipConfirm => 'Всё равно продолжить';
+
+  @override
+  String get transportsBanner =>
+      'Сейчас с вами могут связаться только устройства в этой сети. Настройте путь через интернет.';
+
+  @override
+  String get transportsBannerAction => 'Настроить';
+
+  @override
+  String get transportsBannerDismiss => 'Не сейчас';
+
+  @override
+  String transportsTurnOnFailed(String name, String error) {
+    return 'Не удалось включить $name: $error';
+  }
 }

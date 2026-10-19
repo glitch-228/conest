@@ -7960,5 +7960,82 @@
   "torGetBridgesFriend": "Or ask someone you trust who uses Tor to share a bridge line with you.",
   "@torGetBridgesFriend": {
     "description": "Tor settings: getting a bridge from a trusted person."
+  },
+  "transportsTitle": "Reach people beyond this network",
+  "@transportsTitle": {
+    "description": "Onboarding transports step: title."
+  },
+  "transportsIntro": "Devices on this network reach you directly. For anyone else, Conest needs at least one way over the internet, and three are better, since networks block some of them. Here is what works on this network now.",
+  "@transportsIntro": {
+    "description": "Onboarding transports step: why internet transports matter."
+  },
+  "transportsChecking": "Checking what works on this network…",
+  "@transportsChecking": {
+    "description": "Onboarding transports step: shown while probing."
+  },
+  "transportsCount": "{count, plural, =0{None set up yet: 1 needed, 3 recommended} one{{count} set up: 3 recommended} other{{count} set up: 3 recommended}}",
+  "@transportsCount": {
+    "description": "Onboarding transports step: how many internet transports will be set up.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "transportStateOn": "Working",
+  "@transportStateOn": {
+    "description": "Onboarding transports step: already working."
+  },
+  "transportStateWorks": "Works here",
+  "@transportStateWorks": {
+    "description": "Onboarding transports step: answers here, can be switched on now."
+  },
+  "transportStateBlocked": "Blocked here",
+  "@transportStateBlocked": {
+    "description": "Onboarding transports step: does not answer on this network."
+  },
+  "transportStateNeedsSetup": "Set up later in Settings",
+  "@transportStateNeedsSetup": {
+    "description": "Onboarding transports step: needs an address, account or bridges, in Settings."
+  },
+  "transportsEmailCost": "Checks a mailbox: a little more data and battery.",
+  "@transportsEmailCost": {
+    "description": "Onboarding transports step: cost note for the email transport."
+  },
+  "transportsSkipTitle": "Only nearby devices could reach you",
+  "@transportsSkipTitle": {
+    "description": "Onboarding transports step: warning title when finishing with no internet transport."
+  },
+  "transportsSkipBody": "Without a way over the internet, only devices on this network can reach you, and you only them. You can set one up later in Settings, under Connectivity.",
+  "@transportsSkipBody": {
+    "description": "Onboarding transports step: warning text when finishing with no internet transport."
+  },
+  "transportsSkipConfirm": "Continue anyway",
+  "@transportsSkipConfirm": {
+    "description": "Onboarding transports step: continue without an internet transport."
+  },
+  "transportsBanner": "Only devices on this network can reach you now. Set up a way over the internet.",
+  "@transportsBanner": {
+    "description": "Chat list banner when no internet transport works."
+  },
+  "transportsBannerAction": "Set up",
+  "@transportsBannerAction": {
+    "description": "Chat list banner: opens Settings to set up an internet transport."
+  },
+  "transportsBannerDismiss": "Not now",
+  "@transportsBannerDismiss": {
+    "description": "Chat list banner: hide it for now."
+  },
+  "transportsTurnOnFailed": "{name} could not be switched on: {error}",
+  "@transportsTurnOnFailed": {
+    "description": "Onboarding transports step: a transport could not be switched on.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
   }
 }

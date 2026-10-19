@@ -1364,5 +1364,21 @@
   "torGetBridgesWeb": "网站：bridges.torproject.org",
   "torGetBridgesTelegram": "Telegram：向 @GetBridgesBot 发消息",
   "torGetBridgesEmail": "电子邮件：用 Gmail 或 Riseup 邮箱写信给 bridges@torproject.org",
-  "torGetBridgesFriend": "或者请您信任的、正在使用 Tor 的人与您分享一行网桥。"
+  "torGetBridgesFriend": "或者请您信任的、正在使用 Tor 的人与您分享一行网桥。",
+  "transportsTitle": "联系此网络之外的人",
+  "transportsIntro": "此网络上的设备可以直接联系您。对于其他人，Conest 至少需要一条经由互联网的途径，最好三条，因为网络会封锁其中一些。以下是此网络上目前可用的途径。",
+  "transportsChecking": "正在检查此网络上哪些途径可用…",
+  "transportsCount": "{count, plural, =0{尚未设置：至少需要 1 个，推荐 3 个} other{已设置 {count} 个：推荐 3 个}}",
+  "transportStateOn": "可用",
+  "transportStateWorks": "此处可用",
+  "transportStateBlocked": "此处被封锁",
+  "transportStateNeedsSetup": "稍后在设置中配置",
+  "transportsEmailCost": "会检查邮箱：多用一点流量和电量。",
+  "transportsSkipTitle": "只有附近的设备能联系到您",
+  "transportsSkipBody": "没有经由互联网的途径时，只有此网络上的设备能联系您，您也只能联系它们。您可以稍后在设置的“连接”中进行设置。",
+  "transportsSkipConfirm": "仍然继续",
+  "transportsBanner": "现在只有此网络上的设备能联系您。请设置一条经由互联网的途径。",
+  "transportsBannerAction": "设置",
+  "transportsBannerDismiss": "以后再说",
+  "transportsTurnOnFailed": "无法开启 {name}：{error}"
 }
