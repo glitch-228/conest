@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -136,6 +137,30 @@ void main() {
     expect(reachable, ['stalled.test']);
     // Sign-up and reading then go to 443 first.
     expect(chatmailReachedViaHttps, contains('stalled.test'));
+  });
+
+  test('servers are probed a few at a time, not all at once', () async {
+    // A burst of connections was held back like a port scan on the lab.
+    var inFlight = 0;
+    var most = 0;
+    Future<MailSocket> slow(String host) async {
+      most = max(most, ++inFlight);
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      inFlight--;
+      return server.connect(host, 993, tls: false);
+    }
+
+    final reachable = await reachableChatmailServers(
+      [for (var i = 0; i < 8; i++) 's$i.test'],
+      connector: (host, port, {required bool tls}) => slow(host),
+      viaHttpsPort: (host, alpn) => slow(host),
+      parallel: 2,
+      enough: 8,
+      timeout: const Duration(seconds: 5),
+    );
+    expect(reachable, hasLength(8));
+    // Two servers at a time, both ports each.
+    expect(most, lessThanOrEqualTo(4));
   });
 
   test('probing stops waiting once enough servers answered', () async {

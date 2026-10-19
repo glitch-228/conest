@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
@@ -46,8 +47,10 @@ Future<List<String>> reachableChatmailServers(
   List<String> domains, {
   MailConnector? connector,
   Future<MailSocket> Function(String host, String alpn)? viaHttpsPort,
-  Duration timeout = const Duration(seconds: 10),
+  Duration timeout = const Duration(seconds: 20),
   int enough = 3,
+  int parallel = 4,
+  Duration headStart = const Duration(seconds: 4),
   void Function(String line)? log,
 }) async {
   // Port 993 and port 443 at once: on a censoring network the mail port's
@@ -65,6 +68,7 @@ Future<List<String>> reachableChatmailServers(
       viaHttpsPort ?? (connector == null ? connectViaHttpsPort : null);
   final answered = <String>[];
   final done = Completer<void>();
+  if (domains.isEmpty) return const [];
   var pending = domains.length;
   void settle() {
     if (!done.isCompleted && (answered.length >= enough || pending == 0)) {
@@ -72,52 +76,76 @@ Future<List<String>> reachableChatmailServers(
     }
   }
 
-  for (final domain in domains) {
-    final attempts = [
-      ImapClient.connect(domain, 993, connector: direct),
-      if (https != null)
-        ImapClient.connect(
-          domain,
-          993,
-          connector: (host, _, {required bool tls}) => https(host, 'imap'),
-        ),
-    ];
-    var failed = 0;
-    var won = false;
-    final watch = Stopwatch()..start();
-    for (final (index, attempt) in attempts.indexed) {
-      final port = index == 0 ? '993' : '443';
-      attempt.then(
-        (client) {
-          log?.call(
-            '$domain:$port answered in ${watch.elapsedMilliseconds} ms',
-          );
-          unawaited(client.close().catchError((Object _) {}));
-          if (won) return;
-          won = true;
-          if (!done.isCompleted) {
-            answered.add(domain);
-            // 443 answered first: sign-up goes there first too, rather than
-            // waiting out a mail port that may stall for half a minute.
-            if (index == 1) chatmailReachedViaHttps.add(domain);
-          }
-          pending--;
-          settle();
-        },
-        onError: (Object error) {
-          log?.call(
-            '$domain:$port failed after ${watch.elapsedMilliseconds} ms: '
-            '$error',
-          );
-          if (++failed == attempts.length && !won) {
+  // A few servers at a time, each given a head start before the next: a
+  // burst of 40 connections at once was held back by the device lab's
+  // network for about 27 s (like a port scan), while one after another
+  // they answered within a second.
+  final queue = Queue.of(domains);
+  var slots = parallel;
+  void launch() {
+    while (slots > 0 && queue.isNotEmpty && !done.isCompleted) {
+      slots--;
+      final domain = queue.removeFirst();
+      final freed = Completer<void>();
+      void free() {
+        if (!freed.isCompleted) {
+          freed.complete();
+          slots++;
+          launch();
+        }
+      }
+
+      Timer(headStart, free);
+      final attempts = [
+        ImapClient.connect(domain, 993, connector: direct),
+        if (https != null)
+          ImapClient.connect(
+            domain,
+            993,
+            connector: (host, _, {required bool tls}) => https(host, 'imap'),
+          ),
+      ];
+      var failed = 0;
+      var won = false;
+      final watch = Stopwatch()..start();
+      for (final (index, attempt) in attempts.indexed) {
+        final port = index == 0 ? '993' : '443';
+        attempt.then(
+          (client) {
+            log?.call(
+              '$domain:$port answered in ${watch.elapsedMilliseconds} ms',
+            );
+            unawaited(client.close().catchError((Object _) {}));
+            if (won) return;
+            won = true;
+            if (!done.isCompleted) {
+              answered.add(domain);
+              // 443 answered first: sign-up goes there first too, rather
+              // than waiting out a mail port that may stall for half a
+              // minute.
+              if (index == 1) chatmailReachedViaHttps.add(domain);
+            }
             pending--;
+            free();
             settle();
-          }
-        },
-      );
+          },
+          onError: (Object error) {
+            log?.call(
+              '$domain:$port failed after ${watch.elapsedMilliseconds} ms: '
+              '$error',
+            );
+            if (++failed == attempts.length && !won) {
+              pending--;
+              free();
+              settle();
+            }
+          },
+        );
+      }
     }
   }
-  if (domains.isEmpty) return const [];
+
+  launch();
   await done.future.timeout(timeout, onTimeout: () {});
   return List.unmodifiable(answered);
 }
