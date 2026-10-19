@@ -92,6 +92,50 @@ void main() {
     },
   );
 
+  test('chatmail servers are ranked by how fast they answer here', () async {
+    final closed = <String>[];
+    final reachable = await reachableChatmailServers(
+      ['slow.test', 'blocked.test', 'fast.test', 'silent.test'],
+      connector: (host, port, {required bool tls}) async {
+        switch (host) {
+          case 'blocked.test':
+            throw const SocketException('Connection timed out');
+          case 'silent.test':
+            // Connects and never speaks: still waiting at the deadline.
+            await Completer<void>().future;
+          case 'slow.test':
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+        final socket = _BreakableSocket(
+          await server.connect(host, port, tls: tls),
+        );
+        socket.onClose = () => closed.add(host);
+        return socket;
+      },
+      timeout: const Duration(seconds: 2),
+    );
+    expect(reachable, ['fast.test', 'slow.test']);
+    // Probes only: every connection that answered is closed again.
+    await until(() => closed.length == 2);
+    expect(closed.toSet(), {'fast.test', 'slow.test'});
+    expect(server.passwords, isEmpty);
+  });
+
+  test('probing stops waiting once enough servers answered', () async {
+    final watch = Stopwatch()..start();
+    final reachable = await reachableChatmailServers(
+      ['a.test', 'b.test', 'silent.test'],
+      connector: (host, port, {required bool tls}) async {
+        if (host == 'silent.test') await Completer<void>().future;
+        return server.connect(host, port, tls: tls);
+      },
+      enough: 2,
+      timeout: const Duration(seconds: 5),
+    );
+    expect(reachable.toSet(), {'a.test', 'b.test'});
+    expect(watch.elapsed, lessThan(const Duration(seconds: 4)));
+  });
+
   test('a frame arrives as encrypted mail and the mail is deleted', () async {
     final aliceGot = <(String, Uint8List)>[];
     final bobGot = <(String, Uint8List)>[];
@@ -373,6 +417,7 @@ class _BreakableSocket implements MailSocket {
   final MailSocket _inner;
   final _input = StreamController<Uint8List>();
   bool closed = false;
+  void Function()? onClose;
 
   void breakNow() => _input.addError(const SocketException('broken'));
 
@@ -385,6 +430,7 @@ class _BreakableSocket implements MailSocket {
   @override
   Future<void> close() async {
     closed = true;
+    onClose?.call();
     await _inner.close();
   }
 }

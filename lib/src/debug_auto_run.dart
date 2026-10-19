@@ -40,7 +40,6 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'email_carrier.dart' show defaultChatmailDomains;
 import 'messenger_controller.dart';
 import 'models.dart';
 
@@ -276,9 +275,7 @@ Future<String> runDebugRequest(
             case 'tor':
               await controller.enableTorCarrier();
             case 'email':
-              await controller.enableChatmailCarrier(
-                request.chatmail ?? defaultChatmailDomains.first,
-              );
+              await controller.enableChatmailCarrier(request.chatmail);
             case 'bitchat':
               await controller.enableBitchatCarrier();
             case 'reticulum':

@@ -17,7 +17,8 @@ class EmailCarrierPanel extends StatefulWidget {
 }
 
 class _EmailCarrierPanelState extends State<EmailCarrierPanel> {
-  final _domain = TextEditingController(text: defaultChatmailDomains.first);
+  // Empty: the server that answers fastest on this network.
+  final _domain = TextEditingController();
   final _mail = TextEditingController();
   final _password = TextEditingController();
   final _imapHost = TextEditingController();
@@ -142,7 +143,10 @@ class _EmailCarrierPanelState extends State<EmailCarrierPanel> {
           )
         else ...[
           if (!_ownAccount)
-            field(_domain, 'Chatmail server (a new account is created)'),
+            field(
+              _domain,
+              'Chatmail server (empty: the fastest one reachable here)',
+            ),
           CheckboxListTile(
             contentPadding: EdgeInsets.zero,
             value: _ownAccount,

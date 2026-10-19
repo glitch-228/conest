@@ -7060,15 +7060,52 @@ class MessengerController extends ChangeNotifier {
 
   /// Creates an account on the chatmail server [domain] (a random name and
   /// password; the first login creates it) and carries messages through it.
-  Future<void> enableChatmailCarrier(String domain) async {
-    final trimmed = domain.trim().toLowerCase();
-    if (!isPlausibleMailAddress('x@$trimmed')) {
-      throw ArgumentError(
-        'Enter a chatmail server name such as '
-        '${defaultChatmailDomains.first}.',
+  /// With no [domain], the account goes to the first of [candidates] that
+  /// answers fastest on this network and takes the sign-up (censored
+  /// networks block some servers and not others). Returns the server used.
+  Future<String> enableChatmailCarrier([
+    String? domain,
+    List<String> candidates = defaultChatmailDomains,
+  ]) async {
+    final trimmed = domain?.trim().toLowerCase() ?? '';
+    if (trimmed.isNotEmpty) {
+      if (!isPlausibleMailAddress('x@$trimmed')) {
+        throw ArgumentError(
+          'Enter a chatmail server name such as '
+          '${defaultChatmailDomains.first}, or leave it empty.',
+        );
+      }
+      await _enableEmailCarrier(EmailCarrierConfig.chatmail(trimmed));
+      return trimmed;
+    }
+    final reachable = await reachableChatmailServers(
+      candidates,
+      connector: _mailConnector,
+    );
+    appendDebugLog(
+      'Email sign-up: servers answering here, fastest first: '
+      '${reachable.isEmpty ? 'none' : reachable.join(', ')}',
+    );
+    if (reachable.isEmpty) {
+      throw StateError(
+        'No chatmail server answered on this network. Check the connection, '
+        'or enter a server you can reach.',
       );
     }
-    await _enableEmailCarrier(EmailCarrierConfig.chatmail(trimmed));
+    Object? lastError;
+    for (final server in reachable) {
+      try {
+        await _enableEmailCarrier(
+          EmailCarrierConfig.chatmail(server),
+          attempts: 1,
+        );
+        return server;
+      } catch (error) {
+        lastError = error;
+        appendDebugLog('Email sign-up at $server failed: $error');
+      }
+    }
+    throw lastError!;
   }
 
   /// Carries messages through an existing mail account (IMAP and SMTP with
@@ -7102,7 +7139,10 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
-  Future<void> _enableEmailCarrier(EmailCarrierConfig config) async {
+  Future<void> _enableEmailCarrier(
+    EmailCarrierConfig config, {
+    int attempts = 3,
+  }) async {
     _requireIdentity();
     if (!_carrierAllowed(TransportKind.deltaChat)) {
       throw StateError('Turn on Online and Email in Connectivity first.');
@@ -7123,7 +7163,7 @@ class MessengerController extends ChangeNotifier {
           'Email sign-up attempt $attempt failed after '
           '${_now().difference(started).inSeconds} s: $error',
         );
-        if (attempt == 3 || !isTransientNetworkError(error)) rethrow;
+        if (attempt >= attempts || !isTransientNetworkError(error)) rethrow;
         await Future<void>.delayed(Duration(seconds: attempt));
       }
     }

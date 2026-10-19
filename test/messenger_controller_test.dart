@@ -16518,6 +16518,37 @@ void main() {
       }
     }
 
+    test(
+      'a new email account goes to a chatmail server reachable here',
+      () async {
+        final server = await FakeMailServer.start();
+        addTearDown(server.close);
+        final alice = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          // The first server is blocked on this network.
+          mailConnector: (host, port, {required bool tls}) async {
+            if (host == 'blocked.test') {
+              throw const SocketException('Connection timed out');
+            }
+            return server.connect(host, port, tls: tls);
+          },
+        );
+        addTearDown(alice.dispose);
+        final chosen = await alice.enableChatmailCarrier(null, [
+          'blocked.test',
+          'chat.test',
+        ]);
+        expect(chosen, 'chat.test');
+        expect(alice.emailCarrierConfig!.mail, endsWith('@chat.test'));
+        expect(server.passwords, contains(alice.emailCarrierConfig!.mail));
+        expect(
+          alice.recentDebugLog.join('\n'),
+          contains('fastest first: chat.test'),
+        );
+      },
+    );
+
     test('two devices talk over chatmail when Conest relays fail', () async {
       final server = await FakeMailServer.start();
       addTearDown(server.close);

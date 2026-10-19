@@ -12,8 +12,75 @@ import 'network_errors.dart';
 import 'transport_models.dart';
 
 /// Chatmail servers a new email carrier can create an account on. Any
-/// chatmail server works; these are run by different operators.
-const List<String> defaultChatmailDomains = ['nine.testrun.org'];
+/// chatmail server works; these are run by different operators (from
+/// chatmail.at/relays, October 2026). Networks block or throttle some of
+/// them and not others, and which ones changes, so a new account goes to
+/// whichever answer fastest here (see [reachableChatmailServers]).
+const List<String> defaultChatmailDomains = [
+  'nine.testrun.org',
+  'chat.adminforge.de',
+  'mailchat.pl',
+  'tarpit.fun',
+  'chat.vim.wtf',
+  'd.gaufr.es',
+  'e2ee.im',
+  'toque.im',
+  'chatmail.email',
+  'chtml.ca',
+  'mehl.cloud',
+  'delta.disobey.net',
+  'chika.aangat.lahat.computer',
+  'uninterest.ing',
+  'e2ee.wang',
+  'chatmail.culturanerd.it',
+  'chat.nuvon.app',
+  'sweetfern.net',
+  'nibblehole.com',
+  'chatmail.woodpeckersnest.space',
+];
+
+/// Of [domains], those whose IMAP greeting arrives within [timeout] on this
+/// network, fastest first. Every probe's connection is closed (no login is
+/// tried), late ones too. Stops waiting once [enough] have answered.
+Future<List<String>> reachableChatmailServers(
+  List<String> domains, {
+  MailConnector? connector,
+  Duration timeout = const Duration(seconds: 10),
+  int enough = 3,
+}) async {
+  final answered = <String>[];
+  final done = Completer<void>();
+  var pending = domains.length;
+  void settle() {
+    if (!done.isCompleted && (answered.length >= enough || pending == 0)) {
+      done.complete();
+    }
+  }
+
+  for (final domain in domains) {
+    ImapClient.connect(
+      domain,
+      993,
+      connector:
+          connector ??
+          chatmailFallback(greetingWait: const Duration(seconds: 6)),
+    ).then(
+      (client) {
+        if (!done.isCompleted) answered.add(domain);
+        unawaited(client.close().catchError((Object _) {}));
+        pending--;
+        settle();
+      },
+      onError: (Object _) {
+        pending--;
+        settle();
+      },
+    );
+  }
+  if (domains.isEmpty) return const [];
+  await done.future.timeout(timeout, onTimeout: () {});
+  return List.unmodifiable(answered);
+}
 
 /// A device's address on the email carrier: its mail address and the
 /// mailbox key senders encrypt its mail with.
