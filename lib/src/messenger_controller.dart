@@ -1343,6 +1343,11 @@ class MessengerController extends ChangeNotifier {
   Future<void> retryUnacknowledgedMessagesNow() =>
       _retryUnacknowledgedMessages(force: true);
   @visibleForTesting
+  void resendWaitingMessagesForTesting(String deviceId) {
+    final peer = _contactByDeviceId(deviceId);
+    if (peer != null) _resendWaitingMessages(peer);
+  }
+  @visibleForTesting
   Future<int> runHeartbeatPassNow() async =>
       (await _runHeartbeatPass(force: true)).sentCount;
   @visibleForTesting
@@ -30266,15 +30271,26 @@ class MessengerController extends ChangeNotifier {
     _resendWaitingMessages(peer);
   }
 
+  final Map<String, DateTime> _waitingResentAt = {};
+
   /// Messages, 1:1 and group, still waiting for [peer]'s acknowledgement go
   /// again now, encrypted on the new session. Olm decrypts only within its
   /// last few ratchet chains, so one held up on the way (a relay lease that
   /// replayed a minute later) can no longer be read, and the peer asked for
   /// this session; waiting for the next retry pass lost it on the lab.
+  ///
+  /// At most once per peer every 30 s: bundles are cheap to send, and each
+  /// would otherwise have everything waiting encrypted and sent again.
   void _resendWaitingMessages(ContactRecord peer) {
-    _flushContactSoon(peer.deviceId);
     final me = _snapshot.identity;
     if (me == null) return;
+    final direct = messagesFor(peer.deviceId).any(
+      (message) =>
+          message.outbound &&
+          message.state.awaitsRecipientAck &&
+          message.route != MessageRoute.plainMatrix,
+    );
+    final grouped = <(GroupRecord, ContactRecord, ChatMessage)>[];
     for (final group in _snapshot.groups) {
       if (!group.hasActiveMember(me.deviceId) ||
           !group.hasActiveMember(peer.deviceId)) {
@@ -30283,21 +30299,32 @@ class MessengerController extends ChangeNotifier {
       final member = _groupMemberContact(group, peer.deviceId);
       if (member == null || !member.canSendOutbound) continue;
       for (final message in messagesForGroup(group.groupId)) {
-        if (!message.outbound ||
-            message.groupFile != null ||
-            !(message.recipientStates[peer.deviceId]?.awaitsRecipientAck ??
+        if (message.outbound &&
+            message.groupFile == null &&
+            (message.recipientStates[peer.deviceId]?.awaitsRecipientAck ??
                 false)) {
-          continue;
+          grouped.add((group, member, message));
         }
-        unawaited(
-          _tryDeliverExistingGroupMessage(
-            group: group,
-            contact: member,
-            message: message,
-            background: true,
-          ).catchError((Object _) => false),
-        );
       }
+    }
+    // Nothing waiting: nothing to do, and no limit spent.
+    if (!direct && grouped.isEmpty) return;
+    final now = _now();
+    final last = _waitingResentAt[peer.deviceId];
+    if (last != null && now.difference(last) < const Duration(seconds: 30)) {
+      return;
+    }
+    _waitingResentAt[peer.deviceId] = now;
+    if (direct) _flushContactSoon(peer.deviceId);
+    for (final (group, member, message) in grouped) {
+      unawaited(
+        _tryDeliverExistingGroupMessage(
+          group: group,
+          contact: member,
+          message: message,
+          background: true,
+        ).catchError((Object _) => false),
+      );
     }
   }
 

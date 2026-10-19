@@ -22112,6 +22112,20 @@ void main() {
     ) async {
       await _pairControllers(alice, bob);
       await settle([alice, bob]);
+      // Both sessions open before the first messages: until then the app
+      // rightly sends with the static key, and a slow machine (CI) needs
+      // more rounds than a fixed count.
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      for (
+        var round = 0;
+        round < 40 &&
+            !(await alice.hasRatchetSessionForTesting(bobId) &&
+                await bob.hasRatchetSessionForTesting(aliceId));
+        round++
+      ) {
+        await settle([alice, bob], rounds: 1);
+      }
       await alice.sendMessage(contact: alice.contacts.single, body: 'a1');
       await bob.sendMessage(contact: bob.contacts.single, body: 'b1');
       await settle([alice, bob]);
@@ -22954,6 +22968,52 @@ void main() {
         );
       },
     );
+
+    test('waiting messages are re-sent at most every 30 s per peer', () async {
+      // Bundles are cheap: a stream of them must not have everything
+      // waiting encrypted and sent again each time.
+      final relay = _FakeRelayClient();
+      var clock = DateTime.now().toUtc();
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        ratchetEngine: FakeRatchetEngine(),
+        nowProvider: () => clock,
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      // Bob's acknowledgements never get back: the message keeps waiting.
+      relay.shouldFailStore = (_, _, _, recipient, envelope) =>
+          recipient == aliceId && envelope.kind == 'ack';
+      await alice.sendMessage(contact: alice.contacts.single, body: 'waiting');
+      await settle([alice, bob], rounds: 2);
+      final id = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.body == 'waiting')
+          .id;
+      int copies() =>
+          relay.storedEnvelopes.where((e) => e.messageId == id).length;
+      Future<void> resend() async {
+        alice.resendWaitingMessagesForTesting(bobId);
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+      }
+
+      final before = copies();
+      await resend();
+      final once = copies();
+      expect(once, greaterThan(before));
+      await resend();
+      await resend();
+      expect(copies(), once, reason: 'again within 30 s');
+      clock = clock.add(const Duration(seconds: 31));
+      await resend();
+      expect(copies(), greaterThan(once));
+    });
 
     test('a lost session recovers through a reset bundle', () async {
       final relay = _FakeRelayClient();
