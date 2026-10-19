@@ -42,12 +42,15 @@ const List<String> nostrRelayCandidates = [
 Future<List<String>> reachableNostrRelays(
   List<String> relays, {
   NostrSocketConnector? connector,
-  Duration timeout = const Duration(seconds: 10),
+  Duration timeout = const Duration(seconds: 15),
   int enough = maxNostrAddressRelays,
+  int parallel = 4,
+  Duration headStart = const Duration(seconds: 3),
 }) async {
   final connect = connector ?? connectNostrSocket;
   final answered = <String>[];
   final done = Completer<void>();
+  if (relays.isEmpty) return const [];
   var pending = relays.length;
   void settle() {
     if (!done.isCompleted && (answered.length >= enough || pending == 0)) {
@@ -55,21 +58,42 @@ Future<List<String>> reachableNostrRelays(
     }
   }
 
-  for (final relay in relays) {
-    Future<NostrSocket>.sync(() => connect(Uri.parse(relay))).then(
-      (socket) {
-        if (!done.isCompleted) answered.add(relay);
-        unawaited(socket.close().catchError((Object _) {}));
-        pending--;
-        settle();
-      },
-      onError: (Object _) {
-        pending--;
-        settle();
-      },
-    );
+  // A few at a time, each given a head start before the next: censoring
+  // networks hold back bursts of connections (seen with mail servers).
+  final queue = Queue.of(relays);
+  var slots = parallel;
+  void launch() {
+    while (slots > 0 && queue.isNotEmpty && !done.isCompleted) {
+      slots--;
+      final relay = queue.removeFirst();
+      final freed = Completer<void>();
+      void free() {
+        if (!freed.isCompleted) {
+          freed.complete();
+          slots++;
+          launch();
+        }
+      }
+
+      Timer(headStart, free);
+      Future<NostrSocket>.sync(() => connect(Uri.parse(relay))).then(
+        (socket) {
+          if (!done.isCompleted) answered.add(relay);
+          unawaited(socket.close().catchError((Object _) {}));
+          pending--;
+          free();
+          settle();
+        },
+        onError: (Object _) {
+          pending--;
+          free();
+          settle();
+        },
+      );
+    }
   }
-  if (relays.isEmpty) return const [];
+
+  launch();
   await done.future.timeout(timeout, onTimeout: () {});
   return List.unmodifiable(answered);
 }

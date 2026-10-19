@@ -332,6 +332,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.tls = true,
     this.idleTimeout = const Duration(minutes: 25),
     this.pollInterval = const Duration(minutes: 1),
+    this.connectionLimitWait = const Duration(minutes: 10),
     DateTime Function()? now,
     void Function(String line)? log,
   }) : _config = config,
@@ -354,6 +355,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   final bool tls;
   final Duration idleTimeout;
   final Duration pollInterval;
+
+  /// How long to wait after the server refused another connection.
+  final Duration connectionLimitWait;
 
   /// A frame from the mail address [sender].
   final void Function(String sender, Uint8List frame) onFrame;
@@ -550,6 +554,13 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         client = null;
         if (!current()) break;
         _lastError = describeNetworkError(error);
+        // The server refuses more connections from this account: it still
+        // holds ones the network dropped, until its own timeout, and every
+        // earlier try only added to them (the lab phone's account).
+        if ('$error'.contains('Maximum number of connections') &&
+            backoff < connectionLimitWait) {
+          backoff = connectionLimitWait;
+        }
         _log?.call(
           'reading mail failed while $step: $error; '
           'next try in ${backoff.inSeconds} s',
@@ -559,7 +570,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         _wake = wake;
         await Future.any([wake.future, Future<void>.delayed(backoff)]);
         backoff = backoff * 2 > const Duration(minutes: 5)
-            ? const Duration(minutes: 5)
+            ? (backoff > const Duration(minutes: 5)
+                  ? backoff
+                  : const Duration(minutes: 5))
             : backoff * 2;
       } finally {
         await client?.logout().catchError((Object _) {});

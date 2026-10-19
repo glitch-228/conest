@@ -23,6 +23,29 @@ void main() {
     }
   });
 
+  test('relays are probed a few at a time', () async {
+    var inFlight = 0;
+    var most = 0;
+    for (var i = 0; i < 8; i++) {
+      relays.relay('wss://r$i.test');
+    }
+    final reachable = await reachableNostrRelays(
+      [for (var i = 0; i < 8; i++) 'wss://r$i.test'],
+      connector: (url) async {
+        most = inFlight + 1 > most ? inFlight + 1 : most;
+        inFlight++;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        inFlight--;
+        return relays.connect(url);
+      },
+      parallel: 3,
+      enough: 8,
+      timeout: const Duration(seconds: 5),
+    );
+    expect(reachable, hasLength(8));
+    expect(most, lessThanOrEqualTo(3));
+  });
+
   test('relays are ranked by how fast they answer here', () async {
     relays.relay('wss://fast.test');
     relays.relay('wss://slow.test');

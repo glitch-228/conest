@@ -38,6 +38,9 @@ class FakeMailServer {
   final List<int> fetchedSizes = [];
   Future<void> Function(FakeMail mail)? beforeBodyFetch;
 
+  /// Refuses every login with this answer (a server at its limit).
+  String? refuseLogin;
+
   /// Tests can announce hostile sizes without allocating oversized bodies.
   final Map<int, int> reportedSizes = {};
   final List<Socket> _open = [];
@@ -256,7 +259,9 @@ class FakeMailServer {
               .allMatches(command)
               .map((m) => m.group(1)!.replaceAll(r'\"', '"'))
               .toList();
-          if (args.length == 2 && _login(args[0], args[1])) {
+          if (refuseLogin != null) {
+            reply('$tag NO $refuseLogin');
+          } else if (args.length == 2 && _login(args[0], args[1])) {
             user = args[0];
             reply('$tag OK logged in');
           } else {

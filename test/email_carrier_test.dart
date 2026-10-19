@@ -178,6 +178,23 @@ void main() {
     expect(watch.elapsed, lessThan(const Duration(seconds: 4)));
   });
 
+  test('a server at its connection limit is left alone for a while', () async {
+    server.refuseLogin =
+        '[UNAVAILABLE] Maximum number of connections from user+IP exceeded';
+    final lines = <String>[];
+    final bob = EmailCarrierChannel(
+      config: account('bob'),
+      connector: server.connect,
+      onFrame: (_, _) {},
+      log: lines.add,
+      connectionLimitWait: const Duration(minutes: 10),
+    );
+    channels.add(bob);
+    bob.start();
+    await until(() => lines.isNotEmpty);
+    expect(lines.first, contains('next try in 600 s'));
+  });
+
   test('a frame arrives as encrypted mail and the mail is deleted', () async {
     final aliceGot = <(String, Uint8List)>[];
     final bobGot = <(String, Uint8List)>[];
