@@ -181,7 +181,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
     // advertisement, before a scan response may add the service, and does
     // not report it again while it stays in range. Looked at again for a
     // minute, a few at a time.
-    let mut unmatched: HashMap<Address, u64> = HashMap::new();
+    let mut unmatched: VecDeque<(Address, u64)> = VecDeque::new();
     let mut rechecked_at = 0;
     let mut hub: Option<tokio::task::AbortHandle> = None;
     let outcome: anyhow::Result<()> = async { loop {
@@ -203,14 +203,21 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                 }
                 if !unmatched.is_empty() && now.saturating_sub(rechecked_at) >= 2000 {
                     rechecked_at = now;
-                    unmatched.retain(|_, seen| now.saturating_sub(*seen) < 60_000);
-                    let candidates: Vec<Address> = unmatched.keys().copied().take(32).collect();
-                    for address in candidates {
+                    unmatched.retain(|(_, seen)| now.saturating_sub(*seen) < 60_000);
+                    // Round-robin: the 32 at the front, then to the back,
+                    // so a crowded place still gets every device checked.
+                    for _ in 0..unmatched.len().min(32) {
                         if tasks.len() >= MAX_LINKS * 2 { break; }
-                        let Ok(device) = adapter.device(address) else { unmatched.remove(&address); continue; };
-                        let Ok(Some(uuids)) = device.uuids().await else { continue; };
-                        if !uuids.contains(&Uuid::from_u128(SERVICE_UUID)) { continue; }
-                        unmatched.remove(&address);
+                        let Some((address, seen)) = unmatched.pop_front() else { break; };
+                        let Ok(device) = adapter.device(address) else { continue; };
+                        let matched = matches!(
+                            device.uuids().await,
+                            Ok(Some(uuids)) if uuids.contains(&Uuid::from_u128(SERVICE_UUID))
+                        );
+                        if !matched {
+                            unmatched.push_back((address, seen));
+                            continue;
+                        }
                         let id = state.core().reserve(peer(address), Role::Central, state.now());
                         if let Some(id) = id {
                             connected.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(address, device.clone());
@@ -232,7 +239,11 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                         Ok(Some(uuids)) if uuids.contains(&Uuid::from_u128(SERVICE_UUID))
                     );
                     if !matched {
-                        if unmatched.len() < 256 { unmatched.entry(address).or_insert_with(|| state.now()); }
+                        if !unmatched.iter().any(|(known, _)| *known == address) {
+                            // Full: the oldest gives way to the newcomer.
+                            if unmatched.len() >= 256 { unmatched.pop_front(); }
+                            unmatched.push_back((address, state.now()));
+                        }
                         continue;
                     }
                     let id = state.core().reserve(peer(address), Role::Central, state.now());
@@ -241,7 +252,7 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                         tasks.spawn(central(state.clone(), device, id, connected.clone()));
                     }
                 } else if let Some(AdapterEvent::DeviceRemoved(address)) = event {
-                    unmatched.remove(&address);
+                    unmatched.retain(|(known, _)| *known != address);
                 } else if event.is_none() {
                     bail!("Bluetooth scanning stopped. Check the adapter and BlueZ service.");
                 }

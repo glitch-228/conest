@@ -173,9 +173,10 @@ class _Replayed implements MailSocket {
 Future<MailSocket> connectViaHttpsPort(String host, String alpn) =>
     connectMailSocket(host, 443, tls: true, alpn: alpn);
 
-/// Chatmail servers this app has reached only on port 443 (the mail ports
-/// stall or are blocked on this network): sign-up, reading and sending go
-/// there first.
+/// Chatmail servers that answered first on port 443 here (the mail ports
+/// were blocked, stalled or just slower): sign-up, reading and sending go
+/// there first. One that then fails on 443 is dropped from the set and the
+/// mail port is tried again.
 final Set<String> chatmailReachedViaHttps = <String>{};
 
 class _IoMailSocket implements MailSocket {

@@ -52,7 +52,14 @@ Future<List<String>> reachableChatmailServers(
   // Port 993 and port 443 at once: on a censoring network the mail port's
   // TLS can stall for longer than this whole probe, so trying 443 only
   // after it found nothing (seen on the device lab).
-  final direct = connector ?? connectMailSocket;
+  // A port that connects and never greets is given up after a few seconds,
+  // not left open until its read timeout.
+  final direct =
+      connector ??
+      chatmailFallback(
+        viaHttpsPort: (_, _) => Future.error(StateError('probe: 993 only')),
+        greetingWait: const Duration(seconds: 6),
+      );
   final https =
       viaHttpsPort ?? (connector == null ? connectViaHttpsPort : null);
   final answered = <String>[];
@@ -84,6 +91,8 @@ Future<List<String>> reachableChatmailServers(
           won = true;
           if (!done.isCompleted) {
             answered.add(domain);
+            // 443 answered first: sign-up goes there first too, rather than
+            // waiting out a mail port that may stall for half a minute.
             if (index == 1) chatmailReachedViaHttps.add(domain);
           }
           pending--;

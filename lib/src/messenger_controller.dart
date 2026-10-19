@@ -30338,6 +30338,7 @@ class MessengerController extends ChangeNotifier {
     if (grouped.isEmpty) return;
     // The newest few, one at a time, stopping at the first that does not go:
     // a peer that never acknowledges gets no burst of the whole backlog.
+    grouped.sort((a, b) => a.$3.createdAt.compareTo(b.$3.createdAt));
     final newest = grouped.length <= 32
         ? grouped
         : grouped.sublist(grouped.length - 32);
