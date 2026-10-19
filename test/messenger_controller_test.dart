@@ -16539,6 +16539,38 @@ void main() {
       }
     }
 
+    test('with Online off, setting up probes no server at all', () async {
+      final contacted = <String>[];
+      final nostr = FakeNostrRelays();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        internetRelayHost: null,
+        mailConnector: (host, port, {required bool tls}) async {
+          contacted.add(host);
+          throw const SocketException('not reached');
+        },
+        nostrConnector: (url) {
+          contacted.add(url.host);
+          return nostr.connect(url);
+        },
+      );
+      addTearDown(alice.dispose);
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(onlineEnabled: false),
+      );
+      await expectLater(alice.enableChatmailCarrier(), throwsStateError);
+      final checks = await alice.checkInternetTransports(
+        timeout: const Duration(milliseconds: 200),
+      );
+      expect(
+        checks.every((check) => check.state != InternetTransportState.works),
+        isTrue,
+      );
+      await alice.enableNostrCarrier();
+      expect(contacted, isEmpty);
+    });
+
     test(
       'a new email account goes to a chatmail server reachable here',
       () async {

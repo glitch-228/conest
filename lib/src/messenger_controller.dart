@@ -4798,7 +4798,10 @@ class MessengerController extends ChangeNotifier {
   }) async {
     _requireIdentity();
     var probed = <String>[];
-    if (relays == null && nostrCarrierConfig == null) {
+    // Only when Nostr may go online: otherwise nothing is contacted.
+    if (relays == null &&
+        nostrCarrierConfig == null &&
+        _carrierAllowed(TransportKind.nostr)) {
       probed = await reachableNostrRelays(
         candidates,
         connector: _nostrConnector,
@@ -7104,6 +7107,12 @@ class MessengerController extends ChangeNotifier {
       }
       await _enableEmailCarrier(EmailCarrierConfig.chatmail(trimmed));
       return trimmed;
+    }
+    // Before probing anything: with Online or Email off, no server is
+    // contacted at all.
+    _requireIdentity();
+    if (!_carrierAllowed(TransportKind.deltaChat)) {
+      throw StateError('Turn on Online and Email in Connectivity first.');
     }
     final reachable = await reachableChatmailServers(
       candidates,
@@ -29261,6 +29270,12 @@ class MessengerController extends ChangeNotifier {
     }
 
     Future<InternetTransportCheck> relay() async {
+      if (!_carrierAllowed(TransportKind.conestRelay)) {
+        return const InternetTransportCheck(
+          TransportKind.conestRelay,
+          InternetTransportState.needsSetup,
+        );
+      }
       final relays = identity.configuredRelays
           .where((route) => route.kind == PeerRouteKind.relay)
           .toList();
@@ -29295,6 +29310,10 @@ class MessengerController extends ChangeNotifier {
     ) async {
       if (ready(kind)) {
         return InternetTransportCheck(kind, InternetTransportState.on);
+      }
+      // Switched off (or Online off): not probed, nothing contacted.
+      if (!_carrierAllowed(kind)) {
+        return InternetTransportCheck(kind, InternetTransportState.needsSetup);
       }
       final answering = await probe();
       return InternetTransportCheck(
@@ -30316,16 +30335,23 @@ class MessengerController extends ChangeNotifier {
     }
     _waitingResentAt[peer.deviceId] = now;
     if (direct) _flushContactSoon(peer.deviceId);
-    for (final (group, member, message) in grouped) {
-      unawaited(
-        _tryDeliverExistingGroupMessage(
+    if (grouped.isEmpty) return;
+    // The newest few, one at a time, stopping at the first that does not go:
+    // a peer that never acknowledges gets no burst of the whole backlog.
+    final newest = grouped.length <= 32
+        ? grouped
+        : grouped.sublist(grouped.length - 32);
+    unawaited(() async {
+      for (final (group, member, message) in newest) {
+        final delivered = await _tryDeliverExistingGroupMessage(
           group: group,
           contact: member,
           message: message,
           background: true,
-        ).catchError((Object _) => false),
-      );
-    }
+        ).catchError((Object _) => false);
+        if (!delivered) break;
+      }
+    }());
   }
 
   /// Controls (edits, deletes, reactions, cancels, call signals) leave the

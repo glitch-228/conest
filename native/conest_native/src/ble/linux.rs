@@ -176,6 +176,13 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
     // Devices this side connected to, so that stopping (or failing) closes
     // their connections: tasks dropped mid-way never reach their own close.
     let connected: Arc<Mutex<HashMap<Address, Device>>> = Arc::default();
+    // Devices seen without the mesh service yet, and when: with no UUIDs in
+    // the discovery filter BlueZ reports a device on its first
+    // advertisement, before a scan response may add the service, and does
+    // not report it again while it stays in range. Looked at again for a
+    // minute, a few at a time.
+    let mut unmatched: HashMap<Address, u64> = HashMap::new();
+    let mut rechecked_at = 0;
     let mut hub: Option<tokio::task::AbortHandle> = None;
     let outcome: anyhow::Result<()> = async { loop {
         tokio::select! {
@@ -194,22 +201,47 @@ pub async fn run(state: Arc<Shared>) -> anyhow::Result<()> {
                     discovery = Some(adapter.discover_devices().await.context("Bluetooth scanning is unavailable")?.boxed());
                     state.core().status.scanning = true;
                 }
+                if !unmatched.is_empty() && now.saturating_sub(rechecked_at) >= 2000 {
+                    rechecked_at = now;
+                    unmatched.retain(|_, seen| now.saturating_sub(*seen) < 60_000);
+                    let candidates: Vec<Address> = unmatched.keys().copied().take(32).collect();
+                    for address in candidates {
+                        if tasks.len() >= MAX_LINKS * 2 { break; }
+                        let Ok(device) = adapter.device(address) else { unmatched.remove(&address); continue; };
+                        let Ok(Some(uuids)) = device.uuids().await else { continue; };
+                        if !uuids.contains(&Uuid::from_u128(SERVICE_UUID)) { continue; }
+                        unmatched.remove(&address);
+                        let id = state.core().reserve(peer(address), Role::Central, state.now());
+                        if let Some(id) = id {
+                            connected.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(address, device.clone());
+                            tasks.spawn(central(state.clone(), device, id, connected.clone()));
+                        }
+                    }
+                }
             }
             event = async { match &mut discovery { Some(d) => d.next().await, None => std::future::pending().await } } => {
                 if let Some(AdapterEvent::DeviceAdded(address)) = event {
                     // JoinSet also counts retiring duplicate tasks until they
                     // finish, so crossed connections cannot grow OS workers.
                     if tasks.len() >= MAX_LINKS * 2 { continue; }
-                    let device = adapter.device(address)?;
                     // A vanished or inaccessible candidate must not reset
                     // established neighbours on the adapter.
-                    let Ok(Some(uuids)) = device.uuids().await else { continue; };
-                    if !uuids.contains(&Uuid::from_u128(SERVICE_UUID)) { continue; }
+                    let Ok(device) = adapter.device(address) else { continue; };
+                    let matched = matches!(
+                        device.uuids().await,
+                        Ok(Some(uuids)) if uuids.contains(&Uuid::from_u128(SERVICE_UUID))
+                    );
+                    if !matched {
+                        if unmatched.len() < 256 { unmatched.entry(address).or_insert_with(|| state.now()); }
+                        continue;
+                    }
                     let id = state.core().reserve(peer(address), Role::Central, state.now());
                     if let Some(id) = id {
                         connected.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(address, device.clone());
                         tasks.spawn(central(state.clone(), device, id, connected.clone()));
                     }
+                } else if let Some(AdapterEvent::DeviceRemoved(address)) = event {
+                    unmatched.remove(&address);
                 } else if event.is_none() {
                     bail!("Bluetooth scanning stopped. Check the adapter and BlueZ service.");
                 }

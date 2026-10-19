@@ -26,15 +26,24 @@ Future<MailSocket> connectMailSocket(
   // The whole connection, TLS handshake included: connect's own timeout
   // covers only reaching the port, and a network that lets the connection
   // open but stalls the handshake left the phone's account setup hanging.
-  final Socket socket = tls
-      ? await SecureSocket.connect(
-          host,
-          port,
-          timeout: timeout,
-          supportedProtocols: alpn == null ? null : [alpn],
-        ).timeout(timeout + const Duration(seconds: 10))
-      : await Socket.connect(host, port, timeout: timeout);
-  return _IoMailSocket(socket);
+  if (!tls) {
+    return _IoMailSocket(await Socket.connect(host, port, timeout: timeout));
+  }
+  final connecting = SecureSocket.connect(
+    host,
+    port,
+    timeout: timeout,
+    supportedProtocols: alpn == null ? null : [alpn],
+  );
+  try {
+    return _IoMailSocket(
+      await connecting.timeout(timeout + const Duration(seconds: 10)),
+    );
+  } on TimeoutException {
+    // A handshake that finishes after all is closed, not left open.
+    unawaited(connecting.then((late) => late.destroy(), onError: (_) {}));
+    rethrow;
+  }
 }
 
 /// Chatmail servers also take IMAP and SMTP on port 443, told apart by

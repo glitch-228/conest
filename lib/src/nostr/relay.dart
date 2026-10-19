@@ -17,9 +17,18 @@ abstract interface class NostrSocket {
 typedef NostrSocketConnector = Future<NostrSocket> Function(Uri url);
 
 /// Opens a real WebSocket.
-Future<NostrSocket> connectNostrSocket(Uri url) async => _IoNostrSocket(
-  await WebSocket.connect(url.toString()).timeout(const Duration(seconds: 15)),
-);
+Future<NostrSocket> connectNostrSocket(Uri url) async {
+  final connecting = WebSocket.connect(url.toString());
+  try {
+    return _IoNostrSocket(
+      await connecting.timeout(const Duration(seconds: 15)),
+    );
+  } on TimeoutException {
+    // A connection that opens after all is closed, not left open.
+    unawaited(connecting.then((late) => late.close(), onError: (_) {}));
+    rethrow;
+  }
+}
 
 class _IoNostrSocket implements NostrSocket {
   _IoNostrSocket(this._socket) {
