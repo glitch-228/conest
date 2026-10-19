@@ -110,6 +110,34 @@ void main() {
     },
   );
 
+  test('no other route is tried once the receipt came', () async {
+    // LAN took the message but reported failure (a lost answer); its
+    // receipt came while it was still trying.
+    var wanted = true;
+    final lan = _FakeAdapter(
+      kind: TransportKind.lan,
+      route: _route(TransportKind.lan, TransportPathKind.local),
+      fail: true,
+      onSend: () => wanted = false,
+    );
+    final iroh = _FakeAdapter(
+      kind: TransportKind.iroh,
+      route: _route(TransportKind.iroh, TransportPathKind.direct),
+    );
+    final registry = TransportRegistry([lan, iroh]);
+    await expectLater(
+      registry.deliverEnvelope(
+        peer: peer,
+        envelope: _envelope(),
+        policies: const {},
+        stillWanted: () => wanted,
+      ),
+      throwsA(isA<TransportSendCancelled>()),
+    );
+    expect(lan.sendCount, 1);
+    expect(iroh.sendCount, 0);
+  });
+
   test('a route that just failed waits behind working ones', () async {
     var now = DateTime.utc(2026, 10, 6, 9);
     final lan = _FakeAdapter(
@@ -461,6 +489,7 @@ class _FakeAdapter implements TransportAdapter {
     required this.route,
     this.fail = false,
     this.sendDelay = Duration.zero,
+    this.onSend,
   });
 
   @override
@@ -468,6 +497,7 @@ class _FakeAdapter implements TransportAdapter {
   final RouteCandidate route;
   bool fail;
   final Duration sendDelay;
+  final void Function()? onSend;
   int sendCount = 0;
 
   @override
@@ -502,6 +532,7 @@ class _FakeAdapter implements TransportAdapter {
     required TransportEnvelope envelope,
   }) async {
     sendCount++;
+    onSend?.call();
     if (sendDelay > Duration.zero) await Future<void>.delayed(sendDelay);
     if (fail) throw StateError('unavailable');
     return DeliveryReceipt(

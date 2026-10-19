@@ -1347,6 +1347,27 @@ class MessengerController extends ChangeNotifier {
     final peer = _contactByDeviceId(deviceId);
     if (peer != null) _resendWaitingMessages(peer);
   }
+
+  /// Sends [message] (a copy taken earlier) to [deviceId] again, as a
+  /// retry pass does; in [groupId] when given.
+  @visibleForTesting
+  Future<bool> retryMessageForTesting(
+    String deviceId,
+    ChatMessage message, {
+    String? groupId,
+  }) async {
+    final contact = groupId == null
+        ? _contactByDeviceId(deviceId)
+        : _groupMemberContact(_requireGroup(groupId), deviceId);
+    if (contact == null) throw StateError('No such contact.');
+    return groupId == null
+        ? _tryDeliverExistingMessage(contact: contact, message: message)
+        : _tryDeliverExistingGroupMessage(
+            group: _requireGroup(groupId),
+            contact: contact,
+            message: message,
+          );
+  }
   @visibleForTesting
   Future<int> runHeartbeatPassNow() async =>
       (await _runHeartbeatPass(force: true)).sentCount;
@@ -25064,8 +25085,11 @@ class MessengerController extends ChangeNotifier {
     required ChatMessage message,
     bool background = false,
   }) async {
+    final stored = _messageById(contact.deviceId, message.id);
     if (_locallyDeletedMessageIds.contains(message.id) ||
-        _messageById(contact.deviceId, message.id) == null ||
+        stored == null ||
+        // Its receipt came since the caller took its copy.
+        !stored.state.awaitsRecipientAck ||
         // Sent from another of this account's devices: that one sends it.
         message.senderDeviceId != identity?.deviceId) {
       return true;
@@ -25114,6 +25138,8 @@ class MessengerController extends ChangeNotifier {
             : 'Sent to ${contact.alias} via ${route.label}; waiting for a delivery receipt.',
       );
       return true;
+    } on TransportSendCancelled {
+      return true; // Its receipt came meanwhile.
     } catch (error) {
       _lastRelayStatus = 'delivery queued';
       _statusMessage = 'Delivery retry pending: $error';
@@ -25132,7 +25158,13 @@ class MessengerController extends ChangeNotifier {
         _groupMessageById(group.groupId, message.id)?.deleted == true ||
         _locallyDeletedMessageIds.contains(message.id) ||
         _groupMessageById(group.groupId, message.id) == null ||
-        !group.hasActiveMember(contact.deviceId)) {
+        !group.hasActiveMember(contact.deviceId) ||
+        // Their receipt came since the caller took its copy.
+        _groupMessageById(
+              group.groupId,
+              message.id,
+            )?.recipientStates[contact.deviceId]?.awaitsRecipientAck ==
+            false) {
       return true;
     }
     // Still being signed: the send that follows carries its place.
@@ -25201,6 +25233,8 @@ class MessengerController extends ChangeNotifier {
       _lastRelayStatus = 'group delivery via ${route.label}';
       await _saveSnapshotSilently(debounce: true);
       return true;
+    } on TransportSendCancelled {
+      return true; // Their receipt came meanwhile.
     } catch (error) {
       _lastRelayStatus = 'group delivery queued';
       _statusMessage = 'Group delivery retry pending: $error';
@@ -26070,6 +26104,14 @@ class MessengerController extends ChangeNotifier {
     return message.recipientStates[deviceId]?.awaitsRecipientAck ?? true;
   }
 
+  /// Whether a receipt from [deviceId] already came for the message
+  /// [envelope] carries: then no route, copy or retry sends it again.
+  bool _receiptCameFor(String deviceId, RelayEnvelope envelope) =>
+      (envelope.kind == 'direct_message' || envelope.kind == 'group_message') &&
+      _confirmedFamilies.containsKey(
+        _outboundAttemptKey(deviceId, envelope.messageId),
+      );
+
   /// Records on the message that [route] took it (to [deviceId], in a
   /// group).
   void _traceOutbound(
@@ -26364,6 +26406,10 @@ class MessengerController extends ChangeNotifier {
     if (!conestActive) {
       throw StateError('Conest is off on this device (Matrix-only mode).');
     }
+    // A retry or copy decided before its receipt came: nothing to send.
+    if (_receiptCameFor(contact.deviceId, envelope)) {
+      throw const TransportSendCancelled('Its receipt already came.');
+    }
     final effective = _effectiveTransports(contact);
     final policies = _effectiveTransportPolicies(contact);
     final candidateRoutes =
@@ -26429,6 +26475,9 @@ class MessengerController extends ChangeNotifier {
           envelope: envelope,
         );
         deliveredVia = _DeliveryRoute.legacy(endpoint);
+      } on TransportSendCancelled {
+        // It arrived another way: no other route takes over.
+        rethrow;
       } catch (error) {
         lastError = error;
       }
@@ -26603,7 +26652,7 @@ class MessengerController extends ChangeNotifier {
     final result = deliveredVia;
     if (result == null) {
       // No route of ours reaches them: a contact who carries for us might.
-      if (allowForwarding) {
+      if (allowForwarding && !_receiptCameFor(contact.deviceId, envelope)) {
         final forwarded = await _deliverViaForwarders(
           contact,
           envelope,
@@ -27420,6 +27469,7 @@ class MessengerController extends ChangeNotifier {
       throw StateError('No unified transport adapter is running.');
     }
     final result = await registry.deliverEnvelope(
+      stillWanted: () => !_receiptCameFor(contact.deviceId, envelope),
       peer: _transportPeerForContact(contact, allowRelay: allowRelay),
       // File chunks stay on transports built for volume; carriers such as
       // Matrix carry messages only.
@@ -28049,6 +28099,9 @@ class MessengerController extends ChangeNotifier {
   }) async {
     Object? lastError;
     for (final route in routes) {
+      if (_receiptCameFor(recipientDeviceId, envelope)) {
+        throw const TransportSendCancelled('Its receipt already came.');
+      }
       try {
         final expectedRelayKey = await _requireOperationalRelayPin(route);
         _storeCallCount++;
@@ -29910,6 +29963,10 @@ class MessengerController extends ChangeNotifier {
     if (index == -1) {
       groups.add(group);
     } else {
+      final gone = groups[index].activeMemberDeviceIds
+          .where((deviceId) => !group.hasActiveMember(deviceId))
+          .toSet();
+      if (gone.isNotEmpty) _stopWaitingForMembers(group.groupId, gone);
       // A copy made before a profile refresh must not take its revision
       // back: the refresh would then be sent again under the same number,
       // and members would ignore it.
@@ -29919,6 +29976,54 @@ class MessengerController extends ChangeNotifier {
           : group;
     }
     _snapshot = _snapshot.copyWith(groups: groups);
+  }
+
+  /// [gone] left the group (removed, or left): this device's messages no
+  /// longer wait for them. What they already received stays recorded.
+  void _stopWaitingForMembers(String groupId, Set<String> gone) {
+    final index = _snapshot.conversations.indexWhere(
+      (conversation) =>
+          conversation.kind == ConversationKind.group &&
+          conversation.id == groupId,
+    );
+    if (index == -1) return;
+    final conversation = _snapshot.conversations[index];
+    var changed = false;
+    final messages = [
+      for (final message in conversation.messages)
+        if (!message.outbound ||
+            !gone.any(
+              (id) => message.recipientStates[id]?.awaitsRecipientAck ?? false,
+            ))
+          message
+        else
+          () {
+            changed = true;
+            final states = Map<String, DeliveryState>.from(
+              message.recipientStates,
+            );
+            for (final id in gone) {
+              if (states[id]?.awaitsRecipientAck ?? false) {
+                states.remove(id);
+                _clearOutboundAttempt(id, message.id);
+              }
+            }
+            return message.copyWith(
+              recipientStates: states,
+              // No one left to wait for: not delivered, and not pending.
+              state: states.isEmpty
+                  ? DeliveryState.canceled
+                  : _aggregateGroupDeliveryState(states),
+            );
+          }(),
+    ];
+    if (!changed) return;
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    conversations[index] = conversation.copyWith(messages: messages);
+    _snapshot = _snapshot.copyWith(conversations: conversations);
+    _markConversationMutationForBatch();
   }
 
   List<ContactRecord> _dedupeContacts(List<ContactRecord> contacts) {

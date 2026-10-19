@@ -7319,6 +7319,102 @@ void main() {
     },
   );
 
+  test('removing a member stops messages waiting for them', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    final carol = await _createController(
+      relayClient: relayClient,
+      displayName: 'Carol',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    addTearDown(carol.dispose);
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    final group = await alice.createGroup(
+      title: 'Waiting',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+    await alice.pollNow();
+    // Carol is away: only Bob receives it.
+    await alice.sendGroupMessage(groupId: group.groupId, body: 'hello');
+    await bob.pollNow();
+    await alice.pollNow();
+    final carolId = carol.identity!.deviceId;
+    final bobId = bob.identity!.deviceId;
+    var sent = alice.messagesForGroup(group.groupId).last;
+    expect(sent.recipientStates[bobId], DeliveryState.delivered);
+    expect(sent.recipientStates[carolId]!.awaitsRecipientAck, isTrue);
+    expect(sent.state.awaitsRecipientAck, isTrue);
+
+    await alice.removeGroupMember(
+      groupId: group.groupId,
+      memberDeviceId: carolId,
+    );
+    sent = alice.messagesForGroup(group.groupId).last;
+    expect(sent.recipientStates.containsKey(carolId), isFalse);
+    expect(sent.state, DeliveryState.delivered);
+  });
+
+  test('a retry after the receipt came sends nothing', () async {
+    final relayClient = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relayClient,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(
+      relayClient: relayClient,
+      displayName: 'Bob',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    final bobId = bob.identity!.deviceId;
+    final group = await alice.createGroup(
+      title: 'Copies',
+      members: alice.contacts,
+    );
+    await bob.pollNow();
+    await alice.pollNow();
+
+    await alice.sendMessage(contact: alice.contacts.single, body: 'direct');
+    await alice.sendGroupMessage(groupId: group.groupId, body: 'grouped');
+    // Copies taken by a retry pass before the receipts came.
+    final direct = alice.messagesFor(bobId).last;
+    final grouped = alice.messagesForGroup(group.groupId).last;
+    expect(direct.state.awaitsRecipientAck, isTrue);
+    await bob.pollNow();
+    await alice.pollNow();
+    expect(alice.messagesFor(bobId).last.state, DeliveryState.delivered);
+    expect(
+      alice.messagesForGroup(group.groupId).last.recipientStates[bobId],
+      DeliveryState.delivered,
+    );
+
+    int storedCopies(String id) => relayClient.storedEnvelopes
+        .where((envelope) => envelope.messageId == id)
+        .length;
+    final before = (storedCopies(direct.id), storedCopies(grouped.id));
+    expect(await alice.retryMessageForTesting(bobId, direct), isTrue);
+    expect(
+      await alice.retryMessageForTesting(
+        bobId,
+        grouped,
+        groupId: group.groupId,
+      ),
+      isTrue,
+    );
+    expect((storedCopies(direct.id), storedCopies(grouped.id)), before);
+  });
+
   test('owner can add a member after group creation', () async {
     final relayClient = _FakeRelayClient();
     final alice = await _createController(
@@ -18768,6 +18864,57 @@ void main() {
       expect(alice.userMode, UserMode.normal);
     });
 
+    testWidgets('the transports step links to the guide on routes', (
+      tester,
+    ) async {
+      final bridge = _RecordingPlatformBridge();
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          internetRelayHost: null,
+          platformBridge: bridge,
+          nostrConnector: FakeNostrRelays().connect,
+          mailConnector: (host, port, {required bool tls}) async =>
+              throw const SocketException('Connection timed out'),
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.pumpWidget(
+        localized(
+          Scaffold(
+            body: SingleChildScrollView(
+              child: TransportsStep(
+                controller: alice,
+                onBack: () {},
+                onDone: () async {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const ValueKey('transports-guide')));
+      await tester.pump();
+      expect(bridge.opened, [
+        Uri.parse(
+          'https://github.com/glitch-228/conest/blob/main/docs/reaching-people.md',
+        ),
+      ]);
+      // Let the network check finish before the controller goes.
+      await tester.runAsync(() async {
+        for (var i = 0; i < 100; i++) {
+          await tester.pump();
+          if (find
+              .byKey(const ValueKey('transports-count'))
+              .evaluate()
+              .isNotEmpty) {
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+    });
+
     testWidgets('the chat list says when only this network can reach us', (
       tester,
     ) async {
@@ -18908,6 +19055,7 @@ void main() {
       WidgetTester tester,
       UserMode mode, {
       required Size size,
+      PlatformBridge? platformBridge,
     }) async {
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
@@ -18916,6 +19064,7 @@ void main() {
         () => _createController(
           relayClient: _FakeRelayClient(),
           displayName: 'Alice',
+          platformBridge: platformBridge,
         ),
       ))!;
       addTearDown(alice.dispose);
@@ -18955,6 +19104,26 @@ void main() {
       expect(find.text('// PERSONAL'), findsNothing);
       // Network detail is for Advanced mode.
       expect(find.text('Transport policy'), findsNothing);
+    });
+
+    testWidgets('settings open the user guide', (tester) async {
+      final bridge = _RecordingPlatformBridge();
+      await settingsFor(
+        tester,
+        UserMode.normal,
+        size: const Size(1200, 900),
+        platformBridge: bridge,
+      );
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('settings-user-guide')),
+      );
+      await tester.tap(find.byKey(const ValueKey('settings-user-guide')));
+      await tester.pump();
+      expect(bridge.opened, [
+        Uri.parse(
+          'https://github.com/glitch-228/conest/blob/main/docs/README.md',
+        ),
+      ]);
     });
 
     testWidgets('advanced settings show the transport policies', (
@@ -25094,6 +25263,10 @@ class _VoiceRecordingBridge extends _RecordingPlatformBridge {
 class _RecordingPlatformBridge extends PlatformBridge {
   final List<String> dismissed = <String>[];
   final List<_ShowCall> shown = <_ShowCall>[];
+  final List<Uri> opened = <Uri>[];
+
+  @override
+  Future<void> openExternalUrl(Uri url) async => opened.add(url);
 
   @override
   Future<void> dismissMessageNotification({

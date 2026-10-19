@@ -326,6 +326,9 @@ class TransportRegistry {
     // Routes not to use this time (they took earlier messages no receipt
     // confirmed); the caller tries them last.
     Set<String> skipRouteIds = const {},
+    // False once the envelope is no longer needed (its receipt came while
+    // a slow route was still trying): no further route is tried.
+    bool Function()? stillWanted,
   }) async {
     final routes = [
       for (final route in await routesFor(peer, policies: policies))
@@ -337,6 +340,9 @@ class TransportRegistry {
       if (!route.permitsPayload(envelope.bytes.length)) continue;
       final adapter = _adapters[route.transport];
       if (adapter == null) continue;
+      if (stillWanted != null && !stillWanted()) {
+        throw const TransportSendCancelled('Its receipt already came.');
+      }
       final startedAt = DateTime.now().toUtc();
       try {
         final receipt = await adapter
