@@ -90,6 +90,23 @@ if [ "${FRESH:-0}" = 1 ]; then
   win "if exist \"$WINDOWS_DIR\\conest_data\" rmdir /S /Q \"$WINDOWS_DIR\\conest_data\"" || true
 fi
 
+# Android blocks a backgrounded app's network (netpolicy APP_BACKGROUND):
+# once another app came to the front the lab app failed every send. The
+# screen stays on for the run (on battery too), and the phone's own
+# setting is put back; using the phone mid-run still backgrounds the app.
+stay_on=""
+if [ "${ANDROID:-1}" = 1 ]; then
+  stay_on=$(adb shell settings get global stay_on_while_plugged_in 2>/dev/null | tr -d '\r')
+  adb shell svc power stayon true >/dev/null 2>&1 || true
+  adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+  adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+fi
+restore_phone() {
+  [ -n "$stay_on" ] && adb shell settings put global stay_on_while_plugged_in "$stay_on" >/dev/null 2>&1
+  true
+}
+trap restore_phone EXIT
+
 tunnel_pid=""
 tunnel_ports=$(echo $MATRIX_TUNNEL $TUNNELS)
 if [ -n "$tunnel_ports" ]; then
@@ -101,7 +118,7 @@ if [ -n "$tunnel_ports" ]; then
   sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
     -N "${forwards[@]}" "$WINDOWS" 2>/dev/null &
   tunnel_pid=$!
-  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; for port in $tunnel_ports; do adb reverse --remove "tcp:$port" 2>/dev/null; done; true' EXIT
+  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; for port in $tunnel_ports; do adb reverse --remove "tcp:$port" 2>/dev/null; done; restore_phone' EXIT
 fi
 
 wait_for() { # description, command that succeeds when ready, tries
