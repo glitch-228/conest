@@ -14668,6 +14668,119 @@ class SettingsDialog extends StatefulWidget {
 class _SettingsDialogState extends State<SettingsDialog> {
   String _settingsCategory = 'Personal / Preferences';
 
+  /// Phones: a category's page is open (otherwise the list of pages).
+  bool _settingsPageOpen = false;
+
+  static const _settingsCategories = [
+    'Personal / Preferences',
+    'Devices',
+    'Connectivity',
+    'Network / Relay',
+    'Storage',
+    'Updates',
+    'Danger',
+  ];
+
+  String _settingsCategoryLabel(BuildContext context, String category) =>
+      switch (category) {
+        'Personal / Preferences' => l10nOf(context).settingsPersonal,
+        'Devices' => l10nOf(context).uiDevicesDF485C,
+        'Storage' => l10nOf(context).settingsStorage,
+        'Connectivity' => l10nOf(context).settingsConnectivity,
+        'Network / Relay' => l10nOf(context).settingsRelays,
+        'Updates' => l10nOf(context).settingsUpdates,
+        'Danger' => l10nOf(context).settingsAccount,
+        _ => category,
+      };
+
+  static IconData _settingsCategoryIcon(String category) => switch (category) {
+    'Personal / Preferences' => Icons.person_outline,
+    'Devices' => Icons.devices_outlined,
+    'Connectivity' => Icons.hub_outlined,
+    'Network / Relay' => Icons.dns_outlined,
+    'Storage' => Icons.sd_storage_outlined,
+    'Updates' => Icons.system_update_outlined,
+    _ => Icons.warning_amber_outlined,
+  };
+
+  /// One page at a time: beside a list of categories on wide windows, or
+  /// opened from the list on phones; [page] holds the chosen category's
+  /// sections. The simplest mode shows its short page as it is.
+  Widget _settingsLayout(
+    BuildContext context, {
+    required bool categorized,
+    required bool wide,
+    required Widget page,
+  }) {
+    if (!categorized) return SingleChildScrollView(child: page);
+    Widget tile(String category, {required bool selected}) => ListTile(
+      key: ValueKey('settings-category-$category'),
+      dense: wide,
+      selected: selected,
+      leading: Icon(_settingsCategoryIcon(category)),
+      title: Text(_settingsCategoryLabel(context, category)),
+      trailing: wide ? null : const Icon(Icons.chevron_right),
+      onTap: () => setState(() {
+        _settingsCategory = category;
+        _settingsPageOpen = true;
+      }),
+    );
+    if (wide) {
+      final height = MediaQuery.sizeOf(context).height * 0.7;
+      return SizedBox(
+        width: 900,
+        height: height < 420 ? 420 : height,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 210,
+              child: ListView(
+                children: [
+                  for (final category in _settingsCategories)
+                    tile(category, selected: category == _settingsCategory),
+                ],
+              ),
+            ),
+            const VerticalDivider(width: 24),
+            Expanded(
+              child: SingleChildScrollView(
+                key: ValueKey('settings-page-$_settingsCategory'),
+                child: page,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    if (!_settingsPageOpen) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final category in _settingsCategories)
+            tile(category, selected: false),
+        ],
+      );
+    }
+    return SingleChildScrollView(
+      key: ValueKey('settings-page-$_settingsCategory'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            key: const ValueKey('settings-back'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.arrow_back),
+            title: Text(_settingsCategoryLabel(context, _settingsCategory)),
+            onTap: () => setState(() => _settingsPageOpen = false),
+          ),
+          page,
+        ],
+      ),
+    );
+  }
+
   /// Simple mode shows only the personal settings until asked for all.
   bool _showAllSettings = false;
 
@@ -14790,70 +14903,27 @@ class _SettingsDialogState extends State<SettingsDialog> {
     final contactRelays = widget.controller.discoveredContactRelayRoutes;
     final simple =
         widget.controller.userMode == UserMode.minimal && !_showAllSettings;
-    final categorized =
-        !simple &&
-        widget.fullscreenOnMobile &&
-        MediaQuery.sizeOf(context).width < 700;
+    // Every category is a page: a sidebar on wide windows, a list of
+    // pages on phones. The simplest mode keeps one short page.
+    final categorized = !simple;
+    final wide = MediaQuery.sizeOf(context).width >= 700;
     return AdaptiveChatDialog(
       fullscreenOnMobile: widget.fullscreenOnMobile,
       scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       title: Text(l10nOf(context).tabSettings),
       content: SizedBox(
-        width: 720,
+        width: categorized && wide ? 900 : 720,
         child: identity == null
             ? Text(l10nOf(context).uiNoIdentityIsActive6B2EE3)
-            : SingleChildScrollView(
-                child: Column(
+            : _settingsLayout(
+                context,
+                categorized: categorized,
+                wide: wide,
+                page: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (categorized) ...[
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: [
-                            for (final category in const [
-                              'Personal / Preferences',
-                              'Storage',
-                              'Connectivity',
-                              'Network / Relay',
-                              'Updates',
-                              'Danger',
-                            ])
-                              Padding(
-                                padding: const EdgeInsetsDirectional.only(end: 8),
-                                child: ChoiceChip(
-                                  label: Text(switch (category) {
-                                    'Personal / Preferences' => l10nOf(
-                                      context,
-                                    ).settingsPersonal,
-                                    'Storage' => l10nOf(
-                                      context,
-                                    ).settingsStorage,
-                                    'Connectivity' => l10nOf(
-                                      context,
-                                    ).settingsConnectivity,
-                                    'Network / Relay' => l10nOf(
-                                      context,
-                                    ).settingsRelays,
-                                    'Updates' => l10nOf(
-                                      context,
-                                    ).settingsUpdates,
-                                    'Danger' => l10nOf(context).settingsAccount,
-                                    _ => category,
-                                  }),
-                                  selected: _settingsCategory == category,
-                                  onSelected: (_) => setState(
-                                    () => _settingsCategory = category,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                    ],
                     if (!categorized ||
                         _settingsCategory == 'Personal / Preferences')
                       _SettingsSection(
@@ -15120,8 +15190,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
-                    if (!categorized ||
-                        _settingsCategory == 'Personal / Preferences') ...[
+                    if (!categorized || _settingsCategory == 'Devices') ...[
                       _SettingsSection(
                         title: l10nOf(context).uiDevicesDF485C,
                         palette: widget.palette,
@@ -15384,7 +15453,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               controller: widget.controller,
                               palette: widget.palette,
                             ),
-                            const _MessageRouteLegend(),
+                            // Network detail: Advanced mode only.
+                            if (widget.controller.userMode.showsNetworkDetail)
+                              const _MessageRouteLegend(),
                             if (widget.controller.matrixCarrierAvailable)
                               MatrixAccountPanel(controller: widget.controller),
                             const SizedBox(height: 12),
@@ -15409,22 +15480,27 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             BitchatCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             TorCarrierPanel(controller: widget.controller),
-                            const SizedBox(height: 12),
-                            Text(
-                              l10nOf(context).uiTransportPolicy088D79,
-                              style: Theme.of(context).textTheme.titleSmall
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 6),
-                            for (final kind
-                                in widget.controller.configurableTransports)
-                              _TransportPolicySelector(
-                                kind: kind,
-                                value: identity.connectivity.policyFor(kind),
-                                enabled: !_busy,
-                                onChanged: (value) =>
-                                    _setGlobalTransportPolicy(kind, value),
+                            if (widget
+                                .controller
+                                .userMode
+                                .showsNetworkDetail) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                l10nOf(context).uiTransportPolicy088D79,
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w700),
                               ),
+                              const SizedBox(height: 6),
+                              for (final kind
+                                  in widget.controller.configurableTransports)
+                                _TransportPolicySelector(
+                                  kind: kind,
+                                  value: identity.connectivity.policyFor(kind),
+                                  enabled: !_busy,
+                                  onChanged: (value) =>
+                                      _setGlobalTransportPolicy(kind, value),
+                                ),
+                            ],
                             const SizedBox(height: 8),
                             Text(
                               identity.connectivity.anyEnabled

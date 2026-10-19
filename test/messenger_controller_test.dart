@@ -3472,6 +3472,8 @@ void main() {
         ),
       );
       await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('settings-category-Storage')));
+      await tester.pump();
       await tester.ensureVisible(find.text('Keep 10% of storage free'));
       await tester.runAsync(() async {
         await tester.tap(find.text('Keep 10% of storage free'));
@@ -3482,6 +3484,10 @@ void main() {
       await tester.pump();
       expect(bob.identity!.connectivity.storageReserveEnabled, isFalse);
       expect(bob.identity!.connectivity.irohTransferLimitEnabled, isTrue);
+      await tester.tap(
+        find.byKey(const ValueKey('settings-category-Connectivity')),
+      );
+      await tester.pump();
       await tester.ensureVisible(
         find.text('Limit Iroh files to 100 MiB (recommended)'),
       );
@@ -18886,7 +18892,101 @@ void main() {
       );
       await tester.tap(find.byKey(const ValueKey('show-all-settings')));
       await tester.pump();
+      // Every category is there now, each its own page.
+      expect(
+        find.byKey(const ValueKey('settings-category-Connectivity')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('settings-category-Connectivity')),
+      );
+      await tester.pump();
       expect(find.text('// CONNECTIVITY'), findsOneWidget);
+    });
+
+    Future<MessengerController> settingsFor(
+      WidgetTester tester,
+      UserMode mode, {
+      required Size size,
+    }) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+        ),
+      ))!;
+      addTearDown(alice.dispose);
+      await tester.runAsync(() => alice.setUserMode(mode));
+      final updates = _createUpdateService();
+      final theme = app.ConestThemeController.memory();
+      addTearDown(updates.dispose);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: app.SettingsDialog(
+              fullscreenOnMobile: true,
+              controller: alice,
+              updateService: updates,
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      return alice;
+    }
+
+    testWidgets('wide settings show one page beside the categories', (
+      tester,
+    ) async {
+      await settingsFor(tester, UserMode.normal, size: const Size(1200, 900));
+      expect(find.text('// PERSONAL'), findsOneWidget);
+      expect(find.text('// CONNECTIVITY'), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey('settings-category-Connectivity')),
+      );
+      await tester.pump();
+      expect(find.text('// CONNECTIVITY'), findsOneWidget);
+      expect(find.text('// PERSONAL'), findsNothing);
+      // Network detail is for Advanced mode.
+      expect(find.text('Transport policy'), findsNothing);
+    });
+
+    testWidgets('advanced settings show the transport policies', (
+      tester,
+    ) async {
+      await settingsFor(tester, UserMode.advanced, size: const Size(1200, 900));
+      await tester.tap(
+        find.byKey(const ValueKey('settings-category-Connectivity')),
+      );
+      await tester.pump();
+      await tester.ensureVisible(find.text('Transport policy'));
+      expect(find.text('Transport policy'), findsOneWidget);
+    });
+
+    testWidgets('phone settings list the pages, open one, and go back', (
+      tester,
+    ) async {
+      await settingsFor(tester, UserMode.normal, size: const Size(400, 800));
+      expect(find.text('// PERSONAL'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('settings-category-Devices')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('settings-back')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('settings-category-Storage')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('settings-back')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('settings-category-Storage')),
+        findsOneWidget,
+      );
     });
   });
 

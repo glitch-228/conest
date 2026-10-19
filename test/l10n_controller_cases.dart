@@ -172,23 +172,30 @@ void _localizationControllerTests() {
           ),
         ),
       );
+      // Every settings page, opened from its category.
       for (final title in [
-        strings.settingsPersonal,
-        strings.settingsStorage,
-        strings.settingsConnectivity,
-        strings.settingsRelays,
-        strings.settingsUpdates,
-        strings.settingsAccount,
+        'Personal / Preferences',
+        'Devices',
+        'Connectivity',
+        'Network / Relay',
+        'Storage',
+        'Updates',
+        'Danger',
       ]) {
-        final chip = find.widgetWithText(ChoiceChip, title);
-        await tester.ensureVisible(chip);
-        await tester.tap(chip);
+        final category = find.byKey(ValueKey('settings-category-$title'));
+        await tester.ensureVisible(category);
+        await tester.tap(category);
         await tester.pump(const Duration(milliseconds: 100));
         expect(
           tester.takeException(),
           isNull,
           reason: '$code: Settings $title',
         );
+        final back = find.byKey(const ValueKey('settings-back'));
+        if (back.evaluate().isNotEmpty) {
+          await tester.tap(back);
+          await tester.pump(const Duration(milliseconds: 100));
+        }
       }
 
       await show(
