@@ -1357,5 +1357,12 @@
   "bluetoothMeshNeedsAttention": "شبكة البلوتوث تحتاج إلى انتباه",
   "forwardSelectedTitle": "{count, plural, zero{إعادة توجيه {count} رسالة} one{إعادة توجيه رسالة واحدة} two{إعادة توجيه رسالتين} few{إعادة توجيه {count} رسائل} many{إعادة توجيه {count} رسالة} other{إعادة توجيه {count} رسالة}}",
   "forwardedSummary": "{count, plural, zero{لم تُوجَّه أي رسالة} one{وُجِّهت رسالة واحدة} two{وُجِّهت رسالتان} few{وُجِّهت {count} رسائل} many{وُجِّهت {count} رسالة} other{وُجِّهت {count} رسالة}}",
-  "forwardSkipped": "{count, plural, zero{لم يُترك أي ملف} one{ملف واحد ليس على هذا الجهاز بعد فتُرك} two{ملفان ليسا على هذا الجهاز بعد فتُركا} few{{count} ملفات ليست على هذا الجهاز بعد فتُركت} many{{count} ملفًا ليست على هذا الجهاز بعد فتُركت} other{{count} ملف ليست على هذا الجهاز بعد فتُركت}}"
+  "forwardSkipped": "{count, plural, zero{لم يُترك أي ملف} one{ملف واحد ليس على هذا الجهاز بعد فتُرك} two{ملفان ليسا على هذا الجهاز بعد فتُركا} few{{count} ملفات ليست على هذا الجهاز بعد فتُركت} many{{count} ملفًا ليست على هذا الجهاز بعد فتُركت} other{{count} ملف ليست على هذا الجهاز بعد فتُركت}}",
+  "torBlockedHint": "يبدو أن Tor محجوب على هذه الشبكة. الجسور تتجاوز ذلك، لكن الجسور العامة غالبًا ما تكون محجوبة أيضًا: احصل على جسورك الخاصة (أدناه).",
+  "torGetBridgesTitle": "كيف تحصل على جسورك الخاصة",
+  "torGetBridgesIntro": "يوزّع Tor Project الجسور بهذه الطرق. اطلب جسور obfs4 أو webtunnel، ثم الصق الأسطر أعلاه.",
+  "torGetBridgesWeb": "الموقع: bridges.torproject.org",
+  "torGetBridgesTelegram": "تيليغرام: راسل ‎@GetBridgesBot",
+  "torGetBridgesEmail": "البريد: اكتب إلى bridges@torproject.org من عنوان Gmail أو Riseup",
+  "torGetBridgesFriend": "أو اطلب من شخص تثق به ويستخدم Tor أن يشاركك سطر جسر."
 }

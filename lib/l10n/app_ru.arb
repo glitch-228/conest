@@ -1357,5 +1357,12 @@
   "bluetoothMeshNeedsAttention": "Bluetooth-сеть требует внимания",
   "forwardSelectedTitle": "{count, plural, one{Переслать {count} сообщение} few{Переслать {count} сообщения} many{Переслать {count} сообщений} other{Переслать {count} сообщения}}",
   "forwardedSummary": "{count, plural, one{Переслано {count} сообщение} few{Переслано {count} сообщения} many{Переслано {count} сообщений} other{Переслано {count} сообщения}}",
-  "forwardSkipped": "{count, plural, one{{count} файл ещё не на этом устройстве и пропущен} few{{count} файла ещё не на этом устройстве и пропущены} many{{count} файлов ещё не на этом устройстве и пропущены} other{{count} файла ещё не на этом устройстве и пропущены}}"
+  "forwardSkipped": "{count, plural, one{{count} файл ещё не на этом устройстве и пропущен} few{{count} файла ещё не на этом устройстве и пропущены} many{{count} файлов ещё не на этом устройстве и пропущены} other{{count} файла ещё не на этом устройстве и пропущены}}",
+  "torBlockedHint": "Похоже, Tor заблокирован в этой сети. Мосты помогают обойти блокировку, но общедоступные тоже часто заблокированы: получите свои (см. ниже).",
+  "torGetBridgesTitle": "Как получить свои мосты",
+  "torGetBridgesIntro": "Tor Project раздаёт мосты такими способами. Запросите мосты obfs4 или webtunnel и вставьте строки выше.",
+  "torGetBridgesWeb": "Сайт: bridges.torproject.org",
+  "torGetBridgesTelegram": "Telegram: напишите @GetBridgesBot",
+  "torGetBridgesEmail": "Почта: напишите на bridges@torproject.org с адреса Gmail или Riseup",
+  "torGetBridgesFriend": "Или попросите человека, которому доверяете и который пользуется Tor, поделиться строкой моста."
 }

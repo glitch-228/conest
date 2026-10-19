@@ -5255,4 +5255,29 @@ class AppLocalizationsEn extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get torBlockedHint =>
+      'Tor looks blocked on this network. Bridges get around that, but the public ones are often blocked too: get your own (below).';
+
+  @override
+  String get torGetBridgesTitle => 'How to get your own bridges';
+
+  @override
+  String get torGetBridgesIntro =>
+      'The Tor Project hands out bridges in these ways. Ask for obfs4 or webtunnel bridges, then paste the lines above.';
+
+  @override
+  String get torGetBridgesWeb => 'Website: bridges.torproject.org';
+
+  @override
+  String get torGetBridgesTelegram => 'Telegram: write to @GetBridgesBot';
+
+  @override
+  String get torGetBridgesEmail =>
+      'Email: write to bridges@torproject.org from a Gmail or Riseup address';
+
+  @override
+  String get torGetBridgesFriend =>
+      'Or ask someone you trust who uses Tor to share a bridge line with you.';
 }

@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:conest/main.dart' as app;
 import 'package:conest/l10n/app_localizations.dart';
+import 'package:conest/src/ui/tor_carrier_panel.dart';
 import 'package:conest/src/app_locales.dart';
 import 'package:conest/src/ui/calls_list.dart';
 import 'package:conest/main.dart' show sniffImageMimeType, buildDeltaAttachment;
@@ -21809,6 +21810,46 @@ void main() {
       );
       expect(status.ready, isFalse);
       expect(status.lastError, contains('Tor is blocked.'));
+    });
+
+    testWidgets('a blocked Tor points to getting your own bridges', (
+      tester,
+    ) async {
+      final tor = FakeTorNetwork()..blocked = true;
+      late MessengerController alice;
+      await tester.runAsync(() async {
+        alice = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          torApi: tor.device(),
+        );
+        await alice.enableTorCarrier();
+        for (
+          var i = 0;
+          i < 50 && alice.torChannel?.state != TorCarrierState.failed;
+          i++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      addTearDown(alice.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: TorCarrierPanel(controller: alice),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('tor-blocked-hint')), findsOneWidget);
+      // Opened by itself, with the Tor Project's ways to get bridges.
+      expect(find.textContaining('@GetBridgesBot'), findsOneWidget);
+      expect(find.textContaining('bridges@torproject.org'), findsOneWidget);
+      expect(find.textContaining('bridges.torproject.org'), findsWidgets);
     });
 
     test('two devices talk through their onion services', () async {

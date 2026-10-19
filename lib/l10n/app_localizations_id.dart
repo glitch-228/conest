@@ -5241,4 +5241,29 @@ class AppLocalizationsId extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get torBlockedHint =>
+      'Tor tampaknya diblokir di jaringan ini. Bridge bisa menembusnya, tetapi bridge publik juga sering diblokir: dapatkan bridge Anda sendiri (di bawah).';
+
+  @override
+  String get torGetBridgesTitle => 'Cara mendapatkan bridge Anda sendiri';
+
+  @override
+  String get torGetBridgesIntro =>
+      'Tor Project membagikan bridge dengan cara-cara ini. Mintalah bridge obfs4 atau webtunnel, lalu tempelkan barisnya di atas.';
+
+  @override
+  String get torGetBridgesWeb => 'Situs web: bridges.torproject.org';
+
+  @override
+  String get torGetBridgesTelegram => 'Telegram: kirim pesan ke @GetBridgesBot';
+
+  @override
+  String get torGetBridgesEmail =>
+      'Email: kirim ke bridges@torproject.org dari alamat Gmail atau Riseup';
+
+  @override
+  String get torGetBridgesFriend =>
+      'Atau minta orang yang Anda percaya dan memakai Tor untuk membagikan satu baris bridge.';
 }

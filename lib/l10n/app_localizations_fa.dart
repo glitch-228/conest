@@ -5254,4 +5254,29 @@ class AppLocalizationsFa extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get torBlockedHint =>
+      'به نظر می‌رسد Tor در این شبکه مسدود است. پل‌ها این مسدودسازی را دور می‌زنند، اما پل‌های عمومی هم اغلب مسدودند: پل‌های خودتان را بگیرید (پایین).';
+
+  @override
+  String get torGetBridgesTitle => 'چگونه پل‌های خودتان را بگیرید';
+
+  @override
+  String get torGetBridgesIntro =>
+      'Tor Project پل‌ها را از این راه‌ها می‌دهد. پل‌های obfs4 یا webtunnel بخواهید، سپس خط‌ها را در بالا بچسبانید.';
+
+  @override
+  String get torGetBridgesWeb => 'وب‌سایت: bridges.torproject.org';
+
+  @override
+  String get torGetBridgesTelegram => 'تلگرام: به ‎@GetBridgesBot پیام دهید';
+
+  @override
+  String get torGetBridgesEmail =>
+      'ایمیل: از یک نشانی Gmail یا Riseup به bridges@torproject.org بنویسید';
+
+  @override
+  String get torGetBridgesFriend =>
+      'یا از کسی که به او اعتماد دارید و از Tor استفاده می‌کند بخواهید یک خط پل با شما به اشتراک بگذارد.';
 }

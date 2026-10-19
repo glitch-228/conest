@@ -8308,6 +8308,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{count, plural, one{1 file is not on this device yet and was left out} other{{count} files are not on this device yet and were left out}}'**
   String forwardSkipped(int count);
+
+  /// Tor settings: shown when Tor seems blocked and no bridges are set.
+  ///
+  /// In en, this message translates to:
+  /// **'Tor looks blocked on this network. Bridges get around that, but the public ones are often blocked too: get your own (below).'**
+  String get torBlockedHint;
+
+  /// Tor settings: title of the help on getting bridges.
+  ///
+  /// In en, this message translates to:
+  /// **'How to get your own bridges'**
+  String get torGetBridgesTitle;
+
+  /// Tor settings: introduction to the ways of getting bridges.
+  ///
+  /// In en, this message translates to:
+  /// **'The Tor Project hands out bridges in these ways. Ask for obfs4 or webtunnel bridges, then paste the lines above.'**
+  String get torGetBridgesIntro;
+
+  /// Tor settings: get bridges from the Tor Project website (keep the address as is).
+  ///
+  /// In en, this message translates to:
+  /// **'Website: bridges.torproject.org'**
+  String get torGetBridgesWeb;
+
+  /// Tor settings: get bridges from the Tor Project's Telegram bot (keep the bot name as is).
+  ///
+  /// In en, this message translates to:
+  /// **'Telegram: write to @GetBridgesBot'**
+  String get torGetBridgesTelegram;
+
+  /// Tor settings: get bridges by email from the Tor Project (keep the addresses as is).
+  ///
+  /// In en, this message translates to:
+  /// **'Email: write to bridges@torproject.org from a Gmail or Riseup address'**
+  String get torGetBridgesEmail;
+
+  /// Tor settings: getting a bridge from a trusted person.
+  ///
+  /// In en, this message translates to:
+  /// **'Or ask someone you trust who uses Tor to share a bridge line with you.'**
+  String get torGetBridgesFriend;
 }
 
 class _AppLocalizationsDelegate

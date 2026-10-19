@@ -74,6 +74,16 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
       TorCarrierState.failed => 'Cannot reach Tor; retrying',
       _ => 'Off',
     };
+    // Plain Tor stuck or refused, with no bridges: the network blocks it.
+    final blocked =
+        config != null &&
+        config.bridges.isEmpty &&
+        channel != null &&
+        channel.state != TorCarrierState.connected &&
+        (channel.state == TorCarrierState.failed ||
+            '${channel.lastError ?? ''} ${channel.progressDetail ?? ''}'
+                .toLowerCase()
+                .contains('filtered'));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -106,6 +116,35 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
             },
             helperMaxLines: 2,
           ),
+        ),
+        if (blocked)
+          Padding(
+            key: const ValueKey('tor-blocked-hint'),
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              l10nOf(context).torBlockedHint,
+              style: TextStyle(color: theme.colorScheme.error),
+            ),
+          ),
+        ExpansionTile(
+          key: const ValueKey('tor-get-bridges'),
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          initiallyExpanded: blocked,
+          title: Text(l10nOf(context).torGetBridgesTitle),
+          children: [
+            Text(l10nOf(context).torGetBridgesIntro),
+            const SizedBox(height: 4),
+            for (final way in [
+              l10nOf(context).torGetBridgesWeb,
+              l10nOf(context).torGetBridgesTelegram,
+              l10nOf(context).torGetBridgesEmail,
+            ])
+              SelectableText('• $way'),
+            const SizedBox(height: 4),
+            Text(l10nOf(context).torGetBridgesFriend),
+          ],
         ),
         if (config != null)
           Align(

@@ -1357,5 +1357,12 @@
   "bluetoothMeshNeedsAttention": "شبکهٔ بلوتوث نیاز به بررسی دارد",
   "forwardSelectedTitle": "{count, plural, one{بازارسال {count} پیام} other{بازارسال {count} پیام}}",
   "forwardedSummary": "{count, plural, one{{count} پیام بازارسال شد} other{{count} پیام بازارسال شد}}",
-  "forwardSkipped": "{count, plural, one{{count} فایل هنوز روی این دستگاه نیست و کنار گذاشته شد} other{{count} فایل هنوز روی این دستگاه نیست و کنار گذاشته شد}}"
+  "forwardSkipped": "{count, plural, one{{count} فایل هنوز روی این دستگاه نیست و کنار گذاشته شد} other{{count} فایل هنوز روی این دستگاه نیست و کنار گذاشته شد}}",
+  "torBlockedHint": "به نظر می‌رسد Tor در این شبکه مسدود است. پل‌ها این مسدودسازی را دور می‌زنند، اما پل‌های عمومی هم اغلب مسدودند: پل‌های خودتان را بگیرید (پایین).",
+  "torGetBridgesTitle": "چگونه پل‌های خودتان را بگیرید",
+  "torGetBridgesIntro": "Tor Project پل‌ها را از این راه‌ها می‌دهد. پل‌های obfs4 یا webtunnel بخواهید، سپس خط‌ها را در بالا بچسبانید.",
+  "torGetBridgesWeb": "وب‌سایت: bridges.torproject.org",
+  "torGetBridgesTelegram": "تلگرام: به ‎@GetBridgesBot پیام دهید",
+  "torGetBridgesEmail": "ایمیل: از یک نشانی Gmail یا Riseup به bridges@torproject.org بنویسید",
+  "torGetBridgesFriend": "یا از کسی که به او اعتماد دارید و از Tor استفاده می‌کند بخواهید یک خط پل با شما به اشتراک بگذارد."
 }

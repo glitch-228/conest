@@ -5384,4 +5384,29 @@ class AppLocalizationsAr extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get torBlockedHint =>
+      'يبدو أن Tor محجوب على هذه الشبكة. الجسور تتجاوز ذلك، لكن الجسور العامة غالبًا ما تكون محجوبة أيضًا: احصل على جسورك الخاصة (أدناه).';
+
+  @override
+  String get torGetBridgesTitle => 'كيف تحصل على جسورك الخاصة';
+
+  @override
+  String get torGetBridgesIntro =>
+      'يوزّع Tor Project الجسور بهذه الطرق. اطلب جسور obfs4 أو webtunnel، ثم الصق الأسطر أعلاه.';
+
+  @override
+  String get torGetBridgesWeb => 'الموقع: bridges.torproject.org';
+
+  @override
+  String get torGetBridgesTelegram => 'تيليغرام: راسل ‎@GetBridgesBot';
+
+  @override
+  String get torGetBridgesEmail =>
+      'البريد: اكتب إلى bridges@torproject.org من عنوان Gmail أو Riseup';
+
+  @override
+  String get torGetBridgesFriend =>
+      'أو اطلب من شخص تثق به ويستخدم Tor أن يشاركك سطر جسر.';
 }

@@ -1357,5 +1357,12 @@
   "bluetoothMeshNeedsAttention": "Jaringan Bluetooth perlu diperiksa",
   "forwardSelectedTitle": "{count, plural, other{Teruskan {count} pesan}}",
   "forwardedSummary": "{count, plural, other{{count} pesan diteruskan}}",
-  "forwardSkipped": "{count, plural, other{{count} file belum ada di perangkat ini dan dilewati}}"
+  "forwardSkipped": "{count, plural, other{{count} file belum ada di perangkat ini dan dilewati}}",
+  "torBlockedHint": "Tor tampaknya diblokir di jaringan ini. Bridge bisa menembusnya, tetapi bridge publik juga sering diblokir: dapatkan bridge Anda sendiri (di bawah).",
+  "torGetBridgesTitle": "Cara mendapatkan bridge Anda sendiri",
+  "torGetBridgesIntro": "Tor Project membagikan bridge dengan cara-cara ini. Mintalah bridge obfs4 atau webtunnel, lalu tempelkan barisnya di atas.",
+  "torGetBridgesWeb": "Situs web: bridges.torproject.org",
+  "torGetBridgesTelegram": "Telegram: kirim pesan ke @GetBridgesBot",
+  "torGetBridgesEmail": "Email: kirim ke bridges@torproject.org dari alamat Gmail atau Riseup",
+  "torGetBridgesFriend": "Atau minta orang yang Anda percaya dan memakai Tor untuk membagikan satu baris bridge."
 }

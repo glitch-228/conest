@@ -5023,4 +5023,28 @@ class AppLocalizationsZh extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get torBlockedHint =>
+      'Tor 在此网络上似乎被封锁。网桥可以绕过封锁，但公共网桥也常被封锁：请获取您自己的网桥（见下方）。';
+
+  @override
+  String get torGetBridgesTitle => '如何获取您自己的网桥';
+
+  @override
+  String get torGetBridgesIntro =>
+      'Tor Project 通过以下方式提供网桥。请索取 obfs4 或 webtunnel 网桥，然后把这些行粘贴到上方。';
+
+  @override
+  String get torGetBridgesWeb => '网站：bridges.torproject.org';
+
+  @override
+  String get torGetBridgesTelegram => 'Telegram：向 @GetBridgesBot 发消息';
+
+  @override
+  String get torGetBridgesEmail =>
+      '电子邮件：用 Gmail 或 Riseup 邮箱写信给 bridges@torproject.org';
+
+  @override
+  String get torGetBridgesFriend => '或者请您信任的、正在使用 Tor 的人与您分享一行网桥。';
 }

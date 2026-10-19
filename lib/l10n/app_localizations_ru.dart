@@ -5376,4 +5376,29 @@ class AppLocalizationsRu extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get torBlockedHint =>
+      'Похоже, Tor заблокирован в этой сети. Мосты помогают обойти блокировку, но общедоступные тоже часто заблокированы: получите свои (см. ниже).';
+
+  @override
+  String get torGetBridgesTitle => 'Как получить свои мосты';
+
+  @override
+  String get torGetBridgesIntro =>
+      'Tor Project раздаёт мосты такими способами. Запросите мосты obfs4 или webtunnel и вставьте строки выше.';
+
+  @override
+  String get torGetBridgesWeb => 'Сайт: bridges.torproject.org';
+
+  @override
+  String get torGetBridgesTelegram => 'Telegram: напишите @GetBridgesBot';
+
+  @override
+  String get torGetBridgesEmail =>
+      'Почта: напишите на bridges@torproject.org с адреса Gmail или Riseup';
+
+  @override
+  String get torGetBridgesFriend =>
+      'Или попросите человека, которому доверяете и который пользуется Tor, поделиться строкой моста.';
 }
