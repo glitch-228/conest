@@ -4784,9 +4784,31 @@ class MessengerController extends ChangeNotifier {
   /// Sets up the Nostr carrier with a fresh key of its own (not linked to
   /// the Conest identity), or changes its relays. Contacts learn the new
   /// address in the contact exchange.
-  Future<void> enableNostrCarrier({List<String>? relays}) async {
+  /// With no [relays] and no earlier setup, the relays are those of
+  /// [candidates] that answer fastest on this network (at most
+  /// [maxNostrAddressRelays]), or the defaults when none answers.
+  Future<void> enableNostrCarrier({
+    List<String>? relays,
+    List<String> candidates = nostrRelayCandidates,
+  }) async {
     _requireIdentity();
-    final chosen = relays ?? nostrCarrierConfig?.relays ?? defaultNostrRelays;
+    var probed = <String>[];
+    if (relays == null && nostrCarrierConfig == null) {
+      probed = await reachableNostrRelays(
+        candidates,
+        connector: _nostrConnector,
+      );
+      appendDebugLog(
+        'Nostr setup: relays answering here, fastest first: '
+        '${probed.isEmpty ? 'none, using the defaults' : probed.join(', ')}',
+      );
+    }
+    final chosen =
+        relays ??
+        nostrCarrierConfig?.relays ??
+        (probed.isEmpty
+            ? defaultNostrRelays
+            : probed.take(maxNostrAddressRelays).toList());
     final parsed = [
       for (final relay in chosen.map((relay) => relay.trim()))
         if (relay.isNotEmpty) relay,

@@ -16446,6 +16446,25 @@ void main() {
       },
     );
 
+    test('a new Nostr setup uses the relays that answer here', () async {
+      final nostr = FakeNostrRelays();
+      nostr.relay('wss://up1.test');
+      nostr.relay('wss://up2.test');
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nostrConnector: nostr.connect,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableNostrCarrier(
+        candidates: ['wss://down.test', 'wss://up1.test', 'wss://up2.test'],
+      );
+      expect(alice.nostrCarrierConfig!.relays.toSet(), {
+        'wss://up1.test',
+        'wss://up2.test',
+      });
+    });
+
     test(
       'turning Nostr off withdraws the address and forgets the key',
       () async {

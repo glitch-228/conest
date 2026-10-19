@@ -20,6 +20,60 @@ const List<String> defaultNostrRelays = [
   'wss://nostr.mom',
 ];
 
+/// Relays a new Nostr carrier picks from: each stores gift-wrapped events
+/// and serves them without signing in (checked with
+/// test/nostr_relay_live_test.dart, October 2026). Censored networks reach
+/// some and not others, and which ones changes by the minute, so a new
+/// setup takes those that answer fastest here (see [reachableNostrRelays]).
+const List<String> nostrRelayCandidates = [
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://nostr.mom',
+  'wss://nostr.oxtr.dev',
+  'wss://relay.snort.social',
+  'wss://nostr-pub.wellorder.net',
+  'wss://purplerelay.com',
+  'wss://nostr.data.haus',
+];
+
+/// Of [relays], those that accept a connection within [timeout] on this
+/// network, fastest first; every probe is closed again. Stops waiting once
+/// [enough] have answered.
+Future<List<String>> reachableNostrRelays(
+  List<String> relays, {
+  NostrSocketConnector? connector,
+  Duration timeout = const Duration(seconds: 10),
+  int enough = maxNostrAddressRelays,
+}) async {
+  final connect = connector ?? connectNostrSocket;
+  final answered = <String>[];
+  final done = Completer<void>();
+  var pending = relays.length;
+  void settle() {
+    if (!done.isCompleted && (answered.length >= enough || pending == 0)) {
+      done.complete();
+    }
+  }
+
+  for (final relay in relays) {
+    Future<NostrSocket>.sync(() => connect(Uri.parse(relay))).then(
+      (socket) {
+        if (!done.isCompleted) answered.add(relay);
+        unawaited(socket.close().catchError((Object _) {}));
+        pending--;
+        settle();
+      },
+      onError: (Object _) {
+        pending--;
+        settle();
+      },
+    );
+  }
+  if (relays.isEmpty) return const [];
+  await done.future.timeout(timeout, onTimeout: () {});
+  return List.unmodifiable(answered);
+}
+
 /// Relays that shut down, and the default each saved setup moves to.
 const Map<String, String> _retiredNostrRelays = {
   'wss://relay.0xchat.com': 'wss://relay.primal.net',

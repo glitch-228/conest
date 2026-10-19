@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:conest/src/nostr/event.dart';
@@ -20,6 +21,33 @@ void main() {
     for (final channel in channels) {
       await channel.stop();
     }
+  });
+
+  test('relays are ranked by how fast they answer here', () async {
+    relays.relay('wss://fast.test');
+    relays.relay('wss://slow.test');
+    relays.relay('wss://silent.test');
+    final reachable = await reachableNostrRelays(
+      [
+        'wss://slow.test',
+        'wss://down.test',
+        'wss://fast.test',
+        'wss://silent.test',
+      ],
+      connector: (url) async {
+        if (url.host == 'slow.test') {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+        // Connects and never completes the handshake.
+        if (url.host == 'silent.test') await Completer<void>().future;
+        return relays.connect(url);
+      },
+      timeout: const Duration(seconds: 2),
+    );
+    expect(reachable, ['wss://fast.test', 'wss://slow.test']);
+    // Probes only: nothing stays open.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(relays.openConnections, 0);
   });
 
   NostrCarrierChannel channel(

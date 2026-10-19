@@ -58,6 +58,20 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
     }
   }
 
+  /// The untouched defaults let the app pick the relays that answer here;
+  /// the box then shows the ones it chose.
+  Future<void> _switchOn() async {
+    final lines = _relayLines;
+    final untouched =
+        lines.length == defaultNostrRelays.length &&
+        lines.every(defaultNostrRelays.contains);
+    await widget.controller.enableNostrCarrier(
+      relays: untouched ? null : lines,
+    );
+    final chosen = widget.controller.nostrCarrierConfig?.relays;
+    if (mounted && chosen != null) _relays.text = chosen.join('\n');
+  }
+
   List<String> get _relayLines => _relays.text
       .split(RegExp(r'[\s,]+'))
       .where((line) => line.isNotEmpty)
@@ -82,11 +96,7 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
           value: config != null,
           onChanged: _busy
               ? null
-              : (on) => _run(
-                  on
-                      ? () => controller.enableNostrCarrier(relays: _relayLines)
-                      : controller.disableNostrCarrier,
-                ),
+              : (on) => _run(on ? _switchOn : controller.disableNostrCarrier),
         ),
         if (config != null) ...[
           for (final MapEntry(key: url, value: (state, error, reading))
