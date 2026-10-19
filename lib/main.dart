@@ -127,6 +127,7 @@ Future<void> _startDebugRunIfAsked(
     await controller.flushErrorHistory();
     // Time for the vault to reach the disk.
     await Future<void>.delayed(const Duration(seconds: 2));
+    CrashCatcher.instance.markStopped();
     exit(0);
   }
 }
@@ -149,7 +150,12 @@ Future<void> _startCrashRecords(CrashCatcher crashes, Directory root) async {
   final directory = Directory(p.join(root.path, 'crash'));
   // On Android the system ends apps in the background as a matter of
   // course: there a run counts as running only while in front.
-  await crashes.attach(directory, markRunning: !Platform.isAndroid);
+  final info = await ConestBuildInfo.load();
+  await crashes.attach(
+    directory,
+    markRunning: !Platform.isAndroid,
+    build: '${info.version}+${info.buildNumber}@${info.commit ?? ''}',
+  );
   try {
     startNativeCrashReports(p.join(directory.path, CrashCatcher.nativeName));
   } catch (error) {
@@ -331,6 +337,12 @@ Future<void> _runConestWithProfile(
     applicationSupportDirectoryProvider: () async => profile.dataRoot,
     tempDirectoryProvider: () async => profile.tempRoot,
     automaticStartupChecksEnabled: profile.automaticStartupChecksEnabled,
+    // The installer or updater ends the app: save what is pending, and the
+    // next start must not call it a crash.
+    onHandOver: () {
+      controller.savePendingChangesForLifecycle();
+      CrashCatcher.instance.markUpdating();
+    },
   );
   await controller.initialize();
   final crashes = CrashCatcher.instance;

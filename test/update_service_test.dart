@@ -830,6 +830,7 @@ void main() {
     });
 
     var launcherFinished = false;
+    var handedOver = false;
     var exited = false;
     int? exitCode;
     String? launchedExecutable;
@@ -857,8 +858,14 @@ void main() {
       },
       exitCallback: (code) {
         expect(launcherFinished, isTrue);
+        // The app was told before it ends (no crash notice next start).
+        expect(handedOver, isTrue);
         exited = true;
         exitCode = code;
+      },
+      onHandOver: () {
+        expect(launcherFinished, isTrue);
+        handedOver = true;
       },
     );
 

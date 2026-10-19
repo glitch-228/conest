@@ -333,8 +333,10 @@ class UpdateService extends ChangeNotifier {
     String? releaseManifestPublicKeyBase64,
     DesktopUpdaterLauncher? desktopUpdaterLauncher,
     void Function(int code)? exitCallback,
+    void Function()? onHandOver,
     bool automaticStartupChecksEnabled = true,
-  }) : _platformBridge = platformBridge ?? PlatformBridge(),
+  }) : _onHandOver = onHandOver,
+       _platformBridge = platformBridge ?? PlatformBridge(),
        _httpClientFactory = httpClientFactory ?? HttpClient.new,
        _applicationSupportDirectoryProvider =
            applicationSupportDirectoryProvider ??
@@ -366,6 +368,11 @@ class UpdateService extends ChangeNotifier {
   final String _releaseManifestPublicKeyBase64;
   final DesktopUpdaterLauncher _desktopUpdaterLauncher;
   final void Function(int code) _exitCallback;
+
+  /// Called just before the app hands itself to an installer or updater
+  /// (which then ends it): the app saves what is pending and notes that
+  /// the end is no crash.
+  final void Function()? _onHandOver;
   final bool _automaticStartupChecksEnabled;
 
   bool _startupCheckStarted = false;
@@ -592,6 +599,7 @@ class UpdateService extends ChangeNotifier {
         expectedSizeBytes: available.asset.sizeBytes,
       );
       if (_targetPlatform == UpdateTargetPlatform.android) {
+        _onHandOver?.call();
         await _platformBridge.installDownloadedApk(archiveFile.path);
         _statusMessage =
             'Installer opened for ${available.release.tagName}. Confirm the Android install to finish updating.';
@@ -1047,6 +1055,7 @@ class UpdateService extends ChangeNotifier {
       '--data-root',
       appSupportDir.path,
     ]);
+    _onHandOver?.call();
     _exitCallback(0);
   }
 

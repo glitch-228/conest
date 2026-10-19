@@ -163,7 +163,14 @@ class CrashCatcher {
   /// [markRunning]: whether this run counts as running from the start. On
   /// Android the system ends apps in the background as a matter of course,
   /// so the marker is kept only while the app is in front.
-  Future<void> attach(Directory directory, {required bool markRunning}) async {
+  /// [build] names the running build: a marker left by another build
+  /// means an update replaced the app, not that it crashed.
+  Future<void> attach(
+    Directory directory, {
+    required bool markRunning,
+    String? build,
+  }) async {
+    _build = build;
     try {
       await directory.create(recursive: true);
       final log = File(p.join(directory.path, logName));
@@ -187,11 +194,17 @@ class CrashCatcher {
         native.deleteSync();
       }
       final marker = File(p.join(directory.path, markerName));
-      if (marker.existsSync()) {
-        final since = DateTime.tryParse(marker.readAsStringSync().trim());
+      final ended = marker.existsSync() ? _readMarker(marker) : null;
+      // Not a crash: the app handed itself to an installer or updater, or
+      // a newer build now runs (an update replaced the one that was).
+      final replaced =
+          ended != null &&
+          (ended.updating ||
+              (build != null && ended.build != null && ended.build != build));
+      if (ended != null && !replaced) {
         carried.add(
           CrashRecord(
-            at: (since ?? marker.lastModifiedSync()).toUtc(),
+            at: ended.at,
             kind: 'exit',
             text:
                 'Conest closed without finishing: a crash, or the device '
@@ -240,16 +253,54 @@ class CrashCatcher {
     } catch (_) {}
   }
 
+  /// The running build, written into the marker.
+  String? _build;
+
   /// This run is in progress: if it ends without [markStopped], the next
   /// start says so.
-  void markRunning() {
+  void markRunning() => _writeMarker(updating: false);
+
+  /// The app is handing itself to an installer or updater, which ends it:
+  /// the next start says nothing.
+  void markUpdating() => _writeMarker(updating: true);
+
+  void _writeMarker({required bool updating}) {
     final directory = _directory;
     if (directory == null) return;
     try {
-      File(
-        p.join(directory.path, markerName),
-      ).writeAsStringSync(_now().toUtc().toIso8601String(), flush: true);
+      File(p.join(directory.path, markerName)).writeAsStringSync(
+        jsonEncode({
+          'at': _now().toUtc().toIso8601String(),
+          'build': ?_build,
+          if (updating) 'updating': true,
+        }),
+        flush: true,
+      );
     } catch (_) {}
+  }
+
+  /// A marker as written by [_writeMarker], or by older builds (only the
+  /// time).
+  static ({DateTime at, String? build, bool updating}) _readMarker(
+    File marker,
+  ) {
+    final text = marker.readAsStringSync().trim();
+    final fallback = marker.lastModifiedSync().toUtc();
+    try {
+      final json = jsonDecode(text);
+      if (json is Map<String, dynamic>) {
+        return (
+          at: DateTime.tryParse('${json['at']}')?.toUtc() ?? fallback,
+          build: json['build'] is String ? json['build'] as String : null,
+          updating: json['updating'] == true,
+        );
+      }
+    } catch (_) {}
+    return (
+      at: DateTime.tryParse(text)?.toUtc() ?? fallback,
+      build: null,
+      updating: false,
+    );
   }
 
   /// This run closed properly, or went to the background where the system

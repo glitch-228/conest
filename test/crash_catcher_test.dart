@@ -35,6 +35,44 @@ void main() {
     expect(next.previousRun.records.single.kind, 'exit');
   });
 
+  test('an update replacing the app is no crash', () async {
+    // The updater (desktop) or the installer (Android) ends the app.
+    final first = CrashCatcher();
+    await first.attach(root, markRunning: true, build: '0.4.0+60@aaa');
+    first.markUpdating();
+    // The same build (an install the user cancelled, then a restart) is no
+    // crash either.
+    final next = CrashCatcher();
+    await next.attach(root, markRunning: true, build: '0.4.0+60@aaa');
+    expect(next.previousRun.isEmpty, isTrue);
+  });
+
+  test('a newer build finding the old one still running is no crash', () {
+    // The process was ended by the update before it could say so.
+    return () async {
+      final first = CrashCatcher();
+      await first.attach(root, markRunning: true, build: '0.4.0+60@aaa');
+      final next = CrashCatcher();
+      await next.attach(root, markRunning: true, build: '0.4.0+61@bbb');
+      expect(next.previousRun.isEmpty, isTrue);
+      // The same build ending that way is reported, as before.
+      final third = CrashCatcher();
+      await third.attach(root, markRunning: true, build: '0.4.0+61@bbb');
+      expect(third.previousRun.crashed, isTrue);
+    }();
+  });
+
+  test('a marker from an older version (only a time) still counts', () async {
+    Directory(root.path).createSync(recursive: true);
+    File(
+      p.join(root.path, CrashCatcher.markerName),
+    ).writeAsStringSync('2026-10-19T10:00:00.000Z');
+    final next = CrashCatcher();
+    await next.attach(root, markRunning: true, build: '0.4.0+61@bbb');
+    expect(next.previousRun.crashed, isTrue);
+    expect(next.previousRun.records.single.at, DateTime.utc(2026, 10, 19, 10));
+  });
+
   test('a run that closed properly leaves nothing to report', () async {
     final first = CrashCatcher();
     await first.attach(root, markRunning: true);
