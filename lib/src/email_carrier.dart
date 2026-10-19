@@ -45,9 +45,16 @@ const List<String> defaultChatmailDomains = [
 Future<List<String>> reachableChatmailServers(
   List<String> domains, {
   MailConnector? connector,
+  Future<MailSocket> Function(String host, String alpn)? viaHttpsPort,
   Duration timeout = const Duration(seconds: 10),
   int enough = 3,
 }) async {
+  // Port 993 and port 443 at once: on a censoring network the mail port's
+  // TLS can stall for longer than this whole probe, so trying 443 only
+  // after it found nothing (seen on the device lab).
+  final direct = connector ?? connectMailSocket;
+  final https =
+      viaHttpsPort ?? (connector == null ? connectViaHttpsPort : null);
   final answered = <String>[];
   final done = Completer<void>();
   var pending = domains.length;
@@ -58,24 +65,38 @@ Future<List<String>> reachableChatmailServers(
   }
 
   for (final domain in domains) {
-    ImapClient.connect(
-      domain,
-      993,
-      connector:
-          connector ??
-          chatmailFallback(greetingWait: const Duration(seconds: 6)),
-    ).then(
-      (client) {
-        if (!done.isCompleted) answered.add(domain);
-        unawaited(client.close().catchError((Object _) {}));
-        pending--;
-        settle();
-      },
-      onError: (Object _) {
-        pending--;
-        settle();
-      },
-    );
+    final attempts = [
+      ImapClient.connect(domain, 993, connector: direct),
+      if (https != null)
+        ImapClient.connect(
+          domain,
+          993,
+          connector: (host, _, {required bool tls}) => https(host, 'imap'),
+        ),
+    ];
+    var failed = 0;
+    var won = false;
+    for (final (index, attempt) in attempts.indexed) {
+      attempt.then(
+        (client) {
+          unawaited(client.close().catchError((Object _) {}));
+          if (won) return;
+          won = true;
+          if (!done.isCompleted) {
+            answered.add(domain);
+            if (index == 1) chatmailReachedViaHttps.add(domain);
+          }
+          pending--;
+          settle();
+        },
+        onError: (Object _) {
+          if (++failed == attempts.length && !won) {
+            pending--;
+            settle();
+          }
+        },
+      );
+    }
   }
   if (domains.isEmpty) return const [];
   await done.future.timeout(timeout, onTimeout: () {});
@@ -271,7 +292,10 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
        // Chatmail servers also listen on 443, for networks that block the
        // mail ports.
        _connector =
-           connector ?? (config.chatmail ? chatmailFallback(log: log) : null),
+           connector ??
+           (config.chatmail
+               ? chatmailFallback(log: log, viaHttps: chatmailReachedViaHttps)
+               : null),
        _now = now ?? DateTime.now;
 
   EmailCarrierConfig _config;
@@ -338,7 +362,10 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
       config.imapPort,
       tls: tls,
       connector:
-          connector ?? (config.chatmail ? chatmailFallback(log: log) : null),
+          connector ??
+          (config.chatmail
+              ? chatmailFallback(log: log, viaHttps: chatmailReachedViaHttps)
+              : null),
     );
     log?.call('IMAP ${config.imapHost} answered in ${took()}');
     try {

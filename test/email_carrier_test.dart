@@ -121,6 +121,23 @@ void main() {
     expect(server.passwords, isEmpty);
   });
 
+  test('a server whose mail port stalls is found on port 443', () async {
+    // The device lab's network: TLS on 993 stalls longer than the probe.
+    chatmailReachedViaHttps.remove('stalled.test');
+    final reachable = await reachableChatmailServers(
+      ['stalled.test'],
+      connector: (host, port, {required bool tls}) async {
+        await Completer<void>().future;
+        throw StateError('unreachable');
+      },
+      viaHttpsPort: (host, alpn) => server.connect(host, 993, tls: false),
+      timeout: const Duration(seconds: 2),
+    );
+    expect(reachable, ['stalled.test']);
+    // Sign-up and reading then go to 443 first.
+    expect(chatmailReachedViaHttps, contains('stalled.test'));
+  });
+
   test('probing stops waiting once enough servers answered', () async {
     final watch = Stopwatch()..start();
     final reachable = await reachableChatmailServers(

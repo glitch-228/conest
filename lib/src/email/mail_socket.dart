@@ -43,13 +43,15 @@ Future<MailSocket> connectMailSocket(
 MailConnector chatmailFallback({
   MailConnector direct = connectMailSocket,
   Future<MailSocket> Function(String host, String alpn) viaHttpsPort =
-      _connectViaHttpsPort,
+      connectViaHttpsPort,
   Duration greetingWait = const Duration(seconds: 15),
   void Function(String line)? log,
+  Set<String>? viaHttps,
 }) {
-  // Servers this run reached only on 443: tried there first next time, not
-  // after the blocked port's whole timeout.
-  final viaHttps = <String>{};
+  // Servers reached only on 443: tried there first next time, not after the
+  // blocked port's whole timeout. The app shares one set (see
+  // [chatmailReachedViaHttps]); tests keep their own.
+  final reached = viaHttps ?? <String>{};
   return (String host, int port, {required bool tls}) async {
     final alpn = switch (port) {
       993 => 'imap',
@@ -60,12 +62,12 @@ MailConnector chatmailFallback({
     final watch = Stopwatch()..start();
     String took() =>
         '${(watch.elapsedMilliseconds / 1000).toStringAsFixed(1)} s';
-    if (viaHttps.contains(host)) {
+    if (reached.contains(host)) {
       try {
         return await viaHttpsPort(host, alpn);
       } catch (error) {
         log?.call('$host:443 ($alpn) failed after ${took()}: $error');
-        viaHttps.remove(host);
+        reached.remove(host);
         watch.reset();
       }
     }
@@ -81,7 +83,7 @@ MailConnector chatmailFallback({
       try {
         final socket = await viaHttpsPort(host, alpn);
         log?.call('$host reached over port 443 ($alpn) in ${took()}');
-        viaHttps.add(host);
+        reached.add(host);
         return socket;
       } catch (httpsError) {
         log?.call('$host:443 ($alpn) failed after ${took()}: $httpsError');
@@ -158,8 +160,14 @@ class _Replayed implements MailSocket {
   }
 }
 
-Future<MailSocket> _connectViaHttpsPort(String host, String alpn) =>
+/// IMAP or SMTP ([alpn]) on [host]'s port 443, as chatmail servers offer.
+Future<MailSocket> connectViaHttpsPort(String host, String alpn) =>
     connectMailSocket(host, 443, tls: true, alpn: alpn);
+
+/// Chatmail servers this app has reached only on port 443 (the mail ports
+/// stall or are blocked on this network): sign-up, reading and sending go
+/// there first.
+final Set<String> chatmailReachedViaHttps = <String>{};
 
 class _IoMailSocket implements MailSocket {
   _IoMailSocket(this._socket) {
