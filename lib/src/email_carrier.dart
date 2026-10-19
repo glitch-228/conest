@@ -48,6 +48,7 @@ Future<List<String>> reachableChatmailServers(
   Future<MailSocket> Function(String host, String alpn)? viaHttpsPort,
   Duration timeout = const Duration(seconds: 10),
   int enough = 3,
+  void Function(String line)? log,
 }) async {
   // Port 993 and port 443 at once: on a censoring network the mail port's
   // TLS can stall for longer than this whole probe, so trying 443 only
@@ -83,9 +84,14 @@ Future<List<String>> reachableChatmailServers(
     ];
     var failed = 0;
     var won = false;
+    final watch = Stopwatch()..start();
     for (final (index, attempt) in attempts.indexed) {
+      final port = index == 0 ? '993' : '443';
       attempt.then(
         (client) {
+          log?.call(
+            '$domain:$port answered in ${watch.elapsedMilliseconds} ms',
+          );
           unawaited(client.close().catchError((Object _) {}));
           if (won) return;
           won = true;
@@ -98,7 +104,11 @@ Future<List<String>> reachableChatmailServers(
           pending--;
           settle();
         },
-        onError: (Object _) {
+        onError: (Object error) {
+          log?.call(
+            '$domain:$port failed after ${watch.elapsedMilliseconds} ms: '
+            '$error',
+          );
           if (++failed == attempts.length && !won) {
             pending--;
             settle();

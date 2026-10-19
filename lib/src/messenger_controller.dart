@@ -7117,6 +7117,7 @@ class MessengerController extends ChangeNotifier {
     final reachable = await reachableChatmailServers(
       candidates,
       connector: _mailConnector,
+      log: (line) => appendDebugLog('Email probe: $line'),
     );
     appendDebugLog(
       'Email sign-up: servers answering here, fastest first: '
