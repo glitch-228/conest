@@ -30263,6 +30263,42 @@ class MessengerController extends ChangeNotifier {
     // may be undecryptable there, so send it again on the new session.
     _bulkKeyAnnouncedAt.removeWhere((key, _) => key.startsWith('$id|'));
     _resendRecentControls(peer);
+    _resendWaitingMessages(peer);
+  }
+
+  /// Messages, 1:1 and group, still waiting for [peer]'s acknowledgement go
+  /// again now, encrypted on the new session. Olm decrypts only within its
+  /// last few ratchet chains, so one held up on the way (a relay lease that
+  /// replayed a minute later) can no longer be read, and the peer asked for
+  /// this session; waiting for the next retry pass lost it on the lab.
+  void _resendWaitingMessages(ContactRecord peer) {
+    _flushContactSoon(peer.deviceId);
+    final me = _snapshot.identity;
+    if (me == null) return;
+    for (final group in _snapshot.groups) {
+      if (!group.hasActiveMember(me.deviceId) ||
+          !group.hasActiveMember(peer.deviceId)) {
+        continue;
+      }
+      final member = _groupMemberContact(group, peer.deviceId);
+      if (member == null || !member.canSendOutbound) continue;
+      for (final message in messagesForGroup(group.groupId)) {
+        if (!message.outbound ||
+            message.groupFile != null ||
+            !(message.recipientStates[peer.deviceId]?.awaitsRecipientAck ??
+                false)) {
+          continue;
+        }
+        unawaited(
+          _tryDeliverExistingGroupMessage(
+            group: group,
+            contact: member,
+            message: message,
+            background: true,
+          ).catchError((Object _) => false),
+        );
+      }
+    }
   }
 
   /// Controls (edits, deletes, reactions, cancels, call signals) leave the

@@ -22899,6 +22899,62 @@ void main() {
       );
     });
 
+    // Olm decrypts only within its last few ratchet chains: a message held
+    // up (a relay lease that replays a minute later) can no longer be
+    // decrypted, and the receiver asks for a new session. What waits for
+    // that contact is then sent again at once, encrypted on the new
+    // session, not on the next retry pass (device lab: a message lost).
+    Future<void> pollOnly(List<MessengerController> controllers) async {
+      for (var round = 0; round < 12; round++) {
+        for (final controller in controllers) {
+          await controller.pollNow();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
+
+    test('after a reset, waiting messages are sent again at once', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      await bob.forgetRatchetSessionsForTesting(aliceId);
+      await alice.sendMessage(contact: alice.contacts.single, body: 'held');
+      await pollOnly([alice, bob]);
+      expect(bob.messagesFor(aliceId).map((m) => m.body), contains('held'));
+    });
+
+    test(
+      'after a reset, waiting group messages are sent again at once',
+      () async {
+        final relay = _FakeRelayClient();
+        final alice = await ratchetController(relay, 'Alice');
+        final bob = await ratchetController(relay, 'Bob');
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await establish(alice, bob);
+        final group = await alice.createGroup(
+          title: 'Held',
+          members: alice.contacts,
+        );
+        await settle([alice, bob]);
+        final aliceId = alice.identity!.deviceId;
+        await bob.forgetRatchetSessionsForTesting(aliceId);
+        await alice.sendGroupMessage(
+          groupId: group.groupId,
+          body: 'held group',
+        );
+        await pollOnly([alice, bob]);
+        expect(
+          bob.messagesForGroup(group.groupId).map((m) => m.body),
+          contains('held group'),
+        );
+      },
+    );
+
     test('a lost session recovers through a reset bundle', () async {
       final relay = _FakeRelayClient();
       final alice = await ratchetController(relay, 'Alice');
