@@ -446,11 +446,17 @@ class LocalRelayNode {
     Datagram? datagram;
     while ((datagram = socket.receive()) != null) {
       final response = _handleUdpDatagram(datagram!);
-      socket.send(
-        utf8.encode(jsonEncode(response)),
-        datagram.address,
-        datagram.port,
-      );
+      try {
+        socket.send(
+          utf8.encode(jsonEncode(response)),
+          datagram.address,
+          datagram.port,
+        );
+      } on SocketException {
+        // The answer is lost, as UDP can be anyway: Android refuses sends
+        // ("Operation not permitted") while it blocks a backgrounded app's
+        // network, and an uncaught throw here ended in the crash log.
+      }
     }
   }
 
