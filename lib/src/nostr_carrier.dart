@@ -60,6 +60,8 @@ Future<List<String>> reachableNostrRelays(
 
   // A few at a time, each given a head start before the next: censoring
   // networks hold back bursts of connections (seen with mail servers).
+  // Head starts still running when the probe ends are cancelled.
+  final timers = <Timer>[];
   final queue = Queue.of(relays);
   var slots = parallel;
   void launch() {
@@ -75,7 +77,7 @@ Future<List<String>> reachableNostrRelays(
         }
       }
 
-      Timer(headStart, free);
+      timers.add(Timer(headStart, free));
       Future<NostrSocket>.sync(() => connect(Uri.parse(relay))).then(
         (socket) {
           if (!done.isCompleted) answered.add(relay);
@@ -95,6 +97,9 @@ Future<List<String>> reachableNostrRelays(
 
   launch();
   await done.future.timeout(timeout, onTimeout: () {});
+  for (final timer in timers) {
+    timer.cancel();
+  }
   return List.unmodifiable(answered);
 }
 

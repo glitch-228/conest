@@ -80,6 +80,8 @@ Future<List<String>> reachableChatmailServers(
   // burst of 40 connections at once was held back by the device lab's
   // network for about 27 s (like a port scan), while one after another
   // they answered within a second.
+  // Head starts still running when the probe ends are cancelled.
+  final timers = <Timer>[];
   final queue = Queue.of(domains);
   var slots = parallel;
   void launch() {
@@ -95,7 +97,7 @@ Future<List<String>> reachableChatmailServers(
         }
       }
 
-      Timer(headStart, free);
+      timers.add(Timer(headStart, free));
       final attempts = [
         ImapClient.connect(domain, 993, connector: direct),
         if (https != null)
@@ -147,6 +149,9 @@ Future<List<String>> reachableChatmailServers(
 
   launch();
   await done.future.timeout(timeout, onTimeout: () {});
+  for (final timer in timers) {
+    timer.cancel();
+  }
   return List.unmodifiable(answered);
 }
 
