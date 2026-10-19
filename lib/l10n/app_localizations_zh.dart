@@ -5107,4 +5107,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String transportsTurnOnFailed(String name, String error) {
     return '无法开启 $name：$error';
   }
+
+  @override
+  String get transportsHowToChoose => '如何选择';
+
+  @override
+  String get settingsUserGuide => '用户指南';
 }

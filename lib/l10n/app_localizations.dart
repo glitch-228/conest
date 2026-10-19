@@ -8446,6 +8446,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{name} could not be switched on: {error}'**
   String transportsTurnOnFailed(String name, String error);
+
+  /// Onboarding transports step: link to the user guide page on choosing routes.
+  ///
+  /// In en, this message translates to:
+  /// **'How to choose'**
+  String get transportsHowToChoose;
+
+  /// Settings: opens the online user guide.
+  ///
+  /// In en, this message translates to:
+  /// **'User guide'**
+  String get settingsUserGuide;
 }
 
 class _AppLocalizationsDelegate

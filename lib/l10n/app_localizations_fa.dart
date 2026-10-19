@@ -5343,4 +5343,10 @@ class AppLocalizationsFa extends AppLocalizations {
   String transportsTurnOnFailed(String name, String error) {
     return '$name روشن نشد: $error';
   }
+
+  @override
+  String get transportsHowToChoose => 'چطور انتخاب کنیم';
+
+  @override
+  String get settingsUserGuide => 'راهنمای کاربر';
 }

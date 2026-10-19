@@ -1380,5 +1380,7 @@
   "transportsBanner": "الآن لا تصل إليك إلا الأجهزة على هذه الشبكة. أعدّ طريقًا عبر الإنترنت.",
   "transportsBannerAction": "إعداد",
   "transportsBannerDismiss": "ليس الآن",
-  "transportsTurnOnFailed": "تعذّر تشغيل {name}: {error}"
+  "transportsTurnOnFailed": "تعذّر تشغيل {name}: {error}",
+  "transportsHowToChoose": "كيف تختار",
+  "settingsUserGuide": "دليل المستخدم"
 }

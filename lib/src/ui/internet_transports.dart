@@ -6,6 +6,7 @@ import '../app_locales.dart';
 import '../messenger_controller.dart';
 import '../network_errors.dart';
 import '../transport_models.dart';
+import 'user_guide.dart';
 
 /// The transports step of onboarding: what reaches people beyond this
 /// network, checked on the network the device is on now. Ways that answer
@@ -132,7 +133,18 @@ class _TransportsStepState extends State<TransportsStep> {
         Text(l10n.transportsTitle, style: theme.textTheme.headlineSmall),
         const SizedBox(height: 12),
         Text(l10n.transportsIntro),
-        const SizedBox(height: 16),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: TextButton.icon(
+            key: const ValueKey('transports-guide'),
+            onPressed: () => unawaited(
+              openUserGuide(widget.controller, 'reaching-people.md'),
+            ),
+            icon: const Icon(Icons.help_outline),
+            label: Text(l10n.transportsHowToChoose),
+          ),
+        ),
+        const SizedBox(height: 8),
         if (checks == null)
           Row(
             children: [

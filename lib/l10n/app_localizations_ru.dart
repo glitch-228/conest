@@ -5467,4 +5467,10 @@ class AppLocalizationsRu extends AppLocalizations {
   String transportsTurnOnFailed(String name, String error) {
     return 'Не удалось включить $name: $error';
   }
+
+  @override
+  String get transportsHowToChoose => 'Как выбрать';
+
+  @override
+  String get settingsUserGuide => 'Руководство';
 }

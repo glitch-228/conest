@@ -75,6 +75,7 @@ import 'src/ui/error_history_screen.dart';
 import 'src/debug_auto_run.dart';
 import 'src/ui/route_test_panel.dart';
 import 'src/ui/user_mode_screen.dart';
+import 'src/ui/user_guide.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
@@ -14948,6 +14949,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 onChanged: (value) =>
                                     setState(() => _showAllSettings = value),
                               ),
+                            ListTile(
+                              key: const ValueKey('settings-user-guide'),
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.menu_book_outlined),
+                              title: Text(l10nOf(context).settingsUserGuide),
+                              trailing: const Icon(Icons.open_in_new),
+                              onTap: () =>
+                                  unawaited(openUserGuide(widget.controller)),
+                            ),
                             const SizedBox(height: 12),
                             _ThemeModeSelector(
                               controller: widget.themeController,

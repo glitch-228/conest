@@ -5475,4 +5475,10 @@ class AppLocalizationsAr extends AppLocalizations {
   String transportsTurnOnFailed(String name, String error) {
     return 'تعذّر تشغيل $name: $error';
   }
+
+  @override
+  String get transportsHowToChoose => 'كيف تختار';
+
+  @override
+  String get settingsUserGuide => 'دليل المستخدم';
 }

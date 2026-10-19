@@ -1380,5 +1380,7 @@
   "transportsBanner": "现在只有此网络上的设备能联系您。请设置一条经由互联网的途径。",
   "transportsBannerAction": "设置",
   "transportsBannerDismiss": "以后再说",
-  "transportsTurnOnFailed": "无法开启 {name}：{error}"
+  "transportsTurnOnFailed": "无法开启 {name}：{error}",
+  "transportsHowToChoose": "如何选择",
+  "settingsUserGuide": "用户指南"
 }

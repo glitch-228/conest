@@ -5330,4 +5330,10 @@ class AppLocalizationsId extends AppLocalizations {
   String transportsTurnOnFailed(String name, String error) {
     return '$name tidak bisa dinyalakan: $error';
   }
+
+  @override
+  String get transportsHowToChoose => 'Cara memilih';
+
+  @override
+  String get settingsUserGuide => 'Panduan pengguna';
 }

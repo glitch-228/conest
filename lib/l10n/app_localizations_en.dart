@@ -5343,4 +5343,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String transportsTurnOnFailed(String name, String error) {
     return '$name could not be switched on: $error';
   }
+
+  @override
+  String get transportsHowToChoose => 'How to choose';
+
+  @override
+  String get settingsUserGuide => 'User guide';
 }

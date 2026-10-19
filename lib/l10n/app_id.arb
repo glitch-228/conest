@@ -1380,5 +1380,7 @@
   "transportsBanner": "Saat ini hanya perangkat di jaringan ini yang bisa menjangkau Anda. Atur jalur lewat internet.",
   "transportsBannerAction": "Atur",
   "transportsBannerDismiss": "Nanti saja",
-  "transportsTurnOnFailed": "{name} tidak bisa dinyalakan: {error}"
+  "transportsTurnOnFailed": "{name} tidak bisa dinyalakan: {error}",
+  "transportsHowToChoose": "Cara memilih",
+  "settingsUserGuide": "Panduan pengguna"
 }

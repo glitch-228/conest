@@ -8037,5 +8037,13 @@
         "type": "String"
       }
     }
+  },
+  "transportsHowToChoose": "How to choose",
+  "@transportsHowToChoose": {
+    "description": "Onboarding transports step: link to the user guide page on choosing routes."
+  },
+  "settingsUserGuide": "User guide",
+  "@settingsUserGuide": {
+    "description": "Settings: opens the online user guide."
   }
 }

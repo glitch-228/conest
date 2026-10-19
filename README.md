@@ -9,15 +9,23 @@ messages end-to-end encrypted by Conest.
 It can also be used as a Matrix client, alongside Conest chats or instead
 of them.
 
+New to Conest? Read the [user guide](docs/README.md): getting started,
+choosing routes (also on networks that block things), Tor bridges, several
+devices and troubleshooting.
+
 ## Features
 
 **Messaging**
 - Direct chats and invite-only groups of up to 16 people: text, replies,
   edits, reactions, read receipts, scheduled messages, voice messages and
   files with albums and captions.
-- Saved messages: a chat with yourself for notes, files and forwards,
-  kept only on this device.
-- Voice calls between Conest devices (experimental, off by default).
+- Saved messages: a chat with yourself for notes, files and forwards;
+  its texts appear on your other linked devices.
+- Voice calls between Conest devices, one to one and in groups
+  (experimental, off by default).
+- One account on several devices: each device has its own keys, contacts
+  reach all of them, and sent messages, Saved texts and read marks sync
+  between them.
 - Every message shows a route mark telling how it travelled.
 
 **Privacy and security**
@@ -44,6 +52,11 @@ of them.
   - a Bluetooth mesh with nearby devices (bitchat-compatible).
 - Both sides need a route on for it to be used. Routes enabled later reach
   existing contacts automatically.
+- Setup checks which routes work on the network you are on and offers to
+  turn them on; at least one internet route is needed, three are
+  recommended. Email and Nostr pick servers that answer where you are.
+- A message can go over several routes at once (by battery and network
+  cost); the first copy to arrive counts and the rest are dropped.
 - Routes are ranked per contact by what works and how fast; a contact can
   carry messages for another contact you cannot reach yourself.
 - Files go over LAN, Iroh, Conest relays and Tor; the other routes carry
@@ -68,7 +81,8 @@ of them.
   and others), one to one or in groups, under a Nostr account of their
   own.
 - Delta Chat chats through your email account: verified by invite QR or
-  link (both ways), one to one and in groups, with read receipts.
+  link (both ways), one to one and in groups, with files, reactions,
+  edits and read receipts.
 - Messages with Meshtastic and MeshCore app users through your radio,
   directly and on the radio's channels.
 - Verifying Matrix users in direct chats, as Element does.
@@ -103,18 +117,18 @@ so far (setup, modes, calls, message details); the rest follows.
 
 ## What Is Not Complete Yet
 
-- Several devices on one account (planned: per-device keys under an account
-  key, linking through Matrix or a QR code, optional sync).
-- Talking to other apps' users: Telegram and Discord are planned; Delta
-  Chat files, reactions and its newest invite form are next.
-- Sending one message over several routes at once, and files over several
-  routes in parallel.
-- Relay protocol v2 with registration for large files and call relaying.
+- Several devices: messages received while only one of your devices was
+  reachable, files, voice messages, groups and settings do not sync
+  between your devices yet. History from before linking is not copied.
+- Talking to other apps' users: Telegram and Discord are planned.
+- Files over several routes in parallel, and relay protocol v2 with
+  registration for large files and call relaying.
 - Background notifications on Android and a background runtime on by
   default.
 - Beam receive sessions do not survive an app restart.
-- Device testing of the newer routes (Tor bridges, radios, Bluetooth mesh,
-  email) and of 2 GiB transfers on every platform is ongoing.
+- Email can stall on networks that throttle mail servers; other routes
+  keep working.
+- Device testing of 2 GiB transfers on every platform is ongoing.
 
 ## Run The Relay
 
