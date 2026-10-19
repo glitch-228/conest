@@ -29890,6 +29890,10 @@ class MessengerController extends ChangeNotifier {
         engine: engine,
         store: await _vaultStore.openRatchetStore(),
         now: _now,
+        // Session events in debug builds (device lab): ids only.
+        log: _debugBuildId == null
+            ? null
+            : (line) => appendDebugLog('Ratchet: $line'),
       );
       _ratchet = sessions;
       _crypto
@@ -30185,6 +30189,9 @@ class MessengerController extends ChangeNotifier {
         }),
         createdAt: now.toUtc(),
       );
+      if (_debugBuildId != null) {
+        appendDebugLog('Ratchet: sending $reason bundle to ${peer.alias}');
+      }
       await _deliverToContact(
         contact: peer,
         recipientDeviceId: peer.deviceId,
@@ -30218,6 +30225,9 @@ class MessengerController extends ChangeNotifier {
     if (decoded is! Map<String, dynamic> || decoded['version'] != 1) return;
     final reason = decoded['reason'];
     if (reason != 'offer' && reason != 'answer' && reason != 'reset') return;
+    if (_debugBuildId != null) {
+      appendDebugLog('Ratchet: $reason bundle from ${peer.alias}');
+    }
     final bundle = RatchetBundle.fromJson(decoded['bundle']);
     final id = ratchetPeerId(peer);
     // Messages encrypted before this bundle must be encrypted again.

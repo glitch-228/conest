@@ -349,9 +349,25 @@ class RatchetSessions {
     required RatchetEngine engine,
     required RatchetStore store,
     DateTime Function()? now,
+    void Function(String line)? log,
   }) : _engine = engine,
        _store = store,
-       _now = now ?? DateTime.now;
+       _now = now ?? DateTime.now,
+       _log = log;
+
+  /// Session events (ids only, no keys) for the debug log: which sessions
+  /// were opened, used and dropped, to trace lost messages.
+  final void Function(String line)? _log;
+
+  static String _short(String id) => id.length <= 8 ? id : id.substring(0, 8);
+
+  static String _peerLabel(String peerDeviceId) {
+    final device = peerDeviceId.split('|').first;
+    return device.length <= 8 ? device : device.substring(device.length - 8);
+  }
+
+  String _sessionList(RatchetPeerState? state) =>
+      '[${(state?.sessions ?? const <RatchetSessionState>[]).map((s) => _short(s.sessionId)).join(', ')}]';
 
   /// Old sessions are kept only to decrypt in-flight messages.
   static const int maxSessionsPerPeer = 4;
@@ -417,6 +433,12 @@ class RatchetSessions {
         final state = await _readPeer(peerDeviceId);
         final known = state?.peerIdentityKey;
         if (known == identityKey) return;
+        if (known != null && (state?.sessions.isNotEmpty ?? false)) {
+          _log?.call(
+            '${_peerLabel(peerDeviceId)} has a new identity: dropping '
+            '${_sessionList(state)}',
+          );
+        }
         await _writePeer(
           peerDeviceId,
           known == null && state != null
@@ -444,19 +466,21 @@ class RatchetSessions {
         });
         final state = await _readPeer(peerDeviceId);
         final nowMs = _nowMs();
-        await _writePeer(
-          peerDeviceId,
-          _withSession(
-            state,
-            RatchetSessionState(
-              sessionId: result['sessionId'] as String,
-              pickle: result['session'] as String,
-              createdAtMs: nowMs,
-              lastUsedAtMs: nowMs,
-            ),
-            peerIdentityKey: bundle.identityKey,
+        final next = _withSession(
+          state,
+          RatchetSessionState(
+            sessionId: result['sessionId'] as String,
+            pickle: result['session'] as String,
+            createdAtMs: nowMs,
+            lastUsedAtMs: nowMs,
           ),
+          peerIdentityKey: bundle.identityKey,
         );
+        _log?.call(
+          'started ${_short(result['sessionId'] as String)} to '
+          '${_peerLabel(peerDeviceId)}; now ${_sessionList(next)}',
+        );
+        await _writePeer(peerDeviceId, next);
       });
 
   /// Encrypts with the most recently used session. Throws [StateError]
@@ -517,6 +541,10 @@ class RatchetSessions {
     }
     final identity = peerIdentityKey ?? state?.peerIdentityKey;
     if (!message.opensSession || identity == null) {
+      _log?.call(
+        'no session for a type ${message.type} message from '
+        '${_peerLabel(peerDeviceId)}; have ${_sessionList(state)}',
+      );
       throw const RatchetDecryptException(
         'No ratchet session can decrypt this message.',
       );
@@ -555,10 +583,17 @@ class RatchetSessions {
         ),
       );
     });
-    await _writePeer(
-      peerDeviceId,
-      _withSession(state, session, peerIdentityKey: identity, confirmed: true),
+    final next = _withSession(
+      state,
+      session,
+      peerIdentityKey: identity,
+      confirmed: true,
     );
+    _log?.call(
+      'opened ${_short(session.sessionId)} from '
+      '${_peerLabel(peerDeviceId)}; now ${_sessionList(next)}',
+    );
+    await _writePeer(peerDeviceId, next);
     return plaintext;
   });
 
@@ -706,8 +741,10 @@ class RatchetSessions {
   }
 
   /// Drops every session with a peer (reset or contact removal).
-  Future<void> forget(String peerDeviceId) =>
-      _withPeer(peerDeviceId, () => _deletePeer(peerDeviceId));
+  Future<void> forget(String peerDeviceId) => _withPeer(peerDeviceId, () {
+    _log?.call('forgetting every session with ${_peerLabel(peerDeviceId)}');
+    return _deletePeer(peerDeviceId);
+  });
 
   // Every peer read, including status and bulk-key lookups, holds the peer
   // lock. A late store read must never restore a pre-write send counter.
@@ -748,6 +785,12 @@ class RatchetSessions {
       for (final existing in state?.sessions ?? const <RatchetSessionState>[])
         if (existing.sessionId != session.sessionId) existing,
     ];
+    if (others.length >= maxSessionsPerPeer) {
+      _log?.call(
+        'dropping ${others.skip(maxSessionsPerPeer - 1).map((s) => _short(s.sessionId)).join(', ')} '
+        '(at most $maxSessionsPerPeer sessions)',
+      );
+    }
     return RatchetPeerState(
       peerIdentityKey: peerIdentityKey ?? state?.peerIdentityKey,
       confirmedAtMs: confirmedAtMs,
