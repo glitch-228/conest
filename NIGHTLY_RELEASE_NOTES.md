@@ -1,65 +1,57 @@
-## Conest 0.3.12 nightly (October 19)
+## Conest 0.4.0 nightly (October 20)
 
-Conest now works far better on networks that block things: new
-contacts can be added over the Bluetooth mesh or Reticulum alone, email
-and Nostr pick servers that work where you are, and a new setup step
-helps you set up ways to reach people beyond your own network. Messages
-are no longer lost when a secure session has to be renewed.
-Everything from the earlier October nightlies is included.
+The release candidate for the stable v0.4.0: please try it, above all
+on Windows and Linux. Everything from the earlier nightlies is included.
+
+### On computers
+
+- Enter sends and Shift+Enter starts a new line (Settings > Personal
+  can switch it back; then Ctrl+Enter sends).
+- A click on a message is for selecting its text and opening its links.
+  The message menu opens on a right click, also on the text, and offers
+  to copy the text you selected.
+- Holding the space beside a message selects it; holding the message
+  itself no longer does.
+- Ctrl+V pastes into the open chat wherever you clicked in it.
+- Windows: pasting a screenshot (Win+Shift+S) or another copied image
+  works again.
 
 ### Fixes
 
-- No more lost messages after a delay: a message held up on the way
-  (for example by a relay) could arrive too late to be decrypted and
-  was lost. It is now sent again at once on a fresh secure session.
-- Linux: Conest no longer makes the system's Bluetooth service crash
-  while it looks for nearby phones (a bug in BlueZ 5.87), which also
-  dropped headphones and other Bluetooth devices every few seconds.
-  If you use the Bluetooth mesh on Linux, please update.
-- Email: a mail server connection that stalls is given up on quickly,
-  failed connections are closed at once (servers stopped refusing new
-  ones), and sending works with servers that reject the old greeting.
-- Nostr: a message counts as sent as soon as one relay stored it, so a
-  slow relay no longer holds every message up.
-- Reticulum: the connection status shows whether the node is actually
-  connected, and a restarted connection is announced so contacts can
-  reach this device again straight away.
-- Relays: an address a network answers with 0.0.0.0 is skipped.
-- Albums: single files can be selected, and albums and files have a
-  right-click menu again.
-- Android: ending a transfer from the notification while Conest is in
-  the background no longer crashes it.
+- Group files reach members that only a relay or Tor reaches, as files
+  in one-to-one chats always did (both sides need this nightly).
+- A message whose delivery or reading was confirmed is not sent again
+  over other routes.
+- Removing someone from a group no longer leaves your earlier messages
+  waiting for them.
+- LAN: when another app (often a second Conest on the same computer)
+  holds Conest's LAN port, Conest moves to a free one and tells your
+  contacts, instead of having their messages and files go to that app.
+- Relays: slow connections get more time, and messages held on a relay
+  come back sooner after a lost connection.
+- Updating no longer shows "Conest closed unexpectedly" on the next
+  start, and saves what was pending first.
+- Email setup tries every chatmail server it knows on networks that
+  block some of them.
 
 ### New
 
-- Contacts can be added over the Bluetooth mesh alone, and over
-  Reticulum alone, without any internet route. Requests over the mesh
-  go to an inbox only people with your invite can find; it changes every
-  week.
-- A setup step after choosing how much of Conest to show: it checks
-  which ways to reach people beyond this network work here (Iroh,
-  relays, Nostr, email), offers the ones that work, and recommends at
-  least three. If none is set up, the chat list says that only devices
-  on this network can reach you.
-- Email (chatmail): a new account goes to whichever of 20 public
-  chatmail servers answers fastest where you are, also on port 443 when
-  mail ports are blocked. Leave the server empty to choose
-  automatically.
-- Nostr: a new setup uses the relays (of eight checked ones) that answer
-  fastest where you are.
-- Tor: when Tor looks blocked, its settings say so and show how to get
-  your own bridges from the Tor Project (website, Telegram bot, email),
-  since the public ones are often blocked too.
-- Add a group member as a contact, from the group's member list.
+- Links in messages are underlined and open in your browser. An address
+  that uses letters from other alphabets (and may imitate a site you
+  know) asks first.
+- A user guide (getting started, choosing routes, blocked networks, Tor
+  bridges, several devices, troubleshooting), linked from setup and from
+  Settings > Personal.
+- Settings are split into pages: a sidebar on wide windows, a list on
+  phones.
 
-### Tested on devices
+### Please check
 
-Android, Linux and Windows added each other and exchanged messages and
-group messages over each of these alone: Conest relay, Iroh, Nostr,
-Matrix, Reticulum and the Bluetooth mesh.
+- Pasting a screenshot on Windows, and Enter, clicks and right clicks
+  on Windows and Linux.
+- Sending a group file to a member on another network.
+- Calls and voice messages.
 
-### Not tested on devices yet
+### Known limits
 
-- Email on networks that block or throttle mail servers: setting up an
-  account can still fail there, and delivery can stall.
-- The new setup step on phones, and in every language.
+- Email can stall on networks that block or throttle mail servers.
