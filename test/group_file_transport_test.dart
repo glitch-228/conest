@@ -39,6 +39,52 @@ void main() {
     },
   );
 
+  test('closing while a request is still being answered is no error', () async {
+    // The answer fails once the connection closes under it.
+    final answering = Completer<void>();
+    final cut = Completer<void>();
+    late GroupFileTransport client;
+    late GroupFileTransport server;
+    client = GroupFileTransport(
+      groupId: 'group',
+      eventId: 'event',
+      authorized: (peer) => peer == 'server',
+      timeout: const Duration(seconds: 5),
+      sendEncrypted: (peer, id, frame) async {
+        // As the app's receivers do: the answer's failure is reported there.
+        unawaited(
+          server.receive('client', frame).catchError((Object _) => false),
+        );
+      },
+      cancelAndDrain: (peer, id) async {},
+    );
+    server = GroupFileTransport(
+      groupId: 'group',
+      eventId: 'event',
+      authorized: (peer) => peer == 'client',
+      sendEncrypted: (peer, id, frame) async {
+        answering.complete();
+        await cut.future;
+        throw StateError('Group file connection closed.');
+      },
+      // Cut a moment later: closing is already waiting for the answer.
+      cancelAndDrain: (peer, id) async {
+        Timer(const Duration(milliseconds: 10), () {
+          if (!cut.isCompleted) cut.complete();
+        });
+      },
+      availablePieces: (peer) async => {0},
+    );
+    final asked = expectLater(
+      client.queryAvailability('server'),
+      throwsA(anything),
+    );
+    await answering.future;
+    await server.close();
+    await client.close();
+    await asked;
+  });
+
   test(
     'availability and binary pieces cross a bound authenticated channel',
     () async {

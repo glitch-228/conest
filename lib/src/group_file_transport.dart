@@ -248,7 +248,11 @@ class GroupFileTransport {
         ),
       ),
     );
-    await Future.wait(_tasks.toList());
+    // Each task's own failure (often: closed under it) is the receiver's to
+    // report; closing only waits for them to end.
+    await Future.wait(
+      _tasks.toList().map((task) => task.catchError((Object _) {})),
+    );
   }
 }
 
