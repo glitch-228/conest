@@ -83,13 +83,15 @@ Future<List<String>> reachableNostrRelays(
           if (!done.isCompleted) answered.add(relay);
           unawaited(socket.close().catchError((Object _) {}));
           pending--;
-          free();
+          // Settled first: no server is started once enough answered.
           settle();
+          free();
         },
         onError: (Object _) {
           pending--;
-          free();
+          // Settled first: no server is started once enough answered.
           settle();
+          free();
         },
       );
     }

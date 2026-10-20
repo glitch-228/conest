@@ -178,6 +178,22 @@ void main() {
     expect(watch.elapsed, lessThan(const Duration(seconds: 4)));
   });
 
+  test('no server is tried after enough answered', () async {
+    final tried = <String>[];
+    final reachable = await reachableChatmailServers(
+      ['a.test', 'b.test', 'c.test'],
+      connector: (host, port, {required bool tls}) {
+        tried.add(host);
+        return server.connect(host, port, tls: tls);
+      },
+      parallel: 1,
+      enough: 1,
+      timeout: const Duration(seconds: 5),
+    );
+    expect(reachable, ['a.test']);
+    expect(tried, ['a.test']);
+  });
+
   test('a server at its connection limit is left alone for a while', () async {
     server.refuseLogin =
         '[UNAVAILABLE] Maximum number of connections from user+IP exceeded';

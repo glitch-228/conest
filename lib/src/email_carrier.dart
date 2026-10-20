@@ -128,8 +128,9 @@ Future<List<String>> reachableChatmailServers(
               if (index == 1) chatmailReachedViaHttps.add(domain);
             }
             pending--;
-            free();
+            // Settled first: no server is started once enough answered.
             settle();
+            free();
           },
           onError: (Object error) {
             log?.call(
@@ -138,8 +139,9 @@ Future<List<String>> reachableChatmailServers(
             );
             if (++failed == attempts.length && !won) {
               pending--;
-              free();
+              // Settled first: no server is started once enough answered.
               settle();
+              free();
             }
           },
         );

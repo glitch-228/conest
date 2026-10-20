@@ -14,9 +14,11 @@ import 'package:conest/src/update_service.dart';
 
 class _FakePlatformBridge extends PlatformBridge {
   String? installedApkPath;
+  bool failInstall = false;
 
   @override
   Future<void> installDownloadedApk(String path) async {
+    if (failInstall) throw StateError('No installer.');
     installedApkPath = path;
   }
 }
@@ -705,6 +707,8 @@ void main() {
       });
 
       final platformBridge = _FakePlatformBridge();
+      var handOvers = 0;
+      var failedHandOvers = 0;
       final supportDir = await Directory.systemTemp.createTemp(
         'conest-updates-test',
       );
@@ -736,6 +740,8 @@ void main() {
         applicationSupportDirectoryProvider: () async => supportDir,
         tempDirectoryProvider: () async => tempDir,
         exitCallback: (_) {},
+        onHandOver: () async => handOvers++,
+        onHandOverFailed: () => failedHandOvers++,
       );
 
       await service.checkForUpdate(userInitiated: true);
@@ -744,6 +750,14 @@ void main() {
       expect(platformBridge.installedApkPath, isNotNull);
       expect(await File(platformBridge.installedApkPath!).exists(), isTrue);
       expect(service.lastError, isNull);
+      expect((handOvers, failedHandOvers), (1, 0));
+
+      // The installer does not open: the app runs on, so a later end
+      // counts as a crash again.
+      platformBridge.failInstall = true;
+      await service.downloadAndApplyAvailableUpdate();
+      expect(service.lastError, isNotNull);
+      expect((handOvers, failedHandOvers), (2, 1));
     },
   );
 
@@ -863,8 +877,10 @@ void main() {
         exited = true;
         exitCode = code;
       },
-      onHandOver: () {
+      onHandOver: () async {
         expect(launcherFinished, isTrue);
+        // The app's save is waited for before it ends.
+        await Future<void>.delayed(const Duration(milliseconds: 20));
         handedOver = true;
       },
     );

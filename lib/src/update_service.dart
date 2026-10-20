@@ -333,9 +333,11 @@ class UpdateService extends ChangeNotifier {
     String? releaseManifestPublicKeyBase64,
     DesktopUpdaterLauncher? desktopUpdaterLauncher,
     void Function(int code)? exitCallback,
-    void Function()? onHandOver,
+    Future<void> Function()? onHandOver,
+    void Function()? onHandOverFailed,
     bool automaticStartupChecksEnabled = true,
   }) : _onHandOver = onHandOver,
+       _onHandOverFailed = onHandOverFailed,
        _platformBridge = platformBridge ?? PlatformBridge(),
        _httpClientFactory = httpClientFactory ?? HttpClient.new,
        _applicationSupportDirectoryProvider =
@@ -371,8 +373,20 @@ class UpdateService extends ChangeNotifier {
 
   /// Called just before the app hands itself to an installer or updater
   /// (which then ends it): the app saves what is pending and notes that
-  /// the end is no crash.
-  final void Function()? _onHandOver;
+  /// the end is no crash. Waited for a few seconds at most.
+  final Future<void> Function()? _onHandOver;
+
+  /// The installer did not open after [_onHandOver]: the app runs on, and
+  /// a later end is a crash again.
+  final void Function()? _onHandOverFailed;
+
+  Future<void> _handOver() async {
+    try {
+      await _onHandOver?.call().timeout(const Duration(seconds: 3));
+    } catch (_) {
+      // Saving is best effort: the update goes ahead.
+    }
+  }
   final bool _automaticStartupChecksEnabled;
 
   bool _startupCheckStarted = false;
@@ -599,8 +613,13 @@ class UpdateService extends ChangeNotifier {
         expectedSizeBytes: available.asset.sizeBytes,
       );
       if (_targetPlatform == UpdateTargetPlatform.android) {
-        _onHandOver?.call();
-        await _platformBridge.installDownloadedApk(archiveFile.path);
+        await _handOver();
+        try {
+          await _platformBridge.installDownloadedApk(archiveFile.path);
+        } catch (_) {
+          _onHandOverFailed?.call();
+          rethrow;
+        }
         _statusMessage =
             'Installer opened for ${available.release.tagName}. Confirm the Android install to finish updating.';
         return;
@@ -1055,7 +1074,7 @@ class UpdateService extends ChangeNotifier {
       '--data-root',
       appSupportDir.path,
     ]);
-    _onHandOver?.call();
+    await _handOver();
     _exitCallback(0);
   }
 

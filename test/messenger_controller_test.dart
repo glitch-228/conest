@@ -33,6 +33,7 @@ import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
+import 'package:conest/src/email_carrier.dart' show defaultChatmailDomains;
 import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
@@ -501,6 +502,11 @@ class _FakeRelayClient extends RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) async {
     leasedFetches.add((timeout, leaseFor));
+    // As the real client: a reply slower than the limit is not waited for.
+    if (fetchDelay > waitFor + timeout) {
+      await Future<void>.delayed(waitFor + timeout);
+      throw TimeoutException('Fetch timed out.', timeout);
+    }
     if (fetchDelay > Duration.zero) await Future<void>.delayed(fetchDelay);
     return _plainLeasedBatch(
       host,
@@ -7360,8 +7366,18 @@ void main() {
       memberDeviceId: carolId,
     );
     sent = alice.messagesForGroup(group.groupId).last;
-    expect(sent.recipientStates.containsKey(carolId), isFalse);
+    expect(sent.recipientStates[carolId], DeliveryState.canceled);
     expect(sent.state, DeliveryState.delivered);
+    expect(alice.groupDeliverySummary(sent), 'Delivered to all 1');
+
+    // Added again: the message waits for her again.
+    await alice.addGroupMembers(
+      groupId: group.groupId,
+      members: [alice.contacts.firstWhere((c) => c.deviceId == carolId)],
+    );
+    sent = alice.messagesForGroup(group.groupId).last;
+    expect(sent.recipientStates[carolId], DeliveryState.pending);
+    expect(sent.state.awaitsRecipientAck, isTrue);
   });
 
   test('a retry after the receipt came sends nothing', () async {
@@ -16703,6 +16719,33 @@ void main() {
       expect(contacted, isEmpty);
     });
 
+    test('the setup check tries every chatmail server', () async {
+      // Only the last server in the list answers here; the others never
+      // do (a network that drops their connections).
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        internetRelayHost: null,
+        nostrConnector: FakeNostrRelays().connect,
+        mailConnector: (host, port, {required bool tls}) =>
+            host == defaultChatmailDomains.last
+            ? server.connect(host, port, tls: tls)
+            : Completer<MailSocket>().future,
+      );
+      addTearDown(alice.dispose);
+      final checks = await alice.checkInternetTransports(
+        timeout: const Duration(seconds: 1),
+      );
+      expect(
+        checks
+            .firstWhere((check) => check.kind == TransportKind.deltaChat)
+            .state,
+        InternetTransportState.works,
+      );
+    });
+
     test(
       'a new email account goes to a chatmail server reachable here',
       () async {
@@ -19124,6 +19167,25 @@ void main() {
           'https://github.com/glitch-228/conest/blob/main/docs/README.md',
         ),
       ]);
+    });
+
+    testWidgets('the phone list of settings pages scrolls on a short screen', (
+      tester,
+    ) async {
+      await settingsFor(tester, UserMode.normal, size: const Size(360, 300));
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('settings-category-Danger')),
+        100,
+        scrollable: find.byType(Scrollable).last,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-category-Danger')),
+        findsOneWidget,
+      );
     });
 
     testWidgets('advanced settings show the transport policies', (
@@ -23359,7 +23421,7 @@ void main() {
         addTearDown(alice.dispose);
         await alice.pollNow();
         expect(relay.leasedFetches, isNotEmpty);
-        expect(relay.leasedFetches.last.$2, const Duration(seconds: 20));
+        expect(relay.leasedFetches.last.$2, const Duration(seconds: 19));
         expect(relay.leasedFetches.last.$1, const Duration(seconds: 4));
         relay.fetchDelay = const Duration(seconds: 3);
         await alice.pollNow();
@@ -23375,6 +23437,41 @@ void main() {
               .reduce((a, b) => a > b ? a : b),
           greaterThan(const Duration(seconds: 4)),
         );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
+    test(
+      'a link slower than the first limit gets more time after it',
+      () async {
+        // Every reply takes 5 s: with no successful fetch to learn from,
+        // the limit stayed at 4 s and every fetch timed out.
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        addTearDown(alice.dispose);
+        relay.fetchDelay = const Duration(seconds: 5);
+        relay.leasedFetches.clear();
+        await alice.pollNow();
+        expect(
+          relay.leasedFetches
+              .firstWhere((fetch) => fetch.$1 > const Duration(seconds: 1))
+              .$1,
+          const Duration(seconds: 4),
+        );
+        relay.leasedFetches.clear();
+        await alice.pollNow();
+        final relayFetches = relay.leasedFetches
+            .where((fetch) => fetch.$1 > const Duration(seconds: 1))
+            .toList();
+        expect(relayFetches, isNotEmpty);
+        for (final (timeout, lease) in relayFetches) {
+          expect(timeout, greaterThan(const Duration(seconds: 5)));
+          // Long enough to process and acknowledge after the reply.
+          expect(lease, timeout + const Duration(seconds: 15));
+        }
       },
       timeout: const Timeout(Duration(minutes: 2)),
     );

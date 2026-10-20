@@ -16973,19 +16973,27 @@ class MessengerController extends ChangeNotifier {
             attemptedRelay = true;
           }
           _fetchCallCount++;
-          final stopwatch = Stopwatch()..start();
           final expectedRelayKey = await _requireOperationalRelayPin(route);
-          final batch = await _relayClient.fetchLeasedEnvelopes(
-            host: route.host,
-            port: route.port,
-            protocol: route.protocol,
-            recipientDeviceId: me.deviceId,
-            expectedIdentityPublicKeyBase64: expectedRelayKey,
-            timeout: route.kind == PeerRouteKind.lan
-                ? const Duration(milliseconds: 900)
-                : _relayFetchTimeout(route),
-            leaseFor: _relayLease,
-          );
+          final stopwatch = Stopwatch()..start();
+          final batch = await _relayClient
+              .fetchLeasedEnvelopes(
+                host: route.host,
+                port: route.port,
+                protocol: route.protocol,
+                recipientDeviceId: me.deviceId,
+                expectedIdentityPublicKeyBase64: expectedRelayKey,
+                timeout: route.kind == PeerRouteKind.lan
+                    ? const Duration(milliseconds: 900)
+                    : _relayFetchTimeout(route),
+                leaseFor: _relayLeaseFor(route),
+              )
+              .catchError((Object error) {
+                if (error is TimeoutException &&
+                    route.kind != PeerRouteKind.lan) {
+                  _noteRelayFetchTimedOut(route);
+                }
+                throw error;
+              });
           final envelopes = batch.envelopes;
           stopwatch.stop();
           _noteRelayFetchTime(route, stopwatch.elapsed);
@@ -17136,10 +17144,12 @@ class MessengerController extends ChangeNotifier {
   int _longPollGeneration = 0;
 
   /// How long a relay keeps fetched envelopes for this device before it
-  /// hands them out again. A fetch whose reply is lost on a slow link
-  /// leaves them leased: after 60 s they arrived too late to decrypt
+  /// hands them out again: the fetch's own time limit, plus time to
+  /// process and acknowledge them. A fetch whose reply is lost on a slow
+  /// link leaves them leased: after 60 s they arrived too late to decrypt
   /// (Olm keeps a few ratchet chains only) on the device lab.
-  static const Duration _relayLease = Duration(seconds: 20);
+  Duration _relayLeaseFor(PeerEndpoint route) =>
+      _relayFetchTimeout(route) + const Duration(seconds: 15);
 
   /// Round trips of relay fetches that do not wait, per route (a long
   /// poll's time is mostly its wait).
@@ -17150,6 +17160,17 @@ class MessengerController extends ChangeNotifier {
     _relayFetchTimes[route.routeKey] = previous == null
         ? elapsed
         : previous * 0.5 + elapsed * 0.5;
+  }
+
+  /// A fetch from [route] ran out of time: its round trip is at least what
+  /// it was given, so the next one gets more (otherwise a link slower than
+  /// the first limit would never be measured).
+  void _noteRelayFetchTimedOut(PeerEndpoint route) {
+    final given = _relayFetchTimeout(route);
+    final previous = _relayFetchTimes[route.routeKey];
+    if (previous == null || previous < given) {
+      _relayFetchTimes[route.routeKey] = given;
+    }
   }
 
   /// How long a relay fetch may take: three of its recent round trips,
@@ -17202,16 +17223,21 @@ class MessengerController extends ChangeNotifier {
       RelayFetchBatch batch = const RelayFetchBatch(envelopes: []);
       try {
         final expectedRelayKey = await _requireOperationalRelayPin(route);
-        batch = await _relayClient.fetchLeasedEnvelopes(
-          host: route.host,
-          port: route.port,
-          protocol: route.protocol,
-          recipientDeviceId: me.deviceId,
-          waitFor: const Duration(seconds: 25),
-          timeout: _relayFetchTimeout(route),
-          leaseFor: _relayLease,
-          expectedIdentityPublicKeyBase64: expectedRelayKey,
-        );
+        batch = await _relayClient
+            .fetchLeasedEnvelopes(
+              host: route.host,
+              port: route.port,
+              protocol: route.protocol,
+              recipientDeviceId: me.deviceId,
+              waitFor: const Duration(seconds: 25),
+              timeout: _relayFetchTimeout(route),
+              leaseFor: _relayLeaseFor(route),
+              expectedIdentityPublicKeyBase64: expectedRelayKey,
+            )
+            .catchError((Object error) {
+              if (error is TimeoutException) _noteRelayFetchTimedOut(route);
+              throw error;
+            });
         stopwatch.stop();
         _routeHealthTracker.recordSuccess(
           route,
@@ -29450,7 +29476,10 @@ class MessengerController extends ChangeNotifier {
         () => reachableChatmailServers(
           chatmailCandidates,
           connector: _mailConnector,
-          timeout: timeout,
+          // Twenty servers, four at a time: started a fifth of the check's
+          // time apart, all of them get a turn before it gives up.
+          timeout: timeout * 2,
+          headStart: timeout ~/ 5,
           enough: 1,
         ),
       ),
@@ -29963,10 +29992,16 @@ class MessengerController extends ChangeNotifier {
     if (index == -1) {
       groups.add(group);
     } else {
-      final gone = groups[index].activeMemberDeviceIds
+      final before = groups[index];
+      final gone = before.activeMemberDeviceIds
           .where((deviceId) => !group.hasActiveMember(deviceId))
           .toSet();
-      if (gone.isNotEmpty) _stopWaitingForMembers(group.groupId, gone);
+      final back = group.activeMemberDeviceIds
+          .where((deviceId) => !before.hasActiveMember(deviceId))
+          .toSet();
+      if (gone.isNotEmpty || back.isNotEmpty) {
+        _setWaitingForMembers(group.groupId, gone: gone, back: back);
+      }
       // A copy made before a profile refresh must not take its revision
       // back: the refresh would then be sent again under the same number,
       // and members would ignore it.
@@ -29979,8 +30014,13 @@ class MessengerController extends ChangeNotifier {
   }
 
   /// [gone] left the group (removed, or left): this device's messages no
-  /// longer wait for them. What they already received stays recorded.
-  void _stopWaitingForMembers(String groupId, Set<String> gone) {
+  /// longer wait for them; what they received stays recorded. Members
+  /// [back] in the group (added again) are waited for again.
+  void _setWaitingForMembers(
+    String groupId, {
+    required Set<String> gone,
+    required Set<String> back,
+  }) {
     final index = _snapshot.conversations.indexWhere(
       (conversation) =>
           conversation.kind == ConversationKind.group &&
@@ -29989,34 +30029,38 @@ class MessengerController extends ChangeNotifier {
     if (index == -1) return;
     final conversation = _snapshot.conversations[index];
     var changed = false;
-    final messages = [
-      for (final message in conversation.messages)
-        if (!message.outbound ||
-            !gone.any(
-              (id) => message.recipientStates[id]?.awaitsRecipientAck ?? false,
-            ))
-          message
-        else
-          () {
-            changed = true;
-            final states = Map<String, DeliveryState>.from(
-              message.recipientStates,
-            );
-            for (final id in gone) {
-              if (states[id]?.awaitsRecipientAck ?? false) {
-                states.remove(id);
-                _clearOutboundAttempt(id, message.id);
-              }
-            }
-            return message.copyWith(
-              recipientStates: states,
-              // No one left to wait for: not delivered, and not pending.
-              state: states.isEmpty
-                  ? DeliveryState.canceled
-                  : _aggregateGroupDeliveryState(states),
-            );
-          }(),
-    ];
+    final messages = <ChatMessage>[];
+    for (final message in conversation.messages) {
+      if (!message.outbound) {
+        messages.add(message);
+        continue;
+      }
+      Map<String, DeliveryState>? states;
+      for (final MapEntry(key: id, value: state)
+          in message.recipientStates.entries) {
+        final DeliveryState next;
+        if (gone.contains(id) && state.awaitsRecipientAck) {
+          next = DeliveryState.canceled;
+          _clearOutboundAttempt(id, message.id);
+        } else if (back.contains(id) && state == DeliveryState.canceled) {
+          next = DeliveryState.pending;
+        } else {
+          continue;
+        }
+        (states ??= Map.of(message.recipientStates))[id] = next;
+      }
+      if (states == null) {
+        messages.add(message);
+        continue;
+      }
+      changed = true;
+      messages.add(
+        message.copyWith(
+          recipientStates: states,
+          state: _aggregateGroupDeliveryState(states),
+        ),
+      );
+    }
     if (!changed) return;
     final conversations = List<ConversationRecord>.from(
       _snapshot.conversations,
@@ -33696,7 +33740,12 @@ class MessengerController extends ChangeNotifier {
     var delivered = 0;
     var accepted = 0;
     var pending = 0;
-    for (final state in message.recipientStates.values) {
+    // Members who left are not counted.
+    final states = message.recipientStates.values
+        .where((state) => state != DeliveryState.canceled)
+        .toList();
+    if (states.isEmpty) return message.state.label;
+    for (final state in states) {
       switch (state) {
         case DeliveryState.read:
           read++;
@@ -33715,7 +33764,7 @@ class MessengerController extends ChangeNotifier {
           pending++;
       }
     }
-    final total = message.recipientStates.length;
+    final total = states.length;
     if (read == total) {
       return 'Read by all $total';
     }
@@ -34204,7 +34253,12 @@ class MessengerController extends ChangeNotifier {
     if (recipientStates.isEmpty) {
       return DeliveryState.delivered;
     }
-    final states = recipientStates.values.toList(growable: false);
+    // Members who left are not waited for (canceled for them).
+    final states = recipientStates.values
+        .where((state) => state != DeliveryState.canceled)
+        .toList(growable: false);
+    // Everyone it was for left before it reached them.
+    if (states.isEmpty) return DeliveryState.failed;
     if (states.every((state) => state == DeliveryState.read)) {
       return DeliveryState.read;
     }

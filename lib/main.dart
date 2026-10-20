@@ -340,10 +340,11 @@ Future<void> _runConestWithProfile(
     automaticStartupChecksEnabled: profile.automaticStartupChecksEnabled,
     // The installer or updater ends the app: save what is pending, and the
     // next start must not call it a crash.
-    onHandOver: () {
-      controller.savePendingChangesForLifecycle();
+    onHandOver: () async {
       CrashCatcher.instance.markUpdating();
+      await controller.flushPendingChanges();
     },
+    onHandOverFailed: CrashCatcher.instance.markRunning,
   );
   await controller.initialize();
   final crashes = CrashCatcher.instance;
@@ -14755,12 +14756,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
       );
     }
     if (!_settingsPageOpen) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final category in _settingsCategories)
-            tile(category, selected: false),
-        ],
+      // Scrolls with large text or on a short screen.
+      return SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final category in _settingsCategories)
+              tile(category, selected: false),
+          ],
+        ),
       );
     }
     return SingleChildScrollView(
