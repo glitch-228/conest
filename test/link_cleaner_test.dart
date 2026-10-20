@@ -97,6 +97,16 @@ void main() {
       expect(clean(long), long);
     });
 
+    test('a redirect target is normalised, not split by what it decodes to', () {
+      // The text path, as the message box uses it.
+      final cleaned = filters.clearUrls.cleanText(
+        'https://www.google.com/url?q=https%3A%2F%2Fa.example%2Fa%20b%0Ax',
+      )!;
+      expect(cleaned, isNot(contains(' ')));
+      expect(cleaned, isNot(contains('\n')));
+      expect(Uri.parse(cleaned).host, 'a.example');
+    });
+
     test('a redirect to a non-web link is not followed', () {
       final rules = ClearUrls.fromJson({
         'providers': {
@@ -165,6 +175,15 @@ void main() {
         'https://clips.twitch.tv/SomeClip',
       );
 
+      // A wrap naming another site is not taken for a Threads original.
+      expect(
+        fixers.originalOf(
+          Uri.parse(
+            'https://fixembed.app/embed?url=https%3A%2F%2Fphish.example%2F',
+          ),
+        ),
+        isNull,
+      );
       final post = Uri.parse('https://www.threads.net/@someone/post/abc');
       final wrapped = fixers.fix(post, failed: {'threads:20', 'threads:21'});
       expect(wrapped?.host, 'fixembed.app');

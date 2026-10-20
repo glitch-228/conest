@@ -144,7 +144,9 @@ class _Provider {
       if (parsed != null &&
           (parsed.scheme == 'http' || parsed.scheme == 'https') &&
           parsed.host.isNotEmpty) {
-        return (url: decoded, redirect: true);
+        // Normalised, as the extension's `new URL(…).href` does: a space or
+        // line break decoded from the wrapper must not split the link.
+        return (url: parsed.toString(), redirect: true);
       }
     }
     for (final raw in rawRules) {

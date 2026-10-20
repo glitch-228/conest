@@ -68,7 +68,10 @@ class EmbedFixers {
     for (final site in _sites) {
       for (final service in site.services) {
         final original = service.reverse(uri);
-        if (original != null) {
+        // A wrapping service names any link; only one to its own site
+        // counts as its original.
+        if (original != null &&
+            (!service.wraps || site.patternFor(original.toString()) != null)) {
           return (site: site, key: site.keyOf(service), original: original);
         }
       }
@@ -156,6 +159,9 @@ class _Service {
 
   final int id;
   final List<_Fix> fixes;
+
+  /// Whether it wraps links (`?url=`) instead of replacing their domain.
+  bool get wraps => fixes.any((fix) => fix.wrapped);
 
   Uri? apply(Uri uri) {
     for (final fix in fixes) {
