@@ -6048,6 +6048,71 @@ void main() {
   );
 
   test(
+    'group files reach a member only relays reach',
+    () async {
+      // No LAN or Iroh between them: as files in direct chats, group file
+      // frames go by relay, in parts.
+      final relay = _FakeRelayClient();
+      final aliceRoot = await Directory.systemTemp.createTemp('conest_gfr_a-');
+      final bobRoot = await Directory.systemTemp.createTemp('conest_gfr_b-');
+      addTearDown(() async {
+        if (await aliceRoot.exists()) await aliceRoot.delete(recursive: true);
+        if (await bobRoot.exists()) await bobRoot.delete(recursive: true);
+      });
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'By relay',
+        members: [alice.contacts.single],
+      );
+      await bob.pollNow();
+      await alice.pollNow();
+      // Larger than one part.
+      final content = Uint8List.fromList(
+        List<int>.generate(300 * 1024, (i) => (i * 31) & 0xff),
+      );
+      final source = await File(
+        '${aliceRoot.path}/photo.bin',
+      ).writeAsBytes(content);
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'photo.bin',
+        mimeType: 'application/octet-stream',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      bool done() =>
+          bob.groupFileSession(eventId)?.download.state ==
+          GroupFileDownloadState.complete;
+      for (var round = 0; round < 120 && !done(); round++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      expect(done(), isTrue);
+      expect(
+        relay.storedEnvelopes.where((e) => e.kind == 'group_file_part'),
+        isNotEmpty,
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
     'group files get receipts and stay finished with nobody reachable',
     () async {
       final network = _InProcessIrohNetwork();

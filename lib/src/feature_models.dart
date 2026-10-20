@@ -36,6 +36,10 @@ enum ApplicationCapability {
 
   /// A debug build that runs full transport tests (debug_transport_test).
   debugTransportTestV1,
+
+  /// Takes group file frames over relays and Tor too (group_file_part),
+  /// not only LAN and Iroh.
+  groupFileRelayV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

@@ -53,6 +53,8 @@ https://github.com/glitch-228/conest/tree/main/docs
   connection, and slow links get more time.
 - Removing someone from a group no longer leaves your earlier messages
   waiting for them.
+- Group files reach members that only a relay or Tor reaches, as files
+  in one-to-one chats do.
 - Read marks work again on Windows, Android and Linux.
 - Messages that went only one way (often a firewall) now try another
   route. On Windows, Settings > Connectivity can let devices on your
@@ -141,6 +143,3 @@ details from Settings.
   could be reached, files, voice messages, groups and settings do not
   sync between your devices yet.
 - Radios and the Bluetooth mesh carry messages only, never files.
-- Group files travel over LAN and Iroh only: a member who can be reached
-  only through a slow Iroh connection may get them late or not at all.
-  Files in one-to-one chats also go through relays.

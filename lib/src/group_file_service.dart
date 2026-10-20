@@ -135,6 +135,9 @@ class GroupFileSession {
       authorized: _authorize,
       availablePieces: provider.availability,
       readPiece: provider.readPiece,
+      // A 4 MiB piece by relay is some 32 envelopes, each stored and then
+      // fetched: it takes longer than one over LAN or Iroh.
+      timeout: const Duration(seconds: 90),
     );
     download = GroupFileDownload(
       store: store,

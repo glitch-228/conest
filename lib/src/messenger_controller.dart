@@ -325,6 +325,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'attachment_cancel',
   'attachment_pause_control',
   'attachment_progress',
+  'group_file_part',
   'message_edit',
   'message_delete',
   'message_reaction',
@@ -3018,16 +3019,16 @@ class MessengerController extends ChangeNotifier {
           'This group file requires an explicit download acceptance when it leaves LAN.',
         );
       }
-      if (adapter == null ||
-          !_canUseIrohForContact(contact) ||
-          !_irohFileAllowed(manifest.sizeBytes)) {
-        throw StateError(
-          'Group file LAN and Iroh routes are unavailable or exceed their limits.',
-        );
-      }
-      final peer = _transportPeerForContact(contact, allowRelay: true);
       Object? lastError;
-      for (final route in await adapter.discoverRoutes(peer)) {
+      final irohUsable =
+          adapter != null &&
+          _canUseIrohForContact(contact) &&
+          _irohFileAllowed(manifest.sizeBytes);
+      final peer = _transportPeerForContact(contact, allowRelay: true);
+      for (final route
+          in irohUsable
+              ? await adapter.discoverRoutes(peer)
+              : const <RouteCandidate>[]) {
         if (!route.permitsPayload(bytes.length)) continue;
         if (await _groupHistory.fileForPeer(
               event.groupId,
@@ -3042,7 +3043,8 @@ class MessengerController extends ChangeNotifier {
         // limit, while retaining the same authenticated encrypted payload.
         for (var attempt = 0; attempt < 2; attempt++) {
           try {
-            final receipt = await adapter
+            // Routes come only from a usable adapter.
+            final receipt = await adapter!
                 .sendAttachmentRange(
                   peer: peer,
                   route: route,
@@ -3073,15 +3075,180 @@ class MessengerController extends ChangeNotifier {
           }
         }
       }
+      // As for files in direct chats: relays and Tor, in parts that fit
+      // their envelopes, when LAN and Iroh do not get through.
+      try {
+        if (await _sendGroupFileFrameInParts(
+          contact,
+          event,
+          manifest,
+          request,
+          bytes,
+        )) {
+          return;
+        }
+      } catch (error) {
+        lastError = error;
+        appendDebugLog(
+          'Group file frame ${event.eventId}/$request to ${contact.alias} '
+          'by relay failed: $error',
+        );
+      }
       throw StateError(
-        'No Iroh group file route accepted the frame'
-        '${lastError == null ? '.' : ': $lastError'}',
+        irohUsable
+            ? 'No group file route accepted the frame'
+                  '${lastError == null ? '.' : ': $lastError'}'
+            : 'Group file LAN and Iroh routes are unavailable or exceed '
+                  'their limits, and no relay takes it.',
       );
     }();
     _groupFileSends[key] = task;
     return task.whenComplete(() {
       if (identical(_groupFileSends[key], task)) _groupFileSends.remove(key);
     });
+  }
+
+  /// A part of a group file frame in a relay envelope (at most this much).
+  static const int _groupFilePartBytes = 128 * 1024;
+
+  /// Sends [frame] (encrypted for [contact]) in envelopes over relays and
+  /// Tor, as files in direct chats go. False when [contact]'s app cannot
+  /// take them, or the file is larger than relays carry.
+  Future<bool> _sendGroupFileFrameInParts(
+    ContactRecord contact,
+    GroupHistoryEvent event,
+    GroupFileManifest manifest,
+    String request,
+    Uint8List frame,
+  ) async {
+    if (!contact.featureCapabilities.contains(
+          ApplicationCapability.groupFileRelayV1,
+        ) ||
+        manifest.sizeBytes > maxAttachmentSizeBytes) {
+      return false;
+    }
+    final me = _requireIdentity();
+    final digest = base64Encode(dart_crypto.sha256.convert(frame).bytes);
+    final parts =
+        (frame.length + _groupFilePartBytes - 1) ~/ _groupFilePartBytes;
+    for (var part = 0; part < parts; part++) {
+      final start = part * _groupFilePartBytes;
+      final end = min(start + _groupFilePartBytes, frame.length);
+      final envelope = await _crypto.encryptPayloadEnvelope(
+        kind: 'group_file_part',
+        messageId: _randomId('gfpart'),
+        conversationId: event.groupId,
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: jsonEncode({
+          'v': 1,
+          'frame': '${event.eventId}:$request',
+          'part': part,
+          'parts': parts,
+          'sha256': digest,
+          'data': base64Encode(Uint8List.sublistView(frame, start, end)),
+        }),
+      );
+      await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: envelope,
+        background: true,
+        allowForwarding: false,
+      );
+    }
+    return true;
+  }
+
+  /// Parts of group file frames on their way, by sender and frame.
+  final LinkedHashMap<String, _GroupFileFrameParts> _groupFileFrameParts =
+      LinkedHashMap();
+  static const int _maxGroupFileFramesInParts = 16;
+
+  /// A part of a group file frame that came by relay or Tor: once all have
+  /// come, the frame is checked and taken as one from LAN would be.
+  Future<void> _handleGroupFilePart(RelayEnvelope envelope) async {
+    final me = identity;
+    final group = _groupById(envelope.conversationId);
+    if (me == null ||
+        group == null ||
+        envelope.recipientDeviceId != me.deviceId ||
+        !group.hasActiveMember(me.deviceId) ||
+        !group.hasActiveMember(envelope.senderDeviceId)) {
+      return;
+    }
+    final sender = _groupMemberContact(group, envelope.senderDeviceId);
+    if (sender == null || sender.accountId != envelope.senderAccountId) {
+      return;
+    }
+    final Map<String, dynamic> payload;
+    try {
+      final decoded = jsonDecode(
+        await _crypto.decryptMessage(contact: sender, envelope: envelope),
+      );
+      if (decoded is! Map<String, dynamic> || decoded['v'] != 1) return;
+      payload = decoded;
+    } catch (_) {
+      return;
+    }
+    final frameId = payload['frame'];
+    final part = payload['part'];
+    final parts = payload['parts'];
+    final digest = payload['sha256'];
+    final data = payload['data'];
+    // A 4 MiB piece and its framing, in 128 KiB parts.
+    const maxParts = 40;
+    if (frameId is! String ||
+        frameId.length > 200 ||
+        part is! int ||
+        parts is! int ||
+        parts < 1 ||
+        parts > maxParts ||
+        part < 0 ||
+        part >= parts ||
+        digest is! String ||
+        data is! String) {
+      return;
+    }
+    final Uint8List bytes;
+    try {
+      bytes = base64Decode(data);
+    } catch (_) {
+      return;
+    }
+    if (bytes.length > _groupFilePartBytes) return;
+    final key = '${sender.deviceId}|$frameId';
+    var entry = _groupFileFrameParts.remove(key);
+    if (entry == null || entry.parts != parts || entry.digest != digest) {
+      entry = _GroupFileFrameParts(parts, digest, _now());
+    }
+    _groupFileFrameParts[key] = entry;
+    while (_groupFileFrameParts.length > _maxGroupFileFramesInParts) {
+      _groupFileFrameParts.remove(_groupFileFrameParts.keys.first);
+    }
+    entry.received[part] = bytes;
+    if (entry.received.length < parts) return;
+    _groupFileFrameParts.remove(key);
+    final frame = BytesBuilder(copy: false);
+    for (var index = 0; index < parts; index++) {
+      frame.add(entry.received[index]!);
+    }
+    final whole = frame.takeBytes();
+    if (base64Encode(dart_crypto.sha256.convert(whole).bytes) != digest) {
+      appendDebugLog(
+        'A group file frame from ${sender.alias} did not check out.',
+      );
+      return;
+    }
+    try {
+      // The frame names its sender: only the one who sent the parts.
+      if (peekGroupFileBinary(whole).sender != sender.deviceId) return;
+      await _handleGroupFileLan(whole);
+    } catch (error) {
+      appendDebugLog('Group file frame from ${sender.alias} refused: $error');
+    }
   }
 
   Future<void> _handleGroupFileIroh(
@@ -7867,6 +8034,7 @@ class MessengerController extends ChangeNotifier {
     'group_membership',
     'group_membership_ack',
     'group_leave',
+    'group_file_part',
     'ack',
   };
 
@@ -18721,6 +18889,7 @@ class MessengerController extends ChangeNotifier {
     'attachment_chunk_request',
     'attachment_chunk',
     'attachment_progress',
+    'group_file_part',
   };
 
   bool _isHighFrequencyTransferEnvelope(RelayEnvelope envelope) =>
@@ -18911,6 +19080,12 @@ class MessengerController extends ChangeNotifier {
 
         if (envelope.kind == 'group_call_signal') {
           await _handleGroupCallSignal(envelope);
+          _markSeen(envelope.messageId);
+          continue;
+        }
+
+        if (envelope.kind == 'group_file_part') {
+          await _handleGroupFilePart(envelope);
           _markSeen(envelope.messageId);
           continue;
         }
@@ -33288,6 +33463,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.attachmentCompleteRetryV1,
       ApplicationCapability.multiRouteMessagesV1,
       ApplicationCapability.routeProbeV1,
+      ApplicationCapability.groupFileRelayV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -35880,4 +36056,14 @@ class _LinkAsExisting {
   /// The new device's confirmation: its proof of holding its keys.
   String? proof;
   bool granted = false;
+}
+
+/// The parts of one group file frame received so far.
+class _GroupFileFrameParts {
+  _GroupFileFrameParts(this.parts, this.digest, this.startedAt);
+
+  final int parts;
+  final String digest;
+  final DateTime startedAt;
+  final Map<int, Uint8List> received = {};
 }
