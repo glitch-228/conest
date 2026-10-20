@@ -5019,6 +5019,9 @@ class VaultSnapshot {
     this.reportedLinks = const <String, Object?>{},
     this.keepFileMetadata = false,
     this.randomFileNames = false,
+    this.keepLinkTracking = false,
+    this.keepLinkSites = false,
+    this.failedLinkFixers = const <String, String>{},
     this.userMode,
     this.userModeChosen = true,
     this.localeCode,
@@ -5150,6 +5153,17 @@ class VaultSnapshot {
   /// Send files under random names (the extension kept).
   final bool randomFileNames;
 
+  /// Send and open links as written. Off: their tracking parts are
+  /// removed (ClearURLs rules).
+  final bool keepLinkTracking;
+
+  /// Send links to their own sites. Off: links to sites that other apps
+  /// cannot preview move to an embed-fixing service.
+  final bool keepLinkSites;
+
+  /// Embed-fixing services that failed ("twitter:1" → when, UTC ISO).
+  final Map<String, String> failedLinkFixers;
+
   /// What the app is used as; null until chosen (an identity from before
   /// app modes reads as [AppMode.both] where Matrix exists).
   final AppMode? appMode;
@@ -5227,6 +5241,9 @@ class VaultSnapshot {
     Map<String, Object?>? reportedLinks,
     bool? keepFileMetadata,
     bool? randomFileNames,
+    bool? keepLinkTracking,
+    bool? keepLinkSites,
+    Map<String, String>? failedLinkFixers,
     UserMode? userMode,
     bool? userModeChosen,
     String? localeCode,
@@ -5288,6 +5305,9 @@ class VaultSnapshot {
       reportedLinks: reportedLinks ?? this.reportedLinks,
       keepFileMetadata: keepFileMetadata ?? this.keepFileMetadata,
       randomFileNames: randomFileNames ?? this.randomFileNames,
+      keepLinkTracking: keepLinkTracking ?? this.keepLinkTracking,
+      keepLinkSites: keepLinkSites ?? this.keepLinkSites,
+      failedLinkFixers: failedLinkFixers ?? this.failedLinkFixers,
       userMode: userMode ?? this.userMode,
       userModeChosen: userModeChosen ?? this.userModeChosen,
       localeCode: clearLocaleCode ? null : localeCode ?? this.localeCode,
@@ -5372,6 +5392,9 @@ class VaultSnapshot {
       if (reportedLinks.isNotEmpty) 'reportedLinks': reportedLinks,
       if (keepFileMetadata) 'keepFileMetadata': true,
       if (randomFileNames) 'randomFileNames': true,
+      if (keepLinkTracking) 'keepLinkTracking': true,
+      if (keepLinkSites) 'keepLinkSites': true,
+      if (failedLinkFixers.isNotEmpty) 'failedLinkFixers': failedLinkFixers,
       if (userMode != null) 'userMode': userMode!.name,
       if (!userModeChosen) 'userModeChosen': false,
       if (localeCode != null) 'localeCode': localeCode,
@@ -5443,6 +5466,14 @@ class VaultSnapshot {
       ],
       keepFileMetadata: json['keepFileMetadata'] == true,
       randomFileNames: json['randomFileNames'] == true,
+      keepLinkTracking: json['keepLinkTracking'] == true,
+      keepLinkSites: json['keepLinkSites'] == true,
+      failedLinkFixers: {
+        for (final entry
+            in (json['failedLinkFixers'] as Map<String, dynamic>? ?? const {})
+                .entries)
+          if (entry.value case final String at) entry.key: at,
+      },
       userMode: UserMode.values.asNameMap()[json['userMode']],
       userModeChosen: json['userModeChosen'] != false,
       localeCode:

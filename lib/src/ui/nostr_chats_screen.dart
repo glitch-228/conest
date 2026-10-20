@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../messenger_controller.dart';
 import '../nostr_chats.dart';
 import 'composer_keys.dart';
+import 'link_cleaning.dart';
 import 'linked_text.dart';
 
 /// Nostr private messages (NIP-17) in Settings → Connectivity: on or off,
@@ -254,6 +255,7 @@ class _NostrChatScreenState extends State<_NostrChatScreen> {
   }
 
   Future<void> _send() async {
+    finishComposerLinks(_composer);
     final text = _composer.text;
     if (text.trim().isEmpty || _sending) return;
     setState(() {

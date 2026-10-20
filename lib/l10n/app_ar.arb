@@ -1395,5 +1395,14 @@
   "carrierPaused": "متوقف مؤقتًا: محفوظ وغير مستخدم. شغّله لاستخدامه مجددًا.",
   "emailChangeAccount": "تغيير الحساب",
   "emailOtherServer": "استخدام خادم آخر",
-  "actionSave": "حفظ"
+  "actionSave": "حفظ",
+  "settingsLinksTitle": "الروابط التي ترسلها وتفتحها",
+  "settingsCleanLinks": "إزالة التتبع من الروابط",
+  "settingsCleanLinksHelp": "يزيل أجزاء الرابط التي تخبر الموقع بمن شاركه (مثل ?si= أو utm_) عند إرساله وعند فتحه. يستخدم قواعد ClearURLs.",
+  "settingsEmbedLinks": "روابط تعرض معاينة",
+  "settingsEmbedLinksHelp": "تمر روابط المنشورات على X وInstagram وReddit وTikTok والمواقع المشابهة عبر خدمة تتيح للتطبيقات الأخرى عرض معاينة، وتوجّه المتصفح إلى المنشور. الخدمات مأخوذة من قائمة embed-fixer؛ ويُتخطّى ما يتعطل منها.",
+  "linkCleaned": "نُظِّف الرابط",
+  "linkCleanedUndo": "تراجع",
+  "menuOpenOriginalLink": "فتح الرابط الأصلي",
+  "editorSendOriginalAsFile": "إرسال الأصل كملف (دون ضغط)"
 }

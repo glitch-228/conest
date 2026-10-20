@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../bitchat_chats.dart';
 import '../messenger_controller.dart';
 import 'composer_keys.dart';
+import 'link_cleaning.dart';
 import 'linked_text.dart';
 
 /// Chats with bitchat users nearby: the mesh chat everyone in range shares
@@ -183,6 +184,7 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
   }
 
   Future<void> _send() async {
+    finishComposerLinks(_composer);
     final text = _composer.text;
     if (text.trim().isEmpty) return;
     setState(() => _error = null);

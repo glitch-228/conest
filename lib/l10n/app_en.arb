@@ -8112,5 +8112,41 @@
   "actionSave": "Save",
   "@actionSave": {
     "description": "Button: save changes."
+  },
+  "settingsLinksTitle": "Links you send and open",
+  "@settingsLinksTitle": {
+    "description": "Settings heading: link privacy switches."
+  },
+  "settingsCleanLinks": "Remove tracking from links",
+  "@settingsCleanLinks": {
+    "description": "Switch: remove tracking parameters from links (ClearURLs)."
+  },
+  "settingsCleanLinksHelp": "Removes the parts of a link that tell a site who shared it (such as ?si= or utm_), when you send it and when you open one. Uses the ClearURLs rules.",
+  "@settingsCleanLinksHelp": {
+    "description": "Help under the remove-tracking switch."
+  },
+  "settingsEmbedLinks": "Links that show previews",
+  "@settingsEmbedLinks": {
+    "description": "Switch: move links to embed-fixing services so previews show."
+  },
+  "settingsEmbedLinksHelp": "Links to posts on X, Instagram, Reddit, TikTok and similar sites go through a service that lets other apps show a preview, and that sends browsers on to the post. The services come from the embed-fixer list; one that fails is skipped.",
+  "@settingsEmbedLinksHelp": {
+    "description": "Help under the embed-friendly links switch."
+  },
+  "linkCleaned": "Link cleaned",
+  "@linkCleaned": {
+    "description": "Note above the message box after a link was cleaned."
+  },
+  "linkCleanedUndo": "Undo",
+  "@linkCleanedUndo": {
+    "description": "Button: put the cleaned link back as written."
+  },
+  "menuOpenOriginalLink": "Open original link",
+  "@menuOpenOriginalLink": {
+    "description": "Message menu: open the original site of an embed-fixed link (when the service does not work)."
+  },
+  "editorSendOriginalAsFile": "Send original as file (no compression)",
+  "@editorSendOriginalAsFile": {
+    "description": "Image editor button: send the picked image unchanged, as a file, instead of the downscaled photo."
   }
 }

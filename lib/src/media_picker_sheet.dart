@@ -26,6 +26,7 @@ class MediaPickerResult {
        fallbackToFilePicker = false,
        filePath = null,
        sizeBytes = bytes.length,
+       asFile = false,
        items = null;
 
   MediaPickerResult.sendFile({
@@ -33,6 +34,7 @@ class MediaPickerResult {
     required this.sizeBytes,
     required this.fileName,
     required this.mimeType,
+    this.asFile = false,
   }) : bytes = null,
        fallbackToFilePicker = false,
        items = null;
@@ -43,6 +45,7 @@ class MediaPickerResult {
       sizeBytes = null,
       fileName = null,
       mimeType = null,
+      asFile = false,
       fallbackToFilePicker = false;
 
   bool get hasItems => items != null && items!.isNotEmpty;
@@ -53,6 +56,7 @@ class MediaPickerResult {
       sizeBytes = null,
       fileName = null,
       mimeType = null,
+      asFile = false,
       fallbackToFilePicker = true,
       items = null;
 
@@ -62,6 +66,10 @@ class MediaPickerResult {
   final String? fileName;
   final String? mimeType;
   final bool fallbackToFilePicker;
+
+  /// Sent as a file: the original, unchanged (not downscaled), shown as a
+  /// file rather than a photo.
+  final bool asFile;
   final List<
     ({
       Uint8List? bytes,
@@ -668,17 +676,30 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       // (with or without dirty edits) pops with null — never silently
       // sends the unedited original. The previous `edited ?? bytes`
       // fallback shipped the original on cancel, which the user reported.
-      final edited = await Navigator.of(context).push<Uint8List>(
+      final chosen = await Navigator.of(context).push<Object>(
         MaterialPageRoute(
           builder: (_) =>
               MediaEditorScreen(sourceBytes: bytes, palette: widget.palette),
         ),
       );
       if (!mounted) return;
-      if (edited == null) {
+      if (identical(chosen, MediaEditorScreen.sendOriginalAsFile)) {
+        Navigator.of(context).pop(
+          MediaPickerResult.sendFile(
+            filePath: file.path,
+            sizeBytes: sizeBytes,
+            fileName: fileName,
+            mimeType: mime,
+            asFile: true,
+          ),
+        );
+        return;
+      }
+      if (chosen is! Uint8List) {
         // User backed out — do not send.
         return;
       }
+      final edited = chosen;
       if (edited.length > widget.maxBytes) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
@@ -694,7 +715,8 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
       Navigator.of(context).pop(
         MediaPickerResult.send(
           bytes: edited,
-          fileName: fileName,
+          // The editor's output is a JPEG, whatever the original was.
+          fileName: _jpegName(fileName),
           mimeType: 'image/jpeg',
         ),
       );
@@ -1149,8 +1171,24 @@ class MediaEditorScreen extends StatefulWidget {
   final Uint8List sourceBytes;
   final ConestPalette palette;
 
+  /// What the editor returns for "Send original as file": the picked file
+  /// unchanged, instead of the edited (downscaled JPEG) bytes it returns
+  /// for Send.
+  static const Object sendOriginalAsFile = _SendOriginalAsFile();
+
   @override
   State<MediaEditorScreen> createState() => _MediaEditorScreenState();
+}
+
+class _SendOriginalAsFile {
+  const _SendOriginalAsFile();
+}
+
+/// [name] with a .jpg extension.
+String _jpegName(String name) {
+  final dot = name.lastIndexOf('.');
+  final stem = dot > 0 ? name.substring(0, dot) : name;
+  return '$stem.jpg';
 }
 
 class _MediaEditorScreenState extends State<MediaEditorScreen> {
@@ -1299,6 +1337,18 @@ class _MediaEditorScreenState extends State<MediaEditorScreen> {
                   ? l10nOf(context).uiApplyCropA43CCF
                   : l10nOf(context).uiCropC5DB3D,
             ),
+            // Before any edit: the original, uncompressed, as a file.
+            if (!_isDirty && !_cropMode)
+              IconButton(
+                key: const ValueKey('editor-send-original'),
+                onPressed: _busy
+                    ? null
+                    : () => Navigator.of(
+                        context,
+                      ).pop(MediaEditorScreen.sendOriginalAsFile),
+                icon: const Icon(Icons.insert_drive_file_outlined),
+                tooltip: l10nOf(context).editorSendOriginalAsFile,
+              ),
             IconButton(
               onPressed: _busy
                   ? null

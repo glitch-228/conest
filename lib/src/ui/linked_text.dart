@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../app_locales.dart';
+import '../links/link_cleaner.dart';
+import 'link_cleaning.dart';
 
 /// A link found in a message: where it is in the text, and what it opens.
 typedef FoundLink = ({int start, int end, Uri uri});
@@ -62,10 +64,13 @@ bool _closesUnopened(String text, String last) {
 }
 
 /// Whether [uri]'s host has letters outside ASCII (Dart keeps them
-/// percent-encoded): it may be made to look like another site, so opening
-/// it asks first.
+/// percent-encoded, or written as punycode): it may be made to look like
+/// another site, so opening it asks first.
 bool hasLookalikeHost(Uri uri) =>
-    uri.host.contains('%') || uri.host.runes.any((rune) => rune > 0x7f);
+    uri.host.contains('%') ||
+    uri.host.runes.any((rune) => rune > 0x7f) ||
+    // The same, written as punycode.
+    uri.host.split('.').any((label) => label.startsWith('xn--'));
 
 String _readableHost(Uri uri) {
   try {
@@ -75,19 +80,26 @@ String _readableHost(Uri uri) {
   }
 }
 
-/// Opens [uri] with [openUrl] (the system browser), asking first when its
-/// host has letters outside ASCII.
+/// Opens [uri] with [openUrl] (the system browser), without its tracking
+/// parts (see [LinkSettings]), asking first when its host has letters
+/// outside ASCII.
 Future<void> openMessageLink(
   BuildContext context,
   Future<void> Function(Uri uri) openUrl,
   Uri uri,
 ) async {
-  if (hasLookalikeHost(uri)) {
+  // Opened without tracking, as Settings → Privacy says.
+  final settings = LinkSettings.maybeOf(context);
+  final filters = LinkFilters.current;
+  final opened = settings == null || filters == null
+      ? uri
+      : filters.forOpening(uri, settings.policy());
+  if (hasLookalikeHost(uri) || hasLookalikeHost(opened)) {
     final open = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(l10nOf(context).linkLookalikeTitle),
-        content: Text(l10nOf(context).linkLookalikeBody(_readableHost(uri))),
+        content: Text(l10nOf(context).linkLookalikeBody(_readableHost(opened))),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -104,7 +116,7 @@ Future<void> openMessageLink(
     if (open != true) return;
   }
   try {
-    await openUrl(uri);
+    await openUrl(opened);
   } catch (error) {
     debugPrint('Opening a link failed: $error');
   }

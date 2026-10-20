@@ -80,6 +80,8 @@ import 'src/ui/user_guide.dart';
 import 'src/ui/clipboard_image.dart';
 import 'src/ui/chat_paste_scope.dart';
 import 'src/ui/composer_keys.dart';
+import 'src/ui/link_cleaning.dart';
+import 'src/links/link_cleaner.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
@@ -435,6 +437,8 @@ Future<void> _runConestWithProfile(
   } catch (error) {
     controller.appendDebugLog('connectivity_plus listener unavailable: $error');
   }
+  // Links are cleaned once the bundled lists are read.
+  unawaited(LinkFilters.load());
   runApp(
     ConestApp(
       controller: controller,
@@ -1315,7 +1319,13 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               builder: (context, child) {
                 final framed = ComposerSettings(
                   enterSends: widget.themeController.enterSends,
-                  child: child ?? const SizedBox.shrink(),
+                  child: LinkSettings(
+                    policy: () => widget.controller.linkPolicy,
+                    onServiceFailed: (service) => unawaited(
+                      widget.controller.noteLinkFixerFailed(service),
+                    ),
+                    child: child ?? const SizedBox.shrink(),
+                  ),
                 );
                 if (_controllerUserMode != UserMode.minimal || child == null) {
                   return framed;
@@ -2521,6 +2531,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _sendCurrentMessage() async {
+    finishComposerLinks(_composerController);
     final contact = _selectedContact;
     if (contact == null) return;
     final body = _composerController.text.trim();
@@ -2604,6 +2615,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _sendCurrentGroupMessage() async {
+    finishComposerLinks(_composerController);
     final group = _selectedGroup;
     final body = _composerController.text.trim();
     if (group == null || body.isEmpty) {
@@ -2624,6 +2636,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _sendLanLobbyMessage() async {
+    finishComposerLinks(_composerController);
     final body = _composerController.text.trim();
     if (body.isEmpty) {
       return;
@@ -2902,6 +2915,7 @@ class _HomeScreenState extends State<HomeScreen> {
       sizeBytes: result.sizeBytes!,
       fileName: result.fileName!,
       mimeType: result.mimeType ?? 'application/octet-stream',
+      asFile: result.asFile,
     );
   }
 
@@ -3120,9 +3134,13 @@ class _HomeScreenState extends State<HomeScreen> {
     int? sizeBytes,
     required String fileName,
     required String mimeType,
+    bool asFile = false,
   }) {
     return _stageMultipleAttachments(
       contact: contact,
+      presentation: asFile
+          ? AttachmentPresentation.file
+          : AttachmentPresentation.media,
       items: [
         (
           bytes: bytes,
@@ -3159,6 +3177,7 @@ class _HomeScreenState extends State<HomeScreen> {
       })
     >
     items,
+    AttachmentPresentation presentation = AttachmentPresentation.media,
   }) async {
     if (items.isEmpty) return;
     final cap = MessengerController.maxAttachmentsPerSend;
@@ -3191,6 +3210,7 @@ class _HomeScreenState extends State<HomeScreen> {
           filePath: item.filePath,
           poster: item.poster,
           caption: item.caption,
+          presentation: presentation,
         ),
       );
     }
@@ -8705,6 +8725,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
   GroupRecord get group => widget.group;
 
   Future<void> _scheduleText() async {
+    finishComposerLinks(widget.composerController);
     final body = widget.composerController.text.trim();
     if (body.isEmpty) return;
     final date = await showDatePicker(
@@ -9764,6 +9785,12 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                 message.senderDeviceId,
                               ),
                         );
+                      } else if (value == 'open_original_link') {
+                        await openOriginalLink(
+                          context,
+                          controller.openExternalUrl,
+                          message.body,
+                        );
                       } else if (value == 'copy_selection') {
                         await Clipboard.setData(
                           ClipboardData(text: _selectedText),
@@ -9895,6 +9922,11 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         PopupMenuItem(
                           value: 'copy_selection',
                           child: Text(l10nOf(context).menuCopySelection),
+                        ),
+                      if (embedFixedLinkIn(message.body) != null)
+                        PopupMenuItem(
+                          value: 'open_original_link',
+                          child: Text(l10nOf(context).menuOpenOriginalLink),
                         ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
@@ -10225,6 +10257,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     ),
                     const SizedBox(height: 12),
                   ],
+                  LinkCleanedNote(controller: widget.composerController),
                   _VoiceComposerPanel(
                     service: controller.voiceMessageService,
                     destinationKey: 'group:${group.groupId}',
@@ -10829,6 +10862,7 @@ class _ChatPanelState extends State<_ChatPanel> {
   ContactRecord get contact => widget.contact;
 
   Future<void> _scheduleText() async {
+    finishComposerLinks(widget.composerController);
     final body = widget.composerController.text.trim();
     final staged = controller.stagedAttachmentsFor(contact.deviceId);
     if (staged.length > 1) {
@@ -11690,7 +11724,13 @@ class _ChatPanelState extends State<_ChatPanel> {
                     child: const SizedBox.shrink(),
                     onSelected: (value) async {
                       try {
-                        if (value == 'copy_selection') {
+                        if (value == 'open_original_link') {
+                          await openOriginalLink(
+                            context,
+                            controller.openExternalUrl,
+                            message.body,
+                          );
+                        } else if (value == 'copy_selection') {
                           await Clipboard.setData(
                             ClipboardData(text: _selectedText),
                           );
@@ -11832,6 +11872,11 @@ class _ChatPanelState extends State<_ChatPanel> {
                         PopupMenuItem(
                           value: 'copy_selection',
                           child: Text(l10nOf(context).menuCopySelection),
+                        ),
+                      if (embedFixedLinkIn(message.body) != null)
+                        PopupMenuItem(
+                          value: 'open_original_link',
+                          child: Text(l10nOf(context).menuOpenOriginalLink),
                         ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
@@ -12270,6 +12315,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                     contact: contact,
                     palette: palette,
                   ),
+                  LinkCleanedNote(controller: widget.composerController),
                   _VoiceComposerPanel(
                     service: controller.voiceMessageService,
                     destinationKey: 'direct:${contact.deviceId}',
@@ -15337,6 +15383,44 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               onChanged: (value) => unawaited(
                                 widget.controller
                                     .setRandomizesFileNames(value)
+                                    .then((_) {
+                                      if (mounted) setState(() {});
+                                    }),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              l10nOf(context).settingsLinksTitle,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            SwitchListTile.adaptive(
+                              key: const ValueKey('settings-clean-links'),
+                              contentPadding: EdgeInsets.zero,
+                              value:
+                                  widget.controller.linkPolicy.removeTracking,
+                              title: Text(l10nOf(context).settingsCleanLinks),
+                              subtitle: Text(
+                                l10nOf(context).settingsCleanLinksHelp,
+                              ),
+                              onChanged: (value) => unawaited(
+                                widget.controller.setCleansLinks(value).then((
+                                  _,
+                                ) {
+                                  if (mounted) setState(() {});
+                                }),
+                              ),
+                            ),
+                            SwitchListTile.adaptive(
+                              key: const ValueKey('settings-embed-links'),
+                              contentPadding: EdgeInsets.zero,
+                              value: widget.controller.linkPolicy.embedFriendly,
+                              title: Text(l10nOf(context).settingsEmbedLinks),
+                              subtitle: Text(
+                                l10nOf(context).settingsEmbedLinksHelp,
+                              ),
+                              onChanged: (value) => unawaited(
+                                widget.controller
+                                    .setEmbedFriendlyLinks(value)
                                     .then((_) {
                                       if (mounted) setState(() {});
                                     }),

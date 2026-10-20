@@ -1395,5 +1395,14 @@
   "carrierPaused": "Dijeda: disimpan, tidak dipakai. Nyalakan untuk memakainya lagi.",
   "emailChangeAccount": "Ganti akun",
   "emailOtherServer": "Pakai server lain",
-  "actionSave": "Simpan"
+  "actionSave": "Simpan",
+  "settingsLinksTitle": "Tautan yang Anda kirim dan buka",
+  "settingsCleanLinks": "Hapus pelacakan dari tautan",
+  "settingsCleanLinksHelp": "Menghapus bagian tautan yang memberi tahu situs siapa yang membagikannya (seperti ?si= atau utm_), saat dikirim dan saat dibuka. Memakai aturan ClearURLs.",
+  "settingsEmbedLinks": "Tautan yang menampilkan pratinjau",
+  "settingsEmbedLinksHelp": "Tautan ke postingan di X, Instagram, Reddit, TikTok, dan situs serupa melewati layanan yang memungkinkan aplikasi lain menampilkan pratinjau dan meneruskan peramban ke postingan. Layanan diambil dari daftar embed-fixer; yang gagal dilewati.",
+  "linkCleaned": "Tautan dibersihkan",
+  "linkCleanedUndo": "Urungkan",
+  "menuOpenOriginalLink": "Buka tautan asli",
+  "editorSendOriginalAsFile": "Kirim asli sebagai file (tanpa kompresi)"
 }

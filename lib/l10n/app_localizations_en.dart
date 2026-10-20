@@ -5396,4 +5396,34 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get actionSave => 'Save';
+
+  @override
+  String get settingsLinksTitle => 'Links you send and open';
+
+  @override
+  String get settingsCleanLinks => 'Remove tracking from links';
+
+  @override
+  String get settingsCleanLinksHelp =>
+      'Removes the parts of a link that tell a site who shared it (such as ?si= or utm_), when you send it and when you open one. Uses the ClearURLs rules.';
+
+  @override
+  String get settingsEmbedLinks => 'Links that show previews';
+
+  @override
+  String get settingsEmbedLinksHelp =>
+      'Links to posts on X, Instagram, Reddit, TikTok and similar sites go through a service that lets other apps show a preview, and that sends browsers on to the post. The services come from the embed-fixer list; one that fails is skipped.';
+
+  @override
+  String get linkCleaned => 'Link cleaned';
+
+  @override
+  String get linkCleanedUndo => 'Undo';
+
+  @override
+  String get menuOpenOriginalLink => 'Open original link';
+
+  @override
+  String get editorSendOriginalAsFile =>
+      'Send original as file (no compression)';
 }

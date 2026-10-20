@@ -5159,4 +5159,33 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get actionSave => '保存';
+
+  @override
+  String get settingsLinksTitle => '你发送和打开的链接';
+
+  @override
+  String get settingsCleanLinks => '去除链接中的跟踪参数';
+
+  @override
+  String get settingsCleanLinksHelp =>
+      '发送和打开链接时，去掉让网站得知是谁分享的部分（如 ?si= 或 utm_）。使用 ClearURLs 规则。';
+
+  @override
+  String get settingsEmbedLinks => '可显示预览的链接';
+
+  @override
+  String get settingsEmbedLinksHelp =>
+      '指向 X、Instagram、Reddit、TikTok 等网站帖子的链接会经过一个服务，让其他应用能显示预览，并把浏览器转到原帖。服务来自 embed-fixer 列表；失效的服务会被跳过。';
+
+  @override
+  String get linkCleaned => '链接已清理';
+
+  @override
+  String get linkCleanedUndo => '撤销';
+
+  @override
+  String get menuOpenOriginalLink => '打开原始链接';
+
+  @override
+  String get editorSendOriginalAsFile => '以文件发送原图（不压缩）';
 }

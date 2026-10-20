@@ -5520,4 +5520,35 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get actionSave => 'Сохранить';
+
+  @override
+  String get settingsLinksTitle =>
+      'Ссылки, которые вы отправляете и открываете';
+
+  @override
+  String get settingsCleanLinks => 'Удалять слежку из ссылок';
+
+  @override
+  String get settingsCleanLinksHelp =>
+      'Убирает части ссылки, по которым сайт узнаёт, кто ею поделился (например, ?si= или utm_), при отправке и при открытии. Использует правила ClearURLs.';
+
+  @override
+  String get settingsEmbedLinks => 'Ссылки с предпросмотром';
+
+  @override
+  String get settingsEmbedLinksHelp =>
+      'Ссылки на посты в X, Instagram, Reddit, TikTok и похожих сайтах идут через сервис, который позволяет другим приложениям показать предпросмотр и переправляет браузер к посту. Сервисы взяты из списка embed-fixer; неработающий пропускается.';
+
+  @override
+  String get linkCleaned => 'Ссылка очищена';
+
+  @override
+  String get linkCleanedUndo => 'Отменить';
+
+  @override
+  String get menuOpenOriginalLink => 'Открыть исходную ссылку';
+
+  @override
+  String get editorSendOriginalAsFile =>
+      'Отправить оригинал файлом (без сжатия)';
 }

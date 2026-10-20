@@ -5383,4 +5383,34 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get actionSave => 'Simpan';
+
+  @override
+  String get settingsLinksTitle => 'Tautan yang Anda kirim dan buka';
+
+  @override
+  String get settingsCleanLinks => 'Hapus pelacakan dari tautan';
+
+  @override
+  String get settingsCleanLinksHelp =>
+      'Menghapus bagian tautan yang memberi tahu situs siapa yang membagikannya (seperti ?si= atau utm_), saat dikirim dan saat dibuka. Memakai aturan ClearURLs.';
+
+  @override
+  String get settingsEmbedLinks => 'Tautan yang menampilkan pratinjau';
+
+  @override
+  String get settingsEmbedLinksHelp =>
+      'Tautan ke postingan di X, Instagram, Reddit, TikTok, dan situs serupa melewati layanan yang memungkinkan aplikasi lain menampilkan pratinjau dan meneruskan peramban ke postingan. Layanan diambil dari daftar embed-fixer; yang gagal dilewati.';
+
+  @override
+  String get linkCleaned => 'Tautan dibersihkan';
+
+  @override
+  String get linkCleanedUndo => 'Urungkan';
+
+  @override
+  String get menuOpenOriginalLink => 'Buka tautan asli';
+
+  @override
+  String get editorSendOriginalAsFile =>
+      'Kirim asli sebagai file (tanpa kompresi)';
 }

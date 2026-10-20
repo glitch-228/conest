@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'link_cleaning.dart';
+
 /// Whether Enter sends messages, for every message box below it.
 class ComposerSettings extends InheritedWidget {
   const ComposerSettings({
@@ -50,7 +52,8 @@ Map<Type, Action<Intent>> composerSendActions(
   VoidCallback onSend,
 ) => {_SendIntent: _SendAction(controller, onSend)};
 
-/// A message box ([child], editing [controller]) with the send keys.
+/// A message box ([child], editing [controller]) with the send keys, and
+/// its links cleaned as they are written ([LinkCleanedNote]).
 class ComposerKeys extends StatelessWidget {
   const ComposerKeys({
     super.key,
@@ -64,12 +67,19 @@ class ComposerKeys extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Shortcuts(
-    shortcuts: composerSendShortcuts(context),
-    child: Actions(
-      actions: composerSendActions(controller, onSend),
-      child: child,
-    ),
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      LinkCleanedNote(controller: controller),
+      Shortcuts(
+        shortcuts: composerSendShortcuts(context),
+        child: Actions(
+          actions: composerSendActions(controller, onSend),
+          child: child,
+        ),
+      ),
+    ],
   );
 }
 

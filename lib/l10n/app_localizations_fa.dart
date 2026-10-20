@@ -5396,4 +5396,34 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get actionSave => 'ذخیره';
+
+  @override
+  String get settingsLinksTitle => 'پیوندهایی که می‌فرستید و باز می‌کنید';
+
+  @override
+  String get settingsCleanLinks => 'حذف ردیابی از پیوندها';
+
+  @override
+  String get settingsCleanLinksHelp =>
+      'بخش‌هایی از پیوند را که به سایت می‌گویند چه کسی آن را هم‌رسانی کرده (مانند ?si= یا utm_) هنگام فرستادن و باز کردن حذف می‌کند. از قواعد ClearURLs استفاده می‌کند.';
+
+  @override
+  String get settingsEmbedLinks => 'پیوندهای دارای پیش‌نمایش';
+
+  @override
+  String get settingsEmbedLinksHelp =>
+      'پیوندهای پست‌های X، اینستاگرام، ردیت، تیک‌تاک و سایت‌های مشابه از سرویسی می‌گذرند که به برنامه‌های دیگر امکان نمایش پیش‌نمایش می‌دهد و مرورگر را به پست می‌برد. سرویس‌ها از فهرست embed-fixer آمده‌اند؛ سرویسی که کار نکند کنار گذاشته می‌شود.';
+
+  @override
+  String get linkCleaned => 'پیوند پاک‌سازی شد';
+
+  @override
+  String get linkCleanedUndo => 'واگرد';
+
+  @override
+  String get menuOpenOriginalLink => 'باز کردن پیوند اصلی';
+
+  @override
+  String get editorSendOriginalAsFile =>
+      'فرستادن نسخهٔ اصلی به‌صورت فایل (بدون فشرده‌سازی)';
 }

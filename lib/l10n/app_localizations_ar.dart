@@ -5528,4 +5528,33 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get actionSave => 'حفظ';
+
+  @override
+  String get settingsLinksTitle => 'الروابط التي ترسلها وتفتحها';
+
+  @override
+  String get settingsCleanLinks => 'إزالة التتبع من الروابط';
+
+  @override
+  String get settingsCleanLinksHelp =>
+      'يزيل أجزاء الرابط التي تخبر الموقع بمن شاركه (مثل ?si= أو utm_) عند إرساله وعند فتحه. يستخدم قواعد ClearURLs.';
+
+  @override
+  String get settingsEmbedLinks => 'روابط تعرض معاينة';
+
+  @override
+  String get settingsEmbedLinksHelp =>
+      'تمر روابط المنشورات على X وInstagram وReddit وTikTok والمواقع المشابهة عبر خدمة تتيح للتطبيقات الأخرى عرض معاينة، وتوجّه المتصفح إلى المنشور. الخدمات مأخوذة من قائمة embed-fixer؛ ويُتخطّى ما يتعطل منها.';
+
+  @override
+  String get linkCleaned => 'نُظِّف الرابط';
+
+  @override
+  String get linkCleanedUndo => 'تراجع';
+
+  @override
+  String get menuOpenOriginalLink => 'فتح الرابط الأصلي';
+
+  @override
+  String get editorSendOriginalAsFile => 'إرسال الأصل كملف (دون ضغط)';
 }

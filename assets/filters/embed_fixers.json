@@ -1,0 +1,612 @@
+{
+ "source": "https://github.com/seriaati/embed-fixer",
+ "commit": "937963ef5697b7bf26a615cd801dadaf1ac46ad0",
+ "sites": [
+  {
+   "id": "twitter",
+   "name": "Twitter/X",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?twitter.com/[a-zA-Z0-9_]+/status/\\d+(/photo|video/\\d+)?/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.)?x.com/[a-zA-Z0-9_]+/status/\\d+(/photo|video/\\d+)?/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 1,
+     "name": "FxEmbed",
+     "default": true,
+     "fixes": [
+      {
+       "from": "twitter.com",
+       "to": "fxtwitter.com"
+      },
+      {
+       "from": "x.com",
+       "to": "fixupx.com"
+      }
+     ]
+    },
+    {
+     "id": 2,
+     "name": "BetterTwitFix",
+     "default": false,
+     "fixes": [
+      {
+       "from": "twitter.com",
+       "to": "vxtwitter.com"
+      },
+      {
+       "from": "x.com",
+       "to": "fixvx.com"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "pixiv",
+   "name": "Pixiv",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?pixiv.net(/[a-zA-Z]+)?/artworks/\\d+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 3,
+     "name": "Phixiv",
+     "default": true,
+     "fixes": [
+      {
+       "from": "pixiv.net",
+       "to": "phixiv.net"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "tiktok",
+   "name": "TikTok",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?tiktok.com/(t/\\w+|@[\\w.]+/(video|photo)/\\d+)/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://vm.tiktok.com/\\w+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://vt.tiktok.com/\\w+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 4,
+     "name": "fxTikTok",
+     "default": true,
+     "fixes": [
+      {
+       "from": "tiktok.com",
+       "to": "tnktok.com"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reddit",
+   "name": "Reddit",
+   "patterns": [
+    {
+     "pattern": "https://(www.|old.)?reddit.com/r/[\\w]+/comments/[\\w]+/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.|old.)?reddit.com/r/[\\w]+/s/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.|old.)?reddit.com/user/[\\w]+/comments/[\\w]+/[\\w]+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 6,
+     "name": "FixReddit",
+     "default": true,
+     "fixes": [
+      {
+       "from": "reddit.com",
+       "to": "fxreddit.seria.moe"
+      }
+     ]
+    },
+    {
+     "id": 7,
+     "name": "vxReddit",
+     "default": false,
+     "fixes": [
+      {
+       "from": "reddit.com",
+       "to": "vxreddit.com"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "instagram",
+   "name": "Instagram",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?instagram.com/share/[\\w]+/?",
+     "skip": [
+      8
+     ]
+    },
+    {
+     "pattern": "https://(www.)?instagram.com/(p|reels?)/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.)?instagram.com/share/(p|reels?)/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.)?instagram.com/stories/[\\w.]+/\\d+/?",
+     "skip": [
+      8,
+      9,
+      23,
+      34,
+      35
+     ]
+    }
+   ],
+   "services": [
+    {
+     "id": 37,
+     "name": "OGInstagram",
+     "default": true,
+     "fixes": [
+      {
+       "from": "instagram.com",
+       "to": "oginstagram.com"
+      }
+     ]
+    },
+    {
+     "id": 8,
+     "name": "InstaFix",
+     "default": false,
+     "fixes": [
+      {
+       "from": "instagram.com",
+       "to": "eeinstagram.com"
+      }
+     ]
+    },
+    {
+     "id": 34,
+     "name": "vxinstagram",
+     "default": false,
+     "fixes": [
+      {
+       "from": "instagram.com",
+       "to": "fxig.seria.moe"
+      }
+     ]
+    },
+    {
+     "id": 35,
+     "name": "InstaEmbedRouter",
+     "default": false,
+     "fixes": [
+      {
+       "from": "instagram.com",
+       "to": "zzinstagram.com"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "furaffinity",
+   "name": "FurAffinity",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?furaffinity.net/view/\\d+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 10,
+     "name": "xfuraffinity",
+     "default": true,
+     "fixes": [
+      {
+       "from": "furaffinity.net",
+       "to": "xfuraffinity.net"
+      }
+     ]
+    },
+    {
+     "id": 28,
+     "name": "fxraffinity",
+     "default": false,
+     "fixes": [
+      {
+       "from": "furaffinity.net",
+       "to": "fxraffinity.net"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "twitch_clips",
+   "name": "Twitch Clips",
+   "patterns": [
+    {
+     "pattern": "https://m.twitch.tv/clip/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://clips.twitch.tv/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.)?twitch.tv/[\\w]+/clip/[\\w]+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 11,
+     "name": "fxtwitch",
+     "default": true,
+     "fixes": [
+      {
+       "from": "clips.twitch.tv",
+       "to": "fxtwitch.seria.moe/clip"
+      },
+      {
+       "from": "m.twitch.tv",
+       "to": "fxtwitch.seria.moe"
+      },
+      {
+       "from": "twitch.tv",
+       "to": "fxtwitch.seria.moe"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "iwara",
+   "name": "Iwara",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?iwara.tv/video/[\\w]+/[\\w]+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 12,
+     "name": "fxiwara",
+     "default": true,
+     "fixes": [
+      {
+       "from": "iwara.tv",
+       "to": "fxiwara.seria.moe"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bluesky",
+   "name": "Bluesky",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?bsky.app/profile/[\\w.-]+/post/[\\w]+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 13,
+     "name": "VixBluesky",
+     "default": true,
+     "fixes": [
+      {
+       "from": "bsky.app",
+       "to": "bskx.app"
+      }
+     ]
+    },
+    {
+     "id": 14,
+     "name": "FxEmbed",
+     "default": false,
+     "fixes": [
+      {
+       "from": "bsky.app",
+       "to": "fxbsky.app"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "facebook",
+   "name": "Facebook",
+   "patterns": [
+    {
+     "pattern": "https://(www.|web.)?facebook.com/share/r/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.|web.)?facebook.com/reel/\\d+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.|web.)?facebook.com/share/v/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.|web.)?facebook.com/(.*)",
+     "skip": [
+      15
+     ]
+    }
+   ],
+   "services": [
+    {
+     "id": 25,
+     "name": "facebed",
+     "default": true,
+     "fixes": [
+      {
+       "from": "facebook.com",
+       "to": "facebed.seria.moe"
+      }
+     ]
+    },
+    {
+     "id": 16,
+     "name": "fxfacebook",
+     "default": false,
+     "fixes": [
+      {
+       "from": "facebook.com",
+       "to": "fxfb.seria.moe"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bilibili",
+   "name": "Bilibili",
+   "patterns": [
+    {
+     "pattern": "https://(www.|m.)?bilibili.com/video/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.)?b23.tv/[\\w]+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 17,
+     "name": "fxbilibili",
+     "default": true,
+     "fixes": [
+      {
+       "from": "m.bilibili.com",
+       "to": "fxbilibili.seria.moe"
+      },
+      {
+       "from": "bilibili.com",
+       "to": "fxbilibili.seria.moe"
+      },
+      {
+       "from": "b23.tv",
+       "to": "fxbilibili.seria.moe/b23"
+      }
+     ]
+    },
+    {
+     "id": 22,
+     "name": "BiliFix",
+     "default": false,
+     "fixes": [
+      {
+       "from": "m.bilibili.com",
+       "to": "vxbilibili.com"
+      },
+      {
+       "from": "bilibili.com",
+       "to": "vxbilibili.com"
+      },
+      {
+       "from": "b23.tv",
+       "to": "vxb23.tv"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "bilibili_opus",
+   "name": "Bilibili Opus",
+   "patterns": [
+    {
+     "pattern": "https://(www.|m.)?bilibili.com/opus/\\d+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://t.bilibili.com/\\d+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 36,
+     "name": "BiliFix",
+     "default": true,
+     "fixes": [
+      {
+       "from": "bilibili.com",
+       "to": "vxbilibili.com"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "tumblr",
+   "name": "Tumblr",
+   "patterns": [
+    {
+     "pattern": "https://(www\\.)?tumblr\\.com/[a-zA-Z0-9_-]+/[0-9]+/?([a-zA-Z0-9_-]+/?)?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 19,
+     "name": "fxtumblr",
+     "default": true,
+     "fixes": [
+      {
+       "from": "tumblr.com",
+       "to": "tpmblr.com"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "threads",
+   "name": "Threads",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?threads.(net|com)/@[\\w.]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.)?threads.(net|com)/@[\\w.]+/post/[\\w]+/?",
+     "skip": []
+    },
+    {
+     "pattern": "https://(www.)?threads.(net|com)/share/[\\w]+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 20,
+     "name": "FixThreads",
+     "default": true,
+     "fixes": [
+      {
+       "from": "threads.net",
+       "to": "fixthreads.seria.moe"
+      },
+      {
+       "from": "threads.com",
+       "to": "fixthreads.seria.moe"
+      }
+     ]
+    },
+    {
+     "id": 21,
+     "name": "vxThreads",
+     "default": false,
+     "fixes": [
+      {
+       "from": "threads.net",
+       "to": "vxthreads.net"
+      },
+      {
+       "from": "threads.com",
+       "to": "vxthreads.net"
+      }
+     ]
+    },
+    {
+     "id": 33,
+     "name": "FixEmbed",
+     "default": false,
+     "fixes": [
+      {
+       "wrap": "fixembed.app/embed"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ptt",
+   "name": "PTT",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?ptt.cc/bbs/[A-Za-z0-9_]+/M.\\d+.A.[A-Z0-9]+.html/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 24,
+     "name": "fxptt",
+     "default": false,
+     "fixes": [
+      {
+       "from": "ptt.cc",
+       "to": "fxptt.seria.moe"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "deviantart",
+   "name": "DeviantArt",
+   "patterns": [
+    {
+     "pattern": "https://(www.)?deviantart.com/[\\w.-]+/art/[\\w.-]+-\\d+/?",
+     "skip": []
+    }
+   ],
+   "services": [
+    {
+     "id": 32,
+     "name": "fxdeviantart",
+     "default": true,
+     "fixes": [
+      {
+       "from": "deviantart.com",
+       "to": "fixdeviantart.com"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

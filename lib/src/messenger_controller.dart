@@ -47,6 +47,7 @@ import 'carrier.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
 import 'media_sanitizer.dart';
+import 'links/link_cleaner.dart';
 import 'file_metadata_consent.dart';
 import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
@@ -6035,6 +6036,60 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> setRandomizesFileNames(bool value) async {
     _snapshot = _snapshot.copyWith(randomFileNames: value);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// How links are cleaned when sent and opened (Settings → Privacy).
+  LinkPolicy get linkPolicy {
+    final now = _now().toUtc();
+    return LinkPolicy(
+      removeTracking: !_snapshot.keepLinkTracking,
+      embedFriendly: !_snapshot.keepLinkSites,
+      failedServices: {
+        for (final entry in _snapshot.failedLinkFixers.entries)
+          if (DateTime.tryParse(entry.value) case final at?
+              when _withinLinkFixerRetry(now, at))
+            entry.key,
+      },
+    );
+  }
+
+  /// How long an embed-fixing service that failed is skipped.
+  static const linkFixerRetryAfter = Duration(hours: 24);
+
+  /// A failure at [at] still counts at [now]. One "in the future" (the
+  /// clock was set back since) does not, or it would count for as long.
+  static bool _withinLinkFixerRetry(DateTime now, DateTime at) {
+    final age = now.difference(at);
+    return !age.isNegative && age < linkFixerRetryAfter;
+  }
+
+  Future<void> setCleansLinks(bool value) async {
+    _snapshot = _snapshot.copyWith(keepLinkTracking: !value);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  Future<void> setEmbedFriendlyLinks(bool value) async {
+    _snapshot = _snapshot.copyWith(keepLinkSites: !value);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// An embed-fixing service ("twitter:1") did not work: links skip it
+  /// for [linkFixerRetryAfter]. At most 64 are remembered.
+  Future<void> noteLinkFixerFailed(String service) async {
+    if (service.length > 64) return;
+    final now = _now().toUtc();
+    final failed = <String, String>{
+      for (final entry in _snapshot.failedLinkFixers.entries)
+        if (DateTime.tryParse(entry.value) case final at?
+            when _withinLinkFixerRetry(now, at))
+          entry.key: entry.value,
+    }..remove(service);
+    while (failed.length >= 64) {
+      failed.remove(failed.keys.first);
+    }
+    failed[service] = now.toIso8601String();
+    _snapshot = _snapshot.copyWith(failedLinkFixers: failed);
     await _saveSnapshotSilently(notify: true);
   }
 
@@ -15829,7 +15884,9 @@ class MessengerController extends ChangeNotifier {
   /// [maxAttachmentsPerAlbum]; the composer's [caption] (typed in the
   /// TextField) is promoted to the FIRST uncaptioned item. Clears the
   /// bucket immediately so the UI moves the previews into the chat
-  /// thread; per-item failures surface via the bubble's Failed state.
+  /// thread; a file that fails once sent shows as Failed, and one refused
+  /// before that (too large, unreadable) goes back into the bucket with
+  /// the reason in [statusMessage].
   Future<void> sendStagedBundle({
     required ContactRecord contact,
     String caption = '',
@@ -15901,6 +15958,15 @@ class MessengerController extends ChangeNotifier {
       return result.future;
     }
 
+    // Files that could not go: back into the tray, with the reason shown,
+    // instead of vanishing (a debug log line was all they used to leave).
+    final notSent = <StagedAttachment>[];
+    final reasons = <String>[];
+    void keepStaged(StagedAttachment entry, Object error) {
+      notSent.add(entry);
+      reasons.add('${entry.fileName}: ${_stagedFailureReason(error)}');
+    }
+
     for (var a = 0; a < albums.length; a++) {
       final album = albums[a];
       final albumId = album.length > 1 ? newAlbumId() : null;
@@ -15918,22 +15984,31 @@ class MessengerController extends ChangeNotifier {
         } on AttachmentSpoolException catch (error) {
           final useOriginal = await confirmFallback(entry, error);
           if (useOriginal) {
-            await sendAttachmentSource(
-              contact: contact,
-              source: entry,
-              caption: album.length == 1
-                  ? entry.caption
-                  : (i == 0 ? entry.caption : ''),
-              albumId: albumId,
-              allowOriginalFallback: true,
-            );
+            try {
+              await sendAttachmentSource(
+                contact: contact,
+                source: entry,
+                caption: album.length == 1
+                    ? entry.caption
+                    : (i == 0 ? entry.caption : ''),
+                albumId: albumId,
+                allowOriginalFallback: true,
+              );
+            } catch (retryError) {
+              appendDebugLog(
+                'sendStagedBundle: ${entry.fileName} failed — $retryError',
+              );
+              keepStaged(entry, retryError);
+            }
           } else {
             appendDebugLog(
               'sendStagedBundle: ${entry.fileName} not sent — $error',
             );
+            keepStaged(entry, error);
           }
         } catch (error) {
           appendDebugLog('sendStagedBundle: ${entry.fileName} failed — $error');
+          keepStaged(entry, error);
         }
       }
 
@@ -15970,7 +16045,26 @@ class MessengerController extends ChangeNotifier {
         );
       }
     }
+    if (notSent.isNotEmpty) {
+      // In the order they were staged (two are prepared at a time).
+      final order = {for (final (i, item) in items.indexed) item.id: i};
+      notSent.sort((a, b) => (order[a.id] ?? 0).compareTo(order[b.id] ?? 0));
+      _stagedAttachments
+          .putIfAbsent(contact.deviceId, () => <StagedAttachment>[])
+          .insertAll(0, notSent);
+      setStatus('Not sent, still above the message box: ${reasons.join('; ')}');
+    }
   }
+
+  /// Why a staged file could not be sent, in a few words.
+  static String _stagedFailureReason(Object error) => switch (error) {
+    IrohTransferLimitException(:final message) => message,
+    AttachmentSpoolException() => 'it could not be prepared ($error)',
+    ArgumentError(:final message) => '$message',
+    StateError(:final message) => message,
+    FileSystemException(:final message) => 'it could not be read ($message)',
+    _ => '$error',
+  };
 
   /// Called when the host platform reports a connectivity-interface change
   /// (Wi-Fi ↔ VPN ↔ cellular). The host wires `connectivity_plus`'s stream
@@ -28334,7 +28428,10 @@ class MessengerController extends ChangeNotifier {
     if (key != null) return key;
     final health = await _checkRouteHealth(route);
     if (!health.available) {
-      throw StateError('Relay has no verified identity pin.');
+      // Its identity is learned from its first answer.
+      throw StateError(
+        'Relay not reachable yet; its identity is checked once it answers.',
+      );
     }
     key = _pinnedIdentityKeyForRoute(route);
     if (key == null) {

@@ -10,6 +10,7 @@ import '../delta_chats.dart';
 import 'delta_content_widgets.dart';
 import '../messenger_controller.dart';
 import 'composer_keys.dart';
+import 'link_cleaning.dart';
 import 'linked_text.dart';
 
 /// Delta Chat in Settings → Connectivity: on or off, this account's
@@ -436,6 +437,7 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
   }
 
   Future<void> _send() async {
+    finishComposerLinks(_composer);
     final text = _composer.text;
     if (text.trim().isEmpty || _sending) return;
     setState(() {

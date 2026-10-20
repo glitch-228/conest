@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../messenger_controller.dart';
 import '../radio_chats.dart';
 import 'composer_keys.dart';
+import 'link_cleaning.dart';
 import 'linked_text.dart';
 
 /// What a radio's app chats need from the controller.
@@ -276,6 +277,7 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
   }
 
   Future<void> _send() async {
+    finishComposerLinks(_composer);
     final text = _composer.text;
     if (text.trim().isEmpty || _sending) return;
     setState(() {

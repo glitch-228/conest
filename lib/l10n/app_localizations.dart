@@ -8536,6 +8536,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Save'**
   String get actionSave;
+
+  /// Settings heading: link privacy switches.
+  ///
+  /// In en, this message translates to:
+  /// **'Links you send and open'**
+  String get settingsLinksTitle;
+
+  /// Switch: remove tracking parameters from links (ClearURLs).
+  ///
+  /// In en, this message translates to:
+  /// **'Remove tracking from links'**
+  String get settingsCleanLinks;
+
+  /// Help under the remove-tracking switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Removes the parts of a link that tell a site who shared it (such as ?si= or utm_), when you send it and when you open one. Uses the ClearURLs rules.'**
+  String get settingsCleanLinksHelp;
+
+  /// Switch: move links to embed-fixing services so previews show.
+  ///
+  /// In en, this message translates to:
+  /// **'Links that show previews'**
+  String get settingsEmbedLinks;
+
+  /// Help under the embed-friendly links switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Links to posts on X, Instagram, Reddit, TikTok and similar sites go through a service that lets other apps show a preview, and that sends browsers on to the post. The services come from the embed-fixer list; one that fails is skipped.'**
+  String get settingsEmbedLinksHelp;
+
+  /// Note above the message box after a link was cleaned.
+  ///
+  /// In en, this message translates to:
+  /// **'Link cleaned'**
+  String get linkCleaned;
+
+  /// Button: put the cleaned link back as written.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo'**
+  String get linkCleanedUndo;
+
+  /// Message menu: open the original site of an embed-fixed link (when the service does not work).
+  ///
+  /// In en, this message translates to:
+  /// **'Open original link'**
+  String get menuOpenOriginalLink;
+
+  /// Image editor button: send the picked image unchanged, as a file, instead of the downscaled photo.
+  ///
+  /// In en, this message translates to:
+  /// **'Send original as file (no compression)'**
+  String get editorSendOriginalAsFile;
 }
 
 class _AppLocalizationsDelegate

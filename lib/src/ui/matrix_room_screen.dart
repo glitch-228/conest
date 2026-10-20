@@ -15,6 +15,7 @@ import '../matrix_timeline.dart';
 import 'matrix_verification_dialog.dart';
 import 'composer_keys.dart';
 import '../platform_bridge.dart';
+import 'link_cleaning.dart';
 import 'linked_text.dart';
 
 /// Asks for a Matrix ID, opens (or creates) the direct chat with it and
@@ -214,6 +215,7 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
   }
 
   Future<void> _send() async {
+    finishComposerLinks(_composer);
     final body = _composer.text.trim();
     if (body.isEmpty || _sending) return;
     setState(() => _sending = true);

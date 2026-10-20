@@ -242,4 +242,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(result?.items?.map((item) => item.fileName), ['r2.jpg', 'r0.jpg']);
   });
+
+  testWidgets('an image can go as its original file, uncompressed', (
+    tester,
+  ) async {
+    final original = File('${library.files.path}/r0.jpg')
+      ..writeAsBytesSync(_pixel);
+    await open(tester);
+    final grid = find.byKey(const ValueKey('media-grid'));
+    final cells = find.descendant(of: grid, matching: find.byType(InkWell));
+    await tester.runAsync(() async {
+      await tester.tap(cells.at(0));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('editor-send-original')));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pumpAndSettle();
+    expect(result?.asFile, isTrue);
+    expect(result?.filePath, original.path);
+    expect(result?.bytes, isNull);
+    expect(result?.fileName, 'r0.jpg');
+    expect(result?.sizeBytes, _pixel.length);
+  });
 }

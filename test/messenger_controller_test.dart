@@ -49,6 +49,8 @@ import 'package:conest/src/transport_exchange_test.dart';
 import 'package:conest/src/ui/connections_screen.dart';
 import 'package:conest/src/ui/error_history_screen.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
+import 'package:conest/src/ui/link_cleaning.dart';
+import 'package:conest/src/links/link_cleaner.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_call/group_call_media.dart';
 import 'package:conest/src/group_call/group_call_crypto.dart';
@@ -22376,6 +22378,133 @@ void main() {
     );
   });
 
+  testWidgets('links are cleaned in one-to-one and group message boxes', (
+    tester,
+  ) async {
+    final relay = _FakeRelayClient();
+    late MessengerController alice;
+    late MessengerController bob;
+    late GroupRecord group;
+    await tester.runAsync(() async {
+      alice = await _createController(relayClient: relay, displayName: 'Alice');
+      bob = await _createController(relayClient: relay, displayName: 'Bob');
+      await _pairControllers(alice, bob);
+      group = await alice.createGroup(
+        title: 'Linkers',
+        members: alice.contacts,
+      );
+    });
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    LinkFilters.current = LinkFilters.fromJson(
+      clearUrls: File(LinkFilters.clearUrlsAsset).readAsStringSync(),
+      embedFixers: File(LinkFilters.embedFixersAsset).readAsStringSync(),
+    );
+    addTearDown(() => LinkFilters.current = null);
+    // Wide: the chat list stays beside the open chat.
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final updates = _createUpdateService();
+    final theme = app.ConestThemeController.memory();
+    addTearDown(updates.dispose);
+    addTearDown(theme.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LinkSettings(
+          policy: () => alice.linkPolicy,
+          onServiceFailed: (_) {},
+          child: ListenableBuilder(
+            listenable: alice,
+            builder: (context, _) => app.HomeScreen(
+              controller: alice,
+              updateService: updates,
+              buildInfo: _createBuildInfo(),
+              themeController: theme,
+              palette: app.ConestPalette(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final composer = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.maxLines != 1,
+    );
+    Future<void> send(String text) async {
+      await tester.enterText(composer.first, text);
+      await tester.pump();
+      // Ctrl+Enter: the same send as the button, in either chat.
+      await tester.runAsync(() async {
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
+      await tester.pump();
+    }
+
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    await send('watch https://youtu.be/v?si=abc');
+    expect(
+      alice.messagesFor(bob.identity!.deviceId).map((m) => m.body),
+      contains('watch https://youtu.be/v'),
+    );
+
+    await tester.tap(find.text('Linkers').first);
+    await tester.pump();
+    await send('https://x.com/a/status/1?s=20');
+    expect(
+      alice.messagesForGroup(group.groupId).map((m) => m.body),
+      contains('https://fixupx.com/a/status/1'),
+    );
+    // The group's history catch-up timer, started by opening it.
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  test(
+    'link settings persist, and a failed service is skipped a day',
+    () async {
+      var now = DateTime.utc(2026, 10, 20, 12);
+      final storage = _MemoryVaultStore();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: storage,
+        nowProvider: () => now,
+      );
+      expect(alice.linkPolicy.removeTracking, isTrue);
+      expect(alice.linkPolicy.embedFriendly, isTrue);
+      await alice.setCleansLinks(false);
+      await alice.setEmbedFriendlyLinks(false);
+      await alice.noteLinkFixerFailed('twitter:1');
+      expect(alice.linkPolicy.failedServices, {'twitter:1'});
+      await alice.flushPendingChanges();
+      alice.dispose();
+
+      final again = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: storage,
+        nowProvider: () => now,
+        createIdentity: false,
+      );
+      addTearDown(again.dispose);
+      expect(again.linkPolicy.removeTracking, isFalse);
+      expect(again.linkPolicy.embedFriendly, isFalse);
+      expect(again.linkPolicy.failedServices, {'twitter:1'});
+      now = now.add(const Duration(hours: 25));
+      expect(again.linkPolicy.failedServices, isEmpty);
+      // A failure noted "in the future" (the clock was set back) is ignored.
+      await again.noteLinkFixerFailed('twitter:2');
+      now = now.subtract(const Duration(days: 30));
+      expect(again.linkPolicy.failedServices, isEmpty);
+    },
+  );
+
   testWidgets(
     'the composer empties as soon as a message is sent, before delivery',
     (tester) async {
@@ -24332,6 +24461,63 @@ void main() {
         );
       },
       timeout: const Timeout(Duration(seconds: 20)),
+    );
+
+    test(
+      'a staged file that cannot go comes back to the tray, with why',
+      () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        // A picked file whose copy is gone by the time Send is pressed (the
+        // system cleared it), next to one that is fine.
+        final gone = File(
+          '${Directory.systemTemp.createTempSync('conest-gone-').path}/IMG.jpg',
+        );
+        alice.stageAttachments(
+          contact: bobOnAlice,
+          items: [
+            StagedAttachment(
+              id: 'gone',
+              fileName: 'IMG.jpg',
+              mimeType: 'image/jpeg',
+              sizeBytes: 2048,
+              filePath: gone.path,
+              presentation: AttachmentPresentation.file,
+            ),
+            StagedAttachment(
+              id: 'fine',
+              fileName: 'notes.txt',
+              mimeType: 'text/plain',
+              sizeBytes: 5,
+              bytes: Uint8List.fromList('hello'.codeUnits),
+            ),
+          ],
+        );
+
+        await alice.sendStagedBundle(contact: bobOnAlice);
+
+        final outbound = alice
+            .messagesFor(bobOnAlice.deviceId)
+            .where((m) => m.attachment != null)
+            .map((m) => m.attachment!.fileName);
+        expect(outbound, hasLength(1));
+        expect(outbound.single, isNot('IMG.jpg'));
+        final back = alice.stagedAttachmentsFor(bobOnAlice.deviceId);
+        expect(back.map((item) => item.id), ['gone']);
+        expect(back.single.presentation, AttachmentPresentation.file);
+        expect(alice.statusMessage, contains('IMG.jpg'));
+      },
     );
 
     test('removeStaged drops a single item by id', () async {
