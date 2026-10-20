@@ -411,6 +411,20 @@ class _FakeLocalRelayNode extends LocalRelayNode {
   }
 }
 
+/// A local relay node whose [busy] ports are held by another app.
+class _BusyPortLocalRelayNode extends _FakeLocalRelayNode {
+  _BusyPortLocalRelayNode(this.busy);
+  final Set<int> busy;
+
+  @override
+  Future<void> start(int port) async {
+    if (busy.contains(port)) {
+      throw const SocketException('Address already in use');
+    }
+    await super.start(port);
+  }
+}
+
 /// Simulates the Android symptom where a platform-side stop call hangs.
 /// `resetIdentity` must time out and proceed instead of blocking the UI.
 class _HangingLocalRelayNode extends LocalRelayNode {
@@ -11978,6 +11992,25 @@ void main() {
     expect(snapshot, contains('fetchCalls='));
     expect(snapshot, contains('vaultSaveCount='));
     expect(snapshot, contains('routeBackoffSummary='));
+  });
+
+  test('a local relay port held by another app moves to a free one', () async {
+    // Another Conest on this computer holds the usual port: contacts' LAN
+    // traffic would reach it instead.
+    final node = _BusyPortLocalRelayNode({
+      defaultRelayPort,
+      defaultRelayPort + 1,
+    });
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+      localRelayNode: node,
+    );
+    addTearDown(alice.dispose);
+    await alice.pollNow();
+    expect(node.port, defaultRelayPort + 2);
+    // Kept and advertised: invites and route hints carry the new port.
+    expect(alice.identity!.localRelayPort, defaultRelayPort + 2);
   });
 
   test('relay health score records success and failure samples', () async {

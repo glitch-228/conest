@@ -2994,7 +2994,8 @@ class MessengerController extends ChangeNotifier {
             return;
           }
           appendDebugLog(
-            'Group file LAN block rejected for ${contact.alias}; '
+            'Group file LAN block rejected for ${contact.alias} '
+            '(${binaryLanChannel is HttpLanDirectChannel ? binaryLanChannel.lastPutFailure : null}); '
             'trying Iroh fallback.',
           );
         } catch (error) {
@@ -18227,17 +18228,48 @@ class MessengerController extends ChangeNotifier {
     try {
       await _localRelayNode.start(me.localRelayPort);
     } catch (error) {
-      // Another app holding the port must not stop path checks, polls and
-      // sends over Iroh and relays; LAN delivery to this device waits.
       appendDebugLog(
         'Local relay node could not start on port ${me.localRelayPort}: '
         '$error',
       );
+      // Another app holds the port (often a second Conest on this computer).
+      // Contacts would send LAN traffic to that app: a free port nearby is
+      // taken instead, kept, and advertised like any port change.
+      final moved = await _startLocalRelayNearby(me.localRelayPort);
+      final current = _snapshot.identity;
+      if (moved != null && current != null) {
+        _snapshot = _snapshot.copyWith(
+          identity: current.copyWith(localRelayPort: moved),
+        );
+        _setTransientStatus(
+          'Port ${me.localRelayPort} is in use by another app; LAN receiving '
+          'uses port $moved instead.',
+        );
+        unawaited(_persist('Local relay port moved to $moved.'));
+        unawaited(_announcePairingAvailabilityIfNeeded());
+        return;
+      }
+      // No free port nearby: path checks, polls and sends over Iroh and
+      // relays go on; LAN delivery to this device waits.
       _setTransientStatus(
         'LAN receiving is off: port ${me.localRelayPort} is in use. '
         'Pick another local relay port in Settings.',
       );
     }
+  }
+
+  /// Starts the local relay node on the first free port after [taken] (20
+  /// at most); its port, or null.
+  Future<int?> _startLocalRelayNearby(int taken) async {
+    for (var port = taken + 1; port <= taken + 20 && port <= 65535; port++) {
+      try {
+        await _localRelayNode.start(port);
+        return port;
+      } catch (_) {
+        // Taken as well: the next one.
+      }
+    }
+    return null;
   }
 
   Future<void> _ensurePairingBeaconRunning() async {
