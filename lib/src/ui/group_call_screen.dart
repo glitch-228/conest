@@ -66,16 +66,24 @@ class GroupCallButton extends StatelessWidget {
   );
 }
 
-/// Global incoming banner and return bar use the same foreground call state.
+/// A group call: in the group's own chat ([groupId]), its invitation ("…
+/// started a call") or the way back into it; everywhere else (no
+/// [groupId]) only the way back into a call this device has joined.
 class GroupCallBanner extends StatelessWidget {
-  const GroupCallBanner({super.key, required this.controller});
+  const GroupCallBanner({super.key, required this.controller, this.groupId});
   final MessengerController controller;
+  final String? groupId;
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: controller,
     builder: (context, _) {
       final service = controller.groupCallService;
-      final room = service?.active ?? service?.rooms.firstOrNull;
+      final only = groupId;
+      final room = only == null
+          ? (service?.active?.joined == true ? service!.active : null)
+          : (service?.active?.groupId == only
+                ? service!.active
+                : service?.rooms.where((r) => r.groupId == only).firstOrNull);
       if (room == null) return const SizedBox.shrink();
       final group = controller.groups
           .where((g) => g.groupId == room.groupId)

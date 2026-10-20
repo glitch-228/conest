@@ -10079,6 +10079,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 ),
               ),
             const Divider(height: 1),
+            // This group's call: its invitation, or the way back into it.
+            GroupCallBanner(controller: controller, groupId: group.groupId),
             if (_selectionMode)
               _MessageSelectionBar(
                 palette: palette,

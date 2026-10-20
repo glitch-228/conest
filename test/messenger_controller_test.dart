@@ -38,6 +38,7 @@ import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/email_carrier.dart' show defaultChatmailDomains;
 import 'package:conest/src/ui/email_carrier_panel.dart';
+import 'package:conest/src/ui/group_call_screen.dart';
 import 'package:conest/src/ui/nostr_carrier_panel.dart';
 import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
@@ -4860,6 +4861,81 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 1600));
     expect(bridge.foreground, isEmpty);
     expect(notified, lessThan(2));
+  });
+
+  testWidgets('a call started in a group is announced in that group only', (
+    tester,
+  ) async {
+    late MessengerController alice;
+    late MessengerController bob;
+    late GroupRecord called;
+    late GroupRecord other;
+    await tester.runAsync(() async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        groupCallMedia: FakeCallMedia(),
+      );
+      bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        groupCallMedia: FakeCallMedia(),
+      );
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      called = await alice.createGroup(
+        title: 'Called',
+        members: alice.contacts,
+      );
+      other = await alice.createGroup(title: 'Other', members: alice.contacts);
+      await _waitForIroh(() => bob.groups.length == 2);
+      await alice.joinOrStartGroupCall(called.groupId);
+      await _waitForIroh(() {
+        unawaited(alice.groupCallService?.tick());
+        return bob.groupCallService?.rooms.isNotEmpty ?? false;
+      }, reason: 'Bob hears of the call');
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Column(
+            children: [
+              GroupCallBanner(controller: bob),
+              GroupCallBanner(controller: bob, groupId: other.groupId),
+              GroupCallBanner(
+                key: const ValueKey('called-banner'),
+                controller: bob,
+                groupId: called.groupId,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    // Only in the group's own chat, not over the app or in other chats.
+    expect(find.textContaining('started a call'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('called-banner')),
+        matching: find.textContaining('started a call in Called'),
+      ),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async {
+      alice.dispose();
+      bob.dispose();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
   });
 
   test('a group call tells Android only what changed', () async {

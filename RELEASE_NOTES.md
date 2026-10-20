@@ -146,3 +146,5 @@ details from Settings.
   could be reached, files, voice messages, groups and settings do not
   sync between your devices yet.
 - Radios and the Bluetooth mesh carry messages only, never files.
+- Calls, one to one and in groups, are still experimental: connections
+  and sound quality can be uneven.
