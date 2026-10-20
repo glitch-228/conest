@@ -5349,4 +5349,25 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get settingsUserGuide => 'راهنمای کاربر';
+
+  @override
+  String get settingsEnterSends => 'Enter پیام را می‌فرستد';
+
+  @override
+  String get settingsEnterSendsHelp =>
+      'Shift+Enter خط تازه می‌سازد. خاموش: Enter خط تازه می‌سازد و Ctrl+Enter می‌فرستد.';
+
+  @override
+  String get menuCopySelection => 'کپی متن انتخاب‌شده';
+
+  @override
+  String get linkLookalikeTitle => 'این پیوند باز شود؟';
+
+  @override
+  String linkLookalikeBody(String host) {
+    return 'نشانی $host حروفی از الفباهای دیگر دارد. ممکن است از سایتی که می‌شناسید تقلید کند.';
+  }
+
+  @override
+  String get linkOpen => 'باز کردن';
 }

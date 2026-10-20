@@ -9,6 +9,8 @@ import '../../main.dart' show buildDeltaAttachment;
 import '../delta_chats.dart';
 import 'delta_content_widgets.dart';
 import '../messenger_controller.dart';
+import 'composer_keys.dart';
+import 'linked_text.dart';
 
 /// Delta Chat in Settings → Connectivity: on or off, this account's
 /// invite, and the chats.
@@ -685,7 +687,11 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                               if (message.deleted)
                                 Text(l10nOf(context).uiMessageDeleted3271A7)
                               else ...[
-                                if (message.text.isNotEmpty) Text(message.text),
+                                if (message.text.isNotEmpty)
+                                  LinkedText(
+                                    message.text,
+                                    openUrl: widget.controller.openExternalUrl,
+                                  ),
                                 if (message.pending != null)
                                   Text(
                                     '${message.pending!.name}, ${(message.pending!.size / (1024 * 1024)).toStringAsFixed(1)} MB, '
@@ -796,18 +802,22 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                         }),
                       ),
                       Expanded(
-                        child: TextField(
-                          key: const ValueKey('delta-composer'),
+                        child: ComposerKeys(
                           controller: _composer,
-                          enabled: !chat.left,
-                          minLines: 1,
-                          maxLines: 4,
-                          decoration: InputDecoration(
-                            hintText: chat.left
-                                ? l10nOf(context).uiYouAreNotInThisCF5BD5
-                                : l10nOf(context).uiMessage68F414,
+                          onSend: _send,
+                          child: TextField(
+                            key: const ValueKey('delta-composer'),
+                            controller: _composer,
+                            enabled: !chat.left,
+                            minLines: 1,
+                            maxLines: 4,
+                            decoration: InputDecoration(
+                              hintText: chat.left
+                                  ? l10nOf(context).uiYouAreNotInThisCF5BD5
+                                  : l10nOf(context).uiMessage68F414,
+                            ),
+                            onSubmitted: (_) => _send(),
                           ),
-                          onSubmitted: (_) => _send(),
                         ),
                       ),
                       DeltaVoiceComposer(

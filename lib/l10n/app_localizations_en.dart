@@ -5349,4 +5349,25 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsUserGuide => 'User guide';
+
+  @override
+  String get settingsEnterSends => 'Enter sends the message';
+
+  @override
+  String get settingsEnterSendsHelp =>
+      'Shift+Enter starts a new line. Off: Enter starts a new line and Ctrl+Enter sends.';
+
+  @override
+  String get menuCopySelection => 'Copy selected text';
+
+  @override
+  String get linkLookalikeTitle => 'Open this link?';
+
+  @override
+  String linkLookalikeBody(String host) {
+    return 'The address $host uses letters from other alphabets. It may imitate a site you know.';
+  }
+
+  @override
+  String get linkOpen => 'Open';
 }

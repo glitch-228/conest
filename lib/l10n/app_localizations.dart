@@ -8458,6 +8458,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'User guide'**
   String get settingsUserGuide;
+
+  /// Settings switch: Enter sends a message (Shift+Enter: new line).
+  ///
+  /// In en, this message translates to:
+  /// **'Enter sends the message'**
+  String get settingsEnterSends;
+
+  /// Settings: explains the Enter-sends switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Shift+Enter starts a new line. Off: Enter starts a new line and Ctrl+Enter sends.'**
+  String get settingsEnterSendsHelp;
+
+  /// Message menu: copy the text selected in the message.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy selected text'**
+  String get menuCopySelection;
+
+  /// Dialog title before opening a link whose host has non-ASCII letters.
+  ///
+  /// In en, this message translates to:
+  /// **'Open this link?'**
+  String get linkLookalikeTitle;
+
+  /// Dialog body: the link host may imitate another site.
+  ///
+  /// In en, this message translates to:
+  /// **'The address {host} uses letters from other alphabets. It may imitate a site you know.'**
+  String linkLookalikeBody(String host);
+
+  /// Button: open the link.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get linkOpen;
 }
 
 class _AppLocalizationsDelegate

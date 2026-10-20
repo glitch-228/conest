@@ -1382,5 +1382,11 @@
   "transportsBannerDismiss": "Nanti saja",
   "transportsTurnOnFailed": "{name} tidak bisa dinyalakan: {error}",
   "transportsHowToChoose": "Cara memilih",
-  "settingsUserGuide": "Panduan pengguna"
+  "settingsUserGuide": "Panduan pengguna",
+  "settingsEnterSends": "Enter mengirim pesan",
+  "settingsEnterSendsHelp": "Shift+Enter membuat baris baru. Mati: Enter membuat baris baru dan Ctrl+Enter mengirim.",
+  "menuCopySelection": "Salin teks yang dipilih",
+  "linkLookalikeTitle": "Buka tautan ini?",
+  "linkLookalikeBody": "Alamat {host} memakai huruf dari abjad lain. Mungkin meniru situs yang Anda kenal.",
+  "linkOpen": "Buka"
 }

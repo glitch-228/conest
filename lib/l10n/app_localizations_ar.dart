@@ -5481,4 +5481,25 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get settingsUserGuide => 'دليل المستخدم';
+
+  @override
+  String get settingsEnterSends => 'زر Enter يرسل الرسالة';
+
+  @override
+  String get settingsEnterSendsHelp =>
+      'Shift+Enter يبدأ سطرًا جديدًا. عند الإيقاف: Enter يبدأ سطرًا جديدًا وCtrl+Enter يرسل.';
+
+  @override
+  String get menuCopySelection => 'نسخ النص المحدد';
+
+  @override
+  String get linkLookalikeTitle => 'هل تفتح هذا الرابط؟';
+
+  @override
+  String linkLookalikeBody(String host) {
+    return 'العنوان $host يستخدم حروفًا من أبجديات أخرى. قد يقلّد موقعًا تعرفه.';
+  }
+
+  @override
+  String get linkOpen => 'فتح';
 }

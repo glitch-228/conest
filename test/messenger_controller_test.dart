@@ -6,7 +6,10 @@ import 'dart:math';
 import 'file_privacy_controller_cases.dart';
 
 import 'package:cryptography/cryptography.dart';
-import 'package:flutter/gestures.dart' show kSecondaryButton;
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
+import 'package:flutter/gestures.dart'
+    show PointerDeviceKind, kSecondaryButton, kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10779,6 +10782,184 @@ void main() {
     alice.dispose();
     bob.dispose();
     await tester.pump(const Duration(milliseconds: 100));
+  });
+
+  Future<(MessengerController, MessengerController)> openChatWithMessage(
+    WidgetTester tester,
+    String body,
+  ) async {
+    // Tall enough for a message's whole menu.
+    tester.view.physicalSize = const Size(1400, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final relayClient = _FakeRelayClient();
+    late MessengerController alice;
+    late MessengerController bob;
+    await tester.runAsync(() async {
+      alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      await _pairControllers(alice, bob);
+      await alice.sendMessage(contact: alice.contacts.single, body: body);
+      await bob.pollNow();
+      await alice.pollNow();
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.HomeScreen(
+          controller: alice,
+          updateService: _createUpdateService(),
+          buildInfo: _createBuildInfo(),
+          themeController: app.ConestThemeController.memory(),
+          palette: app.ConestPalette(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    await tester.ensureVisible(find.text(body).last);
+    return (alice, bob);
+  }
+
+  Future<void> closeChat(
+    WidgetTester tester,
+    (MessengerController, MessengerController) pair,
+  ) async {
+    await tester.pumpWidget(const SizedBox.shrink());
+    pair.$1.dispose();
+    pair.$2.dispose();
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+
+  testWidgets('desktop: clicks on a message are for its text', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final pair = await openChatWithMessage(tester, 'click me');
+    final text = find.text('click me').last;
+    // A click, on the text or the bubble around it, opens no menu.
+    await tester.tap(text, kind: PointerDeviceKind.mouse);
+    final around = tester.getRect(text);
+    await tester.tapAt(
+      Offset(around.center.dx, around.top - 4),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Copy message'), findsNothing);
+    // A right click does.
+    await tester.tap(
+      text,
+      kind: PointerDeviceKind.mouse,
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Copy message'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pump(const Duration(milliseconds: 400));
+    // Holding the message, its text or the bubble around it, does not
+    // select it.
+    await tester.longPress(text, kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    expect(find.text('1 selected'), findsNothing);
+    // Inside the bubble, below the text (above the bubble's outer margin).
+    final bubbleRect = tester.getRect(
+      find.ancestor(of: text, matching: find.byType(AnimatedContainer)).first,
+    );
+    await tester.longPressAt(
+      bubbleRect.bottomLeft + const Offset(8, -16),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+    expect(find.text('1 selected'), findsNothing);
+    // Holding the row beside the bubble does.
+    final bubble = tester.getRect(text);
+    await tester.longPressAt(
+      Offset(bubble.left - 160, bubble.center.dy),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+    expect(find.text('1 selected'), findsOneWidget);
+    await closeChat(tester, pair);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('phone: a tap on a message opens its menu', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final pair = await openChatWithMessage(tester, 'tap me');
+    // The bubble around the text (a tap on the text is the text's).
+    final rect = tester.getRect(find.text('tap me').last);
+    await tester.tapAt(Offset(rect.center.dx, rect.top - 4));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Copy message'), findsOneWidget);
+    await closeChat(tester, pair);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('desktop: the menu copies the selected text', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final pair = await openChatWithMessage(tester, 'pick this word');
+    final rect = tester.getRect(find.text('pick this word').last);
+    // Dragging across the first word selects it.
+    final gesture = await tester.startGesture(
+      Offset(rect.left + 1, rect.center.dy),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+    await gesture.moveTo(Offset(rect.left + 30, rect.center.dy));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tapAt(
+      Offset(rect.left + 6, rect.center.dy),
+      kind: PointerDeviceKind.mouse,
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Copy selected text'), findsOneWidget);
+    // Chosen as a tap on it does (the test window places the menu low).
+    final item = find.text('Copy selected text');
+    Navigator.of(tester.element(item)).pop(
+      tester
+          .widget<PopupMenuItem<String>>(
+            find.ancestor(
+              of: item,
+              matching: find.byType(PopupMenuItem<String>),
+            ),
+          )
+          .value,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    // The selection, not the whole message.
+    expect(copied, isNotEmpty);
+    expect('pick this word'.startsWith(copied!), isTrue);
+    expect(copied, isNot('pick this word'));
+    await closeChat(tester, pair);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets(

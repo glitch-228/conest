@@ -13,6 +13,9 @@ import '../conest_theme.dart';
 import '../matrix_service.dart';
 import '../matrix_timeline.dart';
 import 'matrix_verification_dialog.dart';
+import 'composer_keys.dart';
+import '../platform_bridge.dart';
+import 'linked_text.dart';
 
 /// Asks for a Matrix ID, opens (or creates) the direct chat with it and
 /// shows the room.
@@ -539,16 +542,20 @@ class _MatrixRoomScreenState extends State<MatrixRoomScreen> {
                       icon: const Icon(Icons.attach_file),
                     ),
                     Expanded(
-                      child: TextField(
+                      child: ComposerKeys(
                         controller: _composer,
-                        minLines: 1,
-                        maxLines: 6,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _send(),
-                        decoration: InputDecoration(
-                          hintText: l10nOf(context).uiMessage68F414,
-                          border: OutlineInputBorder(),
-                          isDense: true,
+                        onSend: _send,
+                        child: TextField(
+                          controller: _composer,
+                          minLines: 1,
+                          maxLines: 6,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => _send(),
+                          decoration: InputDecoration(
+                            hintText: l10nOf(context).uiMessage68F414,
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
                         ),
                       ),
                     ),
@@ -882,7 +889,13 @@ class _MatrixBubble extends StatelessWidget {
           style: TextStyle(color: meta),
         );
       default:
-        return SelectableText(item.body, style: TextStyle(color: foreground));
+        return SelectionArea(
+          child: LinkedText(
+            item.body,
+            openUrl: PlatformBridge().openExternalUrl,
+            style: TextStyle(color: foreground),
+          ),
+        );
     }
   }
 }

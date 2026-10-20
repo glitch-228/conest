@@ -156,6 +156,9 @@ void main() {
       viaHttpsPort: (host, alpn) => slow(host),
       parallel: 2,
       enough: 8,
+      // Only answers free a slot here (a loaded machine can be slower than
+      // a head start).
+      headStart: const Duration(minutes: 1),
       timeout: const Duration(seconds: 5),
     );
     expect(reachable, hasLength(8));

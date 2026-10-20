@@ -1382,5 +1382,11 @@
   "transportsBannerDismiss": "Не сейчас",
   "transportsTurnOnFailed": "Не удалось включить {name}: {error}",
   "transportsHowToChoose": "Как выбрать",
-  "settingsUserGuide": "Руководство"
+  "settingsUserGuide": "Руководство",
+  "settingsEnterSends": "Enter отправляет сообщение",
+  "settingsEnterSendsHelp": "Shift+Enter — новая строка. Если выключено: Enter — новая строка, Ctrl+Enter — отправить.",
+  "menuCopySelection": "Копировать выделенное",
+  "linkLookalikeTitle": "Открыть ссылку?",
+  "linkLookalikeBody": "В адресе {host} есть буквы из других алфавитов. Он может подделывать знакомый вам сайт.",
+  "linkOpen": "Открыть"
 }

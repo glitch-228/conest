@@ -5473,4 +5473,25 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get settingsUserGuide => 'Руководство';
+
+  @override
+  String get settingsEnterSends => 'Enter отправляет сообщение';
+
+  @override
+  String get settingsEnterSendsHelp =>
+      'Shift+Enter — новая строка. Если выключено: Enter — новая строка, Ctrl+Enter — отправить.';
+
+  @override
+  String get menuCopySelection => 'Копировать выделенное';
+
+  @override
+  String get linkLookalikeTitle => 'Открыть ссылку?';
+
+  @override
+  String linkLookalikeBody(String host) {
+    return 'В адресе $host есть буквы из других алфавитов. Он может подделывать знакомый вам сайт.';
+  }
+
+  @override
+  String get linkOpen => 'Открыть';
 }

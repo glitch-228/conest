@@ -5336,4 +5336,25 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get settingsUserGuide => 'Panduan pengguna';
+
+  @override
+  String get settingsEnterSends => 'Enter mengirim pesan';
+
+  @override
+  String get settingsEnterSendsHelp =>
+      'Shift+Enter membuat baris baru. Mati: Enter membuat baris baru dan Ctrl+Enter mengirim.';
+
+  @override
+  String get menuCopySelection => 'Salin teks yang dipilih';
+
+  @override
+  String get linkLookalikeTitle => 'Buka tautan ini?';
+
+  @override
+  String linkLookalikeBody(String host) {
+    return 'Alamat $host memakai huruf dari abjad lain. Mungkin meniru situs yang Anda kenal.';
+  }
+
+  @override
+  String get linkOpen => 'Buka';
 }

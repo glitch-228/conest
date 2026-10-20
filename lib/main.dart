@@ -76,6 +76,9 @@ import 'src/debug_auto_run.dart';
 import 'src/ui/route_test_panel.dart';
 import 'src/ui/user_mode_screen.dart';
 import 'src/ui/user_guide.dart';
+import 'src/ui/clipboard_image.dart';
+import 'src/ui/chat_paste_scope.dart';
+import 'src/ui/composer_keys.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
 import 'src/ui/matrix_home_screen.dart';
@@ -94,6 +97,7 @@ import 'src/ui/signature_panels.dart';
 import 'src/ui/signature_widgets.dart';
 import 'src/ui/tor_carrier_panel.dart';
 import 'src/update_service.dart';
+import 'src/ui/linked_text.dart';
 
 export 'src/conest_theme.dart'
     show
@@ -143,6 +147,28 @@ Future<DebugRunRequest?> _readDebugRequest(List<String> args) async {
   if (buildInfo.channel != UpdateChannel.debug) return null;
   return DebugRunRequest.fromArgs(args) ??
       DebugRunRequest.fromExtra(await PlatformBridge().debugRunRequest());
+}
+
+/// Reads the clipboard as a paste does and writes each step to [path].
+Future<void> _probeClipboard(String path) async {
+  final lines = <String>[];
+  try {
+    final clipboard = SystemClipboard.instance;
+    if (clipboard == null) {
+      lines.add('No clipboard on this platform.');
+    } else {
+      final bytes = await readClipboardImage(
+        await clipboard.read(),
+        log: lines.add,
+      );
+      lines.add(
+        bytes == null ? 'Result: no image' : 'Result: ${bytes.length} bytes',
+      );
+    }
+  } catch (error) {
+    lines.add('Failed: $error');
+  }
+  await File(path).writeAsString('${lines.join('\n')}\n');
 }
 
 /// Crash records go in the app's data folder; the native library and
@@ -209,6 +235,15 @@ Future<void> _main(List<String> args, CrashCatcher crashes) async {
   if (!kDebugMode) {
     // Instead of a grey box where a part of the screen failed to draw.
     ErrorWidget.builder = (details) => const _BrokenPart();
+  }
+  // Lab only (debug builds): what a paste would read from the clipboard,
+  // written to a file; then the app ends.
+  const probeFlag = '--debug-paste-probe=';
+  final probe = args.where((arg) => arg.startsWith(probeFlag)).firstOrNull;
+  if (probe != null &&
+      (await ConestBuildInfo.load()).channel == UpdateChannel.debug) {
+    await _probeClipboard(probe.substring(probeFlag.length));
+    exit(0);
   }
   final storageResolver = AppStorageResolver();
   var storageResolution = await storageResolver.resolve();
@@ -1259,8 +1294,12 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               ),
               // Simple mode reads larger.
               builder: (context, child) {
+                final framed = ComposerSettings(
+                  enterSends: widget.themeController.enterSends,
+                  child: child ?? const SizedBox.shrink(),
+                );
                 if (_controllerUserMode != UserMode.minimal || child == null) {
-                  return child ?? const SizedBox.shrink();
+                  return framed;
                 }
                 final media = MediaQuery.of(context);
                 return MediaQuery(
@@ -1271,7 +1310,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
                           : media.textScaler.scale(1),
                     ),
                   ),
-                  child: child,
+                  child: framed,
                 );
               },
               home: _controllerReady
@@ -2671,7 +2710,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final clipboard = SystemClipboard.instance;
     if (clipboard == null) return false;
-    final DataReader reader;
+    final ClipboardReader reader;
     try {
       reader = await clipboard.read();
     } catch (error) {
@@ -2679,59 +2718,42 @@ class _HomeScreenState extends State<HomeScreen> {
       return false;
     }
     // Try image formats first.
-    final imageFormats = [Formats.png, Formats.jpeg, Formats.gif, Formats.webp];
-    for (final fmt in imageFormats) {
-      if (reader.canProvide(fmt)) {
-        final completer = Completer<Uint8List?>();
-        reader.getFile(fmt, (file) async {
-          try {
-            final stream = file.getStream();
-            const maxClipboardImageBytes = 8 * 1024 * 1024;
-            final builder = BytesBuilder(copy: false);
-            var total = 0;
-            await for (final chunk in stream) {
-              total += chunk.length;
-              if (total > maxClipboardImageBytes) {
-                completer.complete(null);
-                return;
-              }
-              builder.add(chunk);
-            }
-            completer.complete(builder.takeBytes());
-          } catch (_) {
-            completer.complete(null);
-          }
-        });
-        final bytes = await completer.future;
-        if (bytes == null || bytes.isEmpty) continue;
-        final mime = sniffImageMimeType(bytes) ?? 'image/png';
-        final ext = mime == 'image/jpeg' ? 'jpg' : mime.split('/').last;
-        final fileName = 'pasted-${DateTime.now().millisecondsSinceEpoch}.$ext';
-        if (contact != null) {
-          await _sendAttachmentBytes(
-            contact: contact,
-            bytes: bytes,
-            fileName: fileName,
-            mimeType: mime,
-          );
-        } else {
-          await _publishGroupClipboardBytes(
-            group!,
-            bytes: bytes,
-            fileName: fileName,
-            mimeType: mime,
-          );
-        }
-        return true;
+    final bytes = await readClipboardImage(
+      reader,
+      log: widget.controller.appendDebugLog,
+    );
+    if (bytes != null) {
+      final mime = sniffImageMimeType(bytes) ?? 'image/png';
+      final ext = mime == 'image/jpeg' ? 'jpg' : mime.split('/').last;
+      final fileName = 'pasted-${DateTime.now().millisecondsSinceEpoch}.$ext';
+      if (contact != null) {
+        await _sendAttachmentBytes(
+          contact: contact,
+          bytes: bytes,
+          fileName: fileName,
+          mimeType: mime,
+        );
+      } else {
+        await _publishGroupClipboardBytes(
+          group!,
+          bytes: bytes,
+          fileName: fileName,
+          mimeType: mime,
+        );
       }
+      return true;
     }
     // Fall through to file URI (Linux file managers / Windows Explorer).
     if (reader.canProvide(Formats.fileUri)) {
-      final completer = Completer<Uri?>();
-      reader.getValue(Formats.fileUri, (value) {
-        completer.complete(value);
-      });
-      final uri = await completer.future;
+      // Read so that a failure ends the paste instead of waiting forever.
+      final uri = await reader
+          .readValue(Formats.fileUri)
+          .timeout(const Duration(seconds: 10), onTimeout: () => null)
+          .catchError((Object error) {
+            widget.controller.appendDebugLog('Clipboard file read: $error');
+            return null;
+          });
+      if (!mounted) return false;
       if (uri != null) {
         try {
           final file = File.fromUri(uri);
@@ -3243,7 +3265,7 @@ class _HomeScreenState extends State<HomeScreen> {
         : widget.controller.contacts
               .where((contact) => contact.deviceId == visibleCall.peerDeviceId)
               .firstOrNull;
-    return CallbackShortcuts(
+    final shell = CallbackShortcuts(
       bindings: widget.themeController.shell != ConestShell.courier
           ? const {}
           : {
@@ -3691,6 +3713,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+    );
+    return ChatPasteScope(
+      // Ctrl+V with the focus anywhere in an open chat, not only the
+      // message box (another text field keeps its own paste).
+      active: () => _selectedContact != null || _selectedGroup != null,
+      onPaste: () => unawaited(_handleSmartPaste()),
+      child: shell,
     );
   }
 }
@@ -8648,6 +8677,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
 
+  /// Text selected in a message, for "Copy selected text".
+  String? _selectedTextMessageId;
+  String _selectedText = '';
+
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
   GroupRecord get group => widget.group;
@@ -9390,7 +9423,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
       onTap: () {
         if (_selectionMode) {
           _toggleMessageSelection(message);
-        } else {
+        } else if (!_desktopPointer) {
+          // On desktops a click is for the text and its links; the menu
+          // opens on a right click.
           _messageActionKey(message.id).currentState?.showButtonMenu();
         }
       },
@@ -9403,7 +9438,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
               _flashMessage(message.id);
               widget.onReplyToMessage(message);
             },
-      child: Align(
+      child: _BubbleAlign(
+        selecting: _selectionMode,
         alignment: outbound
             ? AlignmentDirectional.centerEnd
             : AlignmentDirectional.centerStart,
@@ -9458,6 +9494,16 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
               ),
               const SizedBox(height: 6),
               SelectionArea(
+                onSelectionChanged: (content) {
+                  _selectedTextMessageId = message.id;
+                  _selectedText = content?.plainText ?? '';
+                },
+                contextMenuBuilder: (context, state) => _messageTextMenu(
+                  state,
+                  () => _messageActionKey(
+                    message.id,
+                  ).currentState?.showButtonMenu(),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -9579,8 +9625,12 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     ],
                     if (message.body.isNotEmpty ||
                         (!message.hasAttachment && message.groupFile == null))
-                      Text(
+                      LinkedText(
                         message.body,
+                        openUrl: controller.openExternalUrl,
+                        linkColor: outbound
+                            ? palette.outboundText
+                            : palette.primary,
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                           color: outbound
                               ? palette.outboundText
@@ -9694,6 +9744,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               .contactDeviceOutOfTouchSince(
                                 message.senderDeviceId,
                               ),
+                        );
+                      } else if (value == 'copy_selection') {
+                        await Clipboard.setData(
+                          ClipboardData(text: _selectedText),
                         );
                       } else if (value == 'copy') {
                         await _copyMessage(message);
@@ -9817,6 +9871,12 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                         value: 'copy',
                         child: Text(l10nOf(context).menuCopyMessage),
                       ),
+                      if (_selectedTextMessageId == message.id &&
+                          _selectedText.trim().isNotEmpty)
+                        PopupMenuItem(
+                          value: 'copy_selection',
+                          child: Text(l10nOf(context).menuCopySelection),
+                        ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
                         PopupMenuItem(
@@ -10301,6 +10361,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                               LogicalKeyboardKey.keyV,
                               meta: true,
                             ): const _PasteMediaIntent(),
+                            ...composerSendShortcuts(context),
                           },
                           child: Actions(
                             actions: <Type, Action<Intent>>{
@@ -10311,6 +10372,10 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                                       return null;
                                     },
                                   ),
+                              ...composerSendActions(
+                                widget.composerController,
+                                widget.onSend,
+                              ),
                             },
                             child: TextField(
                               controller: widget.composerController,
@@ -10733,6 +10798,10 @@ class _ChatPanelState extends State<_ChatPanel> {
   static const Duration _replyFlashDuration = Duration(milliseconds: 320);
 
   bool get _selectionMode => _selectedMessageIds.isNotEmpty;
+
+  /// Text selected in a message, for "Copy selected text".
+  String? _selectedTextMessageId;
+  String _selectedText = '';
 
   MessengerController get controller => widget.controller;
   ConestPalette get palette => widget.palette;
@@ -11386,7 +11455,9 @@ class _ChatPanelState extends State<_ChatPanel> {
       onTap: () {
         if (_selectionMode) {
           _toggleMessageSelection(message);
-        } else {
+        } else if (!_desktopPointer) {
+          // On desktops a click is for the text and its links; the menu
+          // opens on a right click.
           _messageActionKey(message.id).currentState?.showButtonMenu();
         }
       },
@@ -11403,7 +11474,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                 widget.onReplyToMessage(message);
               }
             },
-      child: Align(
+      child: _BubbleAlign(
+        selecting: _selectionMode,
         alignment: outbound
             ? AlignmentDirectional.centerEnd
             : AlignmentDirectional.centerStart,
@@ -11448,6 +11520,16 @@ class _ChatPanelState extends State<_ChatPanel> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SelectionArea(
+                onSelectionChanged: (content) {
+                  _selectedTextMessageId = message.id;
+                  _selectedText = content?.plainText ?? '';
+                },
+                contextMenuBuilder: (context, state) => _messageTextMenu(
+                  state,
+                  () => _messageActionKey(
+                    message.id,
+                  ).currentState?.showButtonMenu(),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -11465,8 +11547,12 @@ class _ChatPanelState extends State<_ChatPanel> {
                       if (message.body.isNotEmpty) const SizedBox(height: 8),
                     ],
                     if (message.body.isNotEmpty || !message.hasAttachment)
-                      Text(
+                      LinkedText(
                         message.body,
+                        openUrl: controller.openExternalUrl,
+                        linkColor: outbound
+                            ? palette.outboundText
+                            : palette.primary,
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                           color: outbound
                               ? palette.outboundText
@@ -11583,7 +11669,11 @@ class _ChatPanelState extends State<_ChatPanel> {
                     child: const SizedBox.shrink(),
                     onSelected: (value) async {
                       try {
-                        if (value == 'copy') {
+                        if (value == 'copy_selection') {
+                          await Clipboard.setData(
+                            ClipboardData(text: _selectedText),
+                          );
+                        } else if (value == 'copy') {
                           await _copyMessage(message);
                         } else if (value == 'details') {
                           await MessageInfoDialog.show(
@@ -11716,6 +11806,12 @@ class _ChatPanelState extends State<_ChatPanel> {
                         value: 'copy',
                         child: Text(l10nOf(context).menuCopyMessage),
                       ),
+                      if (_selectedTextMessageId == message.id &&
+                          _selectedText.trim().isNotEmpty)
+                        PopupMenuItem(
+                          value: 'copy_selection',
+                          child: Text(l10nOf(context).menuCopySelection),
+                        ),
                       if (attachmentDescriptor != null && !outbound &&
                           !attachmentAvailable)
                         PopupMenuItem(
@@ -12183,6 +12279,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                               LogicalKeyboardKey.keyV,
                               meta: true,
                             ): const _PasteMediaIntent(),
+                            ...composerSendShortcuts(context),
                           },
                           child: Actions(
                             actions: <Type, Action<Intent>>{
@@ -12193,6 +12290,10 @@ class _ChatPanelState extends State<_ChatPanel> {
                                       return null;
                                     },
                                   ),
+                              ...composerSendActions(
+                                widget.composerController,
+                                widget.onSend,
+                              ),
                             },
                             child: TextField(
                               controller: widget.composerController,
@@ -12611,8 +12712,9 @@ class _LanLobbyPanel extends StatelessWidget {
                                       ),
                                 ),
                                 const SizedBox(height: 6),
-                                Text(
+                                LinkedText(
                                   message.body,
+                                  openUrl: controller.openExternalUrl,
                                   style: Theme.of(context).textTheme.bodyLarge
                                       ?.copyWith(
                                         color: outbound
@@ -12659,14 +12761,20 @@ class _LanLobbyPanel extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: TextField(
+                    child: ComposerKeys(
                       controller: composerController,
-                      minLines: 1,
-                      maxLines: 5,
-                      decoration: InputDecoration(
-                        hintText: l10nOf(context).uiWriteToNearbyLANUsers291142,
+                      onSend: onSend,
+                      child: TextField(
+                        controller: composerController,
+                        minLines: 1,
+                        maxLines: 5,
+                        decoration: InputDecoration(
+                          hintText: l10nOf(
+                            context,
+                          ).uiWriteToNearbyLANUsers291142,
+                        ),
+                        onSubmitted: (_) => onSend(),
                       ),
-                      onSubmitted: (_) => onSend(),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -14961,6 +15069,21 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               trailing: const Icon(Icons.open_in_new),
                               onTap: () =>
                                   unawaited(openUserGuide(widget.controller)),
+                            ),
+                            SwitchListTile(
+                              key: const ValueKey('settings-enter-sends'),
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(l10nOf(context).settingsEnterSends),
+                              subtitle: Text(
+                                l10nOf(context).settingsEnterSendsHelp,
+                              ),
+                              value: widget.themeController.enterSends,
+                              onChanged: (value) async {
+                                await widget.themeController.setEnterSends(
+                                  value,
+                                );
+                                if (mounted) setState(() {});
+                              },
                             ),
                             const SizedBox(height: 12),
                             _ThemeModeSelector(
@@ -19139,7 +19262,11 @@ class _AlbumBubble extends StatelessWidget {
           )
         : GestureDetector(
             key: ValueKey('album-item-${m.id}'),
-            onLongPress: toggle == null ? null : () => toggle(m),
+            // On desktops holding the album itself is for its text: the
+            // row beside it selects.
+            onLongPress: toggle == null || _desktopPointer
+                ? null
+                : () => toggle(m),
             onSecondaryTapUp: (details) =>
                 _showMemberMenu(context, details.globalPosition, m, row),
             child: row,
@@ -19193,7 +19320,8 @@ class _AlbumBubble extends StatelessWidget {
                 items: _albumMenuItems(context, anyInFlight),
               ),
             ),
-      child: Align(
+      child: _BubbleAlign(
+        selecting: selectionMode,
         alignment: outbound
             ? AlignmentDirectional.centerEnd
             : AlignmentDirectional.centerStart,
@@ -22372,6 +22500,62 @@ String _formatProfileTimestamp(DateTime? value) {
     return 'never';
   }
   return value.toLocal().toString();
+}
+
+/// Whether pointers here are a mouse and keyboard first (desktops): a
+/// click is for text and links, and the menu opens on a right click.
+/// Unlike [_isDesktopPlatform], it follows the platform tests choose.
+bool get _desktopPointer => switch (defaultTargetPlatform) {
+  TargetPlatform.windows ||
+  TargetPlatform.linux ||
+  TargetPlatform.macOS => true,
+  _ => false,
+};
+
+/// A right click on a message's text: on desktops the message's own menu
+/// ([showMessageMenu]; it offers to copy the selected text), on phones the
+/// text's menu.
+Widget _messageTextMenu(
+  SelectableRegionState state,
+  VoidCallback showMessageMenu,
+) {
+  if (!_desktopPointer) {
+    return AdaptiveTextSelectionToolbar.selectableRegion(
+      selectableRegionState: state,
+    );
+  }
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    ContextMenuController.removeAny();
+    showMessageMenu();
+  });
+  return const SizedBox.shrink();
+}
+
+/// A message bubble's place in its row. On desktops, outside selection,
+/// the bubble keeps long presses (they are for its text): holding the
+/// empty row beside it selects the message, as in Telegram.
+class _BubbleAlign extends StatelessWidget {
+  const _BubbleAlign({
+    required this.selecting,
+    required this.alignment,
+    required this.child,
+  });
+
+  final bool selecting;
+  final AlignmentGeometry alignment;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: alignment,
+    child: _desktopPointer && !selecting
+        ? GestureDetector(
+            key: const ValueKey('bubble-keeps-long-press'),
+            onLongPress: () {},
+            child: child,
+          )
+        : child,
+  );
 }
 
 bool get _isDesktopPlatform =>

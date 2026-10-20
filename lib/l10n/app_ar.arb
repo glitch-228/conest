@@ -1382,5 +1382,11 @@
   "transportsBannerDismiss": "ليس الآن",
   "transportsTurnOnFailed": "تعذّر تشغيل {name}: {error}",
   "transportsHowToChoose": "كيف تختار",
-  "settingsUserGuide": "دليل المستخدم"
+  "settingsUserGuide": "دليل المستخدم",
+  "settingsEnterSends": "زر Enter يرسل الرسالة",
+  "settingsEnterSendsHelp": "Shift+Enter يبدأ سطرًا جديدًا. عند الإيقاف: Enter يبدأ سطرًا جديدًا وCtrl+Enter يرسل.",
+  "menuCopySelection": "نسخ النص المحدد",
+  "linkLookalikeTitle": "هل تفتح هذا الرابط؟",
+  "linkLookalikeBody": "العنوان {host} يستخدم حروفًا من أبجديات أخرى. قد يقلّد موقعًا تعرفه.",
+  "linkOpen": "فتح"
 }

@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
 import '../radio_chats.dart';
+import 'composer_keys.dart';
+import 'linked_text.dart';
 
 /// What a radio's app chats need from the controller.
 class RadioChatsAccess {
@@ -354,7 +356,10 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                                       : "${(message.name)} (${(message.from.substring(0, min(6, message.from.length)))})",
                                   style: theme.textTheme.labelMedium,
                                 ),
-                              Text(message.text),
+                              LinkedText(
+                                message.text,
+                                openUrl: widget.controller.openExternalUrl,
+                              ),
                               Text(
                                 [
                                   TimeOfDay.fromDateTime(
@@ -402,16 +407,20 @@ class _RadioChatScreenState extends State<_RadioChatScreen> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: TextField(
-                          key: const ValueKey('radio-composer'),
+                        child: ComposerKeys(
                           controller: _composer,
-                          enabled: canWrite,
-                          decoration: InputDecoration(
-                            hintText: canWrite
-                                ? l10nOf(context).uiMessage68F414
-                                : l10nOf(context).uiTurnOnAppMessagesTo7DCA13,
+                          onSend: _send,
+                          child: TextField(
+                            key: const ValueKey('radio-composer'),
+                            controller: _composer,
+                            enabled: canWrite,
+                            decoration: InputDecoration(
+                              hintText: canWrite
+                                  ? l10nOf(context).uiMessage68F414
+                                  : l10nOf(context).uiTurnOnAppMessagesTo7DCA13,
+                            ),
+                            onSubmitted: (_) => _send(),
                           ),
-                          onSubmitted: (_) => _send(),
                         ),
                       ),
                       IconButton(

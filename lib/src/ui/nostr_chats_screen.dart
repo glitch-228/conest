@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 
 import '../messenger_controller.dart';
 import '../nostr_chats.dart';
+import 'composer_keys.dart';
+import 'linked_text.dart';
 
 /// Nostr private messages (NIP-17) in Settings → Connectivity: on or off,
 /// this account's npub, and new chats.
@@ -327,7 +329,10 @@ class _NostrChatScreenState extends State<_NostrChatScreen> {
                                   controller.nostrName(message.author),
                                   style: theme.textTheme.labelMedium,
                                 ),
-                              Text(message.text),
+                              LinkedText(
+                                message.text,
+                                openUrl: widget.controller.openExternalUrl,
+                              ),
                               Text(
                                 TimeOfDay.fromDateTime(
                                   message.at.toLocal(),
@@ -357,15 +362,19 @@ class _NostrChatScreenState extends State<_NostrChatScreen> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: TextField(
-                          key: const ValueKey('nostr-composer'),
+                        child: ComposerKeys(
                           controller: _composer,
-                          minLines: 1,
-                          maxLines: 4,
-                          decoration: InputDecoration(
-                            hintText: l10nOf(context).uiMessage68F414,
+                          onSend: _send,
+                          child: TextField(
+                            key: const ValueKey('nostr-composer'),
+                            controller: _composer,
+                            minLines: 1,
+                            maxLines: 4,
+                            decoration: InputDecoration(
+                              hintText: l10nOf(context).uiMessage68F414,
+                            ),
+                            onSubmitted: (_) => _send(),
                           ),
-                          onSubmitted: (_) => _send(),
                         ),
                       ),
                       IconButton(

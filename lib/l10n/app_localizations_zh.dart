@@ -5113,4 +5113,25 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsUserGuide => '用户指南';
+
+  @override
+  String get settingsEnterSends => '按 Enter 发送消息';
+
+  @override
+  String get settingsEnterSendsHelp =>
+      'Shift+Enter 换行。关闭时：Enter 换行，Ctrl+Enter 发送。';
+
+  @override
+  String get menuCopySelection => '复制所选文字';
+
+  @override
+  String get linkLookalikeTitle => '打开此链接？';
+
+  @override
+  String linkLookalikeBody(String host) {
+    return '地址 $host 使用了其他字母表中的字母，可能在冒充你熟悉的网站。';
+  }
+
+  @override
+  String get linkOpen => '打开';
 }

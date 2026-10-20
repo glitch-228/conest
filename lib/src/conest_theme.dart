@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -142,6 +143,9 @@ class ThemePreferenceStore {
           shell: decoded['layoutMigrationVersion'] == 1
               ? ConestShell.fromStorage(decoded['shell'] as String?)
               : ConestShell.courier,
+          enterSends: decoded['enterSends'] is bool
+              ? decoded['enterSends'] as bool
+              : null,
         );
         if (decoded['layoutMigrationVersion'] != 1) {
           try {
@@ -182,6 +186,7 @@ class ThemePreferenceStore {
         'shell': prefs.shell.name,
         'layoutMigrationVersion': 1,
         'sidebarWidth': prefs.sidebarWidth,
+        'enterSends': ?prefs.enterSends,
       }),
     );
   }
@@ -212,6 +217,7 @@ class ThemePreferences {
     this.homeLayout = ConestHomeLayout.signalCards,
     this.shell = ConestShell.courier,
     this.sidebarWidth = defaultSidebarWidth,
+    this.enterSends,
   });
 
   const ThemePreferences.defaults()
@@ -219,7 +225,8 @@ class ThemePreferences {
       decorationIntensity = defaultDecorationIntensity,
       homeLayout = ConestHomeLayout.signalCards,
       shell = ConestShell.courier,
-      sidebarWidth = defaultSidebarWidth;
+      sidebarWidth = defaultSidebarWidth,
+      enterSends = null;
 
   /// Subtle-by-default Signature ambience. 0 = clean, 1.5 = full atmosphere.
   static const double defaultDecorationIntensity = 1.0;
@@ -231,12 +238,17 @@ class ThemePreferences {
   final double sidebarWidth;
   final ConestShell shell;
 
+  /// Whether Enter sends a message (Shift+Enter: a new line); null until
+  /// chosen, which means yes on desktops and no on phones.
+  final bool? enterSends;
+
   ThemePreferences copyWith({
     ConestThemeMode? mode,
     double? decorationIntensity,
     ConestHomeLayout? homeLayout,
     ConestShell? shell,
     double? sidebarWidth,
+    bool? enterSends,
   }) {
     return ThemePreferences(
       mode: mode ?? this.mode,
@@ -244,6 +256,7 @@ class ThemePreferences {
       homeLayout: homeLayout ?? this.homeLayout,
       shell: shell ?? this.shell,
       sidebarWidth: sidebarWidth ?? this.sidebarWidth,
+      enterSends: enterSends ?? this.enterSends,
     );
   }
 }
@@ -274,6 +287,23 @@ class ConestThemeController extends ChangeNotifier {
   ConestShell get shell => _prefs.shell;
   double get sidebarWidth => _prefs.sidebarWidth;
   bool get initialized => _initialized;
+
+  /// Whether Enter sends a message: as chosen, or by default on desktops.
+  bool get enterSends => _prefs.enterSends ?? enterSendsByDefault;
+
+  static bool get enterSendsByDefault => switch (defaultTargetPlatform) {
+    TargetPlatform.windows ||
+    TargetPlatform.linux ||
+    TargetPlatform.macOS => true,
+    _ => false,
+  };
+
+  Future<void> setEnterSends(bool value) async {
+    if (_prefs.enterSends == value) return;
+    _prefs = _prefs.copyWith(enterSends: value);
+    notifyListeners();
+    await _store.save(_prefs);
+  }
 
   Future<void> initialize() async {
     if (_initialized) {

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 
 import '../bitchat_chats.dart';
 import '../messenger_controller.dart';
+import 'composer_keys.dart';
+import 'linked_text.dart';
 
 /// Chats with bitchat users nearby: the mesh chat everyone in range shares
 /// and private chats.
@@ -272,7 +274,10 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
                                   "${(message.nickname)}#${(message.peerId.substring(0, 4))}",
                                   style: theme.textTheme.labelMedium,
                                 ),
-                              Text(message.text),
+                              LinkedText(
+                                message.text,
+                                openUrl: widget.controller.openExternalUrl,
+                              ),
                               Text(
                                 [
                                   TimeOfDay.fromDateTime(
@@ -318,18 +323,22 @@ class _BitchatChatScreenState extends State<_BitchatChatScreen> {
               child: Row(
                 children: [
                   Expanded(
-                    child: TextField(
-                      key: const ValueKey('bitchat-composer'),
+                    child: ComposerKeys(
                       controller: _composer,
-                      enabled: widget.controller.bitchatReachable,
-                      minLines: 1,
-                      maxLines: 4,
-                      decoration: InputDecoration(
-                        hintText: widget.controller.bitchatReachable
-                            ? l10nOf(context).uiMessage68F414
-                            : l10nOf(context).uiHiddenTurnOnReachableBy0103C9,
+                      onSend: _send,
+                      child: TextField(
+                        key: const ValueKey('bitchat-composer'),
+                        controller: _composer,
+                        enabled: widget.controller.bitchatReachable,
+                        minLines: 1,
+                        maxLines: 4,
+                        decoration: InputDecoration(
+                          hintText: widget.controller.bitchatReachable
+                              ? l10nOf(context).uiMessage68F414
+                              : l10nOf(context).uiHiddenTurnOnReachableBy0103C9,
+                        ),
+                        onSubmitted: (_) => _send(),
                       ),
-                      onSubmitted: (_) => _send(),
                     ),
                   ),
                   IconButton(

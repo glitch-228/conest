@@ -1382,5 +1382,11 @@
   "transportsBannerDismiss": "اکنون نه",
   "transportsTurnOnFailed": "{name} روشن نشد: {error}",
   "transportsHowToChoose": "چطور انتخاب کنیم",
-  "settingsUserGuide": "راهنمای کاربر"
+  "settingsUserGuide": "راهنمای کاربر",
+  "settingsEnterSends": "Enter پیام را می‌فرستد",
+  "settingsEnterSendsHelp": "Shift+Enter خط تازه می‌سازد. خاموش: Enter خط تازه می‌سازد و Ctrl+Enter می‌فرستد.",
+  "menuCopySelection": "کپی متن انتخاب‌شده",
+  "linkLookalikeTitle": "این پیوند باز شود؟",
+  "linkLookalikeBody": "نشانی {host} حروفی از الفباهای دیگر دارد. ممکن است از سایتی که می‌شناسید تقلید کند.",
+  "linkOpen": "باز کردن"
 }

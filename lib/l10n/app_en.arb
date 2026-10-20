@@ -8045,5 +8045,34 @@
   "settingsUserGuide": "User guide",
   "@settingsUserGuide": {
     "description": "Settings: opens the online user guide."
+  },
+  "settingsEnterSends": "Enter sends the message",
+  "@settingsEnterSends": {
+    "description": "Settings switch: Enter sends a message (Shift+Enter: new line)."
+  },
+  "settingsEnterSendsHelp": "Shift+Enter starts a new line. Off: Enter starts a new line and Ctrl+Enter sends.",
+  "@settingsEnterSendsHelp": {
+    "description": "Settings: explains the Enter-sends switch."
+  },
+  "menuCopySelection": "Copy selected text",
+  "@menuCopySelection": {
+    "description": "Message menu: copy the text selected in the message."
+  },
+  "linkLookalikeTitle": "Open this link?",
+  "@linkLookalikeTitle": {
+    "description": "Dialog title before opening a link whose host has non-ASCII letters."
+  },
+  "linkLookalikeBody": "The address {host} uses letters from other alphabets. It may imitate a site you know.",
+  "@linkLookalikeBody": {
+    "description": "Dialog body: the link host may imitate another site.",
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "linkOpen": "Open",
+  "@linkOpen": {
+    "description": "Button: open the link."
   }
 }
