@@ -1,7 +1,22 @@
-## Conest 0.4.0 nightly (October 20)
+## Conest 0.4.0 nightly (October 20, second)
 
 The release candidate for the stable v0.4.0: please try it, above all
 on Windows and Linux. Everything from the earlier nightlies is included.
+
+### Fixed since this morning's nightly
+
+- Links open on the first click or tap, at once.
+- On computers, dragging over a message with the mouse selects its text
+  again, and holding the space beside a message selects it: the mouse no
+  longer swipes a message to reply (a finger or a trackpad still does).
+- Android: the back button in Settings goes from a page back to the list
+  of pages, instead of closing Settings.
+- Updating from an older version no longer shows "Conest closed
+  unexpectedly" on the next start.
+- Email, Nostr, Tor, Reticulum and the Bluetooth mesh: their switch now
+  pauses and resumes, keeping your address there (it used to forget it).
+  "Remove" forgets it, after asking. Email shows the account in use and
+  can change it (your own account) or move to another server.
 
 ### On computers
 
@@ -46,6 +61,10 @@ on Windows and Linux. Everything from the earlier nightlies is included.
   phones.
 
 ### Please check
+
+- This build was not started on a test phone before release (none was
+  connected); the morning's nightly was, and nothing Android-specific
+  changed since.
 
 - Pasting a screenshot on Windows, and Enter, clicks and right clicks
   on Windows and Linux.
