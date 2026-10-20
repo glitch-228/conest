@@ -5,6 +5,8 @@ import '../messenger_controller.dart';
 import '../network_errors.dart';
 import '../nostr/relay.dart';
 import '../nostr_carrier.dart';
+import 'carrier_switch.dart';
+import '../transport_models.dart';
 
 /// The Nostr carrier in Settings: turn it on, choose the relays this device
 /// reads from, and see whether each one is connected.
@@ -86,17 +88,17 @@ class _NostrCarrierPanelState extends State<NostrCarrierPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SwitchListTile.adaptive(
-          key: const ValueKey('nostr-carrier-switch'),
-          contentPadding: EdgeInsets.zero,
-          title: Text(l10nOf(context).uiNostrRelaysBD8BAD),
-          subtitle: Text(
-            l10nOf(context).uiCarryMessagesThroughPublicNostr729B94,
-          ),
-          value: config != null,
-          onChanged: _busy
-              ? null
-              : (on) => _run(on ? _switchOn : controller.disableNostrCarrier),
+        CarrierSwitch(
+          switchKey: const ValueKey('nostr-carrier-switch'),
+          controller: controller,
+          kind: TransportKind.nostr,
+          title: l10nOf(context).uiNostrRelaysBD8BAD,
+          subtitle: l10nOf(context).uiCarryMessagesThroughPublicNostr729B94,
+          configured: config != null,
+          busy: _busy,
+          run: _run,
+          onSetUp: _switchOn,
+          onRemove: controller.disableNostrCarrier,
         ),
         if (config != null) ...[
           for (final MapEntry(key: url, value: (state, error, reading))

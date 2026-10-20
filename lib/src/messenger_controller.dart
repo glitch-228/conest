@@ -7406,6 +7406,27 @@ class MessengerController extends ChangeNotifier {
     await _startEmailCarrier();
   }
 
+  /// Whether [kind] was turned off by the user while its account is kept
+  /// (paused), as opposed to off with Online, or never set up.
+  bool isCarrierPaused(TransportKind kind) =>
+      identity?.connectivity.transportPolicies[kind] ==
+      TransportPolicy.disabled;
+
+  /// Pauses [kind] (its account, address and keys are kept; contacts are
+  /// told not to use it) or resumes it.
+  Future<void> setCarrierPaused(TransportKind kind, bool paused) async {
+    final me = _requireIdentity();
+    if (isCarrierPaused(kind) == paused) return;
+    await updateGlobalConnectivity(
+      me.connectivity.copyWith(
+        transportPolicies: {
+          ...me.connectivity.transportPolicies,
+          kind: paused ? TransportPolicy.disabled : TransportPolicy.automatic,
+        },
+      ),
+    );
+  }
+
   /// Stops the email carrier and forgets the account here (a chatmail
   /// account is left to expire on the server); contacts stop using it.
   Future<void> disableEmailCarrier() async {

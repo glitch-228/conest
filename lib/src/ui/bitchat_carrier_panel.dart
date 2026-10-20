@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import '../bitchat_carrier.dart';
 import '../messenger_controller.dart';
 import 'bitchat_chats_screen.dart';
+import 'carrier_switch.dart';
+import '../transport_models.dart';
 
 /// The Bluetooth mesh in Settings.
 class BitchatCarrierPanel extends StatefulWidget {
@@ -34,12 +36,6 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
   void _changed() {
     if (mounted) setState(() {});
   }
-
-  Future<void> _set(bool on) => _run(
-    () => on
-        ? widget.controller.enableBitchatCarrier()
-        : widget.controller.disableBitchatCarrier(),
-  );
 
   Future<void> _run(Future<void> Function() action) async {
     setState(() {
@@ -103,13 +99,17 @@ class _BitchatCarrierPanelState extends State<BitchatCarrierPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SwitchListTile.adaptive(
-          key: const ValueKey('bitchat-carrier-switch'),
-          contentPadding: EdgeInsets.zero,
-          title: Text(l10nOf(context).uiBluetoothMeshC8B7F1),
-          subtitle: Text(l10nOf(context).uiReachContactsNearbyWithoutAny9E9649),
-          value: config != null,
-          onChanged: _busy ? null : _set,
+        CarrierSwitch(
+          switchKey: const ValueKey('bitchat-carrier-switch'),
+          controller: controller,
+          kind: TransportKind.bitchat,
+          title: l10nOf(context).uiBluetoothMeshC8B7F1,
+          subtitle: l10nOf(context).uiReachContactsNearbyWithoutAny9E9649,
+          configured: config != null,
+          busy: _busy,
+          run: _run,
+          onSetUp: controller.enableBitchatCarrier,
+          onRemove: controller.disableBitchatCarrier,
         ),
         if (config != null)
           ListTile(

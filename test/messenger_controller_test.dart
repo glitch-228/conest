@@ -37,6 +37,8 @@ import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/email_carrier.dart' show defaultChatmailDomains;
+import 'package:conest/src/ui/email_carrier_panel.dart';
+import 'package:conest/src/ui/nostr_carrier_panel.dart';
 import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
@@ -19477,6 +19479,126 @@ void main() {
       await tester.pump();
       await tester.ensureVisible(find.text('Transport policy'));
       expect(find.text('Transport policy'), findsOneWidget);
+    });
+
+    testWidgets('a carrier switched off is paused, not forgotten', (
+      tester,
+    ) async {
+      final relays = FakeNostrRelays()..relay('wss://r.test');
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          nostrConnector: relays.connect,
+        ),
+      ))!;
+      await tester.runAsync(alice.enableNostrCarrier);
+      final key = alice.nostrCarrierConfig!.toJson().toString();
+      await tester.pumpWidget(
+        localized(
+          Scaffold(
+            body: SingleChildScrollView(
+              child: NostrCarrierPanel(controller: alice),
+            ),
+          ),
+        ),
+      );
+      Future<void> settle() async {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+
+      // Off: paused, its key kept.
+      await tester.tap(find.byKey(const ValueKey('nostr-carrier-switch')));
+      await settle();
+      expect(alice.isCarrierPaused(TransportKind.nostr), isTrue);
+      expect(alice.nostrCarrierConfig!.toJson().toString(), key);
+      expect(
+        find.text('Paused: kept, not used. Turn on to use it again.'),
+        findsOneWidget,
+      );
+      // On again: the same key.
+      await tester.tap(find.byKey(const ValueKey('nostr-carrier-switch')));
+      await settle();
+      expect(alice.isCarrierPaused(TransportKind.nostr), isFalse);
+      expect(alice.nostrCarrierConfig!.toJson().toString(), key);
+      // Remove asks first, then forgets it.
+      await tester.tap(
+        find.byKey(const ValueKey("[<'nostr-carrier-switch'>]-remove")),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Remove Nostr relays?'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey("[<'nostr-carrier-switch'>]-remove-confirm")),
+      );
+      await settle();
+      expect(alice.nostrCarrierConfig, isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      alice.dispose();
+      await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('the email account in use can be changed', (tester) async {
+      final server = (await tester.runAsync(FakeMailServer.start))!;
+      final alice = (await tester.runAsync(
+        () => _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          mailConnector: server.connect,
+        ),
+      ))!;
+      await tester.runAsync(
+        () => alice.enableOwnEmailCarrier(
+          mail: 'alice@mail.test',
+          password: 'secret',
+          imapHost: 'mail.test',
+          imapPort: 993,
+          smtpHost: 'mail.test',
+          smtpPort: 465,
+        ),
+      );
+      await tester.pumpWidget(
+        localized(
+          Scaffold(
+            body: SingleChildScrollView(
+              child: EmailCarrierPanel(controller: alice),
+            ),
+          ),
+        ),
+      );
+      expect(find.text('alice@mail.test'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('email-change-account')));
+      await tester.pump();
+      // The form, filled in with the account in use.
+      expect(find.widgetWithText(TextField, 'alice@mail.test'), findsOneWidget);
+      expect(find.byKey(const ValueKey('email-save-account')), findsOneWidget);
+      await tester.ensureVisible(find.text('Cancel'));
+      await tester.tap(find.text('Cancel'));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('email-save-account')), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      alice.dispose();
+      await tester.runAsync(server.close);
+      await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('the back button leaves a settings page for the list', (
+      tester,
+    ) async {
+      await settingsFor(tester, UserMode.normal, size: const Size(400, 800));
+      await tester.tap(find.byKey(const ValueKey('settings-category-Devices')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('settings-back')), findsOneWidget);
+      // Android's back button.
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expect(find.byKey(const ValueKey('settings-back')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('settings-category-Storage')),
+        findsOneWidget,
+      );
     });
 
     testWidgets('phone settings list the pages, open one, and go back', (

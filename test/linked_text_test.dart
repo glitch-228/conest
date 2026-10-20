@@ -1,6 +1,7 @@
 import 'package:conest/l10n/app_localizations.dart';
 import 'package:conest/src/ui/linked_text.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -97,6 +98,56 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('open-lookalike-link')));
       await tester.pumpAndSettle();
       expect(opened, hasLength(1));
+    });
+
+    testWidgets('one tap opens a link at once inside a message bubble', (
+      tester,
+    ) async {
+      // A bubble answers double taps (reply) and holds (select): a link
+      // in it must not wait for them, nor need a second press.
+      const text = 'see https://example.com/now';
+      final opened = <Uri>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {},
+              onDoubleTap: () {},
+              onLongPress: () {},
+              child: SelectionArea(
+                child: LinkedText(
+                  text,
+                  openUrl: (uri) async => opened.add(uri),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tapAt(linkAt(tester, text, 'https://'));
+      await tester.pump();
+      expect(opened, [Uri.parse('https://example.com/now')]);
+      // The bubble's double-tap wait runs out.
+      await tester.pump(const Duration(milliseconds: 500));
+    });
+
+    testWidgets('dragging across a link selects, it does not open', (
+      tester,
+    ) async {
+      const text = 'see https://example.com/now and more';
+      final opened = await pump(tester, text);
+      final start = linkAt(tester, text, 'https://');
+      final gesture = await tester.startGesture(
+        start,
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.moveTo(start + const Offset(60, 0));
+      await gesture.up();
+      await tester.pump();
+      expect(opened, isEmpty);
     });
 
     testWidgets('text without links is plain text', (tester) async {

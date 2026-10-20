@@ -5502,4 +5502,30 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get linkOpen => 'فتح';
+
+  @override
+  String get carrierRemove => 'إزالة';
+
+  @override
+  String carrierRemoveTitle(String name) {
+    return 'إزالة $name؟';
+  }
+
+  @override
+  String carrierRemoveBody(String name) {
+    return 'لن تصل إليك جهات الاتصال عبر $name، وسيُنسى ما يحفظه هذا الجهاز له. إعداده من جديد يمنحك عنوانًا جديدًا. لإيقافه مؤقتًا، أطفئ مفتاحه بدلًا من ذلك.';
+  }
+
+  @override
+  String get carrierPaused =>
+      'متوقف مؤقتًا: محفوظ وغير مستخدم. شغّله لاستخدامه مجددًا.';
+
+  @override
+  String get emailChangeAccount => 'تغيير الحساب';
+
+  @override
+  String get emailOtherServer => 'استخدام خادم آخر';
+
+  @override
+  String get actionSave => 'حفظ';
 }

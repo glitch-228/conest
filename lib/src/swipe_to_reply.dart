@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -40,6 +41,14 @@ class _SwipeToReplyState extends State<SwipeToReply> {
   @override
   Widget build(BuildContext context) => GestureDetector(
     behavior: HitTestBehavior.translucent,
+    // Not a mouse: dragging with it selects text, and holding it beside a
+    // message selects the message.
+    supportedDevices: const {
+      PointerDeviceKind.touch,
+      PointerDeviceKind.stylus,
+      PointerDeviceKind.invertedStylus,
+      PointerDeviceKind.trackpad,
+    },
     onHorizontalDragStart: widget.enabled
         ? (_) => setState(() => _dragging = true)
         : null,

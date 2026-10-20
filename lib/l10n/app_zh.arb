@@ -1388,5 +1388,12 @@
   "menuCopySelection": "复制所选文字",
   "linkLookalikeTitle": "打开此链接？",
   "linkLookalikeBody": "地址 {host} 使用了其他字母表中的字母，可能在冒充你熟悉的网站。",
-  "linkOpen": "打开"
+  "linkOpen": "打开",
+  "carrierRemove": "移除",
+  "carrierRemoveTitle": "移除 {name}？",
+  "carrierRemoveBody": "联系人将无法再通过 {name} 联系你，本设备为其保存的内容也会被清除。重新设置会得到一个新地址。若只想暂停，请关闭它的开关。",
+  "carrierPaused": "已暂停：保留但不使用。打开即可再次使用。",
+  "emailChangeAccount": "更换账号",
+  "emailOtherServer": "使用其他服务器",
+  "actionSave": "保存"
 }

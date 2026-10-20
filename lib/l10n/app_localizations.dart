@@ -8494,6 +8494,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Open'**
   String get linkOpen;
+
+  /// Button: forget a carrier account (address, keys).
+  ///
+  /// In en, this message translates to:
+  /// **'Remove'**
+  String get carrierRemove;
+
+  /// Dialog title before forgetting a carrier account.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove {name}?'**
+  String carrierRemoveTitle(String name);
+
+  /// Dialog body: what removing a carrier account means.
+  ///
+  /// In en, this message translates to:
+  /// **'Contacts will no longer reach you over {name}, and what this device keeps for it is forgotten. Setting it up again gives you a new address. To stop it for a while, turn its switch off instead.'**
+  String carrierRemoveBody(String name);
+
+  /// A carrier switched off by the user, its account kept.
+  ///
+  /// In en, this message translates to:
+  /// **'Paused: kept, not used. Turn on to use it again.'**
+  String get carrierPaused;
+
+  /// Button: edit the email account the email carrier uses.
+  ///
+  /// In en, this message translates to:
+  /// **'Change account'**
+  String get emailChangeAccount;
+
+  /// Button: move the email carrier to another chatmail server (a new address).
+  ///
+  /// In en, this message translates to:
+  /// **'Use another server'**
+  String get emailOtherServer;
+
+  /// Button: save changes.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get actionSave;
 }
 
 class _AppLocalizationsDelegate

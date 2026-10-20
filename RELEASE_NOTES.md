@@ -119,6 +119,9 @@ https://github.com/glitch-228/conest/tree/main/docs
   AI; help improve them on Weblate.
 - Settings are split into pages: a sidebar on wide windows, a list on
   phones.
+- Turning a way to reach people off (email, Nostr, Tor, Reticulum, the
+  Bluetooth mesh) pauses it and keeps your address there; "Remove"
+  forgets it. Email shows the account in use and can change it.
 - Bluetooth mesh on Linux and Windows computers.
 - If Conest closes unexpectedly, the next start says so and lets you
   copy the details for a bug report. Nothing is sent anywhere. An update

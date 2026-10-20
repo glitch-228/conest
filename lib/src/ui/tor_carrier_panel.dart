@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 
 import '../messenger_controller.dart';
 import '../tor_carrier.dart';
+import 'carrier_switch.dart';
+import '../transport_models.dart';
 
 /// Tor in Settings: on or off, with bridge lines for where Tor is blocked.
 class TorCarrierPanel extends StatefulWidget {
@@ -87,15 +89,17 @@ class _TorCarrierPanelState extends State<TorCarrierPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SwitchListTile.adaptive(
-          key: const ValueKey('tor-carrier-switch'),
-          contentPadding: EdgeInsets.zero,
-          title: Text(l10nOf(context).uiTorED7088),
-          subtitle: Text(l10nOf(context).uiReachContactsThroughTorOnion8B8A98),
-          value: config != null,
-          onChanged: _busy
-              ? null
-              : (on) => _run(on ? _enable : controller.disableTorCarrier),
+        CarrierSwitch(
+          switchKey: const ValueKey('tor-carrier-switch'),
+          controller: controller,
+          kind: TransportKind.tor,
+          title: l10nOf(context).uiTorED7088,
+          subtitle: l10nOf(context).uiReachContactsThroughTorOnion8B8A98,
+          configured: config != null,
+          busy: _busy,
+          run: _run,
+          onSetUp: _enable,
+          onRemove: controller.disableTorCarrier,
         ),
         TextField(
           key: const ValueKey('tor-bridges'),

@@ -5134,4 +5134,29 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get linkOpen => '打开';
+
+  @override
+  String get carrierRemove => '移除';
+
+  @override
+  String carrierRemoveTitle(String name) {
+    return '移除 $name？';
+  }
+
+  @override
+  String carrierRemoveBody(String name) {
+    return '联系人将无法再通过 $name 联系你，本设备为其保存的内容也会被清除。重新设置会得到一个新地址。若只想暂停，请关闭它的开关。';
+  }
+
+  @override
+  String get carrierPaused => '已暂停：保留但不使用。打开即可再次使用。';
+
+  @override
+  String get emailChangeAccount => '更换账号';
+
+  @override
+  String get emailOtherServer => '使用其他服务器';
+
+  @override
+  String get actionSave => '保存';
 }

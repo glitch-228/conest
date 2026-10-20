@@ -8,6 +8,8 @@ import '../network_errors.dart';
 import '../radio/android_radio_link.dart';
 import '../reticulum/rnode_interface.dart';
 import '../reticulum_carrier.dart';
+import 'carrier_switch.dart';
+import '../transport_models.dart';
 
 /// The Reticulum carrier in Settings: the node to connect through and its
 /// state.
@@ -209,15 +211,17 @@ class _ReticulumCarrierPanelState extends State<ReticulumCarrierPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SwitchListTile.adaptive(
-          key: const ValueKey('reticulum-carrier-switch'),
-          contentPadding: EdgeInsets.zero,
-          title: Text(l10nOf(context).uiReticulumC27E52),
-          subtitle: Text(l10nOf(context).uiCarryMessagesOverAReticulum1CE915),
-          value: config != null,
-          onChanged: _busy
-              ? null
-              : (on) => _run(on ? _save : controller.disableReticulumCarrier),
+        CarrierSwitch(
+          switchKey: const ValueKey('reticulum-carrier-switch'),
+          controller: controller,
+          kind: TransportKind.reticulum,
+          title: l10nOf(context).uiReticulumC27E52,
+          subtitle: l10nOf(context).uiCarryMessagesOverAReticulum1CE915,
+          configured: config != null,
+          busy: _busy,
+          run: _run,
+          onSetUp: _save,
+          onRemove: controller.disableReticulumCarrier,
         ),
         if (config != null)
           ListTile(

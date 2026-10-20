@@ -5370,4 +5370,30 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get linkOpen => 'باز کردن';
+
+  @override
+  String get carrierRemove => 'حذف';
+
+  @override
+  String carrierRemoveTitle(String name) {
+    return '$name حذف شود؟';
+  }
+
+  @override
+  String carrierRemoveBody(String name) {
+    return 'مخاطبان دیگر از طریق $name به شما نمی‌رسند و آنچه این دستگاه برایش نگه داشته فراموش می‌شود. راه‌اندازی دوباره نشانی تازه‌ای می‌دهد. برای توقف موقت، به‌جای آن کلیدش را خاموش کنید.';
+  }
+
+  @override
+  String get carrierPaused =>
+      'موقتاً متوقف: نگه داشته شده، استفاده نمی‌شود. برای استفادهٔ دوباره روشنش کنید.';
+
+  @override
+  String get emailChangeAccount => 'تغییر حساب';
+
+  @override
+  String get emailOtherServer => 'استفاده از سرور دیگر';
+
+  @override
+  String get actionSave => 'ذخیره';
 }

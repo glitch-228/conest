@@ -8074,5 +8074,43 @@
   "linkOpen": "Open",
   "@linkOpen": {
     "description": "Button: open the link."
+  },
+  "carrierRemove": "Remove",
+  "@carrierRemove": {
+    "description": "Button: forget a carrier account (address, keys)."
+  },
+  "carrierRemoveTitle": "Remove {name}?",
+  "@carrierRemoveTitle": {
+    "description": "Dialog title before forgetting a carrier account.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "carrierRemoveBody": "Contacts will no longer reach you over {name}, and what this device keeps for it is forgotten. Setting it up again gives you a new address. To stop it for a while, turn its switch off instead.",
+  "@carrierRemoveBody": {
+    "description": "Dialog body: what removing a carrier account means.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "carrierPaused": "Paused: kept, not used. Turn on to use it again.",
+  "@carrierPaused": {
+    "description": "A carrier switched off by the user, its account kept."
+  },
+  "emailChangeAccount": "Change account",
+  "@emailChangeAccount": {
+    "description": "Button: edit the email account the email carrier uses."
+  },
+  "emailOtherServer": "Use another server",
+  "@emailOtherServer": {
+    "description": "Button: move the email carrier to another chatmail server (a new address)."
+  },
+  "actionSave": "Save",
+  "@actionSave": {
+    "description": "Button: save changes."
   }
 }

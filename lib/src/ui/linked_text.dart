@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../app_locales.dart';
 
@@ -108,7 +111,9 @@ Future<void> openMessageLink(
 }
 
 /// [text] with its links underlined and opening on a tap or click (inside a
-/// [SelectionArea], the text stays selectable).
+/// [SelectionArea], the text stays selectable). A press that starts and
+/// ends on a link opens it at once: it is read from the pointer itself, so
+/// a message's own taps, double taps and text selection do not hold it up.
 class LinkedText extends StatefulWidget {
   const LinkedText(
     this.text, {
@@ -132,24 +137,55 @@ class LinkedText extends StatefulWidget {
 }
 
 class _LinkedTextState extends State<LinkedText> {
-  final List<TapGestureRecognizer> _recognizers = [];
+  final _textKey = GlobalKey();
+  FoundLink? _pressed;
+  Offset _pressedAt = Offset.zero;
+  (FoundLink, DateTime)? _lastOpened;
 
-  void _disposeRecognizers() {
-    for (final recognizer in _recognizers) {
-      recognizer.dispose();
+  /// The link under [position] (global), if the pointer is on its text.
+  FoundLink? _linkAt(Offset position, List<FoundLink> links) {
+    final paragraph = _paragraphIn(_textKey.currentContext?.findRenderObject());
+    if (paragraph == null || !paragraph.attached) return null;
+    final local = paragraph.globalToLocal(position);
+    final offset = paragraph.getPositionForOffset(local).offset;
+    for (final link in links) {
+      if (offset < link.start || offset > link.end) continue;
+      final boxes = paragraph.getBoxesForSelection(
+        TextSelection(baseOffset: link.start, extentOffset: link.end),
+      );
+      if (boxes.any((box) => box.toRect().inflate(2).contains(local))) {
+        return link;
+      }
     }
-    _recognizers.clear();
+    return null;
   }
 
-  @override
-  void dispose() {
-    _disposeRecognizers();
-    super.dispose();
+  /// The text's paragraph (under a [SelectionArea] it sits inside a mouse
+  /// region).
+  static RenderParagraph? _paragraphIn(RenderObject? root) {
+    if (root == null || root is RenderParagraph) {
+      return root as RenderParagraph?;
+    }
+    RenderParagraph? found;
+    root.visitChildren((child) => found ??= _paragraphIn(child));
+    return found;
+  }
+
+  void _open(FoundLink link) {
+    final now = DateTime.now();
+    // A double click is one opening.
+    if (_lastOpened case (
+      final last,
+      final at,
+    ) when last == link && now.difference(at) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastOpened = (link, now);
+    unawaited(openMessageLink(context, widget.openUrl, link.uri));
   }
 
   @override
   Widget build(BuildContext context) {
-    _disposeRecognizers();
     final text = widget.text;
     final links = findLinks(text);
     if (links.isEmpty) return Text(text, style: widget.style);
@@ -163,20 +199,40 @@ class _LinkedTextState extends State<LinkedText> {
       if (link.start > at) {
         spans.add(TextSpan(text: text.substring(at, link.start)));
       }
-      final recognizer = TapGestureRecognizer()
-        ..onTap = () => openMessageLink(context, widget.openUrl, link.uri);
-      _recognizers.add(recognizer);
       spans.add(
         TextSpan(
           text: text.substring(link.start, link.end),
           style: linkStyle,
-          recognizer: recognizer,
           mouseCursor: SystemMouseCursors.click,
         ),
       );
       at = link.end;
     }
     if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
-    return Text.rich(TextSpan(children: spans), style: widget.style);
+    return Listener(
+      onPointerDown: (event) {
+        _pressed = event.buttons == kPrimaryButton
+            ? _linkAt(event.position, links)
+            : null;
+        _pressedAt = event.position;
+      },
+      onPointerUp: (event) {
+        final link = _pressed;
+        _pressed = null;
+        // A drag (selecting text) opens nothing.
+        if (link == null ||
+            (event.position - _pressedAt).distance > 8 ||
+            _linkAt(event.position, links) != link) {
+          return;
+        }
+        _open(link);
+      },
+      onPointerCancel: (_) => _pressed = null,
+      child: Text.rich(
+        TextSpan(children: spans),
+        key: _textKey,
+        style: widget.style,
+      ),
+    );
   }
 }

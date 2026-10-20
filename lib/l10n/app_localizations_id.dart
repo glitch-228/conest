@@ -5357,4 +5357,30 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get linkOpen => 'Buka';
+
+  @override
+  String get carrierRemove => 'Hapus';
+
+  @override
+  String carrierRemoveTitle(String name) {
+    return 'Hapus $name?';
+  }
+
+  @override
+  String carrierRemoveBody(String name) {
+    return 'Kontak tidak akan bisa menjangkau Anda lewat $name lagi, dan yang disimpan perangkat ini untuknya dilupakan. Menyiapkannya lagi memberi Anda alamat baru. Untuk menghentikannya sementara, matikan sakelarnya saja.';
+  }
+
+  @override
+  String get carrierPaused =>
+      'Dijeda: disimpan, tidak dipakai. Nyalakan untuk memakainya lagi.';
+
+  @override
+  String get emailChangeAccount => 'Ganti akun';
+
+  @override
+  String get emailOtherServer => 'Pakai server lain';
+
+  @override
+  String get actionSave => 'Simpan';
 }

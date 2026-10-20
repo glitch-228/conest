@@ -21,6 +21,7 @@ import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_player_media_kit/video_player_media_kit.dart';
@@ -149,6 +150,23 @@ Future<DebugRunRequest?> _readDebugRequest(List<String> args) async {
       DebugRunRequest.fromExtra(await PlatformBridge().debugRunRequest());
 }
 
+/// When this app was installed or last updated: Android's package update
+/// time; on desktops also when the executable was written (an archive can
+/// keep the older build time as its modified time). Null if unknown.
+Future<DateTime?> _installedAt() async {
+  DateTime? at;
+  try {
+    at = (await PackageInfo.fromPlatform()).updateTime;
+  } catch (_) {}
+  if (!kIsWeb && !Platform.isAndroid) {
+    try {
+      final written = File(Platform.resolvedExecutable).statSync().changed;
+      if (at == null || written.isAfter(at)) at = written;
+    } catch (_) {}
+  }
+  return at?.toUtc();
+}
+
 /// Reads the clipboard as a paste does and writes each step to [path].
 Future<void> _probeClipboard(String path) async {
   final lines = <String>[];
@@ -182,6 +200,7 @@ Future<void> _startCrashRecords(CrashCatcher crashes, Directory root) async {
     directory,
     markRunning: !Platform.isAndroid,
     build: '${info.version}+${info.buildNumber}@${info.commit ?? ''}',
+    installedAt: await _installedAt(),
   );
   try {
     startNativeCrashReports(p.join(directory.path, CrashCatcher.nativeName));
@@ -14875,21 +14894,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
       );
     }
-    return SingleChildScrollView(
-      key: ValueKey('settings-page-$_settingsCategory'),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            key: const ValueKey('settings-back'),
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.arrow_back),
-            title: Text(_settingsCategoryLabel(context, _settingsCategory)),
-            onTap: () => setState(() => _settingsPageOpen = false),
-          ),
-          page,
-        ],
+    // Back (the system's, too) leaves the page for the list of pages.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _settingsPageOpen = false);
+      },
+      child: SingleChildScrollView(
+        key: ValueKey('settings-page-$_settingsCategory'),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const ValueKey('settings-back'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.arrow_back),
+              title: Text(_settingsCategoryLabel(context, _settingsCategory)),
+              onTap: () => setState(() => _settingsPageOpen = false),
+            ),
+            page,
+          ],
+        ),
       ),
     );
   }

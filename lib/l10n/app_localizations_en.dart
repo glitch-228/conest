@@ -5370,4 +5370,30 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkOpen => 'Open';
+
+  @override
+  String get carrierRemove => 'Remove';
+
+  @override
+  String carrierRemoveTitle(String name) {
+    return 'Remove $name?';
+  }
+
+  @override
+  String carrierRemoveBody(String name) {
+    return 'Contacts will no longer reach you over $name, and what this device keeps for it is forgotten. Setting it up again gives you a new address. To stop it for a while, turn its switch off instead.';
+  }
+
+  @override
+  String get carrierPaused =>
+      'Paused: kept, not used. Turn on to use it again.';
+
+  @override
+  String get emailChangeAccount => 'Change account';
+
+  @override
+  String get emailOtherServer => 'Use another server';
+
+  @override
+  String get actionSave => 'Save';
 }

@@ -1388,5 +1388,12 @@
   "menuCopySelection": "نسخ النص المحدد",
   "linkLookalikeTitle": "هل تفتح هذا الرابط؟",
   "linkLookalikeBody": "العنوان {host} يستخدم حروفًا من أبجديات أخرى. قد يقلّد موقعًا تعرفه.",
-  "linkOpen": "فتح"
+  "linkOpen": "فتح",
+  "carrierRemove": "إزالة",
+  "carrierRemoveTitle": "إزالة {name}؟",
+  "carrierRemoveBody": "لن تصل إليك جهات الاتصال عبر {name}، وسيُنسى ما يحفظه هذا الجهاز له. إعداده من جديد يمنحك عنوانًا جديدًا. لإيقافه مؤقتًا، أطفئ مفتاحه بدلًا من ذلك.",
+  "carrierPaused": "متوقف مؤقتًا: محفوظ وغير مستخدم. شغّله لاستخدامه مجددًا.",
+  "emailChangeAccount": "تغيير الحساب",
+  "emailOtherServer": "استخدام خادم آخر",
+  "actionSave": "حفظ"
 }

@@ -73,6 +73,38 @@ void main() {
     expect(next.previousRun.records.single.at, DateTime.utc(2026, 10, 19, 10));
   });
 
+  test('an older version updated since its marker is no crash', () async {
+    // Updating from a version whose marker names no build: the app was
+    // installed after that run began.
+    Directory(root.path).createSync(recursive: true);
+    File(
+      p.join(root.path, CrashCatcher.markerName),
+    ).writeAsStringSync('2026-10-19T10:00:00.000Z');
+    final next = CrashCatcher();
+    await next.attach(
+      root,
+      markRunning: true,
+      build: '0.4.0+61@bbb',
+      installedAt: DateTime.utc(2026, 10, 20, 9),
+    );
+    expect(next.previousRun.crashed, isFalse);
+  });
+
+  test('installed before the run that did not close: still a crash', () async {
+    Directory(root.path).createSync(recursive: true);
+    File(
+      p.join(root.path, CrashCatcher.markerName),
+    ).writeAsStringSync('2026-10-19T10:00:00.000Z');
+    final next = CrashCatcher();
+    await next.attach(
+      root,
+      markRunning: true,
+      build: '0.4.0+61@bbb',
+      installedAt: DateTime.utc(2026, 10, 18),
+    );
+    expect(next.previousRun.crashed, isTrue);
+  });
+
   test('a run that closed properly leaves nothing to report', () async {
     final first = CrashCatcher();
     await first.attach(root, markRunning: true);

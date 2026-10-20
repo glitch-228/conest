@@ -5494,4 +5494,30 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get linkOpen => 'Открыть';
+
+  @override
+  String get carrierRemove => 'Удалить';
+
+  @override
+  String carrierRemoveTitle(String name) {
+    return 'Удалить $name?';
+  }
+
+  @override
+  String carrierRemoveBody(String name) {
+    return 'Контакты больше не смогут связаться с вами через $name, а то, что это устройство хранит для него, будет забыто. При новой настройке у вас будет новый адрес. Чтобы просто остановить его на время, выключите переключатель.';
+  }
+
+  @override
+  String get carrierPaused =>
+      'Приостановлено: сохранено, но не используется. Включите, чтобы пользоваться снова.';
+
+  @override
+  String get emailChangeAccount => 'Сменить аккаунт';
+
+  @override
+  String get emailOtherServer => 'Другой сервер';
+
+  @override
+  String get actionSave => 'Сохранить';
 }

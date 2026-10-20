@@ -1388,5 +1388,12 @@
   "menuCopySelection": "Salin teks yang dipilih",
   "linkLookalikeTitle": "Buka tautan ini?",
   "linkLookalikeBody": "Alamat {host} memakai huruf dari abjad lain. Mungkin meniru situs yang Anda kenal.",
-  "linkOpen": "Buka"
+  "linkOpen": "Buka",
+  "carrierRemove": "Hapus",
+  "carrierRemoveTitle": "Hapus {name}?",
+  "carrierRemoveBody": "Kontak tidak akan bisa menjangkau Anda lewat {name} lagi, dan yang disimpan perangkat ini untuknya dilupakan. Menyiapkannya lagi memberi Anda alamat baru. Untuk menghentikannya sementara, matikan sakelarnya saja.",
+  "carrierPaused": "Dijeda: disimpan, tidak dipakai. Nyalakan untuk memakainya lagi.",
+  "emailChangeAccount": "Ganti akun",
+  "emailOtherServer": "Pakai server lain",
+  "actionSave": "Simpan"
 }

@@ -169,6 +169,7 @@ class CrashCatcher {
     Directory directory, {
     required bool markRunning,
     String? build,
+    DateTime? installedAt,
   }) async {
     _build = build;
     try {
@@ -196,11 +197,14 @@ class CrashCatcher {
       final marker = File(p.join(directory.path, markerName));
       final ended = marker.existsSync() ? _readMarker(marker) : null;
       // Not a crash: the app handed itself to an installer or updater, or
-      // a newer build now runs (an update replaced the one that was).
+      // a newer build now runs (an update replaced the one that was), or
+      // the app was installed after that run began (an older version's
+      // marker names no build).
       final replaced =
           ended != null &&
           (ended.updating ||
-              (build != null && ended.build != null && ended.build != build));
+              (build != null && ended.build != null && ended.build != build) ||
+              (installedAt != null && installedAt.isAfter(ended.at)));
       if (ended != null && !replaced) {
         carried.add(
           CrashRecord(
