@@ -15,6 +15,9 @@ import pathlib
 import re
 import sys
 
+import deadlines
+import energy_summary
+
 NOISE = re.compile(r"Attachment crypto:")
 WORTH = re.compile(
     r"(?i)error|fail|invalid|dropped|refus|rejected|timeout|denied|no route"
@@ -93,6 +96,14 @@ def main(folder: str) -> None:
                 seen[re.sub(r"[0-9a-f]{8,}|\d+", "#", line[28:200])] += 1
         for line, count in seen.most_common(12):
             print(f"    {count:4d} x {line}")
+    print("===== how long things took (tool/device_lab/deadlines.py)")
+    for line in deadlines.lines(reports):
+        print(line)
+    energy = energy_summary.lines(folder)
+    if energy:
+        print("===== battery and data (tool/device_lab/energy.sh)")
+        for line in energy:
+            print(line)
 
 
 def verdict(folder: str) -> str:
@@ -145,6 +156,9 @@ def verdict(folder: str) -> str:
     missing = {"android", "linux", "windows"} - set(reports)
     if missing:
         parts.append("no report from " + ", ".join(sorted(missing)))
+    late = deadlines.missed(reports)
+    parts.append("deadlines: " + ("all met" if not late else
+                                  "MISSED " + ", ".join(late)))
     return "; ".join(parts)
 
 

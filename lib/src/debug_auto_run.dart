@@ -2,6 +2,10 @@
 /// device can be tested from a shell over adb or ssh:
 ///
 ///   conest --debug-run=routes|messages|files|interactions|all|none
+///          (or contacts: remove and add back every contact this device
+///          added, and every member of the group it made; or burst: 20
+///          messages to every chat and group half a second apart, and
+///          1, 10 and 50 MB files)
 ///          [--debug-name=NAME]            set up storage and an identity
 ///          [--debug-relay=HOST:PORT]      add a relay
 ///          [--debug-accept-invite=CODE]   add a contact (repeatable)
@@ -24,6 +28,8 @@
 ///          [--debug-only-transport=KIND]  every other transport off (LAN
 ///                                         too), from before pairing: adds
 ///                                         contacts and talks over KIND
+///          [--debug-idle=SECONDS]         then stay online, idle, this long
+///                                         (to measure battery and data)
 ///          [--debug-report=PATH] [--debug-wait=20] [--debug-exit]
 ///   adb shell am start -n dev.conest.conest.debug/dev.conest.conest.MainActivity \
 ///       --es conestDebugArgs "--debug-run=all --debug-name=phone --debug-approve"
@@ -35,6 +41,7 @@
 /// report (with the error history) at PATH, or next to the app's files.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -57,6 +64,7 @@ class DebugRunRequest {
     this.group,
     this.noReserve = false,
     this.linger = Duration.zero,
+    this.idle = Duration.zero,
     this.carriers = const [],
     this.reticulum,
     this.chatmail,
@@ -64,10 +72,15 @@ class DebugRunRequest {
     this.onlyTransport,
     this.expectContacts = 0,
     this.expectGroup,
+    this.burstFileSizes = const [
+      1024 * 1024,
+      10 * 1024 * 1024,
+      50 * 1024 * 1024,
+    ],
   });
 
-  /// 'routes', 'messages', 'files', 'interactions', 'all', or 'none'
-  /// (only set up).
+  /// 'routes', 'messages', 'files', 'interactions', 'all', 'contacts',
+  /// 'burst', or 'none' (only set up).
   final String what;
   final String? reportPath;
   final bool exitAfter;
@@ -99,6 +112,10 @@ class DebugRunRequest {
   /// receipts) before the report is written.
   final Duration linger;
 
+  /// After everything (the linger too), stay online doing nothing this
+  /// long: what an idle hour costs in battery and data.
+  final Duration idle;
+
   /// Carriers to switch on before pairing, so the invite and the contact
   /// exchange carry their addresses: some of [carrierNames].
   final List<String> carriers;
@@ -124,6 +141,9 @@ class DebugRunRequest {
   /// the group tests, or it tests a group it has not joined yet.
   final String? expectGroup;
 
+  /// The files 'burst' sends to every chat and group, by size.
+  final List<int> burstFileSizes;
+
   static const List<String> carrierNames = [
     'nostr',
     'tor',
@@ -143,6 +163,8 @@ class DebugRunRequest {
     'files',
     'interactions',
     'all',
+    'contacts',
+    'burst',
     'none',
   };
 
@@ -187,6 +209,7 @@ class DebugRunRequest {
           : null,
       noReserve: args.contains('--debug-no-reserve'),
       linger: seconds('debug-linger', Duration.zero, 3600),
+      idle: seconds('debug-idle', Duration.zero, 4 * 3600),
       carriers: [
         for (final name in (value('debug-carriers') ?? '').split(','))
           if (carrierNames.contains(name.trim())) name.trim(),
@@ -241,6 +264,66 @@ Future<String> runDebugRequest(
       controller.recordError('test', 'Lab step $name failed: $error');
     }
   }
+
+  // Whenever a contact or a lab group membership comes or goes, from the
+  // start to the end: how long removals and additions took to arrive here.
+  final events = <Map<String, Object?>>[];
+  var known = <String, String>{};
+  var memberOf = <String>{};
+  void observe() {
+    final now = DateTime.now().toUtc().toIso8601String();
+    final contactsNow = {
+      for (final contact in _contacts(controller))
+        contact.deviceId: contact.alias,
+    };
+    for (final MapEntry(:key, :value) in contactsNow.entries) {
+      if (!known.containsKey(key)) {
+        events.add({
+          'at': now,
+          'event': 'contact',
+          'deviceId': key,
+          'alias': value,
+        });
+      }
+    }
+    for (final MapEntry(:key, :value) in known.entries) {
+      if (!contactsNow.containsKey(key)) {
+        events.add({
+          'at': now,
+          'event': 'contact-gone',
+          'deviceId': key,
+          'alias': value,
+        });
+      }
+    }
+    known = contactsNow;
+    final groupsNow = {for (final group in _labGroups(controller)) group.title};
+    for (final title in groupsNow.difference(memberOf)) {
+      events.add({'at': now, 'event': 'member', 'group': title});
+    }
+    for (final title in memberOf.difference(groupsNow)) {
+      events.add({'at': now, 'event': 'member-gone', 'group': title});
+    }
+    memberOf = groupsNow;
+  }
+
+  // Contact requests are approved all along (removed contacts come back
+  // during the tests, not only while serving).
+  final approving = <String>{};
+  Future<void> approvePending() async {
+    for (final pending in controller.pendingContactRequests) {
+      if (!approving.add(pending.id)) continue;
+      await step('approve ${pending.id}', () async {
+        await controller.approvePendingContactRequest(pending.id);
+        return pending.id;
+      });
+    }
+  }
+
+  final ticker = Timer.periodic(const Duration(milliseconds: 250), (_) {
+    observe();
+    if (request.approve) unawaited(approvePending());
+  });
 
   final name = request.name;
   if (name != null && !controller.hasIdentity) {
@@ -347,7 +430,9 @@ Future<String> runDebugRequest(
       return null;
     });
   }
+  final invitedAt = <String, DateTime>{};
   for (final (index, code) in request.invites.indexed) {
+    invitedAt['lab-${index + 1}'] = DateTime.now().toUtc();
     await step('accept-invite-$index', () async {
       final result = await controller.addContactFromInvite(
         alias: 'lab-${index + 1}',
@@ -362,12 +447,21 @@ Future<String> runDebugRequest(
   // from the start: how long adding a contact took.
   final serveUntil = DateTime.now().add(request.serve);
   final pairedAfter = <String, int>{};
+  // For contacts this device asked for: from taking the invite.
+  final pairedAfterInvite = <String, int>{};
   void notePaired() {
+    final now = DateTime.now().toUtc();
     for (final contact in _contacts(controller)) {
       pairedAfter.putIfAbsent(
         contact.alias,
-        () => DateTime.now().toUtc().difference(startedAt).inMilliseconds,
+        () => now.difference(startedAt).inMilliseconds,
       );
+      if (invitedAt[contact.alias] case final asked?) {
+        pairedAfterInvite.putIfAbsent(
+          contact.alias,
+          () => now.difference(asked).inMilliseconds,
+        );
+      }
     }
   }
 
@@ -377,14 +471,7 @@ Future<String> runDebugRequest(
         _contacts(controller).length >= request.expectContacts) {
       break;
     }
-    if (request.approve) {
-      for (final pending in controller.pendingContactRequests) {
-        await step('approve ${pending.id}', () async {
-          await controller.approvePendingContactRequest(pending.id);
-          return pending.id;
-        });
-      }
-    }
+    if (request.approve) await approvePending();
     if (DateTime.now().isBefore(serveUntil)) {
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
@@ -465,6 +552,14 @@ Future<String> runDebugRequest(
     // Time for receipts (and files) to come back.
     await Future<void>.delayed(request.wait * 3);
   }
+  final timings = <Map<String, Object?>>[];
+  if (what == 'contacts') {
+    await _removeAndAddBack(controller, step, request, timings);
+  }
+  if (what == 'burst') {
+    await _burst(controller, step, request.burstFileSizes);
+    await _untilConfirmed(controller, const Duration(minutes: 3));
+  }
   if (what == 'interactions' || what == 'all') {
     await _interact(controller, step, request.wait);
     await Future<void>.delayed(request.wait * 2);
@@ -504,6 +599,11 @@ Future<String> runDebugRequest(
   }
   // A moment for this device's own last receipts to arrive.
   await Future<void>.delayed(request.wait);
+  ticker.cancel();
+  observe();
+  // Without this run's own 250 ms ticker, which would cost what is measured.
+  final idleFrom = DateTime.now().toUtc();
+  if (request.idle > Duration.zero) await Future<void>.delayed(request.idle);
   final report = {
     'kind': what,
     'build': controller.debugBuildId,
@@ -513,7 +613,16 @@ Future<String> runDebugRequest(
     'finishedAt': DateTime.now().toUtc().toIso8601String(),
     'steps': steps,
     'contacts': contacts,
+    'onlyTransport': request.onlyTransport?.name,
+    if (request.idle > Duration.zero)
+      'idle': {
+        'from': idleFrom.toIso8601String(),
+        'seconds': request.idle.inSeconds,
+      },
     'pairedAfterMs': pairedAfter,
+    'pairedAfterInviteMs': pairedAfterInvite,
+    'timings': timings,
+    'events': events,
     // This device's relays in order, and the one it holds a waiting fetch
     // on (on battery, the only one it watches promptly).
     'relays': [
@@ -792,6 +901,227 @@ Future<void> _interact(
   }
 }
 
+/// Removes, then adds back, every contact this device added (by the invite
+/// it took) and every other member of the lab group it made. The other
+/// side's report shows when each change arrived ([runDebugRequest]'s
+/// events); this one, how long adding back took until messages could go.
+Future<void> _removeAndAddBack(
+  MessengerController controller,
+  _Step step,
+  DebugRunRequest request,
+  List<Map<String, Object?>> timings,
+) async {
+  Future<int?> until(bool Function() ready, Duration limit) async {
+    final from = DateTime.now();
+    final end = from.add(limit);
+    while (!ready()) {
+      if (!DateTime.now().isBefore(end)) return null;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return DateTime.now().difference(from).inMilliseconds;
+  }
+
+  final me = controller.identity?.displayName ?? 'lab';
+  for (final (index, code) in request.invites.indexed) {
+    final alias = 'lab-${index + 1}';
+    final contact = _contacts(
+      controller,
+    ).where((contact) => contact.alias == alias).firstOrNull;
+    if (contact == null) continue;
+    final peer = contact.deviceId;
+    await step('remove $alias', () async {
+      timings.add({
+        'task': 'remove',
+        'deviceId': peer,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      });
+      await controller.removeContact(peer);
+      return null;
+    });
+    // Time for the notice to arrive before the contact is asked again.
+    await Future<void>.delayed(request.wait);
+    await step('add back $alias', () async {
+      final askedAt = DateTime.now().toUtc();
+      await controller.addContactFromInvite(
+        alias: alias,
+        payload: code,
+        codephrase: '',
+      );
+      final ms = await until(
+        () => _contacts(controller).any((c) => c.deviceId == peer),
+        const Duration(minutes: 2),
+      );
+      timings.add({
+        'task': 'add-back',
+        'deviceId': peer,
+        'at': askedAt.toIso8601String(),
+        'ms': ms,
+      });
+      if (ms == null) throw StateError('$alias not back within 2 min');
+      // And a message over the renewed contact.
+      final back = _contacts(controller).firstWhere((c) => c.deviceId == peer);
+      final body = 'lab back from $me to $alias';
+      await controller.sendMessage(contact: back, body: body);
+      final delivered = await until(
+        () => controller
+            .messagesFor(peer)
+            .any(
+              (m) =>
+                  m.outbound &&
+                  m.body == body &&
+                  (m.state == DeliveryState.delivered ||
+                      m.state == DeliveryState.read),
+            ),
+        const Duration(minutes: 1),
+      );
+      timings.add({
+        'task': 'message-after-add-back',
+        'deviceId': peer,
+        'ms': delivered,
+      });
+      return ms;
+    });
+  }
+  final title = request.group;
+  final group = title == null
+      ? null
+      : _labGroups(
+          controller,
+        ).where((group) => group.title == title).firstOrNull;
+  if (group == null) return;
+  final myId = controller.identity?.deviceId;
+  for (final memberId in [...group.activeMemberDeviceIds]) {
+    if (memberId == myId) continue;
+    final contact = _contacts(
+      controller,
+    ).where((c) => c.deviceId == memberId).firstOrNull;
+    if (contact == null) continue;
+    await step('remove member ${contact.alias}', () async {
+      timings.add({
+        'task': 'remove-member',
+        'deviceId': memberId,
+        'group': group.title,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      });
+      await controller.removeGroupMember(
+        groupId: group.groupId,
+        memberDeviceId: memberId,
+      );
+      return null;
+    });
+    await Future<void>.delayed(request.wait);
+    await step('add member back ${contact.alias}', () async {
+      timings.add({
+        'task': 'add-member',
+        'deviceId': memberId,
+        'group': group.title,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      });
+      await controller.addGroupMembers(
+        groupId: group.groupId,
+        members: [contact],
+      );
+      return null;
+    });
+  }
+}
+
+/// Twenty messages to every chat and lab group, half a second apart (not
+/// waiting for each), then a 1, a 10 and a 50 MB file to each: how long
+/// each took shows in its marks ([_chatReport]).
+Future<void> _burst(
+  MessengerController controller,
+  _Step step,
+  List<int> sizes,
+) async {
+  final me = controller.identity?.displayName ?? 'lab';
+  for (var i = 1; i <= 20; i++) {
+    for (final contact in _contacts(controller)) {
+      await step('burst ${contact.alias} $i', () async {
+        await controller.sendMessage(
+          contact: contact,
+          body: 'lab burst $i from $me to ${contact.alias}',
+        );
+        return null;
+      });
+    }
+    for (final group in _labGroups(controller)) {
+      await step('burst ${group.title} $i', () async {
+        await controller.sendGroupMessage(
+          groupId: group.groupId,
+          body: 'lab burst $i from $me to ${group.title}',
+        );
+        return null;
+      });
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+  }
+  final folder = await Directory.systemTemp.createTemp('conest-lab-');
+  final random = Random();
+  for (final size in sizes) {
+    final file = File('${folder.path}/lab-$size.bin');
+    final out = await file.open(mode: FileMode.write);
+    final chunk = Uint8List(min(size, 1024 * 1024));
+    for (var written = 0; written < size; written += chunk.length) {
+      for (var i = 0; i < chunk.length; i++) {
+        chunk[i] = random.nextInt(256);
+      }
+      await out.writeFrom(chunk);
+    }
+    await out.close();
+    for (final contact in _contacts(controller)) {
+      await step('burst file ${contact.alias} $size', () async {
+        await controller.sendAttachmentSource(
+          contact: contact,
+          source: StagedAttachment(
+            id: 'lab-burst-$size',
+            fileName: 'lab-$size.bin',
+            mimeType: 'application/octet-stream',
+            sizeBytes: size,
+            filePath: file.path,
+            presentation: AttachmentPresentation.file,
+          ),
+        );
+        return null;
+      });
+    }
+    for (final group in _labGroups(controller)) {
+      await step('burst group file ${group.title} $size', () async {
+        return controller.publishGroupFile(
+          groupId: group.groupId,
+          path: file.path,
+          fileName: 'lab-$size.bin',
+          mimeType: 'application/octet-stream',
+          keepMetadata: true,
+        );
+      });
+    }
+  }
+}
+
+/// Until every outgoing lab message to a contact is confirmed (or failed),
+/// at most [limit].
+Future<void> _untilConfirmed(
+  MessengerController controller,
+  Duration limit,
+) async {
+  bool done() => _contacts(controller).every(
+    (contact) => controller
+        .messagesFor(contact.deviceId)
+        .where((m) => m.outbound && m.body.startsWith('lab burst'))
+        .every(
+          (m) =>
+              m.state == DeliveryState.delivered ||
+              m.state == DeliveryState.read ||
+              m.state == DeliveryState.failed,
+        ),
+  );
+  final end = DateTime.now().add(limit);
+  while (!done() && DateTime.now().isBefore(end)) {
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+  }
+}
+
 /// Each carrier's state: ready or not, and its last error.
 List<Map<String, Object?>> _carrierReport(MessengerController controller) => [
   for (final status in controller.carrierStatuses)
@@ -831,6 +1161,17 @@ List<Map<String, Object?>> _chatReport(MessengerController controller) {
         '${trace.route.name}:${trace.mark.name}'
             '+${trace.at.difference(message.createdAt).inMilliseconds}',
     ],
+    // The same, by recipient (group members), for the summary's timings.
+    'traces': [
+      for (final trace in message.routeTrace)
+        {
+          'route': trace.route.name,
+          'mark': trace.mark.name,
+          'ms': trace.at.difference(message.createdAt).inMilliseconds,
+          'device': ?trace.deviceId,
+        },
+    ],
+    'bytes': ?(message.attachment?.sizeBytes ?? message.groupFile?.sizeBytes),
     if (!message.outbound)
       'arrivedAt': message.arrivedAt.toUtc().toIso8601String(),
     'recipients': {

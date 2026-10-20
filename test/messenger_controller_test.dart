@@ -20318,6 +20318,154 @@ void main() {
     );
   });
 
+  Future<(Map, Map)> labPair({
+    required String laptopRun,
+    Duration linger = const Duration(seconds: 60),
+    List<int> burstFileSizes = const [64 * 1024],
+  }) async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    Future<MessengerController> device() async {
+      final controller = await _createController(
+        relayClient: relay,
+        displayName: 'unused',
+        createIdentity: false,
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'test@abc',
+      );
+      addTearDown(controller.dispose);
+      return controller;
+    }
+
+    final phone = await device();
+    final laptop = await device();
+    var polling = true;
+    addTearDown(() => polling = false);
+    unawaited(() async {
+      while (polling) {
+        await Future.wait([
+          if (phone.hasIdentity) phone.pollNow(),
+          if (laptop.hasIdentity) laptop.pollNow(),
+        ]).catchError((_) => const <void>[]);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }());
+    final root = Directory.systemTemp.createTempSync('conest_lab_t0_');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final phoneRun = runDebugRequest(
+      phone,
+      DebugRunRequest(
+        what: 'none',
+        name: 'phone',
+        approve: true,
+        serve: const Duration(seconds: 30),
+        expectContacts: 1,
+        expectGroup: 'lab-all',
+        wait: const Duration(seconds: 1),
+        linger: linger,
+        onlyTransport: TransportKind.conestRelay,
+        relay: 'relay.example:7667',
+      ),
+      defaultReportPath: () async => '${root.path}/phone.json',
+    );
+    final inviteFile = File('${root.path}/phone.json.invite');
+    for (var i = 0; i < 100 && !inviteFile.existsSync(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    final laptopPath = await runDebugRequest(
+      laptop,
+      DebugRunRequest(
+        what: laptopRun,
+        name: 'laptop',
+        invites: [inviteFile.readAsStringSync()],
+        serve: const Duration(seconds: 30),
+        expectContacts: 1,
+        group: 'lab-all',
+        wait: const Duration(seconds: 1),
+        onlyTransport: TransportKind.conestRelay,
+        relay: 'relay.example:7667',
+        burstFileSizes: burstFileSizes,
+      ),
+      defaultReportPath: () async => '${root.path}/laptop.json',
+    );
+    final phoneReport = jsonDecode(File(await phoneRun).readAsStringSync());
+    final laptopReport = jsonDecode(File(laptopPath).readAsStringSync());
+    return (phoneReport as Map, laptopReport as Map);
+  }
+
+  test(
+    'a lab contacts run removes and adds back, and both sides time it',
+    () async {
+      final (phone, laptop) = await labPair(laptopRun: 'contacts');
+      expect(laptop['onlyTransport'], 'conestRelay');
+      expect((laptop['pairedAfterInviteMs'] as Map).values.single, isA<int>());
+      final timings = {
+        for (final timing in laptop['timings'] as List) timing['task']: timing,
+      };
+      expect(
+        timings.keys,
+        containsAll([
+          'remove',
+          'add-back',
+          'message-after-add-back',
+          'remove-member',
+          'add-member',
+        ]),
+      );
+      expect(timings['add-back']['ms'], isA<int>());
+      expect(timings['message-after-add-back']['ms'], isA<int>());
+      // The phone saw the laptop go and come back, and its membership too.
+      final seen = [
+        for (final event in phone['events'] as List) event['event'],
+      ];
+      expect(seen, containsAllInOrder(['contact', 'contact-gone', 'contact']));
+      expect(seen, containsAllInOrder(['member', 'member-gone', 'member']));
+      final steps = laptop['steps'] as List;
+      expect(
+        steps.where((step) => step['ok'] != true).map((step) => step['step']),
+        isEmpty,
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'a lab burst sends twenty to each chat and group, and files, timed',
+    () async {
+      final (phone, laptop) = await labPair(laptopRun: 'burst');
+      final chats = laptop['chats'] as List;
+      final direct = chats.firstWhere((chat) => chat['contact'] != null) as Map;
+      final group =
+          chats.firstWhere((chat) => chat['group'] == 'lab-all') as Map;
+      List bursts(Map chat) => [
+        for (final m in chat['messages'] as List)
+          if ((m['body'] as String).startsWith('lab burst')) m,
+      ];
+      expect(bursts(direct), hasLength(20));
+      expect(bursts(group), hasLength(20));
+      // Each confirmed one says when, per member in the group.
+      final confirmed = [
+        for (final m in bursts(direct))
+          for (final t in m['traces'] as List)
+            if (t['mark'] == 'confirmed') t['ms'],
+      ];
+      expect(confirmed, hasLength(greaterThanOrEqualTo(20)));
+      expect([
+        for (final m in bursts(group))
+          for (final t in m['traces'] as List)
+            if (t['mark'] == 'confirmed') t['device'],
+      ], everyElement(isNotNull));
+      expect(
+        (direct['messages'] as List).where(
+          (m) => m['file'] == 'lab-65536.bin' && m['bytes'] == 65536,
+        ),
+        hasLength(1),
+      );
+      expect(phone['events'], isNotEmpty);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
   test(
     'lab interactions reach the other device, in chats and groups',
     () async {
