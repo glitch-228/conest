@@ -43,6 +43,16 @@ const List<String> defaultChatmailDomains = [
 /// Of [domains], those whose IMAP greeting arrives within [timeout] on this
 /// network, fastest first. Every probe's connection is closed (no login is
 /// tried), late ones too. Stops waiting once [enough] have answered.
+/// A mail server answers here, but this network stops its connections
+/// once they carry real mail (see [ImapClient.checkTransfer]).
+class MailServerStallsException implements Exception {
+  const MailServerStallsException(this.host);
+  final String host;
+  @override
+  String toString() =>
+      'Mail from $host stops after a few kilobytes on this network.';
+}
+
 Future<List<String>> reachableChatmailServers(
   List<String> domains, {
   MailConnector? connector,
@@ -331,6 +341,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     required EmailCarrierConfig config,
     required this.onFrame,
     this.onCursor,
+    this.onStalls,
     this.onStatusChanged,
     this.onOtherMail,
     this.onOtherMailGaveUp,
@@ -340,6 +351,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.idleTimeout = const Duration(minutes: 25),
     this.pollInterval = const Duration(minutes: 1),
     this.connectionLimitWait = const Duration(minutes: 10),
+    this.readTimeout = const Duration(seconds: 60),
     DateTime Function()? now,
     void Function(String line)? log,
   }) : _config = config,
@@ -366,8 +378,21 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// How long to wait after the server refused another connection.
   final Duration connectionLimitWait;
 
+  /// How long a command's answer may take before the connection counts as
+  /// stalled.
+  final Duration readTimeout;
+
   /// A frame from the mail address [sender].
   final void Function(String sender, Uint8List frame) onFrame;
+
+  /// Reading mail froze [stallsBeforeMove] times in a row after a good
+  /// login: this network lets the server's connections through and then
+  /// stops them (told once per start).
+  final void Function()? onStalls;
+
+  static const stallsBeforeMove = 3;
+  var _stalls = 0;
+  var _stallsReported = false;
 
   /// The folder position after mail was read, to resume after a restart.
   final void Function(int uidValidity, int lastUid)? onCursor;
@@ -411,6 +436,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     MailConnector? connector,
     bool tls = true,
     void Function(String line)? log,
+    Duration transferTimeout = transferCheckTimeout,
   }) async {
     final watch = Stopwatch()..start();
     String took() =>
@@ -426,13 +452,45 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
               : null),
     );
     log?.call('IMAP ${config.imapHost} answered in ${took()}');
+    var frozen = false;
     try {
       await client.login(config.mail, config.password);
       log?.call('IMAP login at ${config.imapHost} done in ${took()}');
+      if (config.chatmail) {
+        // A greeting and a login are a few hundred bytes; carrier mail is
+        // more. Some networks freeze connections to some servers after
+        // 16 KB (the lab phone's, to chat.adminforge.de): such a server
+        // is no use here, however fast it answered.
+        try {
+          await client.checkTransfer().timeout(transferTimeout);
+          log?.call(
+            'IMAP transfer check at ${config.imapHost} passed in ${took()}',
+          );
+        } on TimeoutException {
+          frozen = true;
+          throw MailServerStallsException(config.imapHost);
+        } on ImapException catch (error) {
+          // A server that does not take APPEND cannot be checked this way.
+          log?.call(
+            'IMAP transfer check at ${config.imapHost} not possible: $error',
+          );
+        }
+      }
     } finally {
-      await client.logout();
+      if (frozen) {
+        // A LOGOUT would wait on the frozen connection too.
+        await client
+            .close()
+            .timeout(const Duration(seconds: 2))
+            .catchError((Object _) {});
+      } else {
+        await client.logout();
+      }
     }
   }
+
+  /// How long a sign-up waits for its transfer check (48 KB both ways).
+  static const transferCheckTimeout = Duration(seconds: 20);
 
   @override
   void start() {
@@ -506,6 +564,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           _config.imapPort,
           tls: tls,
           connector: _connector,
+          lineTimeout: readTimeout,
         );
         step = 'logging in';
         await client.login(_config.mail, _config.password);
@@ -524,11 +583,16 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         }
         _lastError = null;
         _setState(EmailCarrierState.connected);
-        backoff = const Duration(seconds: 2);
         var storageBackoff = const Duration(seconds: 2);
         while (current()) {
           step = 'reading new mail';
-          if (await _readNew(client, generation)) {
+          final storageFull = await _readNew(client, generation);
+          // Only mail actually read counts as working again: after a mere
+          // login, a connection that freezes would otherwise be retried
+          // every minute, each leaving one more open at the server.
+          backoff = const Duration(seconds: 2);
+          _stalls = 0;
+          if (storageFull) {
             final wake = Completer<void>();
             _wake = wake;
             await Future.any([
@@ -557,9 +621,23 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         // Closed now, not after the wait (nor with a LOGOUT a stalled link
         // would hold up): the server counts open connections per account
         // and refused new ones once failed ones piled up (device lab).
-        await client?.close().catchError((Object _) {});
+        await client
+            ?.close()
+            .timeout(const Duration(seconds: 2))
+            .catchError((Object _) {});
         client = null;
         if (!current()) break;
+        if (step == 'reading new mail' && error is TimeoutException) {
+          _stalls++;
+          if (_stalls >= stallsBeforeMove && !_stallsReported) {
+            _stallsReported = true;
+            _log?.call(
+              'reading mail froze $_stalls times in a row at '
+              '${_config.imapHost}: this network stops its connections',
+            );
+            onStalls?.call();
+          }
+        }
         _lastError = describeNetworkError(error);
         // The server refuses more connections from this account: it still
         // holds ones the network dropped, until its own timeout, and every

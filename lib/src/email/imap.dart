@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'mail_socket.dart';
@@ -24,16 +25,18 @@ class ImapResponse {
 /// The small part of IMAP4rev1 the email carrier needs: login, one folder,
 /// UID search/fetch/delete and IDLE.
 class ImapClient {
-  ImapClient._(this._socket) : _reader = MailLineReader(_socket.input);
+  ImapClient._(this._socket, Duration lineTimeout)
+    : _reader = MailLineReader(_socket.input, lineTimeout: lineTimeout);
 
   static Future<ImapClient> connect(
     String host,
     int port, {
     bool tls = true,
     MailConnector? connector,
+    Duration lineTimeout = const Duration(seconds: 60),
   }) async {
     final socket = await (connector ?? connectMailSocket)(host, port, tls: tls);
-    final client = ImapClient._(socket);
+    final client = ImapClient._(socket, lineTimeout);
     try {
       final greeting = await client._reader.readLine();
       if (!greeting.startsWith('* OK') && !greeting.startsWith('* PREAUTH')) {
@@ -145,6 +148,55 @@ class ImapClient {
   Future<void> delete(int uid) async {
     await _command('UID STORE $uid +FLAGS.SILENT (\\Deleted)');
     if (supportsUidPlus) await _command('UID EXPUNGE $uid');
+  }
+
+  /// Saves a test message of about [size] bytes in the inbox, reads it
+  /// back and deletes it: whether this connection carries real mail. Some
+  /// networks let a connection to a server through, then freeze it after a
+  /// few kilobytes (a 16 KB stall on the lab phone's network), which a
+  /// greeting and a login never show. Plain text, so the carrier never
+  /// takes it for its own mail. Throws [ImapException] when the server
+  /// refuses (no APPEND), and never returns when the connection freezes:
+  /// the caller sets the time limit.
+  Future<void> checkTransfer({int size = 48 * 1024}) async {
+    final random = Random.secure();
+    final token = List.generate(
+      16,
+      (_) => random.nextInt(16).toRadixString(16),
+    ).join();
+    final text = StringBuffer()
+      ..write('X-Conest-Check: $token\r\n')
+      ..write('Subject: Conest transfer check\r\n')
+      ..write('Content-Type: text/plain; charset=us-ascii\r\n\r\n');
+    while (text.length < size) {
+      text.write('${'0123456789abcdef' * 4}\r\n');
+    }
+    final message = latin1.encode(text.toString());
+    final tag = _nextTag();
+    _socket.write(latin1.encode('$tag APPEND "INBOX" {${message.length}}\r\n'));
+    while (true) {
+      final line = await _reader.readLine();
+      if (line.startsWith('+')) break;
+      if (line.startsWith('$tag ')) {
+        throw ImapException('APPEND refused: $line');
+      }
+    }
+    _socket.write(message);
+    _socket.write(latin1.encode('\r\n'));
+    await _collect(tag);
+    int? uid;
+    for (final response in await _command(
+      'UID SEARCH HEADER X-Conest-Check $token',
+    )) {
+      if (!response.text.startsWith('* SEARCH')) continue;
+      uid = int.tryParse(response.text.substring(8).trim().split(' ').first);
+    }
+    if (uid == null) throw const ImapException('test message not found');
+    final back = await fetch(uid, maxBytes: message.length + 4096);
+    await delete(uid);
+    if (back == null || back.length < message.length) {
+      throw const ImapException('test message came back short');
+    }
   }
 
   /// Waits up to [timeout] for new mail with IDLE (RFC 2177); returns

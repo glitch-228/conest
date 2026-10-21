@@ -36,7 +36,8 @@ import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/email/mail_socket.dart';
-import 'package:conest/src/email_carrier.dart' show defaultChatmailDomains;
+import 'package:conest/src/email_carrier.dart'
+    show EmailCarrierState, defaultChatmailDomains;
 import 'package:conest/src/ui/email_carrier_panel.dart';
 import 'package:conest/src/ui/group_call_screen.dart';
 import 'package:conest/src/ui/nostr_carrier_panel.dart';
@@ -17135,6 +17136,55 @@ void main() {
           contains('fastest first: chat.test'),
         );
       },
+    );
+
+    test(
+      'an email account on a server this network freezes moves',
+      () async {
+        final frozen = await FakeMailServer.start();
+        final other = await FakeMailServer.start();
+        addTearDown(frozen.close);
+        addTearDown(other.close);
+        final alice = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          mailConnector: (host, port, {required bool tls}) =>
+              (host == 'chat.test' ? frozen : other).connect(
+                host,
+                port,
+                tls: tls,
+              ),
+        );
+        addTearDown(alice.dispose);
+        alice.emailReadTimeout = const Duration(milliseconds: 300);
+        alice.emailTransferCheckTimeout = const Duration(seconds: 1);
+        await alice.enableChatmailCarrier('chat.test');
+        final first = alice.emailCarrierConfig!.mail;
+        // Reading (mail from before it started is never read).
+        final connected = DateTime.now().add(const Duration(seconds: 10));
+        while (alice.emailChannel?.state != EmailCarrierState.connected &&
+            DateTime.now().isBefore(connected)) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        // Now the network freezes that server's connections after 2 KB, and
+        // mail bigger than that comes.
+        frozen.freezeAfterBytes = 2000;
+        await frozen.dropConnections();
+        frozen.deliver(
+          first,
+          'Content-Type: multipart/encrypted\r\n\r\n${'x' * 20000}\r\n',
+        );
+        final deadline = DateTime.now().add(const Duration(seconds: 40));
+        while (alice.emailCarrierConfig?.mail == first &&
+            DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        final moved = alice.emailCarrierConfig!.mail;
+        expect(moved, isNot(first));
+        expect(moved, isNot(endsWith('@chat.test')));
+        expect(other.passwords, contains(moved));
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
     );
 
     test('two devices talk over chatmail when Conest relays fail', () async {

@@ -214,6 +214,94 @@ void main() {
     expect(lines.first, contains('next try in 600 s'));
   });
 
+  group('servers this network freezes', () {
+    EmailCarrierConfig chatmail() =>
+        EmailCarrierConfig.chatmail('chat.test', random: Random(7));
+
+    test(
+      'a sign-up proves the server carries real mail, and tidies up',
+      () async {
+        final lines = <String>[];
+        final config = chatmail();
+        await EmailCarrierChannel.checkLogin(
+          config,
+          connector: server.connect,
+          log: lines.add,
+        );
+        expect(
+          lines.join('\n'),
+          contains('transfer check at chat.test passed'),
+        );
+        expect(server.mailboxes[config.mail], isEmpty);
+      },
+    );
+
+    test('a server whose connections freeze after 16 KB is refused', () async {
+      server.freezeAfterBytes = 16 * 1024;
+      final started = DateTime.now();
+      await expectLater(
+        EmailCarrierChannel.checkLogin(
+          chatmail(),
+          connector: server.connect,
+          transferTimeout: const Duration(milliseconds: 500),
+        ),
+        throwsA(isA<MailServerStallsException>()),
+      );
+      expect(
+        DateTime.now().difference(started),
+        lessThan(const Duration(seconds: 4)),
+        reason: 'no LOGOUT waiting on the frozen connection',
+      );
+    });
+
+    test('a server that does not take APPEND is still used', () async {
+      server.append = false;
+      final lines = <String>[];
+      await EmailCarrierChannel.checkLogin(
+        chatmail(),
+        connector: server.connect,
+        log: lines.add,
+      );
+      expect(lines.join('\n'), contains('not possible'));
+    });
+
+    test('reading that keeps freezing is reported once, waiting longer each '
+        'time', () async {
+      final lines = <String>[];
+      var stalls = 0;
+      final config = account('bob');
+      final bob = EmailCarrierChannel(
+        config: config,
+        connector: server.connect,
+        onFrame: (_, _) {},
+        onStalls: () => stalls++,
+        log: lines.add,
+        readTimeout: const Duration(milliseconds: 300),
+      );
+      channels.add(bob);
+      bob.start();
+      await until(() => bob.state == EmailCarrierState.connected);
+      // The freeze, then mail bigger than what the network lets through.
+      server.freezeAfterBytes = 2000;
+      await server.dropConnections();
+      server.deliver(
+        config.mail,
+        'Content-Type: multipart/encrypted\r\n\r\n${'x' * 20000}\r\n',
+      );
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (stalls == 0 && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(stalls, 1);
+      final waits = [
+        for (final line in lines)
+          if (RegExp(r'next try in (\d+) s').firstMatch(line) case final m?)
+            int.parse(m.group(1)!),
+      ];
+      expect(waits.take(3), [2, 4, 8]);
+    }, timeout: const Timeout(Duration(seconds: 40)));
+  });
+
   test('a frame arrives as encrypted mail and the mail is deleted', () async {
     final aliceGot = <(String, Uint8List)>[];
     final bobGot = <(String, Uint8List)>[];

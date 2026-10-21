@@ -7520,6 +7520,7 @@ class MessengerController extends ChangeNotifier {
           config,
           connector: _mailConnector,
           log: (line) => appendDebugLog('Email sign-up: $line'),
+          transferTimeout: emailTransferCheckTimeout,
         );
         break;
       } catch (error) {
@@ -7591,6 +7592,8 @@ class MessengerController extends ChangeNotifier {
       onFrame: adapter.receiveFrame,
       onCursor: (validity, uid) => _saveEmailCursor(config.mail, validity, uid),
       onStatusChanged: notifyListeners,
+      onStalls: () => unawaited(_moveFrozenChatmailAccount()),
+      readTimeout: emailReadTimeout,
       onOtherMail: _onOtherMail,
       onOtherMailGaveUp: (_) {
         recordError(
@@ -7610,6 +7613,53 @@ class MessengerController extends ChangeNotifier {
     adapter.attach(channel);
     _emailChannel = channel;
     await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  DateTime? _lastChatmailMove;
+
+  /// How long an email command's answer may take (tests make it short).
+  @visibleForTesting
+  Duration emailReadTimeout = const Duration(seconds: 60);
+
+  /// How long a chatmail sign-up waits for its transfer check.
+  @visibleForTesting
+  Duration emailTransferCheckTimeout = EmailCarrierChannel.transferCheckTimeout;
+
+  /// The chatmail server's connections freeze on this network (reading
+  /// mail keeps stalling after a good login): the carrier moves to a
+  /// server that works here, and contacts learn the new address as with
+  /// any carrier change. Not an address the user gave, nor one Delta Chat
+  /// uses (that would change their address there); at most every 6 hours.
+  Future<void> _moveFrozenChatmailAccount() async {
+    final config = emailCarrierConfig;
+    if (config == null || !config.chatmail) return;
+    final server = config.mail.split('@').last;
+    if (deltaChatEnabled) {
+      setStatus(
+        'Email at $server stops working on this network. To move, remove '
+        'email in Settings and set it up again.',
+      );
+      return;
+    }
+    final now = _now();
+    if (_lastChatmailMove case final last?
+        when now.difference(last) < const Duration(hours: 6)) {
+      return;
+    }
+    _lastChatmailMove = now;
+    appendDebugLog('Email: moving away from $server, which this network stops');
+    try {
+      final moved = await enableChatmailCarrier(null, [
+        for (final domain in defaultChatmailDomains)
+          if (domain != server) domain,
+      ]);
+      recordError(
+        'carrier',
+        'Email moved from $server to $moved: $server stops on this network.',
+      );
+    } catch (error) {
+      recordError('carrier', 'Email could not move away from $server: $error');
+    }
   }
 
   void _saveEmailCursor(String mail, int uidValidity, int lastUid) {

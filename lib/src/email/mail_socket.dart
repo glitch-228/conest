@@ -209,6 +209,7 @@ class MailLineReader {
     Stream<Uint8List> input, {
     this.maxBufferedBytes = 64 * 1024 * 1024,
     this.maxBufferedChunks = 4096,
+    this.lineTimeout = const Duration(seconds: 60),
   }) {
     _subscription = input.listen(
       (chunk) {
@@ -296,10 +297,12 @@ class MailLineReader {
     }
   }
 
+  /// How long [readLine] waits for a line, unless told otherwise.
+  final Duration lineTimeout;
+
   /// The next line without its CRLF, decoded as Latin-1.
-  Future<String> readLine({
-    Duration timeout = const Duration(seconds: 60),
-  }) async {
+  Future<String> readLine({Duration? timeout}) async {
+    final wait = timeout ?? lineTimeout;
     var scanned = 0;
     while (true) {
       _absorb();
@@ -316,15 +319,14 @@ class MailLineReader {
       if (_pending.length > maxLineBytes) {
         throw const FormatException('Mail server line is too long.');
       }
-      await _waitForData(timeout);
+      await _waitForData(wait);
     }
   }
 
   /// The next [count] bytes.
-  Future<Uint8List> readBytes(
-    int count, {
-    Duration timeout = const Duration(seconds: 120),
-  }) async {
+  Future<Uint8List> readBytes(int count, {Duration? timeout}) async {
+    // Like a line: how long to wait for more of it, not for all of it.
+    final wait = timeout ?? lineTimeout;
     // Collect without re-copying what is already gathered.
     final out = BytesBuilder(copy: false);
     var have = 0;
@@ -337,7 +339,7 @@ class MailLineReader {
         have += take;
       }
       if (have == count) return out.takeBytes();
-      await _waitForData(timeout);
+      await _waitForData(wait);
     }
   }
 

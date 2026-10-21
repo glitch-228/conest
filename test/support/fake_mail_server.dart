@@ -41,6 +41,13 @@ class FakeMailServer {
   /// Refuses every login with this answer (a server at its limit).
   String? refuseLogin;
 
+  /// Like a network that freezes a connection after a few kilobytes: once
+  /// a connection was sent this many bytes, nothing more reaches it.
+  int? freezeAfterBytes;
+
+  /// Answers APPEND (off: refused, as a server that does not take it).
+  bool append = true;
+
   /// Tests can announce hostile sizes without allocating oversized bodies.
   final Map<int, int> reportedSizes = {};
   final List<Socket> _open = [];
@@ -234,13 +241,45 @@ class FakeMailServer {
     // that arrived since is announced when IDLE starts (by UID: a count
     // would miss mail arriving after a deletion).
     var reported = 0;
-    void reply(String line) => socket.write('$line\r\n');
+    var sent = 0;
+    void send(List<int> bytes) {
+      sent += bytes.length;
+      final limit = freezeAfterBytes;
+      if (limit != null && sent > limit) return; // frozen
+      socket.add(bytes);
+    }
+
+    void reply(String line) => send(latin1.encode('$line\r\n'));
+    // An APPEND literal being read: its tag and how much is left.
+    String? appendTag;
+    var appendLeft = 0;
+    final appended = StringBuffer();
     List<FakeMail> box() => mailboxes[user] ?? const [];
     int newest() => box().isEmpty ? 0 : box().last.uid;
     bool unannounced() => box().any((mail) => mail.uid > reported);
     reply('* OK fake IMAP ready');
     _lines(socket).listen(
       (line) async {
+        if (appendTag != null) {
+          if (appendLeft > 0) {
+            appended.write('$line\r\n');
+            appendLeft -= line.length + 2;
+            return;
+          }
+          // The line after the literal ends the command.
+          mailboxes
+              .putIfAbsent(user!, () => [])
+              .add(
+                FakeMail(
+                  _nextUid++,
+                  Uint8List.fromList(latin1.encode(appended.toString())),
+                ),
+              );
+          reply('$appendTag OK [APPENDUID 7 ${_nextUid - 1}] appended');
+          appendTag = null;
+          appended.clear();
+          return;
+        }
         if (idleTag != null) {
           if (line.toUpperCase() == 'DONE') {
             unawaited(idleWatch?.cancel());
@@ -276,6 +315,29 @@ class FakeMailServer {
           reply('* OK [UIDVALIDITY 7] ok');
           reply('* OK [UIDNEXT $_nextUid] ok');
           reply('$tag OK [READ-WRITE] selected');
+        } else if (upper.startsWith('APPEND ')) {
+          final literal = RegExp(r'\{(\d+)\}$').firstMatch(command);
+          if (!append || literal == null || user == null) {
+            reply('$tag NO APPEND not allowed');
+          } else {
+            appendTag = tag;
+            appendLeft = int.parse(literal.group(1)!);
+            reply('+ ready');
+          }
+        } else if (upper.startsWith('UID SEARCH HEADER ')) {
+          final parts = command.split(' ');
+          final name = parts[3].toLowerCase();
+          final value = parts.sublist(4).join(' ');
+          final uids = box()
+              .where(
+                (mail) => latin1
+                    .decode(mail.raw)
+                    .toLowerCase()
+                    .contains('$name: ${value.toLowerCase()}'),
+              )
+              .map((m) => m.uid);
+          reply('* SEARCH ${uids.join(' ')}'.trimRight());
+          reply('$tag OK');
         } else if (upper.startsWith('UID SEARCH UID ')) {
           reported = newest();
           final from = int.parse(command.substring(15).split(':').first);
@@ -313,10 +375,12 @@ class FakeMailServer {
               );
             } else {
               await beforeBodyFetch?.call(mail);
-              socket.write(
-                '* ${index + 1} FETCH (UID $uid BODY[] {${mail.raw.length}}\r\n',
+              send(
+                latin1.encode(
+                  '* ${index + 1} FETCH (UID $uid BODY[] {${mail.raw.length}}\r\n',
+                ),
               );
-              socket.add(mail.raw);
+              send(mail.raw);
               reply(')');
             }
           }
