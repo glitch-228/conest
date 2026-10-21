@@ -1,42 +1,50 @@
-## Conest 0.4.1 nightly (October 20)
+## Conest 0.4.1 nightly (October 21)
 
-The first nightly after the stable v0.4.0. Everything in v0.4.0 is
-included.
+Everything in the October 20 nightly is included.
 
 ### New
 
-- Clean links: when you paste or type a link, Conest removes the parts
-  that tell a site who shared it (such as YouTube's ?si= or utm_), and
-  shows "Link cleaned" with Undo above the message box. Links you open
-  from messages are cleaned the same way; the message itself is not
-  changed. This uses the ClearURLs rules, bundled with the app: nothing
-  is downloaded.
-- Links that show previews: links to posts on X, Instagram, Reddit,
-  TikTok, Bluesky and similar sites go through a service that lets other
-  apps show a preview (x.com becomes fixupx.com, for example). The
-  services come from the embed-fixer list. If one does not work, "Open
-  original link" in the message menu opens the post on its own site,
-  and that service is skipped for a day.
-- Both are in Settings > Privacy, under "Links you send and open", and
-  can be turned off.
-- Photos: the editor that opens when you pick a single photo has a new
-  "Send original as file" button. It sends the photo exactly as it is,
-  without downscaling or compression, as a file. (Send still sends a
-  smaller copy, as before.)
+- Link previews: a link in a message shows the site's title, a short
+  description and a small picture under it, and a tap opens the link.
+  In chats with your contacts and in your groups they come by
+  themselves; in other chats you tap "Show link preview" first, because
+  fetching one shows the site your IP address. In battery saver or
+  when roaming they always wait for a tap.
+- How previews are made is up to you, in Settings > Privacy > "Link
+  previews":
+  - "Each receiver fetches them" (the default);
+  - "Sent with the message", so the people you write to never contact
+    the site; their app shows it as "preview from the sender";
+  - "Both";
+  - "Off".
+  While writing, "Send without the preview" removes the one about to
+  be sent.
+- "Fetch previews through Tor" (on by default once Tor is set up):
+  sites see a Tor exit instead of your address. While Tor is not
+  connected, no previews are fetched.
 
 ### Fixes
 
-- Android: a file that could not be sent (too large for the route, or
-  no longer readable) no longer disappears when you press Send. It stays
-  above the message box, and the reason is shown.
-- A relay that cannot be reached yet no longer reports "Relay has no
-  verified identity pin".
+- Email: on networks that block or stall some mail servers, Conest no
+  longer picks a server that only seems to work. When setting up email
+  it checks that a server really passes messages through. If Conest
+  picked your server and it stops passing them later, your account
+  moves to another one that does, and your contacts learn the new
+  address by themselves.
+- Relays: when many messages are sent at once from several devices on
+  one network, a relay could start refusing them, and then nothing was
+  sent for a while, files included. Conest now waits a moment before
+  asking that relay again, and sends the rest another way meanwhile.
+  Relays running this version also allow more before refusing.
+- With LAN turned off, parts of a file could still be sent over the
+  local network and were then thrown away on arrival, so the file did
+  not finish. They now go another way.
 
 ### Please check
 
-- Pasting and typing links on all three devices, Undo, and the two
-  switches in Settings > Privacy.
-- Sending a photo with "Send original as file" on Android, to a contact
-  and in a group.
-- Sending large files on Android: if one cannot go, it should stay above
-  the message box with a reason.
+- Link previews in a chat with a contact, in a group, and in a chat
+  with someone who is not a contact (it should wait for a tap).
+- Each preview setting, and "Fetch previews through Tor" with Tor on.
+- Email on your usual networks, especially where it did not work
+  before.
+- Sending files with LAN turned off in Settings.
