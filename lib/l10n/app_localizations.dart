@@ -8590,6 +8590,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Send original as file (no compression)'**
   String get editorSendOriginalAsFile;
+
+  /// Button under a message in a chat with a stranger: fetch the link preview.
+  ///
+  /// In en, this message translates to:
+  /// **'Show link preview'**
+  String get linkPreviewShow;
+
+  /// Switch: show link previews under messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Link previews'**
+  String get settingsLinkPreviews;
+
+  /// Help under the link previews switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Shows a link\'s title and picture under the message. This device fetches them from the site, which then sees your IP address: by itself in chats with your contacts and groups (not in battery saver or when roaming), and only when you tap in other chats.'**
+  String get settingsLinkPreviewsHelp;
 }
 
 class _AppLocalizationsDelegate

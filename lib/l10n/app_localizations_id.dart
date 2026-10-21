@@ -5413,4 +5413,14 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get editorSendOriginalAsFile =>
       'Kirim asli sebagai file (tanpa kompresi)';
+
+  @override
+  String get linkPreviewShow => 'Tampilkan pratinjau tautan';
+
+  @override
+  String get settingsLinkPreviews => 'Pratinjau tautan';
+
+  @override
+  String get settingsLinkPreviewsHelp =>
+      'Menampilkan judul dan gambar tautan di bawah pesan. Perangkat ini mengambilnya dari situs, yang lalu melihat alamat IP Anda: otomatis di obrolan dengan kontak dan grup Anda (tidak saat hemat baterai atau roaming), dan di obrolan lain hanya saat Anda mengetuk.';
 }

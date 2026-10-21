@@ -391,6 +391,21 @@ class VaultStore {
     return (file: File('${vault.path}.errors'), key: await key.extractBytes());
   }
 
+  /// The encrypted side file for kept link previews, and its key (derived
+  /// from the vault key).
+  Future<({File file, List<int> key})> linkPreviewStore() async {
+    final vault = await _vaultFile();
+    final key = await Hkdf(hmac: Hmac.sha256(), outputLength: 32).deriveKey(
+      secretKey: SecretKey(await _readOrCreateVaultKey()),
+      nonce: const <int>[],
+      info: utf8.encode('conest.previews.v1'),
+    );
+    return (
+      file: File('${vault.path}.previews'),
+      key: await key.extractBytes(),
+    );
+  }
+
   /// Where the native Matrix client keeps its SQLite store (sync state and
   /// encryption keys), and the store passphrase derived from the vault key.
   Future<({String path, String passphrase})> matrixClientStore() async {

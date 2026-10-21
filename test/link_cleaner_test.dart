@@ -220,6 +220,15 @@ void main() {
     expect(read.keepLinkTracking, isTrue);
     expect(read.keepLinkSites, isTrue);
     expect(read.failedLinkFixers, {'twitter:1': '2026-10-20T12:00:00.000Z'});
+    final previewsOff = VaultSnapshot.fromJson(
+      jsonDecode(
+            jsonEncode(
+              VaultSnapshot.empty().copyWith(linkPreviewMode: 'off').toJson(),
+            ),
+          )
+          as Map<String, dynamic>,
+    );
+    expect(previewsOff.linkPreviewMode, 'off');
     // Defaults: cleaning on.
     final fresh = VaultSnapshot.fromJson(
       jsonDecode(jsonEncode(VaultSnapshot.empty().toJson()))

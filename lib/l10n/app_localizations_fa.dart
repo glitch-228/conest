@@ -5426,4 +5426,14 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get editorSendOriginalAsFile =>
       'فرستادن نسخهٔ اصلی به‌صورت فایل (بدون فشرده‌سازی)';
+
+  @override
+  String get linkPreviewShow => 'نمایش پیش‌نمایش پیوند';
+
+  @override
+  String get settingsLinkPreviews => 'پیش‌نمایش پیوندها';
+
+  @override
+  String get settingsLinkPreviewsHelp =>
+      'عنوان و تصویر پیوند را زیر پیام نشان می‌دهد. این دستگاه آن‌ها را از سایت می‌گیرد و سایت نشانی IP شما را می‌بیند: در گفتگو با مخاطبان و گروه‌هایتان به‌طور خودکار (نه در حالت صرفه‌جویی باتری یا رومینگ) و در گفتگوهای دیگر فقط با ضربهٔ شما.';
 }

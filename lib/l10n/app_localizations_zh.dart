@@ -5188,4 +5188,14 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get editorSendOriginalAsFile => '以文件发送原图（不压缩）';
+
+  @override
+  String get linkPreviewShow => '显示链接预览';
+
+  @override
+  String get settingsLinkPreviews => '链接预览';
+
+  @override
+  String get settingsLinkPreviewsHelp =>
+      '在消息下方显示链接的标题和图片。本设备从网站获取它们，网站因此会看到你的 IP 地址：在与联系人和群组的聊天中自动获取（省电模式或漫游时除外），在其他聊天中仅在你点按时获取。';
 }

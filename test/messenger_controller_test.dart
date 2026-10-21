@@ -51,6 +51,7 @@ import 'package:conest/src/ui/error_history_screen.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/ui/link_cleaning.dart';
 import 'package:conest/src/links/link_cleaner.dart';
+import 'package:conest/src/links/link_preview.dart';
 import 'package:conest/src/group_file_crypto.dart';
 import 'package:conest/src/group_call/group_call_media.dart';
 import 'package:conest/src/group_call/group_call_crypto.dart';
@@ -22568,7 +22569,12 @@ void main() {
     late MessengerController bob;
     late GroupRecord group;
     await tester.runAsync(() async {
-      alice = await _createController(relayClient: relay, displayName: 'Alice');
+      alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        // Previews come by themselves only outside battery saver.
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
       bob = await _createController(relayClient: relay, displayName: 'Bob');
       await _pairControllers(alice, bob);
       group = await alice.createGroup(
@@ -22583,6 +22589,13 @@ void main() {
       embedFixers: File(LinkFilters.embedFixersAsset).readAsStringSync(),
     );
     addTearDown(() => LinkFilters.current = null);
+    final previews = _RecordingPreviewFetcher();
+    alice.linkPreviewFetcherForTesting = previews;
+    // Their kept file is opened with real I/O, outside the test's fake
+    // time (as the app does it, on first use).
+    await tester.runAsync(
+      () => alice.loadLinkPreview(Uri.parse('https://warm.example/')),
+    );
     // Wide: the chat list stays beside the open chat.
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
@@ -22633,6 +22646,20 @@ void main() {
       alice.messagesFor(bob.identity!.deviceId).map((m) => m.body),
       contains('watch https://youtu.be/v'),
     );
+    // Its preview, under the message (the kept previews' file is real
+    // I/O: real time, then the frames it schedules).
+    Future<void> settle() async {
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 100)),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    await settle();
+    expect(find.byKey(const ValueKey('link-preview-card')), findsOneWidget);
+    expect(previews.asked.last, 'https://youtu.be/v');
 
     await tester.tap(find.text('Linkers').first);
     await tester.pump();
@@ -22641,8 +22668,12 @@ void main() {
       alice.messagesForGroup(group.groupId).map((m) => m.body),
       contains('https://fixupx.com/a/status/1'),
     );
-    // The group's history catch-up timer, started by opening it.
-    await tester.pump(const Duration(seconds: 2));
+    await settle();
+    expect(find.byKey(const ValueKey('link-preview-card')), findsOneWidget);
+    expect(previews.asked, contains('https://fixupx.com/a/status/1'));
+    // The group's history catch-up timer, started by opening it, and the
+    // kept previews' write (5 s after the last).
+    await tester.pump(const Duration(seconds: 6));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -22686,6 +22717,57 @@ void main() {
       expect(again.linkPolicy.failedServices, isEmpty);
     },
   );
+
+  test('link previews: off, saver, and fetched without tracking', () async {
+    final fetcher = _RecordingPreviewFetcher();
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+    alice.linkPreviewFetcherForTesting = fetcher;
+    LinkFilters.current = LinkFilters.fromJson(
+      clearUrls: File(LinkFilters.clearUrlsAsset).readAsStringSync(),
+      embedFixers: File(LinkFilters.embedFixersAsset).readAsStringSync(),
+    );
+    addTearDown(() => LinkFilters.current = null);
+
+    expect(alice.linkPreviewsEnabled, isTrue);
+    final preview = await alice.loadLinkPreview(
+      Uri.parse('https://news.example/a?utm_source=x&id=3'),
+    );
+    expect(preview?.title, 'Fetched');
+    // Fetched from the address without its tracking.
+    expect(fetcher.asked, ['https://news.example/a?id=3']);
+    expect(
+      alice
+          .cachedLinkPreview(
+            Uri.parse('https://news.example/a?utm_source=x&id=3'),
+          )
+          ?.title,
+      'Fetched',
+    );
+
+    await alice.setLinkPreviewsEnabled(false);
+    expect(alice.linkPreviewsEnabled, isFalse);
+    expect(alice.linkPreviewsAutomaticNow, isFalse);
+    expect(
+      await alice.loadLinkPreview(Uri.parse('https://other.example/')),
+      isNull,
+    );
+    expect(fetcher.asked, hasLength(1));
+  });
+
+  test('link previews do not come by themselves in battery saver', () async {
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+      energyPolicy: EnergyPolicy.fixed(EnergyMode.saver),
+    );
+    addTearDown(alice.dispose);
+    expect(alice.linkPreviewsEnabled, isTrue);
+    expect(alice.linkPreviewsAutomaticNow, isFalse);
+  });
 
   testWidgets(
     'the composer empties as soon as a message is sent, before delivery',
@@ -26570,4 +26652,18 @@ class _FakeBitchatPhone {
   }
 
   Future<void> stop() => _node.stop();
+}
+
+class _RecordingPreviewFetcher extends LinkPreviewFetcher {
+  final asked = <String>[];
+
+  @override
+  Future<LinkPreview?> fetch(
+    Uri url, {
+    int maxImage = LinkPreviewFetcher.maxImageBytes,
+    DateTime Function() now = DateTime.now,
+  }) async {
+    asked.add(url.toString());
+    return LinkPreview(url: url, fetchedAt: now().toUtc(), title: 'Fetched');
+  }
 }

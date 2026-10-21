@@ -27,6 +27,8 @@ dependencies:
   super_clipboard: ^0.9.1
   photo_manager: ^3.6.0
   image: ^4.5.0
+  # Link previews: reading a page's Open Graph tags.
+  html: ^0.15.6
   crop_your_image: ^2.0.0
   desktop_drop: ^0.6.0
   cross_file: ^0.3.4+1

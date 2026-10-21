@@ -5557,4 +5557,14 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get editorSendOriginalAsFile => 'إرسال الأصل كملف (دون ضغط)';
+
+  @override
+  String get linkPreviewShow => 'عرض معاينة الرابط';
+
+  @override
+  String get settingsLinkPreviews => 'معاينات الروابط';
+
+  @override
+  String get settingsLinkPreviewsHelp =>
+      'يعرض عنوان الرابط وصورته تحت الرسالة. يجلبها هذا الجهاز من الموقع، فيرى الموقع عنوان IP الخاص بك: تلقائيًا في المحادثات مع جهات اتصالك ومجموعاتك (ليس في وضع توفير البطارية أو أثناء التجوال)، وفي المحادثات الأخرى عند النقر فقط.';
 }

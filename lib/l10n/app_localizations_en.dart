@@ -5426,4 +5426,14 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get editorSendOriginalAsFile =>
       'Send original as file (no compression)';
+
+  @override
+  String get linkPreviewShow => 'Show link preview';
+
+  @override
+  String get settingsLinkPreviews => 'Link previews';
+
+  @override
+  String get settingsLinkPreviewsHelp =>
+      'Shows a link\'s title and picture under the message. This device fetches them from the site, which then sees your IP address: by itself in chats with your contacts and groups (not in battery saver or when roaming), and only when you tap in other chats.';
 }

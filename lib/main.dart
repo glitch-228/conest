@@ -81,6 +81,7 @@ import 'src/ui/clipboard_image.dart';
 import 'src/ui/chat_paste_scope.dart';
 import 'src/ui/composer_keys.dart';
 import 'src/ui/link_cleaning.dart';
+import 'src/ui/link_preview_card.dart';
 import 'src/links/link_cleaner.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
@@ -9678,6 +9679,20 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                           height: 1.35,
                         ),
                       ),
+                    if (message.body.isNotEmpty)
+                      LinkPreviewCard(
+                        text: message.body,
+                        source: MessengerLinkPreviews(controller),
+                        // A group this device is in.
+                        trusted: true,
+                        openUrl: controller.openExternalUrl,
+                        accent: outbound
+                            ? palette.outboundText
+                            : palette.primary,
+                        textColor: outbound
+                            ? palette.outboundText
+                            : palette.inboundText,
+                      ),
                     if (message.reactions.isNotEmpty) ...[
                       const SizedBox(height: 6),
                       Wrap(
@@ -11614,6 +11629,23 @@ class _ChatPanelState extends State<_ChatPanel> {
                               : palette.inboundText,
                           height: 1.35,
                         ),
+                      ),
+                    if (message.body.isNotEmpty)
+                      LinkPreviewCard(
+                        text: message.body,
+                        source: MessengerLinkPreviews(controller),
+                        // An accepted contact, or Saved messages; a request
+                        // waits for a tap.
+                        trusted:
+                            contact.canSendOutbound ||
+                            contact.deviceId == controller.identity?.deviceId,
+                        openUrl: controller.openExternalUrl,
+                        accent: outbound
+                            ? palette.outboundText
+                            : palette.primary,
+                        textColor: outbound
+                            ? palette.outboundText
+                            : palette.inboundText,
                       ),
                     if (message.reactions.isNotEmpty) ...[
                       const SizedBox(height: 6),
@@ -15421,6 +15453,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               onChanged: (value) => unawaited(
                                 widget.controller
                                     .setEmbedFriendlyLinks(value)
+                                    .then((_) {
+                                      if (mounted) setState(() {});
+                                    }),
+                              ),
+                            ),
+                            SwitchListTile.adaptive(
+                              key: const ValueKey('settings-link-previews'),
+                              contentPadding: EdgeInsets.zero,
+                              value: widget.controller.linkPreviewsEnabled,
+                              title: Text(l10nOf(context).settingsLinkPreviews),
+                              subtitle: Text(
+                                l10nOf(context).settingsLinkPreviewsHelp,
+                              ),
+                              onChanged: (value) => unawaited(
+                                widget.controller
+                                    .setLinkPreviewsEnabled(value)
                                     .then((_) {
                                       if (mounted) setState(() {});
                                     }),

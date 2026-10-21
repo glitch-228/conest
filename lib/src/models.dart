@@ -5022,6 +5022,7 @@ class VaultSnapshot {
     this.keepLinkTracking = false,
     this.keepLinkSites = false,
     this.failedLinkFixers = const <String, String>{},
+    this.linkPreviewMode,
     this.userMode,
     this.userModeChosen = true,
     this.localeCode,
@@ -5164,6 +5165,10 @@ class VaultSnapshot {
   /// Embed-fixing services that failed ("twitter:1" → when, UTC ISO).
   final Map<String, String> failedLinkFixers;
 
+  /// How link previews are made: 'receiver' (this device fetches them;
+  /// the default, null) or 'off'.
+  final String? linkPreviewMode;
+
   /// What the app is used as; null until chosen (an identity from before
   /// app modes reads as [AppMode.both] where Matrix exists).
   final AppMode? appMode;
@@ -5244,6 +5249,7 @@ class VaultSnapshot {
     bool? keepLinkTracking,
     bool? keepLinkSites,
     Map<String, String>? failedLinkFixers,
+    String? linkPreviewMode,
     UserMode? userMode,
     bool? userModeChosen,
     String? localeCode,
@@ -5308,6 +5314,7 @@ class VaultSnapshot {
       keepLinkTracking: keepLinkTracking ?? this.keepLinkTracking,
       keepLinkSites: keepLinkSites ?? this.keepLinkSites,
       failedLinkFixers: failedLinkFixers ?? this.failedLinkFixers,
+      linkPreviewMode: linkPreviewMode ?? this.linkPreviewMode,
       userMode: userMode ?? this.userMode,
       userModeChosen: userModeChosen ?? this.userModeChosen,
       localeCode: clearLocaleCode ? null : localeCode ?? this.localeCode,
@@ -5395,6 +5402,7 @@ class VaultSnapshot {
       if (keepLinkTracking) 'keepLinkTracking': true,
       if (keepLinkSites) 'keepLinkSites': true,
       if (failedLinkFixers.isNotEmpty) 'failedLinkFixers': failedLinkFixers,
+      'linkPreviewMode': ?linkPreviewMode,
       if (userMode != null) 'userMode': userMode!.name,
       if (!userModeChosen) 'userModeChosen': false,
       if (localeCode != null) 'localeCode': localeCode,
@@ -5473,6 +5481,10 @@ class VaultSnapshot {
             in (json['failedLinkFixers'] as Map<String, dynamic>? ?? const {})
                 .entries)
           if (entry.value case final String at) entry.key: at,
+      },
+      linkPreviewMode: switch (json['linkPreviewMode']) {
+        final String mode when mode.length <= 16 => mode,
+        _ => null,
       },
       userMode: UserMode.values.asNameMap()[json['userMode']],
       userModeChosen: json['userModeChosen'] != false,

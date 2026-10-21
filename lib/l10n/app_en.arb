@@ -8148,5 +8148,17 @@
   "editorSendOriginalAsFile": "Send original as file (no compression)",
   "@editorSendOriginalAsFile": {
     "description": "Image editor button: send the picked image unchanged, as a file, instead of the downscaled photo."
+  },
+  "linkPreviewShow": "Show link preview",
+  "@linkPreviewShow": {
+    "description": "Button under a message in a chat with a stranger: fetch the link preview."
+  },
+  "settingsLinkPreviews": "Link previews",
+  "@settingsLinkPreviews": {
+    "description": "Switch: show link previews under messages."
+  },
+  "settingsLinkPreviewsHelp": "Shows a link's title and picture under the message. This device fetches them from the site, which then sees your IP address: by itself in chats with your contacts and groups (not in battery saver or when roaming), and only when you tap in other chats.",
+  "@settingsLinkPreviewsHelp": {
+    "description": "Help under the link previews switch."
   }
 }

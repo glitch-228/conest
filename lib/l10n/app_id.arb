@@ -1404,5 +1404,8 @@
   "linkCleaned": "Tautan dibersihkan",
   "linkCleanedUndo": "Urungkan",
   "menuOpenOriginalLink": "Buka tautan asli",
-  "editorSendOriginalAsFile": "Kirim asli sebagai file (tanpa kompresi)"
+  "editorSendOriginalAsFile": "Kirim asli sebagai file (tanpa kompresi)",
+  "linkPreviewShow": "Tampilkan pratinjau tautan",
+  "settingsLinkPreviews": "Pratinjau tautan",
+  "settingsLinkPreviewsHelp": "Menampilkan judul dan gambar tautan di bawah pesan. Perangkat ini mengambilnya dari situs, yang lalu melihat alamat IP Anda: otomatis di obrolan dengan kontak dan grup Anda (tidak saat hemat baterai atau roaming), dan di obrolan lain hanya saat Anda mengetuk."
 }

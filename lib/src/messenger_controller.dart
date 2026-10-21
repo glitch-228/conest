@@ -48,6 +48,8 @@ import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
 import 'media_sanitizer.dart';
 import 'links/link_cleaner.dart';
+import 'links/link_preview.dart';
+import 'links/link_preview_cache.dart';
 import 'file_metadata_consent.dart';
 import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
@@ -6072,6 +6074,85 @@ class MessengerController extends ChangeNotifier {
   Future<void> setEmbedFriendlyLinks(bool value) async {
     _snapshot = _snapshot.copyWith(keepLinkSites: !value);
     await _saveSnapshotSilently(notify: true);
+  }
+
+  /// Whether link previews are made (by this device, from the site).
+  bool get linkPreviewsEnabled => _snapshot.linkPreviewMode != 'off';
+
+  Future<void> setLinkPreviewsEnabled(bool value) async {
+    _snapshot = _snapshot.copyWith(linkPreviewMode: value ? 'receiver' : 'off');
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// Whether a preview may be fetched without being asked: they are on,
+  /// and neither battery saver, roaming nor being offline says otherwise.
+  /// (Strangers' chats always wait for a tap: a fetch shows the site this
+  /// device's address.)
+  bool get linkPreviewsAutomaticNow =>
+      linkPreviewsEnabled &&
+      _energyPolicy.modeFor(_networkCostClass) != EnergyMode.saver &&
+      _networkCostClass != NetworkCostClass.roaming &&
+      _networkCostClass != NetworkCostClass.offline;
+
+  LinkPreviews? _linkPreviews;
+  Future<LinkPreviews>? _linkPreviewsOpening;
+
+  Future<LinkPreviews> _openLinkPreviews() =>
+      _linkPreviewsOpening ??= () async {
+        final previews = await () async {
+          try {
+            final store = await _vaultStore.linkPreviewStore();
+            return LinkPreviews(
+              fetcher: _linkPreviewFetcher ?? LinkPreviewFetcher(),
+              file: store.file,
+              key: store.key,
+              now: _now,
+              onServiceFailed: (service) =>
+                  unawaited(noteLinkFixerFailed(service)),
+            );
+          } catch (_) {
+            // No place to keep them (an in-memory vault): this run only.
+            return LinkPreviews(
+              fetcher: _linkPreviewFetcher ?? LinkPreviewFetcher(),
+              now: _now,
+              onServiceFailed: (service) =>
+                  unawaited(noteLinkFixerFailed(service)),
+            );
+          }
+        }();
+        await previews.load();
+        return _linkPreviews = previews;
+      }();
+
+  /// For tests: how previews are fetched.
+  @visibleForTesting
+  LinkPreviewFetcher? linkPreviewFetcherForTesting;
+  LinkPreviewFetcher? get _linkPreviewFetcher => linkPreviewFetcherForTesting;
+
+  /// The address a preview of [url] is fetched from: without tracking.
+  Uri _previewAddress(Uri url) =>
+      LinkFilters.current?.forOpening(url, linkPolicy) ?? url;
+
+  /// The kept preview of [url], if there is one (no fetch).
+  LinkPreview? cachedLinkPreview(Uri url) =>
+      _linkPreviews?.cached(_previewAddress(url));
+
+  /// The preview of [url], kept or fetched now; null when previews are off
+  /// or the page has none. Links to an embed-fixing service fall back to
+  /// its alternatives.
+  Future<LinkPreview?> loadLinkPreview(Uri url) async {
+    if (!linkPreviewsEnabled) return null;
+    final previews = await _openLinkPreviews();
+    final policy = linkPolicy;
+    return previews.preview(
+      _previewAddress(url),
+      fixers: LinkFilters.current?.embedFixers,
+      failedServices: policy.failedServices,
+      // On a metered network, smaller pictures.
+      maxImage: _networkCostClass == NetworkCostClass.metered
+          ? 512 * 1024
+          : LinkPreviewFetcher.maxImageBytes,
+    );
   }
 
   /// An embed-fixing service ("twitter:1") did not work: links skip it
@@ -34856,7 +34937,7 @@ class MessengerController extends ChangeNotifier {
     if (_pendingSaveCompleter != null) {
       await _saveSnapshotSilently(notify: false);
     }
-    await Future.wait(_activeSnapshotWrites.toList());
+    await Future.wait([..._activeSnapshotWrites, ?_linkPreviews?.flush()]);
   }
 
   void savePendingChangesForLifecycle() {
@@ -35146,6 +35227,7 @@ class MessengerController extends ChangeNotifier {
   @override
   void dispose() {
     _matrixClient?.dispose();
+    _linkPreviews?.dispose();
     for (final subscription in _carrierReceiptSubscriptions.values) {
       unawaited(subscription.cancel());
     }
