@@ -6198,6 +6198,30 @@ class MessengerController extends ChangeNotifier {
 
   LinkPreviews? _linkPreviews;
   Future<LinkPreviews>? _linkPreviewsOpening;
+  LinkPreviewFetcher? _linkPreviewFetcherInUse;
+
+  /// Previews go through Tor when it is set up (unless turned off here):
+  /// the sites then see a Tor exit, not this device.
+  bool get linkPreviewsThroughTor => !_snapshot.linkPreviewsWithoutTor;
+
+  Future<void> setLinkPreviewsThroughTor(bool value) async {
+    _snapshot = _snapshot.copyWith(linkPreviewsWithoutTor: !value);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// How previews are fetched now: through Tor's local entrance, directly
+  /// (null), or not at all for now (false: Tor is set up for previews but
+  /// not connected yet; never directly instead).
+  Future<Object?> _previewRoute() async {
+    final torSetUp =
+        torCarrierConfig != null && !isCarrierPaused(TransportKind.tor);
+    if (!linkPreviewsThroughTor || !torSetUp) return null;
+    try {
+      return await _torChannel?.webProxy() ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<LinkPreviews> _openLinkPreviews() =>
       _linkPreviewsOpening ??= () async {
@@ -6205,7 +6229,8 @@ class MessengerController extends ChangeNotifier {
           try {
             final store = await _vaultStore.linkPreviewStore();
             return LinkPreviews(
-              fetcher: _linkPreviewFetcher ?? LinkPreviewFetcher(),
+              fetcher: _linkPreviewFetcherInUse ??=
+                  _linkPreviewFetcher ?? LinkPreviewFetcher(),
               file: store.file,
               key: store.key,
               now: _now,
@@ -6215,7 +6240,8 @@ class MessengerController extends ChangeNotifier {
           } catch (_) {
             // No place to keep them (an in-memory vault): this run only.
             return LinkPreviews(
-              fetcher: _linkPreviewFetcher ?? LinkPreviewFetcher(),
+              fetcher: _linkPreviewFetcherInUse ??=
+                  _linkPreviewFetcher ?? LinkPreviewFetcher(),
               now: _now,
               onServiceFailed: (service) =>
                   unawaited(noteLinkFixerFailed(service)),
@@ -6245,6 +6271,12 @@ class MessengerController extends ChangeNotifier {
   Future<LinkPreview?> loadLinkPreview(Uri url) async {
     if (!linkPreviewsEnabled) return null;
     final previews = await _openLinkPreviews();
+    final route = await _previewRoute();
+    if (route == false) {
+      // Kept ones still show; nothing is fetched until Tor is there.
+      return previews.cached(_previewAddress(url));
+    }
+    _linkPreviewFetcherInUse?.viaTor = route is TorWebProxy ? route : null;
     final policy = linkPolicy;
     return previews.preview(
       _previewAddress(url),

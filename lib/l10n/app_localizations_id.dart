@@ -5439,4 +5439,11 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get linkPreviewRemove => 'Kirim tanpa pratinjau';
+
+  @override
+  String get settingsLinkPreviewsTor => 'Ambil pratinjau lewat Tor';
+
+  @override
+  String get settingsLinkPreviewsTorHelp =>
+      'Saat Tor disiapkan, situs melihat simpul keluar Tor, bukan alamat Anda, dan tidak ada yang dicari tentang tautan di jaringan Anda. Selama Tor belum terhubung, pratinjau tidak diambil.';
 }

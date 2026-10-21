@@ -23427,6 +23427,51 @@ void main() {
   });
 
   group('Tor carrier', () {
+    test('link previews go through Tor when it is set up, and wait while it '
+        'is not connected', () async {
+      final tor = FakeTorNetwork()..blocked = true;
+      final api = tor.device();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        torApi: api,
+      );
+      addTearDown(alice.dispose);
+      final fetcher = _RoutePreviewFetcher();
+      alice.linkPreviewFetcherForTesting = fetcher;
+      await alice.enableTorCarrier();
+      // Set up, not connected (blocked): nothing is fetched, not directly.
+      expect(
+        await alice.loadLinkPreview(Uri.parse('https://a.example/')),
+        isNull,
+      );
+      expect(fetcher.routes, isEmpty);
+
+      // Connected: through its local entrance, with credentials made here.
+      tor.blocked = false;
+      api.webProxyPort = 4321;
+      await alice.setCarrierPaused(TransportKind.tor, true);
+      await alice.setCarrierPaused(TransportKind.tor, false);
+      for (
+        var i = 0;
+        i < 100 && alice.torChannel?.state != TorCarrierState.connected;
+        i++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(alice.torChannel?.state, TorCarrierState.connected);
+      await alice.loadLinkPreview(Uri.parse('https://b.example/'));
+      expect(fetcher.routes.single?.port, 4321);
+      final (user, password) = api.webProxyCredentials.single;
+      expect(user.length, greaterThanOrEqualTo(16));
+      expect(password, isNot(user));
+
+      // Turned off here: directly.
+      await alice.setLinkPreviewsThroughTor(false);
+      await alice.loadLinkPreview(Uri.parse('https://c.example/'));
+      expect(fetcher.routes.last, isNull);
+    });
+
     test('a Tor that cannot start says why', () async {
       final tor = FakeTorNetwork()..blocked = true;
       final alice = await _createController(
@@ -26907,5 +26952,19 @@ class _RecordingPreviewFetcher extends LinkPreviewFetcher {
   }) async {
     asked.add(url.toString());
     return LinkPreview(url: url, fetchedAt: now().toUtc(), title: 'Fetched');
+  }
+}
+
+class _RoutePreviewFetcher extends LinkPreviewFetcher {
+  final routes = <({int port, String user, String password})?>[];
+
+  @override
+  Future<LinkPreview?> fetch(
+    Uri url, {
+    int maxImage = LinkPreviewFetcher.maxImageBytes,
+    DateTime Function() now = DateTime.now,
+  }) async {
+    routes.add(viaTor);
+    return LinkPreview(url: url, fetchedAt: now().toUtc(), title: 'T');
   }
 }

@@ -1412,5 +1412,7 @@
   "linkPreviewModeSender": "تُرسل مع الرسالة (لا يتصل المستلمون بالموقع)",
   "linkPreviewModeBoth": "كلاهما",
   "linkPreviewModeOff": "إيقاف",
-  "linkPreviewRemove": "إرسال بلا معاينة"
+  "linkPreviewRemove": "إرسال بلا معاينة",
+  "settingsLinkPreviewsTor": "جلب المعاينات عبر Tor",
+  "settingsLinkPreviewsTorHelp": "عند إعداد Tor ترى المواقع مخرج Tor لا عنوانك، ولا يُستعلم عن شيء من الرابط على شبكتك. ما دام Tor غير متصل لا تُجلب معاينات."
 }

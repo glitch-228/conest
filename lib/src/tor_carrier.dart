@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -157,6 +158,11 @@ abstract interface class TorApi {
   Future<void> send(String onion, Uint8List frame);
   Future<void> stop();
 
+  /// Opens (or returns) a local HTTP CONNECT proxy into Tor, on 127.0.0.1,
+  /// answering only [user] and [password]; returns its port. For this
+  /// app's own web requests (link previews), so sites see a Tor exit.
+  Future<int> openWebProxy(String user, String password);
+
   /// `frame` events (base64 `data`) and `bootstrap` progress.
   Stream<Map<String, dynamic>> get events;
 }
@@ -209,7 +215,23 @@ class NativeTorApi implements TorApi {
 
   @override
   Future<void> stop() => _queue.request('stop');
+
+  @override
+  Future<int> openWebProxy(String user, String password) async {
+    final value = await _queue.request('proxy', {
+      'user': user,
+      'password': password,
+    }, const Duration(seconds: 20));
+    final port = value is Map ? value['port'] : null;
+    if (port is! int || port <= 0 || port > 65535) {
+      throw const NativeQueueException('No proxy port.');
+    }
+    return port;
+  }
 }
+
+/// Where this app's own web requests enter Tor (see [TorApi.openWebProxy]).
+typedef TorWebProxy = ({int port, String user, String password});
 
 enum TorCarrierState { stopped, connecting, connected, failed }
 
@@ -274,10 +296,30 @@ class TorCarrierChannel implements ManagedCarrierChannel {
     unawaited(_run(++_generation));
   }
 
+  TorWebProxy? _webProxy;
+
+  /// The local entrance into Tor for this app's own web requests, once Tor
+  /// is connected (null before); its credentials are made here, at random.
+  Future<TorWebProxy?> webProxy() async {
+    if (!_started || _state != TorCarrierState.connected) return null;
+    final known = _webProxy;
+    if (known != null) return known;
+    final random = Random.secure();
+    String secret() => List.generate(
+      24,
+      (_) => 'abcdefghijklmnopqrstuvwxyz0123456789'[random.nextInt(36)],
+    ).join();
+    final user = secret();
+    final password = secret();
+    final port = await _api.openWebProxy(user, password);
+    return _webProxy = (port: port, user: user, password: password);
+  }
+
   @override
   Future<void> stop() async {
     _started = false;
     _generation++;
+    _webProxy = null;
     await _events?.cancel();
     _events = null;
     try {

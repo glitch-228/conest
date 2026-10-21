@@ -15525,6 +15525,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 );
                               },
                             ),
+                            SwitchListTile.adaptive(
+                              key: const ValueKey('settings-link-previews-tor'),
+                              contentPadding: EdgeInsets.zero,
+                              value: widget.controller.linkPreviewsThroughTor,
+                              title: Text(
+                                l10nOf(context).settingsLinkPreviewsTor,
+                              ),
+                              subtitle: Text(
+                                l10nOf(context).settingsLinkPreviewsTorHelp,
+                              ),
+                              onChanged: (value) => unawaited(
+                                widget.controller
+                                    .setLinkPreviewsThroughTor(value)
+                                    .then((_) {
+                                      if (mounted) setState(() {});
+                                    }),
+                              ),
+                            ),
                             const SizedBox(height: 12),
                             SelectableText(
                               'account ${identity.accountId}\ndevice ${identity.deviceId}\nsafety ${identity.safetyNumber}',

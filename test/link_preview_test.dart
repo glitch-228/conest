@@ -10,6 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:archive/archive.dart' show getCrc32;
 import 'package:image/image.dart' as img;
 
+import 'support/test_tls.dart';
+
 void main() {
   // The engine's picture decoder; and real HTTP to the local test server
   // (the test binding otherwise answers every request with 400).
@@ -345,6 +347,97 @@ void main() {
         Uri.parse('http://site.example:$port/long'),
       );
       expect(preview!.title, 'Top');
+    });
+  });
+
+  group('through Tor', () {
+    late HttpServer site;
+    late ServerSocket proxy;
+    final connects = <String>[];
+    final auths = <String?>[];
+    const user = 'useruseruseruseruser';
+    const password = 'passpasspasspasspass';
+
+    setUp(() async {
+      connects.clear();
+      auths.clear();
+      site = await HttpServer.bindSecure(
+        InternetAddress.loopbackIPv4,
+        0,
+        testServerContext(),
+      );
+      site.listen((request) {
+        request.response
+          ..headers.contentType = ContentType.html
+          ..write('<title>Through Tor</title>');
+        unawaited(request.response.close());
+      });
+      // As tor_proxy.rs: CONNECT only, with the credentials; the tunnel
+      // goes to the test site whatever host was asked for.
+      proxy = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      proxy.listen((client) {
+        final head = BytesBuilder();
+        late StreamSubscription<List<int>> reading;
+        reading = client.listen((chunk) async {
+          head.add(chunk);
+          final text = latin1.decode(head.toBytes());
+          if (!text.contains('\r\n\r\n')) return;
+          reading.pause();
+          final lines = text.split('\r\n');
+          connects.add(lines.first);
+          auths.add(
+            lines
+                .where(
+                  (l) => l.toLowerCase().startsWith('proxy-authorization:'),
+                )
+                .map((l) => l.substring(20).trim())
+                .firstOrNull,
+          );
+          final upstream = await Socket.connect(
+            InternetAddress.loopbackIPv4,
+            site.port,
+          );
+          client.add(
+            latin1.encode('HTTP/1.1 200 Connection established\r\n\r\n'),
+          );
+          upstream.listen(client.add, onDone: client.destroy, onError: (_) {});
+          reading.onData(upstream.add);
+          reading.resume();
+        }, onError: (_) {});
+      });
+    });
+    tearDown(() async {
+      await site.close(force: true);
+      await proxy.close();
+    });
+
+    LinkPreviewFetcher torFetcher() => LinkPreviewFetcher(
+      lookup: (_) => fail('no lookup here over Tor'),
+      securityContext: testClientContext(),
+    )..viaTor = (port: proxy.port, user: user, password: password);
+
+    test('a page is fetched through the tunnel, with no lookup here', () async {
+      final preview = await torFetcher().fetch(
+        Uri.parse('https://site.example/post'),
+      );
+      expect(preview?.title, 'Through Tor');
+      expect(connects.single, 'CONNECT site.example:443 HTTP/1.1');
+      expect(
+        auths.single,
+        'Basic ${base64Encode(utf8.encode('$user:$password'))}',
+      );
+    });
+
+    test('over Tor, plain http and private addresses are refused', () async {
+      await expectLater(
+        torFetcher().fetch(Uri.parse('http://site.example/post')),
+        throwsA(isA<LinkPreviewException>()),
+      );
+      await expectLater(
+        torFetcher().fetch(Uri.parse('https://10.0.0.1/admin')),
+        throwsA(isA<LinkPreviewException>()),
+      );
+      expect(connects, isEmpty);
     });
   });
 

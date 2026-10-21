@@ -196,6 +196,11 @@ class LinkPreviewFetcher {
 
   /// Ports a link may name; null allows any (tests).
   final Set<int>? allowedPorts;
+
+  /// When set, requests go through Tor (a local HTTP CONNECT proxy, see
+  /// TorApi.openWebProxy): https only, names looked up by the Tor exit
+  /// (none here), the site sees the exit, not this device.
+  ({int port, String user, String password})? viaTor;
   final SecurityContext? _securityContext;
 
   /// The preview of [url]; null when the page has nothing to show. Throws
@@ -252,7 +257,16 @@ class LinkPreviewFetcher {
       if (allowedPorts case final ports? when !ports.contains(current.port)) {
         throw LinkPreviewException('port ${current.port} not allowed');
       }
-      final address = await _checkedAddress(current.host);
+      final tor = viaTor;
+      if (tor != null && current.scheme != 'https') {
+        throw const LinkPreviewException('only https over Tor');
+      }
+      // Over Tor, a name is looked up by the exit (a lookup here would show
+      // the network what is being fetched); an address written as such is
+      // still checked.
+      final address = tor == null
+          ? await _checkedAddress(current.host)
+          : await _checkedLiteral(current.host);
       final client = HttpClient(context: _securityContext)
         ..connectionTimeout = timeout
         ..idleTimeout = const Duration(seconds: 1)
@@ -268,24 +282,30 @@ class LinkPreviewFetcher {
         overdue = true;
         client.close(force: true);
       });
+      if (tor != null) {
+        client.findProxy = (_) =>
+            'PROXY ${tor.user}:${tor.password}@127.0.0.1:${tor.port}';
+      }
       // To the address that was checked, never a second lookup.
-      client.connectionFactory = (uri, proxyHost, proxyPort) async {
-        final port = uri.hasPort
-            ? uri.port
-            : (uri.scheme == 'https' ? 443 : 80);
-        final task = await Socket.startConnect(address, port);
-        if (uri.scheme != 'https') return task;
-        return ConnectionTask.fromSocket(
-          task.socket.then(
-            (socket) => SecureSocket.secure(
-              socket,
-              host: uri.host,
-              context: _securityContext,
+      if (address != null) {
+        client.connectionFactory = (uri, proxyHost, proxyPort) async {
+          final port = uri.hasPort
+              ? uri.port
+              : (uri.scheme == 'https' ? 443 : 80);
+          final task = await Socket.startConnect(address, port);
+          if (uri.scheme != 'https') return task;
+          return ConnectionTask.fromSocket(
+            task.socket.then(
+              (socket) => SecureSocket.secure(
+                socket,
+                host: uri.host,
+                context: _securityContext,
+              ),
             ),
-          ),
-          task.cancel,
-        );
-      };
+            task.cancel,
+          );
+        };
+      }
       try {
         final request = await client.getUrl(current).timeout(timeout);
         request
@@ -353,6 +373,18 @@ class LinkPreviewFetcher {
       }
     }
     throw const LinkPreviewException('too many redirects');
+  }
+
+  /// Over Tor: an address written in the link must be public; a name is
+  /// left to the exit (null).
+  Future<InternetAddress?> _checkedLiteral(String host) async {
+    final literal = InternetAddress.tryParse(
+      host.replaceAll(RegExp(r'^\[|\]$'), ''),
+    );
+    if (literal != null && !_isAllowed(literal)) {
+      throw const LinkPreviewException('not a public address');
+    }
+    return null;
   }
 
   Future<InternetAddress> _checkedAddress(String host) async {

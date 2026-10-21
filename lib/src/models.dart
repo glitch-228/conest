@@ -5034,6 +5034,7 @@ class VaultSnapshot {
     this.keepLinkSites = false,
     this.failedLinkFixers = const <String, String>{},
     this.linkPreviewMode,
+    this.linkPreviewsWithoutTor = false,
     this.userMode,
     this.userModeChosen = true,
     this.localeCode,
@@ -5180,6 +5181,10 @@ class VaultSnapshot {
   /// the default, null) or 'off'.
   final String? linkPreviewMode;
 
+  /// Fetch link previews directly even when Tor is set up. Off (the
+  /// default): through Tor then.
+  final bool linkPreviewsWithoutTor;
+
   /// What the app is used as; null until chosen (an identity from before
   /// app modes reads as [AppMode.both] where Matrix exists).
   final AppMode? appMode;
@@ -5261,6 +5266,7 @@ class VaultSnapshot {
     bool? keepLinkSites,
     Map<String, String>? failedLinkFixers,
     String? linkPreviewMode,
+    bool? linkPreviewsWithoutTor,
     UserMode? userMode,
     bool? userModeChosen,
     String? localeCode,
@@ -5326,6 +5332,8 @@ class VaultSnapshot {
       keepLinkSites: keepLinkSites ?? this.keepLinkSites,
       failedLinkFixers: failedLinkFixers ?? this.failedLinkFixers,
       linkPreviewMode: linkPreviewMode ?? this.linkPreviewMode,
+      linkPreviewsWithoutTor:
+          linkPreviewsWithoutTor ?? this.linkPreviewsWithoutTor,
       userMode: userMode ?? this.userMode,
       userModeChosen: userModeChosen ?? this.userModeChosen,
       localeCode: clearLocaleCode ? null : localeCode ?? this.localeCode,
@@ -5414,6 +5422,7 @@ class VaultSnapshot {
       if (keepLinkSites) 'keepLinkSites': true,
       if (failedLinkFixers.isNotEmpty) 'failedLinkFixers': failedLinkFixers,
       'linkPreviewMode': ?linkPreviewMode,
+      if (linkPreviewsWithoutTor) 'linkPreviewsWithoutTor': true,
       if (userMode != null) 'userMode': userMode!.name,
       if (!userModeChosen) 'userModeChosen': false,
       if (localeCode != null) 'localeCode': localeCode,
@@ -5493,6 +5502,7 @@ class VaultSnapshot {
                 .entries)
           if (entry.value case final String at) entry.key: at,
       },
+      linkPreviewsWithoutTor: json['linkPreviewsWithoutTor'] == true,
       linkPreviewMode: switch (json['linkPreviewMode']) {
         final String mode when mode.length <= 16 => mode,
         _ => null,

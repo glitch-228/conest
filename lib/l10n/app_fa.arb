@@ -1412,5 +1412,7 @@
   "linkPreviewModeSender": "همراه پیام فرستاده می‌شود (گیرندگان با سایت تماس نمی‌گیرند)",
   "linkPreviewModeBoth": "هر دو",
   "linkPreviewModeOff": "خاموش",
-  "linkPreviewRemove": "فرستادن بدون پیش‌نمایش"
+  "linkPreviewRemove": "فرستادن بدون پیش‌نمایش",
+  "settingsLinkPreviewsTor": "گرفتن پیش‌نمایش از راه Tor",
+  "settingsLinkPreviewsTorHelp": "وقتی Tor راه‌اندازی شده باشد، سایت‌ها خروجی Tor را می‌بینند نه نشانی شما را، و دربارهٔ پیوند چیزی در شبکهٔ شما جست‌وجو نمی‌شود. تا Tor وصل نشده، پیش‌نمایشی گرفته نمی‌شود."
 }

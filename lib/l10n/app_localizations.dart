@@ -8638,6 +8638,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Send without the preview'**
   String get linkPreviewRemove;
+
+  /// Switch: fetch link previews through Tor when Tor is set up.
+  ///
+  /// In en, this message translates to:
+  /// **'Fetch previews through Tor'**
+  String get settingsLinkPreviewsTor;
+
+  /// Help under the Tor previews switch.
+  ///
+  /// In en, this message translates to:
+  /// **'When Tor is set up, sites see a Tor exit, not your address, and nothing about the link is looked up on your network. While Tor is not connected, no previews are fetched.'**
+  String get settingsLinkPreviewsTorHelp;
 }
 
 class _AppLocalizationsDelegate

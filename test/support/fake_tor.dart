@@ -31,6 +31,18 @@ class FakeTorApi implements TorApi {
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   String? _address;
   int starts = 0;
+
+  /// What [openWebProxy] answers (a test's own proxy), and what it was
+  /// given.
+  int webProxyPort = 0;
+  final webProxyCredentials = <(String, String)>[];
+
+  @override
+  Future<int> openWebProxy(String user, String password) async {
+    if (_address == null) throw StateError('Tor is not running.');
+    webProxyCredentials.add((user, password));
+    return webProxyPort;
+  }
   List<String> lastBridges = const [];
 
   @override

@@ -5452,4 +5452,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkPreviewRemove => 'Send without the preview';
+
+  @override
+  String get settingsLinkPreviewsTor => 'Fetch previews through Tor';
+
+  @override
+  String get settingsLinkPreviewsTorHelp =>
+      'When Tor is set up, sites see a Tor exit, not your address, and nothing about the link is looked up on your network. While Tor is not connected, no previews are fetched.';
 }

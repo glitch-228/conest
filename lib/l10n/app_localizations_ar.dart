@@ -5583,4 +5583,11 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get linkPreviewRemove => 'إرسال بلا معاينة';
+
+  @override
+  String get settingsLinkPreviewsTor => 'جلب المعاينات عبر Tor';
+
+  @override
+  String get settingsLinkPreviewsTorHelp =>
+      'عند إعداد Tor ترى المواقع مخرج Tor لا عنوانك، ولا يُستعلم عن شيء من الرابط على شبكتك. ما دام Tor غير متصل لا تُجلب معاينات.';
 }

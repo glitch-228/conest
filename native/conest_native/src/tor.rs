@@ -55,6 +55,9 @@ use tor_hsservice::{
 use tor_proto::stream::IncomingStreamRequest;
 use tor_rtcompat::PreferredRuntime;
 
+#[path = "tor_proxy.rs"]
+mod proxy;
+
 /// The virtual port of Conest's onion service.
 pub const ONION_PORT: u16 = 7177;
 
@@ -124,6 +127,9 @@ type Outgoing = Arc<AsyncMutex<Option<(DataStream, Instant)>>>;
 /// contact does not hold back sends to the others.
 static OUTGOING: LazyLock<Mutex<HashMap<String, Outgoing>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The local web entrance (see `tor_proxy.rs`), while Tor runs.
+static WEB_PROXY: LazyLock<Mutex<Option<proxy::WebProxy>>> = LazyLock::new(|| Mutex::new(None));
 
 struct TorState {
     client: Arc<TorClient<PreferredRuntime>>,
@@ -229,11 +235,42 @@ async fn run(op: &str, request: &Value) -> Result<Value> {
             Ok(Value::Null)
         }
         "send" => send(request).await,
+        "proxy" => web_proxy(request).await,
         "status" => Ok(json!({
             "running": STATE.lock().map(|state| state.is_some()).unwrap_or(false),
         })),
         other => Err(anyhow!("unknown Tor operation {other}")),
     }
+}
+
+/// Opens (or returns) the local web entrance for this app's own requests,
+/// answering only the given user name and password. Tor must be running.
+async fn web_proxy(request: &Value) -> Result<Value> {
+    if let Ok(running) = WEB_PROXY.lock()
+        && let Some(running) = running.as_ref()
+        && !running.task.is_finished()
+    {
+        return Ok(json!({"port": running.port}));
+    }
+    let user = request["user"].as_str().context("missing user")?.to_owned();
+    let password = request["password"]
+        .as_str()
+        .context("missing password")?
+        .to_owned();
+    let client = STATE
+        .lock()
+        .map_err(|_| anyhow!("Tor state poisoned"))?
+        .as_ref()
+        .map(|state| state.client.clone())
+        .context("Tor is not running")?;
+    let started = proxy::start(client, user, password).await?;
+    let port = started.port;
+    if let Ok(mut slot) = WEB_PROXY.lock()
+        && let Some(old) = slot.replace(started)
+    {
+        old.task.abort();
+    }
+    Ok(json!({"port": port}))
 }
 
 /// The running service's address, unless `stop` came after `generation`.
@@ -450,6 +487,11 @@ async fn stop() {
     CANCEL.notify_waiters();
     if let Ok(mut outgoing) = OUTGOING.lock() {
         outgoing.clear();
+    }
+    if let Ok(mut web) = WEB_PROXY.lock()
+        && let Some(web) = web.take()
+    {
+        web.task.abort();
     }
     let Some(state) = state else { return };
     for task in state.tasks {

@@ -5452,4 +5452,11 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get linkPreviewRemove => 'فرستادن بدون پیش‌نمایش';
+
+  @override
+  String get settingsLinkPreviewsTor => 'گرفتن پیش‌نمایش از راه Tor';
+
+  @override
+  String get settingsLinkPreviewsTorHelp =>
+      'وقتی Tor راه‌اندازی شده باشد، سایت‌ها خروجی Tor را می‌بینند نه نشانی شما را، و دربارهٔ پیوند چیزی در شبکهٔ شما جست‌وجو نمی‌شود. تا Tor وصل نشده، پیش‌نمایشی گرفته نمی‌شود.';
 }

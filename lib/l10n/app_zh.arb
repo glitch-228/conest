@@ -1412,5 +1412,7 @@
   "linkPreviewModeSender": "随消息发送（接收者不访问网站）",
   "linkPreviewModeBoth": "两者",
   "linkPreviewModeOff": "关闭",
-  "linkPreviewRemove": "不带预览发送"
+  "linkPreviewRemove": "不带预览发送",
+  "settingsLinkPreviewsTor": "通过 Tor 获取预览",
+  "settingsLinkPreviewsTorHelp": "设置了 Tor 时，网站看到的是 Tor 出口而不是你的地址，你的网络上也不会查询该链接的任何信息。Tor 未连接时不获取预览。"
 }

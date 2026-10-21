@@ -8180,5 +8180,13 @@
   "linkPreviewRemove": "Send without the preview",
   "@linkPreviewRemove": {
     "description": "Tooltip: remove the link preview from the message being written."
+  },
+  "settingsLinkPreviewsTor": "Fetch previews through Tor",
+  "@settingsLinkPreviewsTor": {
+    "description": "Switch: fetch link previews through Tor when Tor is set up."
+  },
+  "settingsLinkPreviewsTorHelp": "When Tor is set up, sites see a Tor exit, not your address, and nothing about the link is looked up on your network. While Tor is not connected, no previews are fetched.",
+  "@settingsLinkPreviewsTorHelp": {
+    "description": "Help under the Tor previews switch."
   }
 }

@@ -1412,5 +1412,7 @@
   "linkPreviewModeSender": "Отправляются с сообщением (получатели не обращаются к сайту)",
   "linkPreviewModeBoth": "Оба способа",
   "linkPreviewModeOff": "Выключено",
-  "linkPreviewRemove": "Отправить без предпросмотра"
+  "linkPreviewRemove": "Отправить без предпросмотра",
+  "settingsLinkPreviewsTor": "Загружать предпросмотр через Tor",
+  "settingsLinkPreviewsTorHelp": "Когда Tor настроен, сайты видят выходной узел Tor, а не ваш адрес, и в вашей сети ничего о ссылке не запрашивается. Пока Tor не подключён, предпросмотр не загружается."
 }
