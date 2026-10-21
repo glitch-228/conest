@@ -20322,6 +20322,8 @@ void main() {
     required String laptopRun,
     Duration linger = const Duration(seconds: 60),
     List<int> burstFileSizes = const [64 * 1024],
+    TransportKind? only = TransportKind.conestRelay,
+    PlatformBridge Function()? bridge,
   }) async {
     final network = _InProcessIrohNetwork();
     final relay = _FakeRelayClient();
@@ -20332,6 +20334,9 @@ void main() {
         createIdentity: false,
         transportRegistryFactory: network.registry,
         debugBuildId: 'test@abc',
+        platformBridge: bridge?.call(),
+        groupCallMedia: bridge == null ? null : FakeCallMedia(),
+        ratchetEngine: bridge == null ? null : FakeRatchetEngine(),
       );
       addTearDown(controller.dispose);
       return controller;
@@ -20355,7 +20360,8 @@ void main() {
     final phoneRun = runDebugRequest(
       phone,
       DebugRunRequest(
-        what: 'none',
+        // As in the lab, the same run (calls: it answers and joins).
+        what: laptopRun == 'calls' ? 'calls' : 'none',
         name: 'phone',
         approve: true,
         serve: const Duration(seconds: 30),
@@ -20363,7 +20369,7 @@ void main() {
         expectGroup: 'lab-all',
         wait: const Duration(seconds: 1),
         linger: linger,
-        onlyTransport: TransportKind.conestRelay,
+        onlyTransport: only,
         relay: 'relay.example:7667',
       ),
       defaultReportPath: () async => '${root.path}/phone.json',
@@ -20382,9 +20388,10 @@ void main() {
         expectContacts: 1,
         group: 'lab-all',
         wait: const Duration(seconds: 1),
-        onlyTransport: TransportKind.conestRelay,
+        onlyTransport: only,
         relay: 'relay.example:7667',
         burstFileSizes: burstFileSizes,
+        callLength: const Duration(seconds: 3),
       ),
       defaultReportPath: () async => '${root.path}/laptop.json',
     );
@@ -20424,6 +20431,33 @@ void main() {
       expect(
         steps.where((step) => step['ok'] != true).map((step) => step['step']),
         isEmpty,
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'a lab calls run calls each contact, then the group, with statistics',
+    () async {
+      final (phone, laptop) = await labPair(
+        laptopRun: 'calls',
+        only: null,
+        bridge: _StatsVoiceBridge.new,
+      );
+      final timings = laptop['timings'] as List;
+      final call = timings.firstWhere((t) => t['task'] == 'call') as Map;
+      expect(call['ms'], isA<int>(), reason: 'connected, and how fast');
+      expect((call['stats'] as Map)['received'], 150);
+      final groupCall =
+          timings.firstWhere((t) => t['task'] == 'group-call') as Map;
+      expect(groupCall['stats'], isNotNull);
+      // The phone answered and joined, and wrote down its side of each.
+      final phoneCalls = phone['calls'] as List;
+      expect(phoneCalls.where((c) => c['call'] != null), isNotEmpty);
+      expect(phoneCalls.where((c) => c['groupCall'] != null), isNotEmpty);
+      expect(
+        phoneCalls.map((c) => (c['stats'] as Map?)?['received']),
+        everyElement(150),
       );
     },
     timeout: const Timeout(Duration(minutes: 3)),
@@ -26139,6 +26173,12 @@ class _HeldGroupCloseMedia extends FakeCallMedia {
     await closeGate?.future;
     await super.close();
   }
+}
+
+/// Native call statistics, as a device would report them.
+class _StatsVoiceBridge extends _VoiceRecordingBridge {
+  @override
+  Map<String, Object?>? get voiceCallStats => {'received': 150, 'lost': 2};
 }
 
 class _VoiceRecordingBridge extends _RecordingPlatformBridge {

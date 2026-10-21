@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -24,7 +24,36 @@ use opus::{Application, Channels, Encoder};
 
 #[path = "audio_remote.rs"]
 mod remote;
-use remote::RemoteMixer;
+use remote::{ReceiveStats, RemoteMixer};
+
+/// What a call's audio did, for the device lab and call diagnostics: the
+/// send side and playout here; the receive side lives in the mixer.
+#[derive(Default)]
+struct CallCounters {
+    /// Opus packets made and queued for the network.
+    sent: AtomicU64,
+    /// Packets dropped because the network side did not take them in time.
+    send_dropped: AtomicU64,
+    /// 20 ms frames handed to the speaker.
+    played_frames: AtomicU64,
+    /// Times the playback queue ran too long and was cut back (latency).
+    playback_trimmed: AtomicU64,
+}
+
+/// A call's audio statistics (see [VoiceAudioSession::stats]).
+#[derive(serde::Serialize)]
+pub struct CallStats {
+    pub sent: u64,
+    pub send_dropped: u64,
+    pub played_frames: u64,
+    pub playback_trimmed: u64,
+    pub received: u64,
+    pub late_or_duplicate: u64,
+    pub lost: u64,
+    pub concealed_frames: u64,
+    pub gaps: u64,
+    pub jitter_ms: f64,
+}
 
 const VOICE_RATE: u32 = 48_000;
 const FRAME_SAMPLES: usize = 960; // 20 ms, mono, 48 kHz.
@@ -191,6 +220,7 @@ pub struct VoiceAudioSession {
     capture: Arc<ArrayQueue<f32>>,
     playback: Arc<ArrayQueue<f32>>,
     render_reference: Arc<ArrayQueue<f32>>,
+    counters: Arc<CallCounters>,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     input_stream: Option<Stream>,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -310,6 +340,7 @@ impl VoiceAudioSession {
         let playback = Arc::new(ArrayQueue::new(PLAYBACK_QUEUE_SAMPLES));
         let render_reference = Arc::new(ArrayQueue::new(ECHO_REFERENCE_QUEUE_SAMPLES));
         let encoded = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
+        let counters = Arc::new(CallCounters::default());
         let incoming = Arc::new(Mutex::new(RemoteMixer::new()
             .context("Could not initialize the remote audio mixer")?));
         let mut encoder = Encoder::new(VOICE_RATE, Channels::Mono, Application::Voip)
@@ -329,6 +360,7 @@ impl VoiceAudioSession {
                 let network_congested = network_congested.clone();
                 let noise_suppression = noise_suppression.clone();
                 let platform_noise_suppression = platform_noise_suppression.clone();
+                let counters = counters.clone();
                 move || {
                     encode_loop(
                         running,
@@ -340,6 +372,7 @@ impl VoiceAudioSession {
                         network_congested,
                         noise_suppression,
                         platform_noise_suppression,
+                        counters,
                     )
                 }
             })
@@ -350,7 +383,8 @@ impl VoiceAudioSession {
                 let running = running.clone();
                 let incoming = incoming.clone();
                 let playback = playback.clone();
-                move || decode_loop(running, incoming, playback)
+                let counters = counters.clone();
+                move || decode_loop(running, incoming, playback, counters)
             }) {
             Ok(worker) => worker,
             Err(error) => {
@@ -372,6 +406,7 @@ impl VoiceAudioSession {
             capture,
             playback,
             render_reference,
+            counters,
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             input_stream: None,
             #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -404,6 +439,27 @@ impl VoiceAudioSession {
 
     pub fn is_healthy(&self) -> bool {
         !self.failed.load(Ordering::Relaxed)
+    }
+
+    /// What this call's audio did so far (counts since it opened).
+    pub fn stats(&self) -> CallStats {
+        let receive = self
+            .incoming
+            .lock()
+            .map(|mixer| mixer.stats())
+            .unwrap_or_default();
+        CallStats {
+            sent: self.counters.sent.load(Ordering::Relaxed),
+            send_dropped: self.counters.send_dropped.load(Ordering::Relaxed),
+            played_frames: self.counters.played_frames.load(Ordering::Relaxed),
+            playback_trimmed: self.counters.playback_trimmed.load(Ordering::Relaxed),
+            received: receive.received,
+            late_or_duplicate: receive.late_or_duplicate,
+            lost: receive.lost,
+            concealed_frames: receive.concealed_frames,
+            gaps: receive.gaps,
+            jitter_ms: receive.jitter_ms,
+        }
     }
 
     pub fn try_next_packet(&self) -> Option<Vec<u8>> {
@@ -724,6 +780,7 @@ fn encode_loop(
     network_congested: Arc<AtomicBool>,
     noise_suppression: Arc<AtomicBool>,
     platform_noise_suppression: Arc<AtomicBool>,
+    counters: Arc<CallCounters>,
 ) {
     let mut frame = vec![0.0_f32; FRAME_SAMPLES];
     let mut bitrate = AdaptiveBitrate::default();
@@ -759,9 +816,14 @@ fn encode_loop(
         }
         if let Ok(packet) = encoder.encode_vec_float(&frame, MAX_OPUS_PACKET)
             && !packet.is_empty()
-            && encoded.push(packet).is_err()
         {
-            let _ = encoded.pop();
+            counters.sent.fetch_add(1, Ordering::Relaxed);
+            if let Err(packet) = encoded.push(packet) {
+                // The oldest goes; this newest one takes its place.
+                let _ = encoded.pop();
+                let _ = encoded.push(packet);
+                counters.send_dropped.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -770,6 +832,7 @@ fn decode_loop(
     running: Arc<AtomicBool>,
     incoming: Arc<Mutex<RemoteMixer>>,
     playback: Arc<ArrayQueue<f32>>,
+    counters: Arc<CallCounters>,
 ) {
     let mut next_playout = Instant::now();
     while running.load(Ordering::Relaxed) {
@@ -784,7 +847,9 @@ fn decode_loop(
             continue;
         };
         next_playout = next_playout_after(next_playout, now);
+        counters.played_frames.fetch_add(1, Ordering::Relaxed);
         if playback.len().saturating_add(frame.len()) > PLAYBACK_QUEUE_SAMPLES * 3 / 4 {
+            counters.playback_trimmed.fetch_add(1, Ordering::Relaxed);
             while playback.len() > PLAYBACK_QUEUE_SAMPLES / 4 {
                 let _ = playback.pop();
             }
@@ -813,6 +878,8 @@ struct PacketJitterBuffer {
     previous_arrival: Option<(u64, Instant)>,
     arrival_jitter_nanos: u64,
     gap_wait: Duration,
+    /// Packets skipped after waiting for them (never came in time).
+    lost: u64,
 }
 
 impl PacketJitterBuffer {
@@ -824,24 +891,31 @@ impl PacketJitterBuffer {
             previous_arrival: None,
             arrival_jitter_nanos: 0,
             gap_wait: MIN_JITTER_WAIT,
+            lost: 0,
         }
     }
 
-    fn insert(&mut self, sequence: u64, packet: Vec<u8>, arrived_at: Instant) {
+    /// False when [packet] is too late (already played past) or a copy.
+    fn insert(&mut self, sequence: u64, packet: Vec<u8>, arrived_at: Instant) -> bool {
         if sequence < self.expected || self.pending.contains_key(&sequence) {
-            return;
+            return false;
         }
         if self.pending.len() >= OPUS_PACKET_QUEUE {
             // Keep the closest packets to the expected point; a distant
             // future packet must not displace audio that can play sooner.
             let furthest = *self.pending.last_key_value().expect("queue is full").0;
             if sequence >= furthest {
-                return;
+                return true;
             }
             self.pending.pop_last();
         }
         self.observe_arrival(sequence, arrived_at);
         self.pending.insert(sequence, packet);
+        true
+    }
+
+    fn jitter(&self) -> Duration {
+        Duration::from_nanos(self.arrival_jitter_nanos)
     }
 
     fn observe_arrival(&mut self, sequence: u64, arrived_at: Instant) {
@@ -880,6 +954,7 @@ impl PacketJitterBuffer {
         if now.duration_since(gap_started) < self.gap_wait {
             return None;
         }
+        self.lost = self.lost.saturating_add(next_sequence - self.expected);
         self.expected = next_sequence;
         self.gap_started = None;
         self.pop_ready(now)

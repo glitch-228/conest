@@ -351,6 +351,21 @@ pub extern "C" fn conest_voice_audio_is_healthy(handle: u64) -> bool {
         .unwrap_or(false)
 }
 
+/// The call's audio statistics so far, as JSON (CallStats), or null when
+/// the session is unknown. Free with conest_string_free.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_stats(handle: u64) -> *mut c_char {
+    let stats = VOICE_AUDIO_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(&handle).map(VoiceAudioSession::stats));
+    match stats {
+        Some(stats) => json_string(&stats),
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// Non-blocking poll for one encoded 20 ms Opus packet. Returns false when
 /// no complete packet is ready or the caller's buffer is too small.
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]

@@ -346,9 +346,16 @@ class PlatformBridge {
     await audio.selectOutputDevice(name);
   }
 
+  /// The last call's audio statistics, taken as it closed (see
+  /// [NativeVoiceCallAudio.stats]); the current call's while one is open.
+  Map<String, Object?>? get voiceCallStats =>
+      _voiceAudio?.stats() ?? _lastVoiceCallStats;
+  Map<String, Object?>? _lastVoiceCallStats;
+
   Future<void> closeVoiceCallMedia() async {
     final nativeAudio = _voiceAudio;
     if (nativeAudio == null) return;
+    _lastVoiceCallStats = nativeAudio.stats() ?? _lastVoiceCallStats;
     if (Platform.isAndroid && nativeAudio.isOpen) {
       try {
         await _channel.invokeMethod<void>('closeVoiceCallMedia');

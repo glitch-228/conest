@@ -10,11 +10,34 @@ use std::{
 
 pub(super) const MAX_REMOTE_STREAMS: u16 = 16;
 
+/// A playout gap this long (3 frames of 20 ms) or longer counts as one
+/// audible break (stutter).
+const GAP_FRAMES: u32 = 3;
+
+/// The receive side of a call's audio statistics (see CallStats).
+#[derive(Default, Clone, Copy)]
+pub(super) struct ReceiveStats {
+    pub received: u64,
+    pub late_or_duplicate: u64,
+    pub lost: u64,
+    pub concealed_frames: u64,
+    pub gaps: u64,
+    pub jitter_ms: f64,
+}
+
 struct RemoteStream {
     decoder: Decoder,
     jitter: PacketJitterBuffer,
     pcm: VecDeque<f32>,
     level: f32,
+    /// A packet came, so silence from now on is a gap, not a quiet start.
+    started: bool,
+    /// Frames in a row played with too little audio.
+    short_run: u32,
+    received: u64,
+    late_or_duplicate: u64,
+    concealed_frames: u64,
+    gaps: u64,
 }
 
 impl RemoteStream {
@@ -24,6 +47,12 @@ impl RemoteStream {
             jitter: PacketJitterBuffer::new(1),
             pcm: VecDeque::with_capacity(FRAME_SAMPLES * 6),
             level: 0.0,
+            started: false,
+            short_run: 0,
+            received: 0,
+            late_or_duplicate: 0,
+            concealed_frames: 0,
+            gaps: 0,
         })
     }
 
@@ -44,6 +73,17 @@ impl RemoteStream {
             }
         }
         let ready = !self.pcm.is_empty();
+        if self.started {
+            if self.pcm.len() < FRAME_SAMPLES {
+                self.concealed_frames += 1;
+                self.short_run += 1;
+                if self.short_run == GAP_FRAMES {
+                    self.gaps += 1;
+                }
+            } else {
+                self.short_run = 0;
+            }
+        }
         let mut energy = 0.0;
         for sample in output {
             *sample = self.pcm.pop_front().unwrap_or(0.0);
@@ -89,8 +129,29 @@ impl RemoteMixer {
         let Some(stream) = self.streams.get_mut(&participant) else {
             return false;
         };
-        stream.jitter.insert(sequence, packet.to_vec(), now);
+        if stream.jitter.insert(sequence, packet.to_vec(), now) {
+            stream.received += 1;
+            stream.started = true;
+        } else {
+            stream.late_or_duplicate += 1;
+        }
         true
+    }
+
+    /// Summed over the streams now playing; the jitter is the worst one.
+    pub fn stats(&self) -> ReceiveStats {
+        let mut stats = ReceiveStats::default();
+        for stream in self.streams.values() {
+            stats.received += stream.received;
+            stats.late_or_duplicate += stream.late_or_duplicate;
+            stats.lost += stream.jitter.lost;
+            stats.concealed_frames += stream.concealed_frames;
+            stats.gaps += stream.gaps;
+            stats.jitter_ms = stats
+                .jitter_ms
+                .max(stream.jitter.jitter().as_secs_f64() * 1000.0);
+        }
+        stats
     }
 
     pub fn level(&self, participant: u16) -> f32 {
@@ -177,6 +238,43 @@ mod tests {
         assert!(mixer.render(now).is_none());
         assert!(mixer.push(2, 1, &bytes, now));
         assert!(mixer.render(now).is_some());
+    }
+
+    #[test]
+    fn counts_received_late_lost_and_audible_gaps() {
+        let mut mixer = RemoteMixer::new().unwrap();
+        let start = Instant::now();
+        let bytes = packet();
+        // 1 and 2 arrive, 3 never does, 4 arrives; 2 comes again (a copy).
+        assert!(mixer.push(0, 1, &bytes, start));
+        assert!(mixer.push(0, 2, &bytes, start + Duration::from_millis(20)));
+        assert!(mixer.push(0, 4, &bytes, start + Duration::from_millis(60)));
+        let mut now = start;
+        for _ in 0..10 {
+            mixer.render(now);
+            now += Duration::from_millis(20);
+        }
+        assert!(mixer.push(0, 2, &bytes, now));
+        let stats = mixer.stats();
+        assert_eq!(stats.received, 3);
+        assert_eq!(stats.late_or_duplicate, 1);
+        assert_eq!(stats.lost, 1);
+        // After the last packet, the silence that follows is one gap.
+        assert!(stats.concealed_frames >= GAP_FRAMES as u64);
+        assert_eq!(stats.gaps, 1);
+    }
+
+    #[test]
+    fn silence_before_the_first_packet_is_not_a_gap() {
+        let mut mixer = RemoteMixer::new().unwrap();
+        let mut now = Instant::now();
+        for _ in 0..20 {
+            mixer.render(now);
+            now += Duration::from_millis(20);
+        }
+        let stats = mixer.stats();
+        assert_eq!(stats.concealed_frames, 0);
+        assert_eq!(stats.gaps, 0);
     }
 
     #[test]

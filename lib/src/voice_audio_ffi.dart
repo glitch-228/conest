@@ -34,6 +34,8 @@ typedef _OutputDevicesNative = Pointer<Utf8> Function();
 typedef _OutputDevicesDart = Pointer<Utf8> Function();
 typedef _SelectOutputNative = Bool Function(Uint64, Pointer<Utf8>);
 typedef _SelectOutputDart = bool Function(int, Pointer<Utf8>);
+typedef _StatsNative = Pointer<Utf8> Function(Uint64);
+typedef _StatsDart = Pointer<Utf8> Function(int);
 typedef _ErrorNative = Pointer<Utf8> Function();
 typedef _ErrorDart = Pointer<Utf8> Function();
 typedef _FreeNative = Void Function(Pointer<Utf8>);
@@ -93,6 +95,12 @@ class _NativeVoiceAudioBindings {
           .lookupFunction<_SelectOutputNative, _SelectOutputDart>(
             'conest_voice_audio_set_output_device',
           ),
+      // Optional: a native library from before call statistics has none.
+      stats = library.providesSymbol('conest_voice_audio_stats')
+          ? library.lookupFunction<_StatsNative, _StatsDart>(
+              'conest_voice_audio_stats',
+            )
+          : null,
       lastError = library.lookupFunction<_ErrorNative, _ErrorDart>(
         'conest_last_error',
       ),
@@ -128,6 +136,7 @@ class _NativeVoiceAudioBindings {
   final _CloseDart close;
   final _OutputDevicesDart outputDevices;
   final _SelectOutputDart selectOutput;
+  final _StatsDart? stats;
   final _ErrorDart lastError;
   final _FreeDart freeString;
   final _StartMessageRecordingDart startMessageRecording;
@@ -337,6 +346,25 @@ class NativeVoiceCallAudio {
       );
     } finally {
       calloc.free(pointer);
+    }
+  }
+
+  /// What this call's audio did so far: packets sent and received, late
+  /// or duplicate ones, lost ones, concealed frames, audible gaps, jitter
+  /// (native CallStats). Null when not open or the library has none.
+  Map<String, Object?>? stats() {
+    final handle = _handle;
+    final read = _bindings.stats;
+    if (handle == null || read == null) return null;
+    final pointer = read(handle);
+    if (pointer == nullptr) return null;
+    try {
+      final value = jsonDecode(pointer.toDartString());
+      return value is Map<String, Object?> ? value : null;
+    } catch (_) {
+      return null;
+    } finally {
+      _bindings.freeString(pointer);
     }
   }
 

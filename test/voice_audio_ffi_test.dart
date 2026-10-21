@@ -32,4 +32,15 @@ void main() {
     },
     skip: audio == null ? 'conest_native is not available' : false,
   );
+
+  test(
+    'call statistics are read only while a call is open',
+    () {
+      // No microphone on the CI runners: the open path is covered by the
+      // native tests; here, a closed session reads as none.
+      expect(audio!.isOpen, isFalse);
+      expect(audio.stats(), isNull);
+    },
+    skip: audio == null ? 'conest_native is not available' : false,
+  );
 }

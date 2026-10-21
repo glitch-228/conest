@@ -5,7 +5,9 @@
 ///          (or contacts: remove and add back every contact this device
 ///          added, and every member of the group it made; or burst: 20
 ///          messages to every chat and group half a second apart, and
-///          1, 10 and 50 MB files)
+///          1, 10 and 50 MB files; or calls: the device that makes the
+///          group calls each contact for a minute, then the group; the
+///          others answer and join)
 ///          [--debug-name=NAME]            set up storage and an identity
 ///          [--debug-relay=HOST:PORT]      add a relay
 ///          [--debug-accept-invite=CODE]   add a contact (repeatable)
@@ -77,10 +79,11 @@ class DebugRunRequest {
       10 * 1024 * 1024,
       50 * 1024 * 1024,
     ],
+    this.callLength = const Duration(minutes: 1),
   });
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', 'contacts',
-  /// 'burst', or 'none' (only set up).
+  /// 'burst', 'calls', or 'none' (only set up).
   final String what;
   final String? reportPath;
   final bool exitAfter;
@@ -144,6 +147,9 @@ class DebugRunRequest {
   /// The files 'burst' sends to every chat and group, by size.
   final List<int> burstFileSizes;
 
+  /// How long each call of a 'calls' run lasts.
+  final Duration callLength;
+
   static const List<String> carrierNames = [
     'nostr',
     'tor',
@@ -165,6 +171,7 @@ class DebugRunRequest {
     'all',
     'contacts',
     'burst',
+    'calls',
     'none',
   };
 
@@ -320,9 +327,86 @@ Future<String> runDebugRequest(
     }
   }
 
+  // Calls: answered and joined here, and their statistics written down
+  // when each ends.
+  final calls = <Map<String, Object?>>[];
+  String? callOpen;
+  final joining = <String>{};
+  final joinedAt = <String, DateTime>{};
+  final leaving = <String>{};
+  void watchCalls() {
+    if (request.what != 'calls') return;
+    final service = controller.voiceCallService;
+    final active = service?.active;
+    if (active != null &&
+        !active.outgoing &&
+        active.state == VoiceCallState.ringing &&
+        request.approve) {
+      unawaited(
+        controller.acceptVoiceCall().catchError((Object error) {
+          controller.recordError('test', 'Lab call answer failed: $error');
+        }),
+      );
+    }
+    final live = active != null && active.state != VoiceCallState.ended
+        ? active.callId
+        : null;
+    if (callOpen != null && live != callOpen) {
+      calls.add({
+        'call': callOpen,
+        'at': DateTime.now().toUtc().toIso8601String(),
+        'stats': controller.voiceCallStats,
+      });
+    }
+    callOpen = live;
+    final rooms = controller.groupCallService?.rooms ?? const [];
+    for (final room in rooms) {
+      final lab = _labGroups(
+        controller,
+      ).any((group) => group.groupId == room.groupId);
+      if (room.joined) {
+        final since = joinedAt.putIfAbsent(room.callId, DateTime.now);
+        // Alone in it (the one who started it left): leave, and write down
+        // what the call's audio did.
+        if (room.participants.length <= 1 &&
+            DateTime.now().difference(since) > const Duration(seconds: 10) &&
+            leaving.add(room.callId)) {
+          final service = controller.groupCallService!;
+          unawaited(
+            service.leave().then<void>((_) {
+              calls.add({
+                'groupCall': room.callId,
+                'group': room.groupId,
+                'at': DateTime.now().toUtc().toIso8601String(),
+                'stats': controller.voiceCallStats,
+              });
+            }, onError: (Object _) {}),
+          );
+        }
+        continue;
+      }
+      if (lab && request.approve && joining.add(room.callId)) {
+        unawaited(
+          controller
+              .joinOrStartGroupCall(room.groupId)
+              .then<void>(
+                (_) {},
+                onError: (Object error) {
+                  controller.recordError(
+                    'test',
+                    'Lab group call join failed: $error',
+                  );
+                },
+              ),
+        );
+      }
+    }
+  }
+
   final ticker = Timer.periodic(const Duration(milliseconds: 250), (_) {
     observe();
     if (request.approve) unawaited(approvePending());
+    watchCalls();
   });
 
   final name = request.name;
@@ -398,6 +482,14 @@ Future<String> runDebugRequest(
           password: matrix[2],
         );
         return matrix[1];
+      });
+    }
+    if (request.what == 'calls') {
+      // On by default; lab data kept from earlier runs may have them off.
+      // Before the invite: contacts learn at pairing that calls work here.
+      await step('calls on', () async {
+        await controller.updateExperimentalVoiceCallsEnabled(true);
+        return null;
       });
     }
     final only = request.onlyTransport;
@@ -556,6 +648,9 @@ Future<String> runDebugRequest(
   if (what == 'contacts') {
     await _removeAndAddBack(controller, step, request, timings);
   }
+  if (what == 'calls' && request.group != null) {
+    await _callEveryone(controller, step, request, timings);
+  }
   if (what == 'burst') {
     await _burst(controller, step, request.burstFileSizes);
     await _untilConfirmed(controller, const Duration(minutes: 3));
@@ -597,6 +692,21 @@ Future<String> runDebugRequest(
   while (!allDone() && DateTime.now().isBefore(lingerUntil)) {
     await Future<void>.delayed(const Duration(milliseconds: 500));
   }
+  // Still in a group call (the others left): leave it, and write down
+  // what its audio did.
+  if (controller.groupCallService?.active case final room?
+      when room.joined && leaving.add(room.callId)) {
+    await step('leave group call', () async {
+      await controller.groupCallService!.leave();
+      calls.add({
+        'groupCall': room.callId,
+        'group': room.groupId,
+        'at': DateTime.now().toUtc().toIso8601String(),
+        'stats': controller.voiceCallStats,
+      });
+      return null;
+    });
+  }
   // A moment for this device's own last receipts to arrive.
   await Future<void>.delayed(request.wait);
   ticker.cancel();
@@ -622,6 +732,7 @@ Future<String> runDebugRequest(
     'pairedAfterMs': pairedAfter,
     'pairedAfterInviteMs': pairedAfterInvite,
     'timings': timings,
+    'calls': calls,
     'events': events,
     // This device's relays in order, and the one it holds a waiting fetch
     // on (on battery, the only one it watches promptly).
@@ -1024,6 +1135,71 @@ Future<void> _removeAndAddBack(
       return null;
     });
   }
+}
+
+/// Calls every contact for a minute, one after another, then starts a
+/// call in the lab group this device made and stays a minute: how long
+/// each took to connect, and each call's audio statistics.
+Future<void> _callEveryone(
+  MessengerController controller,
+  _Step step,
+  DebugRunRequest request,
+  List<Map<String, Object?>> timings,
+) async {
+  final length = request.callLength;
+  final service = controller.voiceCallService;
+  if (service == null) return;
+  for (final contact in _contacts(controller)) {
+    await step('call ${contact.alias}', () async {
+      final started = DateTime.now();
+      await service.startOutgoing(contact.deviceId);
+      final until = started.add(const Duration(seconds: 30));
+      while (service.active?.state != VoiceCallState.connected &&
+          service.active != null &&
+          DateTime.now().isBefore(until)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      final connected = service.active?.state == VoiceCallState.connected;
+      final connectMs = connected
+          ? DateTime.now().difference(started).inMilliseconds
+          : null;
+      if (connected) await Future<void>.delayed(length);
+      final stats = controller.voiceCallStats;
+      await service.end(reason: 'Lab call over');
+      timings.add({
+        'task': 'call',
+        'deviceId': contact.deviceId,
+        'at': started.toUtc().toIso8601String(),
+        'ms': connectMs,
+        'stats': stats,
+      });
+      // The other side writes its own down, then is ready for the next.
+      await Future<void>.delayed(request.wait);
+      if (!connected) throw StateError('not connected within 30 s');
+      return connectMs;
+    });
+  }
+  final group = _labGroups(
+    controller,
+  ).where((group) => group.title == request.group).firstOrNull;
+  final groupCalls = controller.groupCallService;
+  if (group == null || groupCalls == null) return;
+  await step('group call ${group.title}', () async {
+    final started = DateTime.now();
+    await controller.joinOrStartGroupCall(group.groupId);
+    await Future<void>.delayed(length);
+    final room = groupCalls.roomFor(group.groupId);
+    final stats = controller.voiceCallStats;
+    await groupCalls.leave();
+    timings.add({
+      'task': 'group-call',
+      'group': group.title,
+      'at': started.toUtc().toIso8601String(),
+      'participants': room?.participants.length,
+      'stats': stats,
+    });
+    return room?.participants.length;
+  });
 }
 
 /// Twenty messages to every chat and lab group, half a second apart (not

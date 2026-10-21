@@ -10070,6 +10070,11 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  /// The audio statistics of the call now open, or else of the last one
+  /// (packets sent, received, late, lost; concealed frames, audible gaps,
+  /// jitter), for the device lab. Null without native call audio.
+  Map<String, Object?>? get voiceCallStats => _platformBridge.voiceCallStats;
+
   Future<void> updateExperimentalVoiceCallsEnabled(bool enabled) async {
     final me = _requireIdentity();
     if (enabled && !_platformBridge.supportsVoiceCallMedia) {
