@@ -20,10 +20,10 @@ abstract interface class LinkPreviewSource {
 
 /// The preview of the first link in [text], under a message: the site, the
 /// title, two lines of description and a thumbnail; a tap opens the link.
-/// In a [trusted] chat it is fetched by itself (when
-/// [LinkPreviewSource.linkPreviewsAutomaticNow]); elsewhere a "Show link
-/// preview" button asks first, as the fetch shows the site this device's
-/// address.
+/// From a [trusted] sender an https link's preview is fetched by itself
+/// (when [LinkPreviewSource.linkPreviewsAutomaticNow]); otherwise a "Show
+/// link preview" button asks first, as the fetch shows the site this
+/// device's address.
 class LinkPreviewCard extends StatefulWidget {
   const LinkPreviewCard({
     super.key,
@@ -73,12 +73,16 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
     final link = _link;
     if (link == null || !widget.source.linkPreviewsEnabled) return;
     _preview = widget.source.cachedLinkPreview(link);
-    if (_preview == null &&
-        widget.trusted &&
-        widget.source.linkPreviewsAutomaticNow) {
-      unawaited(_load());
-    }
+    if (_preview == null && _automatic) unawaited(_load());
   }
+
+  /// Fetched without a tap: in a trusted chat, when previews may come by
+  /// themselves now, and only over https (the address of a plain http link
+  /// would be seen on the way).
+  bool get _automatic =>
+      widget.trusted &&
+      widget.source.linkPreviewsAutomaticNow &&
+      _link?.scheme == 'https';
 
   static Uri? _firstWebLink(String text) {
     for (final link in findLinks(text)) {
@@ -116,7 +120,7 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
     final preview = _preview;
     final theme = Theme.of(context);
     if (preview == null) {
-      if (_tried || widget.trusted && widget.source.linkPreviewsAutomaticNow) {
+      if (_tried || _automatic) {
         // Nothing to show (or on its way): no space taken.
         return const SizedBox.shrink();
       }

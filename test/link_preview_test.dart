@@ -7,9 +7,15 @@ import 'package:conest/src/links/link_cleaner.dart';
 import 'package:conest/src/links/link_preview.dart';
 import 'package:conest/src/links/link_preview_cache.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:archive/archive.dart' show getCrc32;
 import 'package:image/image.dart' as img;
 
 void main() {
+  // The engine's picture decoder; and real HTTP to the local test server
+  // (the test binding otherwise answers every request with 400).
+  TestWidgetsFlutterBinding.ensureInitialized();
+  HttpOverrides.global = null;
+
   group('reading a page', () {
     test('Open Graph first, then Twitter cards, then the title', () {
       final page = Uri.parse('https://news.example/a/b');
@@ -68,6 +74,10 @@ void main() {
       '64:ff9b::a00:1': false,
       '2002:a00:1::': false,
       '2001:db8::1': false,
+      '2001::1': false,
+      '2001:0:4136:e378::1': false, // Teredo
+      '3fff::1': false,
+      '2001:200::1': true,
     };
     for (final MapEntry(:key, :value) in cases.entries) {
       test('$key is ${value ? '' : 'not '}public', () {
@@ -107,6 +117,7 @@ void main() {
     // policy refuses loopback, which the tests below rely on too.
     LinkPreviewFetcher fetcher({
       Duration timeout = const Duration(seconds: 5),
+      Duration totalTimeout = const Duration(seconds: 10),
       Map<String, List<String>>? names,
     }) => LinkPreviewFetcher(
       lookup: (host) async => [
@@ -120,6 +131,8 @@ void main() {
       ],
       isAllowed: (address) => address.address == '127.0.0.1',
       timeout: timeout,
+      totalTimeout: totalTimeout,
+      allowedPorts: null,
     );
 
     test(
@@ -159,6 +172,7 @@ void main() {
       handler = (request) async => page(request, '<title>secret</title>');
       final real = LinkPreviewFetcher(
         lookup: (host) async => [InternetAddress.loopbackIPv4],
+        allowedPorts: null,
       );
       await expectLater(
         real.fetch(Uri.parse('http://router.example:$port/')),
@@ -256,6 +270,67 @@ void main() {
       );
     });
 
+    test('only the usual web ports', () async {
+      handler = (request) async => page(request, '<title>x</title>');
+      final usual = LinkPreviewFetcher(
+        lookup: (host) async => [InternetAddress.loopbackIPv4],
+        isAllowed: (_) => true,
+      );
+      await expectLater(
+        usual.fetch(Uri.parse('http://site.example:$port/')),
+        throwsA(
+          isA<LinkPreviewException>().having(
+            (e) => e.message,
+            'message',
+            contains('port'),
+          ),
+        ),
+      );
+      expect(hits, isEmpty);
+    });
+
+    test('a compressed answer is refused, not inflated', () async {
+      handler = (request) async {
+        request.response
+          ..headers.contentType = ContentType.html
+          ..headers.set('content-encoding', 'gzip')
+          ..add(gzip.encode(utf8.encode('<title>${'x' * 100000}</title>')));
+        await request.response.close();
+      };
+      await expectLater(
+        fetcher().fetch(Uri.parse('http://site.example:$port/zip')),
+        throwsA(isA<LinkPreviewException>()),
+      );
+    });
+
+    test('a site that trickles is cut off in time', () async {
+      handler = (request) async {
+        request.response.headers.contentType = ContentType.html;
+        request.response.write('<title>slow');
+        for (var i = 0; i < 40; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          request.response.write('.');
+          await request.response.flush();
+        }
+        await request.response.close();
+      };
+      final started = DateTime.now();
+      await expectLater(
+        // Each read comes in time; only the whole request's limit ends it.
+        fetcher(
+          timeout: const Duration(seconds: 5),
+          totalTimeout: const Duration(milliseconds: 600),
+        ).fetch(Uri.parse('http://site.example:$port/trickle')),
+        throwsA(
+          isA<LinkPreviewException>().having((e) => e.down, 'down', true),
+        ),
+      );
+      expect(
+        DateTime.now().difference(started),
+        lessThan(const Duration(seconds: 2)),
+      );
+    });
+
     test('a long page without a length is read only up to the cap', () async {
       handler = (request) async {
         request.response.headers.contentType = ContentType.html;
@@ -270,6 +345,61 @@ void main() {
         Uri.parse('http://site.example:$port/long'),
       );
       expect(preview!.title, 'Top');
+    });
+  });
+
+  group('pictures', () {
+    Uint8List pngOf(int width, int height) => Uint8List.fromList(
+      img.encodePng(img.Image(width: width, height: height)),
+    );
+
+    test('a picture becomes a small JPEG', () async {
+      final thumbnail = await makeLinkPreviewThumbnail(pngOf(800, 400));
+      expect(thumbnail, isNotNull);
+      final read = img.decodeJpg(thumbnail!)!;
+      expect(read.width, 360);
+      expect(read.height, 180);
+    });
+
+    test('a picture declaring a huge size is not decoded', () async {
+      // A 1×1 PNG whose header says 60000×60000 (its checksum fixed).
+      final bytes = pngOf(1, 1);
+      ByteData.sublistView(bytes, 16, 24)
+        ..setUint32(0, 60000)
+        ..setUint32(4, 60000);
+      final crc = getCrc32(bytes.sublist(12, 29));
+      ByteData.sublistView(bytes, 29, 33).setUint32(0, crc);
+      expect(await makeLinkPreviewThumbnail(bytes), isNull);
+    });
+
+    test(
+      'a real picture too wide, or of too many pixels, is not decoded',
+      () async {
+        expect(
+          await makeLinkPreviewThumbnail(
+            pngOf(LinkPreviewFetcher.maxPictureSide + 1, 1),
+          ),
+          isNull,
+        );
+        expect(await makeLinkPreviewThumbnail(pngOf(4100, 4100)), isNull);
+        // Just inside both limits it is.
+        expect(await makeLinkPreviewThumbnail(pngOf(4000, 4000)), isNotNull);
+      },
+    );
+
+    test('only JPEG, PNG, GIF and WebP are read', () async {
+      final bmp = Uint8List.fromList(
+        img.encodeBmp(img.Image(width: 4, height: 4)),
+      );
+      expect(isPreviewPicture(bmp), isFalse);
+      expect(await makeLinkPreviewThumbnail(bmp), isNull);
+      expect(isPreviewPicture(pngOf(2, 2)), isTrue);
+      expect(
+        isPreviewPicture(
+          Uint8List.fromList(img.encodeGif(img.Image(width: 2, height: 2))),
+        ),
+        isTrue,
+      );
     });
   });
 
@@ -369,9 +499,10 @@ void main() {
         embedFixers: File(LinkFilters.embedFixersAsset).readAsStringSync(),
       ).embedFixers;
       final failed = <String>[];
-      final fake = _FakeFetcher({
-        'https://fixvx.com/a/status/1': _preview('From the second'),
-      });
+      final fake = _FakeFetcher(
+        {'https://fixvx.com/a/status/1': _preview('From the second')},
+        down: {'https://fixupx.com/a/status/1'},
+      );
       final previews = LinkPreviews(fetcher: fake, onServiceFailed: failed.add);
       final preview = await previews.preview(
         Uri.parse('https://fixupx.com/a/status/1'),
@@ -384,6 +515,108 @@ void main() {
       ]);
       expect(failed, ['twitter:1']);
     });
+
+    test('a link to a post that is not there switches nothing off', () async {
+      final fixers = LinkFilters.fromJson(
+        clearUrls: File(LinkFilters.clearUrlsAsset).readAsStringSync(),
+        embedFixers: File(LinkFilters.embedFixersAsset).readAsStringSync(),
+      ).embedFixers;
+      final failed = <String>[];
+      // Answers, but with nothing (no such post), everywhere.
+      final nothing = LinkPreviews(
+        fetcher: _FakeFetcher({}),
+        onServiceFailed: failed.add,
+      );
+      await nothing.preview(
+        Uri.parse('https://fixupx.com/a/status/0'),
+        fixers: fixers,
+      );
+      // Down everywhere: nothing shows another works either.
+      final allDown = LinkPreviews(
+        fetcher: _FakeFetcher(
+          {},
+          down: {
+            'https://fixupx.com/a/status/0',
+            'https://fixvx.com/a/status/0',
+            'https://x.com/a/status/0',
+          },
+        ),
+        onServiceFailed: failed.add,
+      );
+      await allDown.preview(
+        Uri.parse('https://fixupx.com/a/status/0'),
+        fixers: fixers,
+      );
+      expect(failed, isEmpty);
+    });
+
+    test('a service is reported at most once an hour', () async {
+      final fixers = LinkFilters.fromJson(
+        clearUrls: File(LinkFilters.clearUrlsAsset).readAsStringSync(),
+        embedFixers: File(LinkFilters.embedFixersAsset).readAsStringSync(),
+      ).embedFixers;
+      final failed = <String>[];
+      final previews = LinkPreviews(
+        fetcher: _FakeFetcher(
+          {
+            for (var i = 1; i <= 3; i++)
+              'https://fixvx.com/a/status/$i': _preview('$i'),
+          },
+          down: {for (var i = 1; i <= 3; i++) 'https://fixupx.com/a/status/$i'},
+        ),
+        onServiceFailed: failed.add,
+      );
+      for (var i = 1; i <= 3; i++) {
+        await previews.preview(
+          Uri.parse('https://fixupx.com/a/status/$i'),
+          fixers: fixers,
+        );
+      }
+      expect(failed, ['twitter:1']);
+    });
+
+    test('at most three fetches at a time', () async {
+      final gate = Completer<void>();
+      var running = 0;
+      var most = 0;
+      final previews = LinkPreviews(
+        fetcher: _FakeFetcher(
+          {},
+          onFetch: () async {
+            running++;
+            most = most < running ? running : most;
+            await gate.future;
+            running--;
+          },
+        ),
+      );
+      final all = [
+        for (var i = 0; i < 10; i++)
+          previews.preview(Uri.parse('https://s$i.example/')),
+      ];
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(most, LinkPreviews.maxConcurrent);
+      gate.complete();
+      await Future.wait(all);
+      expect(most, LinkPreviews.maxConcurrent);
+    });
+
+    test('turning previews off forgets them, the file too', () async {
+      final folder = await Directory.systemTemp.createTemp('conest-previews-');
+      addTearDown(() => folder.delete(recursive: true));
+      final file = File('${folder.path}/previews');
+      final previews = LinkPreviews(
+        fetcher: _FakeFetcher({'https://a.example/': _preview('A')}),
+        file: file,
+        key: List<int>.generate(32, (i) => i),
+      );
+      await previews.preview(Uri.parse('https://a.example/'));
+      await previews.flush();
+      expect(file.existsSync(), isTrue);
+      await previews.clear();
+      expect(previews.cached(Uri.parse('https://a.example/')), isNull);
+      expect(file.existsSync(), isFalse);
+    });
   });
 }
 
@@ -394,9 +627,13 @@ LinkPreview _preview(String title, {DateTime? at}) => LinkPreview(
 );
 
 class _FakeFetcher extends LinkPreviewFetcher {
-  _FakeFetcher(this.answers);
+  _FakeFetcher(this.answers, {this.down = const {}, this.onFetch});
 
   final Map<String, LinkPreview> answers;
+
+  /// Links whose site is down (as opposed to answering with nothing).
+  final Set<String> down;
+  final Future<void> Function()? onFetch;
   final asked = <String>[];
 
   @override
@@ -406,8 +643,14 @@ class _FakeFetcher extends LinkPreviewFetcher {
     DateTime Function() now = DateTime.now,
   }) async {
     asked.add(url.toString());
+    await onFetch?.call();
     final answer = answers[url.toString()];
-    if (answer == null) throw const LinkPreviewException('nothing');
+    if (answer == null) {
+      throw LinkPreviewException(
+        'nothing',
+        down: down.contains(url.toString()),
+      );
+    }
     return answer;
   }
 }

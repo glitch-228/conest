@@ -76,6 +76,15 @@ void main() {
     expect(opened, [Uri.parse('https://site.example/post')]);
   });
 
+  testWidgets('a plain http link waits for a tap, even from a contact', (
+    tester,
+  ) async {
+    await pump(tester, 'http://site.example/post', trusted: true);
+    await tester.pump();
+    expect(source.asked, isEmpty);
+    expect(find.byKey(const ValueKey('link-preview-load')), findsOneWidget);
+  });
+
   testWidgets('from a stranger it waits for a tap', (tester) async {
     await pump(tester, 'https://site.example/post', trusted: false);
     await tester.pump();

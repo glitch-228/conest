@@ -30,6 +30,9 @@ class LinkPreviews {
   static const maxImageBytes = 4 * 1024 * 1024;
   static const retryAfter = Duration(hours: 1);
 
+  /// Fetches at a time, however many messages ask.
+  static const maxConcurrent = 3;
+
   final LinkPreviewFetcher _fetcher;
   final File? file;
   final List<int>? key;
@@ -42,6 +45,9 @@ class LinkPreviews {
   final _entries = <String, LinkPreview>{};
   final _failed = <String, DateTime>{};
   final _loading = <String, Future<LinkPreview?>>{};
+  final _reported = <String, DateTime>{};
+  var _running = 0;
+  final _waiting = <Completer<void>>[];
   Timer? _flushTimer;
   Future<void> _writeTail = Future<void>.value();
 
@@ -80,37 +86,91 @@ class LinkPreviews {
     if (failedLately(url)) return Future.value(null);
     final key = url.toString();
     return _loading[key] ??= () async {
+      await _slot();
       try {
         final candidates = [
           url,
           ...?fixers?.alternatesFor(url, failed: failedServices),
         ];
+        // Services that were down (not merely without this post): reported
+        // only when another one did work, so a link to a post that does not
+        // exist cannot switch them off.
+        final down = <String>[];
         for (final candidate in candidates) {
           LinkPreview? preview;
+          var serviceDown = false;
           try {
             preview = await _fetcher.fetch(
               candidate,
               maxImage: maxImage,
               now: _now,
             );
-          } on LinkPreviewException {
-            preview = null;
+          } on LinkPreviewException catch (error) {
+            serviceDown = error.down;
+          } catch (_) {
+            // Anything else (a page the parser chokes on) is a failure too.
           }
           if (preview != null) {
             _remember(key, preview);
+            down.forEach(_report);
             return preview;
           }
-          if (fixers?.serviceOf(candidate) case final service?) {
-            onServiceFailed?.call(service);
+          if (serviceDown) {
+            if (fixers?.serviceOf(candidate) case final service?) {
+              down.add(service);
+            }
           }
         }
         _failed[key] = _now().toUtc();
         if (_failed.length > maxEntries) _failed.remove(_failed.keys.first);
         return null;
       } finally {
+        _release();
         _loading.remove(key);
       }
     }();
+  }
+
+  /// At most once an hour per service.
+  void _report(String service) {
+    final now = _now();
+    final last = _reported[service];
+    if (last != null && now.difference(last) < retryAfter) return;
+    _reported[service] = now;
+    onServiceFailed?.call(service);
+  }
+
+  Future<void> _slot() async {
+    if (_running < maxConcurrent) {
+      _running++;
+      return;
+    }
+    final turn = Completer<void>();
+    _waiting.add(turn);
+    await turn.future; // the slot is handed over by [_release]
+  }
+
+  void _release() {
+    if (_waiting.isNotEmpty) {
+      _waiting.removeAt(0).complete();
+    } else {
+      _running--;
+    }
+  }
+
+  /// Forgets every kept preview and failure (previews were turned off),
+  /// the file too.
+  Future<void> clear() async {
+    _entries.clear();
+    _failed.clear();
+    _flushTimer?.cancel();
+    _flushTimer = null;
+    await _writeTail;
+    for (final path in [?file?.path, if (file != null) '${file!.path}.tmp']) {
+      try {
+        await File(path).delete();
+      } catch (_) {}
+    }
   }
 
   void _remember(String key, LinkPreview preview) {

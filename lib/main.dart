@@ -9683,8 +9683,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       LinkPreviewCard(
                         text: message.body,
                         source: MessengerLinkPreviews(controller),
-                        // A group this device is in.
-                        trusted: true,
+                        // From this device, or a member who is an accepted
+                        // contact: other members are strangers here.
+                        trusted:
+                            outbound ||
+                            (controller
+                                    .contactByDeviceId(message.senderDeviceId)
+                                    ?.canSendOutbound ??
+                                false),
                         openUrl: controller.openExternalUrl,
                         accent: outbound
                             ? palette.outboundText

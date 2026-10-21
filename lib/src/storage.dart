@@ -565,6 +565,8 @@ class VaultStore {
       File('${file.path}.replace-old'),
       File('${file.path}.errors'),
       File('${file.path}.errors.tmp'),
+      File('${file.path}.previews'),
+      File('${file.path}.previews.tmp'),
     ]) {
       if (await candidate.exists()) await candidate.delete();
     }

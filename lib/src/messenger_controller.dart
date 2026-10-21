@@ -6081,6 +6081,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> setLinkPreviewsEnabled(bool value) async {
     _snapshot = _snapshot.copyWith(linkPreviewMode: value ? 'receiver' : 'off');
+    // Off: what was kept goes too.
+    if (!value) await _linkPreviews?.clear();
     await _saveSnapshotSilently(notify: true);
   }
 
