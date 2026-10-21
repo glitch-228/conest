@@ -238,7 +238,9 @@ class LinkPreviewFetcher {
 
   /// A picture larger than this (per side, or in all) is not decoded.
   static const maxPictureSide = 8192;
-  static const maxPicturePixels = 16 * 1024 * 1024;
+
+  /// (PNGs and animated pictures decode at full size before scaling.)
+  static const maxPicturePixels = 4 * 1024 * 1024;
 
   /// Embed-fixing services answer bots that preview links (as chat apps
   /// do) with the post, and browsers with a redirect to the site.
@@ -496,14 +498,21 @@ Future<Uint8List?> makeLinkPreviewThumbnail(Uint8List bytes) async {
       return null;
     }
     final scale = min(1.0, _thumbnailEdge / max(width, height));
+    final targetWidth = max(1, (width * scale).round());
+    final targetHeight = max(1, (height * scale).round());
     final codec = await descriptor.instantiateCodec(
-      targetWidth: max(1, (width * scale).round()),
-      targetHeight: max(1, (height * scale).round()),
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
     );
     try {
       final frame = await codec.getNextFrame();
       final image = frame.image;
       try {
+        // An animated picture ignores the size asked for: never copy out a
+        // full-size frame.
+        if (image.width > targetWidth || image.height > targetHeight) {
+          return null;
+        }
         final pixels = await image.toByteData(
           format: ui.ImageByteFormat.rawRgba,
         );

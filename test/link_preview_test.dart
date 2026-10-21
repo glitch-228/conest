@@ -381,11 +381,25 @@ void main() {
           ),
           isNull,
         );
-        expect(await makeLinkPreviewThumbnail(pngOf(4100, 4100)), isNull);
+        expect(await makeLinkPreviewThumbnail(pngOf(2100, 2100)), isNull);
         // Just inside both limits it is.
-        expect(await makeLinkPreviewThumbnail(pngOf(4000, 4000)), isNotNull);
+        expect(await makeLinkPreviewThumbnail(pngOf(2000, 2000)), isNotNull);
       },
     );
+
+    test('an animated picture is not copied out at full size', () async {
+      // The engine decodes every frame of an animation at its own size,
+      // whatever size was asked for.
+      final animation = img.Image(width: 800, height: 800)
+        ..addFrame(img.Image(width: 800, height: 800));
+      expect(animation.numFrames, 2);
+      expect(
+        await makeLinkPreviewThumbnail(
+          Uint8List.fromList(img.encodeGif(animation)),
+        ),
+        isNull,
+      );
+    });
 
     test('only JPEG, PNG, GIF and WebP are read', () async {
       final bmp = Uint8List.fromList(
@@ -549,6 +563,49 @@ void main() {
       );
       expect(failed, isEmpty);
     });
+
+    test('only another service working shows one was down', () async {
+      final fixers = LinkFilters.fromJson(
+        clearUrls: File(LinkFilters.clearUrlsAsset).readAsStringSync(),
+        embedFixers: File(LinkFilters.embedFixersAsset).readAsStringSync(),
+      ).embedFixers;
+      final failed = <String>[];
+      // Both services down for this post; the site itself gives a card.
+      final previews = LinkPreviews(
+        fetcher: _FakeFetcher(
+          {'https://x.com/a/status/0': _preview('Generic')},
+          down: {
+            'https://fixupx.com/a/status/0',
+            'https://fixvx.com/a/status/0',
+          },
+        ),
+        onServiceFailed: failed.add,
+      );
+      final preview = await previews.preview(
+        Uri.parse('https://fixupx.com/a/status/0'),
+        fixers: fixers,
+      );
+      expect(preview?.title, 'Generic');
+      expect(failed, isEmpty);
+    });
+
+    test(
+      'a fetch that ends after previews were cleared keeps nothing',
+      () async {
+        final gate = Completer<void>();
+        final previews = LinkPreviews(
+          fetcher: _FakeFetcher({
+            'https://a.example/': _preview('A'),
+          }, onFetch: () => gate.future),
+        );
+        final loading = previews.preview(Uri.parse('https://a.example/'));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await previews.clear();
+        gate.complete();
+        await loading;
+        expect(previews.cached(Uri.parse('https://a.example/')), isNull);
+      },
+    );
 
     test('a service is reported at most once an hour', () async {
       final fixers = LinkFilters.fromJson(

@@ -47,6 +47,9 @@ class LinkPreviews {
   final _loading = <String, Future<LinkPreview?>>{};
   final _reported = <String, DateTime>{};
   var _running = 0;
+
+  /// Bumped by [clear]: a fetch that started before keeps nothing.
+  var _epoch = 0;
   final _waiting = <Completer<void>>[];
   Timer? _flushTimer;
   Future<void> _writeTail = Future<void>.value();
@@ -86,6 +89,7 @@ class LinkPreviews {
     if (failedLately(url)) return Future.value(null);
     final key = url.toString();
     return _loading[key] ??= () async {
+      final epoch = _epoch;
       await _slot();
       try {
         final candidates = [
@@ -111,8 +115,10 @@ class LinkPreviews {
             // Anything else (a page the parser chokes on) is a failure too.
           }
           if (preview != null) {
-            _remember(key, preview);
-            down.forEach(_report);
+            if (epoch == _epoch) _remember(key, preview);
+            // Only another service working shows these were down: the
+            // original site answering says nothing about them.
+            if (fixers?.serviceOf(candidate) != null) down.forEach(_report);
             return preview;
           }
           if (serviceDown) {
@@ -161,6 +167,7 @@ class LinkPreviews {
   /// Forgets every kept preview and failure (previews were turned off),
   /// the file too.
   Future<void> clear() async {
+    _epoch++;
     _entries.clear();
     _failed.clear();
     _flushTimer?.cancel();
