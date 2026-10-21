@@ -5220,4 +5220,9 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get settingsLinkPreviewsTorHelp =>
       '设置了 Tor 时，网站看到的是 Tor 出口而不是你的地址，你的网络上也不会查询该链接的任何信息。Tor 未连接时不获取预览。';
+
+  @override
+  String linkPreviewFromSender(String host) {
+    return '$host · 发送者提供的预览';
+  }
 }

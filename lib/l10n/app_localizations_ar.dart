@@ -5590,4 +5590,9 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get settingsLinkPreviewsTorHelp =>
       'عند إعداد Tor ترى المواقع مخرج Tor لا عنوانك، ولا يُستعلم عن شيء من الرابط على شبكتك. ما دام Tor غير متصل لا تُجلب معاينات.';
+
+  @override
+  String linkPreviewFromSender(String host) {
+    return '$host · معاينة من المرسل';
+  }
 }

@@ -5584,4 +5584,9 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get settingsLinkPreviewsTorHelp =>
       'Когда Tor настроен, сайты видят выходной узел Tor, а не ваш адрес, и в вашей сети ничего о ссылке не запрашивается. Пока Tor не подключён, предпросмотр не загружается.';
+
+  @override
+  String linkPreviewFromSender(String host) {
+    return '$host · предпросмотр от отправителя';
+  }
 }

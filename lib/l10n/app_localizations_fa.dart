@@ -5459,4 +5459,9 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get settingsLinkPreviewsTorHelp =>
       'وقتی Tor راه‌اندازی شده باشد، سایت‌ها خروجی Tor را می‌بینند نه نشانی شما را، و دربارهٔ پیوند چیزی در شبکهٔ شما جست‌وجو نمی‌شود. تا Tor وصل نشده، پیش‌نمایشی گرفته نمی‌شود.';
+
+  @override
+  String linkPreviewFromSender(String host) {
+    return '$host · پیش‌نمایش از فرستنده';
+  }
 }

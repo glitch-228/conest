@@ -2533,12 +2533,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _sendCurrentMessage() async {
+    // Before the links are cleaned and the box emptied: it is for what
+    // was written there.
+    final linkPreview = composerLinkPreview(_composerController);
     finishComposerLinks(_composerController);
     final contact = _selectedContact;
     if (contact == null) return;
     final body = _composerController.text.trim();
-    // Before the box is emptied (it is for what is written there).
-    final linkPreview = composerLinkPreview(_composerController);
     // nightly.10: when files are staged, Send commits the bundle (with
     // the typed text as caption on the first item). When no files are
     // staged, fall through to the text-only send path.
@@ -2620,10 +2621,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _sendCurrentGroupMessage() async {
+    // Before the links are cleaned and the box emptied: it is for what
+    // was written there.
+    final linkPreview = composerLinkPreview(_composerController);
     finishComposerLinks(_composerController);
     final group = _selectedGroup;
     final body = _composerController.text.trim();
-    final linkPreview = composerLinkPreview(_composerController);
     if (group == null || body.isEmpty) {
       return;
     }

@@ -164,10 +164,14 @@ class _Replayed implements MailSocket {
 
   @override
   Future<void> close() async {
-    await _sub.cancel();
+    await _sub.cancel().timeout(_closeWait, onTimeout: () {});
     await _socket.close();
   }
 }
+
+/// How long a close waits for the connection to end politely before it is
+/// cut (a frozen link never lets a close finish).
+const _closeWait = Duration(seconds: 2);
 
 /// IMAP or SMTP ([alpn]) on [host]'s port 443, as chatmail servers offer.
 Future<MailSocket> connectViaHttpsPort(String host, String alpn) =>
@@ -197,7 +201,7 @@ class _IoMailSocket implements MailSocket {
   @override
   Future<void> close() async {
     try {
-      await _socket.close();
+      await _socket.close().timeout(_closeWait);
     } catch (_) {}
     _socket.destroy();
   }

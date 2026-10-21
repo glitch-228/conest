@@ -8650,6 +8650,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'When Tor is set up, sites see a Tor exit, not your address, and nothing about the link is looked up on your network. While Tor is not connected, no previews are fetched.'**
   String get settingsLinkPreviewsTorHelp;
+
+  /// Above a link preview its sender attached: the link's real host, and that the sender made the preview.
+  ///
+  /// In en, this message translates to:
+  /// **'{host} · preview from the sender'**
+  String linkPreviewFromSender(String host);
 }
 
 class _AppLocalizationsDelegate

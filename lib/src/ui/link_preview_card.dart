@@ -18,6 +18,10 @@ abstract interface class LinkPreviewSource {
   /// Whether this device sends previews with its messages.
   bool get linkPreviewsAttached;
 
+  /// Whether a preview may be fetched now without a tap (not in battery
+  /// saver, roaming or offline).
+  bool get linkPreviewsMayFetchNow;
+
   /// Whether a preview may be fetched now without being asked.
   bool get linkPreviewsAutomaticNow;
 
@@ -61,6 +65,9 @@ class LinkPreviewCard extends StatefulWidget {
 class _LinkPreviewCardState extends State<LinkPreviewCard> {
   Uri? _link;
   LinkPreview? _preview;
+
+  /// [_preview] is what the sender attached, not fetched here.
+  bool _fromSender = false;
   bool _loading = false;
   bool _tried = false;
 
@@ -83,14 +90,24 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
 
   void _start() {
     _link = _firstWebLink(widget.text);
+    _fromSender = false;
     final link = _link;
     if (link == null || !widget.source.linkPreviewsEnabled) return;
-    if (widget.attached case final attached?) {
-      _preview = attached;
+    final own = widget.source.linkPreviewsFetchedHere
+        ? widget.source.cachedLinkPreview(link)
+        : null;
+    // Only for the message's own link (an edit can change it).
+    if (own == null && widget.attached?.url == link) {
+      _preview = widget.attached;
+      _fromSender = true;
+      // This device's own, when it fetches them: only the site speaks then.
+      if (widget.source.linkPreviewsFetchedHere && _automatic) {
+        unawaited(_load());
+      }
       return;
     }
     if (!widget.source.linkPreviewsFetchedHere) return;
-    _preview = widget.source.cachedLinkPreview(link);
+    _preview = own;
     if (_preview == null && _automatic) unawaited(_load());
   }
 
@@ -125,7 +142,10 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
     setState(() {
       _loading = false;
       _tried = true;
-      _preview = preview;
+      if (preview != null || !_fromSender) {
+        _preview = preview;
+        _fromSender = false;
+      }
     });
   }
 
@@ -183,7 +203,19 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if ((preview.siteName ?? '').isNotEmpty)
+                      // From the sender: the link's own host, never a
+                      // name the sender chose, and said so.
+                      if (_fromSender)
+                        Text(
+                          l10nOf(context).linkPreviewFromSender(link.host),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: widget.accent,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        )
+                      else if ((preview.siteName ?? '').isNotEmpty)
                         Text(
                           preview.siteName!,
                           maxLines: 1,
@@ -214,7 +246,9 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
                     ],
                   ),
                 ),
-                if (preview.image case final image?) ...[
+                // A stranger's picture is not shown unasked.
+                if (preview.image case final image?
+                    when !_fromSender || widget.trusted) ...[
                   const SizedBox(width: 8),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(6),
@@ -254,6 +288,9 @@ class MessengerLinkPreviews implements LinkPreviewSource {
 
   @override
   bool get linkPreviewsAttached => controller.linkPreviewsAttached;
+
+  @override
+  bool get linkPreviewsMayFetchNow => controller.linkPreviewsMayFetchNow;
 
   @override
   LinkPreview? cachedLinkPreview(Uri url) => controller.cachedLinkPreview(url);

@@ -12,6 +12,10 @@ class _Source implements LinkPreviewSource {
   bool automatic = true;
   bool fetchedHere = true;
   bool attaches = false;
+  bool mayFetchNow = true;
+
+  @override
+  bool get linkPreviewsMayFetchNow => mayFetchNow;
 
   @override
   bool get linkPreviewsFetchedHere => fetchedHere;
@@ -160,6 +164,64 @@ void main() {
     expect(source.asked, isEmpty);
   });
 
+  testWidgets('a sent preview names the link\'s own host and its sender, '
+      'and a stranger\'s picture is not shown', (tester) async {
+    source.fetchedHere = false;
+    final attached = LinkPreview(
+      url: Uri.parse('https://site.example/post'),
+      fetchedAt: DateTime.utc(2026, 10, 21),
+      title: 'Headline',
+      siteName: 'Some Trusted News',
+      image: Uint8List.fromList(img.encodeJpg(img.Image(width: 8, height: 8))),
+    );
+    await pump(
+      tester,
+      'https://site.example/post',
+      trusted: false,
+      attached: attached,
+    );
+    expect(find.text('site.example · preview from the sender'), findsOneWidget);
+    expect(find.text('Some Trusted News'), findsNothing);
+    expect(find.byType(Image), findsNothing);
+
+    await pump(
+      tester,
+      'https://site.example/post',
+      trusted: true,
+      attached: attached,
+    );
+    expect(find.byType(Image), findsOneWidget);
+
+    // A sent preview for another link (an edit changed it) is not shown.
+    await pump(
+      tester,
+      'https://other.example/x',
+      trusted: true,
+      attached: attached,
+    );
+    expect(find.text('Headline'), findsNothing);
+  });
+
+  testWidgets('when this device fetches too, its own replaces the sent one', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      'https://site.example/post',
+      trusted: true,
+      attached: LinkPreview(
+        url: Uri.parse('https://site.example/post'),
+        fetchedAt: DateTime.utc(2026, 10, 21),
+        title: 'Claimed',
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(source.asked, hasLength(1));
+    expect(find.text('A fine post'), findsOneWidget);
+    expect(find.text('Claimed'), findsNothing);
+  });
+
   testWidgets('when only senders attach previews, nothing is fetched here', (
     tester,
   ) async {
@@ -218,6 +280,36 @@ void main() {
       await tester.pump();
       expect(composerLinkPreview(text), isNotNull);
     });
+
+    testWidgets('a link half typed is not fetched; once finished it is', (
+      tester,
+    ) async {
+      source.attaches = true;
+      await box(tester);
+      // Typed a character at a time, with pauses.
+      const link = 'https://site.example/post';
+      for (var end = 1; end <= link.length; end++) {
+        text.text = link.substring(0, end);
+        await tester.pump(const Duration(milliseconds: 800));
+      }
+      expect(source.asked, isEmpty);
+      text.text = 'https://site.example/post ';
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump();
+      expect(source.asked, [Uri.parse('https://site.example/post')]);
+    });
+
+    testWidgets(
+      'in battery saver or roaming nothing is fetched while writing',
+      (tester) async {
+        source.attaches = true;
+        source.mayFetchNow = false;
+        await box(tester);
+        text.text = 'look https://site.example/post ';
+        await tester.pump(const Duration(milliseconds: 800));
+        expect(source.asked, isEmpty);
+      },
+    );
 
     testWidgets('otherwise nothing is fetched while writing', (tester) async {
       await box(tester);

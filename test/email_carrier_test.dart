@@ -254,6 +254,75 @@ void main() {
       );
     });
 
+    test(
+      'a slow link that keeps moving is not taken for a frozen one',
+      () async {
+        // 24 KB both ways, 2 KB every 100 ms: about two seconds in all, far
+        // over the 300 ms the check waits for data, which keeps coming.
+        server.throttleChunkBytes = 2048;
+        server.throttleDelay = const Duration(milliseconds: 100);
+        final lines = <String>[];
+        await EmailCarrierChannel.checkLogin(
+          chatmail(),
+          connector: server.connect,
+          log: lines.add,
+          transferTimeout: const Duration(milliseconds: 300),
+        );
+        expect(lines.join('\n'), contains('passed'));
+      },
+    );
+
+    test('the account says where it was moved and whether it was picked', () {
+      final moved = EmailCarrierConfig.chatmail(
+        'chat.test',
+        random: Random(1),
+        movedAt: DateTime.utc(2026, 10, 21, 9),
+      );
+      final read = EmailCarrierConfig.fromJson(
+        jsonDecode(jsonEncode(moved.toJson())) as Map<String, dynamic>,
+      )!;
+      expect(read.movedAt, DateTime.utc(2026, 10, 21, 9));
+      expect(read.serverPicked, isTrue);
+      final named = EmailCarrierConfig.chatmail(
+        'chat.test',
+        serverPicked: false,
+      );
+      expect(
+        EmailCarrierConfig.fromJson(
+          jsonDecode(jsonEncode(named.toJson())) as Map<String, dynamic>,
+        )!.serverPicked,
+        isFalse,
+      );
+      // Accounts from before count as picked.
+      final old = Map<String, dynamic>.from(moved.toJson())
+        ..remove('serverPicked');
+      expect(EmailCarrierConfig.fromJson(old)!.serverPicked, isTrue);
+    });
+
+    test(
+      'a connection cut mid-read counts as a stall too',
+      () async {
+        var stalls = 0;
+        final config = account('carol');
+        final carol = stallReportingChannel(config, server, () => stalls++);
+        channels.add(carol);
+        carol.start();
+        await until(() => carol.state == EmailCarrierState.connected);
+        server.dropAfterBytes = 2000;
+        await server.dropConnections();
+        server.deliver(
+          config.mail,
+          'Content-Type: multipart/encrypted\r\n\r\n${'x' * 20000}\r\n',
+        );
+        final deadline = DateTime.now().add(const Duration(seconds: 25));
+        while (stalls == 0 && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        expect(stalls, 1);
+      },
+      timeout: const Timeout(Duration(seconds: 40)),
+    );
+
     test('a server that does not take APPEND is still used', () async {
       server.append = false;
       final lines = <String>[];
@@ -600,3 +669,16 @@ class _BreakableSocket implements MailSocket {
     await _inner.close();
   }
 }
+
+/// A channel that reports stalls to [onStall], reading with short limits.
+EmailCarrierChannel stallReportingChannel(
+  EmailCarrierConfig config,
+  FakeMailServer server,
+  void Function() onStall,
+) => EmailCarrierChannel(
+  config: config,
+  connector: server.connect,
+  onFrame: (_, _) {},
+  onStalls: onStall,
+  readTimeout: const Duration(milliseconds: 300),
+);

@@ -5446,4 +5446,9 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get settingsLinkPreviewsTorHelp =>
       'Saat Tor disiapkan, situs melihat simpul keluar Tor, bukan alamat Anda, dan tidak ada yang dicari tentang tautan di jaringan Anda. Selama Tor belum terhubung, pratinjau tidak diambil.';
+
+  @override
+  String linkPreviewFromSender(String host) {
+    return '$host · pratinjau dari pengirim';
+  }
 }

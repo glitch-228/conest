@@ -6144,7 +6144,7 @@ class MessengerController extends ChangeNotifier {
     LinkPreview? preview,
     String body,
   ) async {
-    if (preview == null) return null;
+    if (preview == null || !linkPreviewsEnabled) return null;
     final link = _firstWebLink(body);
     if (link == null || preview.url != link) return null;
     final image = preview.image;
@@ -6191,7 +6191,12 @@ class MessengerController extends ChangeNotifier {
   /// (Strangers' chats always wait for a tap: a fetch shows the site this
   /// device's address.)
   bool get linkPreviewsAutomaticNow =>
-      linkPreviewsFetchedHere &&
+      linkPreviewsFetchedHere && linkPreviewsMayFetchNow;
+
+  /// Whether a preview may be fetched without a tap at all now: not in
+  /// battery saver, roaming or offline.
+  bool get linkPreviewsMayFetchNow =>
+      linkPreviewsEnabled &&
       _energyPolicy.modeFor(_networkCostClass) != EnergyMode.saver &&
       _networkCostClass != NetworkCostClass.roaming &&
       _networkCostClass != NetworkCostClass.offline;
@@ -7555,6 +7560,8 @@ class MessengerController extends ChangeNotifier {
   Future<String> enableChatmailCarrier([
     String? domain,
     List<String> candidates = defaultChatmailDomains,
+    // For a move away from a server this network froze.
+    ({DateTime movedAt, bool Function() stillWanted})? move,
   ]) async {
     final trimmed = domain?.trim().toLowerCase() ?? '';
     if (trimmed.isNotEmpty) {
@@ -7564,7 +7571,10 @@ class MessengerController extends ChangeNotifier {
           '${defaultChatmailDomains.first}, or leave it empty.',
         );
       }
-      await _enableEmailCarrier(EmailCarrierConfig.chatmail(trimmed));
+      // A server the user named: never left for another.
+      await _enableEmailCarrier(
+        EmailCarrierConfig.chatmail(trimmed, serverPicked: false),
+      );
       return trimmed;
     }
     // Before probing anything: with Online or Email off, no server is
@@ -7592,8 +7602,9 @@ class MessengerController extends ChangeNotifier {
     for (final server in reachable) {
       try {
         await _enableEmailCarrier(
-          EmailCarrierConfig.chatmail(server),
+          EmailCarrierConfig.chatmail(server, movedAt: move?.movedAt),
           attempts: 1,
+          stillWanted: move?.stillWanted,
         );
         return server;
       } catch (error) {
@@ -7638,6 +7649,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> _enableEmailCarrier(
     EmailCarrierConfig config, {
     int attempts = 3,
+    bool Function()? stillWanted,
   }) async {
     _requireIdentity();
     if (!_carrierAllowed(TransportKind.deltaChat)) {
@@ -7663,6 +7675,11 @@ class MessengerController extends ChangeNotifier {
         if (attempt >= attempts || !isTransientNetworkError(error)) rethrow;
         await Future<void>.delayed(Duration(seconds: attempt));
       }
+    }
+    // The sign-up took a while: what asked for it may no longer hold (the
+    // user removed email, or set up another account, meanwhile).
+    if (stillWanted != null && !stillWanted()) {
+      throw StateError('Email changed meanwhile; this setup was dropped.');
     }
     if (_carrierTransports.containsKey(TransportKind.deltaChat)) {
       await unregisterCarrierTransport(TransportKind.deltaChat);
@@ -7762,9 +7779,13 @@ class MessengerController extends ChangeNotifier {
   /// server that works here, and contacts learn the new address as with
   /// any carrier change. Not an address the user gave, nor one Delta Chat
   /// uses (that would change their address there); at most every 6 hours.
+  @visibleForTesting
+  Future<void> moveFrozenChatmailAccountForTesting() =>
+      _moveFrozenChatmailAccount();
+
   Future<void> _moveFrozenChatmailAccount() async {
     final config = emailCarrierConfig;
-    if (config == null || !config.chatmail) return;
+    if (config == null || !config.chatmail || !config.serverPicked) return;
     final server = config.mail.split('@').last;
     if (deltaChatEnabled) {
       setStatus(
@@ -7773,18 +7794,30 @@ class MessengerController extends ChangeNotifier {
       );
       return;
     }
-    final now = _now();
-    if (_lastChatmailMove case final last?
-        when now.difference(last) < const Duration(hours: 6)) {
-      return;
+    final now = _now().toUtc();
+    // Kept with the account, so a restart does not move it again sooner.
+    for (final last in [?_lastChatmailMove, ?config.movedAt]) {
+      final age = now.difference(last);
+      if (!age.isNegative && age < const Duration(hours: 6)) return;
     }
     _lastChatmailMove = now;
     appendDebugLog('Email: moving away from $server, which this network stops');
     try {
-      final moved = await enableChatmailCarrier(null, [
-        for (final domain in defaultChatmailDomains)
-          if (domain != server) domain,
-      ]);
+      final moved = await enableChatmailCarrier(
+        null,
+        [
+          for (final domain in defaultChatmailDomains)
+            if (domain != server) domain,
+        ],
+        (
+          movedAt: now,
+          stillWanted: () =>
+              emailCarrierConfig?.mail == config.mail &&
+              !deltaChatEnabled &&
+              _carrierAllowed(TransportKind.deltaChat) &&
+              !isCarrierPaused(TransportKind.deltaChat),
+        ),
+      );
       recordError(
         'carrier',
         'Email moved from $server to $moved: $server stops on this network.',
@@ -34956,7 +34989,14 @@ class MessengerController extends ChangeNotifier {
     final updatedMessages = conversations[conversationIndex].messages
         .map(
           (message) => message.id == messageId
-              ? message.copyWith(body: body, editedAt: editedAt)
+              ? message.copyWith(
+                  body: body,
+                  editedAt: editedAt,
+                  // An edit that changed the link drops its old preview.
+                  clearLinkPreview:
+                      message.linkPreview != null &&
+                      _firstWebLink(body) != message.linkPreview!.url,
+                )
               : message,
         )
         .toList();

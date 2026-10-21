@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io' show SocketException;
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -211,11 +212,18 @@ class EmailCarrierConfig {
     this.chatmail = false,
     this.uidValidity,
     this.lastUid = 0,
+    this.serverPicked = true,
+    this.movedAt,
   });
 
   /// A new account on a chatmail server: a random name and password; the
   /// first login creates it.
-  factory EmailCarrierConfig.chatmail(String domain, {Random? random}) {
+  factory EmailCarrierConfig.chatmail(
+    String domain, {
+    Random? random,
+    bool serverPicked = true,
+    DateTime? movedAt,
+  }) {
     final source = random ?? Random.secure();
     String token(String alphabet, int length) => List.generate(
       length,
@@ -233,6 +241,8 @@ class EmailCarrierConfig {
       smtpPort: 465,
       mailboxKey: newMailboxKey(source),
       chatmail: true,
+      serverPicked: serverPicked,
+      movedAt: movedAt,
     );
   }
 
@@ -248,6 +258,13 @@ class EmailCarrierConfig {
   /// Where reading resumes: the folder's UIDVALIDITY and the last UID read.
   final int? uidValidity;
   final int lastUid;
+
+  /// A chatmail server this app picked (one the user named is never left
+  /// for another). True for accounts from before this was kept.
+  final bool serverPicked;
+
+  /// When the account was moved here from a server this network froze.
+  final DateTime? movedAt;
 
   static Uint8List newMailboxKey([Random? random]) {
     final source = random ?? Random.secure();
@@ -266,6 +283,8 @@ class EmailCarrierConfig {
         chatmail: chatmail,
         uidValidity: uidValidity ?? this.uidValidity,
         lastUid: lastUid ?? this.lastUid,
+        serverPicked: serverPicked,
+        movedAt: movedAt,
       );
 
   Map<String, Object?> toJson() => {
@@ -279,6 +298,8 @@ class EmailCarrierConfig {
     if (chatmail) 'chatmail': true,
     if (uidValidity != null) 'uidValidity': uidValidity,
     if (lastUid > 0) 'lastUid': lastUid,
+    if (!serverPicked) 'serverPicked': false,
+    if (movedAt case final at?) 'movedAt': at.toUtc().toIso8601String(),
   };
 
   static EmailCarrierConfig? fromJson(Object? json) {
@@ -318,6 +339,8 @@ class EmailCarrierConfig {
       chatmail: json['chatmail'] == true,
       uidValidity: json['uidValidity'] as int?,
       lastUid: json['lastUid'] as int? ?? 0,
+      serverPicked: json['serverPicked'] != false,
+      movedAt: DateTime.tryParse(json['movedAt'] as String? ?? '')?.toUtc(),
     );
   }
 
@@ -450,6 +473,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           (config.chatmail
               ? chatmailFallback(log: log, viaHttps: chatmailReachedViaHttps)
               : null),
+      // No data for this long is a stall; a slow link that keeps moving is
+      // not.
+      lineTimeout: transferTimeout,
     );
     log?.call('IMAP ${config.imapHost} answered in ${took()}');
     var frozen = false;
@@ -462,7 +488,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         // 16 KB (the lab phone's, to chat.adminforge.de): such a server
         // is no use here, however fast it answered.
         try {
-          await client.checkTransfer().timeout(transferTimeout);
+          await client.checkTransfer().timeout(transferCheckLimit);
           log?.call(
             'IMAP transfer check at ${config.imapHost} passed in ${took()}',
           );
@@ -489,13 +515,17 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     }
   }
 
-  /// How long a sign-up waits for its transfer check (48 KB both ways).
-  static const transferCheckTimeout = Duration(seconds: 20);
+  /// How long a sign-up's transfer check may go without data before the
+  /// server counts as frozen here, and how long it may take in all.
+  static const transferCheckTimeout = Duration(seconds: 30);
+  static const transferCheckLimit = Duration(minutes: 2);
 
   @override
   void start() {
     if (_started) return;
     _started = true;
+    _stalls = 0;
+    _stallsReported = false;
     unawaited(_readLoop(++_generation));
   }
 
@@ -627,7 +657,10 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
             .catchError((Object _) {});
         client = null;
         if (!current()) break;
-        if (step == 'reading new mail' && error is TimeoutException) {
+        // Stopped mid-read: frozen (no data), or cut (a reset some networks
+        // send instead).
+        if (step == 'reading new mail' &&
+            (error is TimeoutException || error is SocketException)) {
           _stalls++;
           if (_stalls >= stallsBeforeMove && !_stallsReported) {
             _stallsReported = true;

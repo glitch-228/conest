@@ -17158,7 +17158,8 @@ void main() {
         addTearDown(alice.dispose);
         alice.emailReadTimeout = const Duration(milliseconds: 300);
         alice.emailTransferCheckTimeout = const Duration(seconds: 1);
-        await alice.enableChatmailCarrier('chat.test');
+        // Picked here (a server the user named is never left).
+        await alice.enableChatmailCarrier(null, ['chat.test']);
         final first = alice.emailCarrierConfig!.mail;
         // Reading (mail from before it started is never read).
         final connected = DateTime.now().add(const Duration(seconds: 10));
@@ -17186,6 +17187,34 @@ void main() {
       },
       timeout: const Timeout(Duration(seconds: 60)),
     );
+
+    test('a server the user named is not left, and a move the user overtook '
+        'is dropped', () async {
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        mailConnector: server.connect,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableChatmailCarrier('chat.test');
+      expect(alice.emailCarrierConfig!.serverPicked, isFalse);
+      final named = alice.emailCarrierConfig!.mail;
+      await alice.moveFrozenChatmailAccountForTesting();
+      expect(alice.emailCarrierConfig!.mail, named);
+
+      // A setup no longer wanted when its sign-up ends changes nothing.
+      await expectLater(
+        alice.enableChatmailCarrier(
+          null,
+          ['other.test'],
+          (movedAt: DateTime.utc(2026, 10, 21), stillWanted: () => false),
+        ),
+        throwsStateError,
+      );
+      expect(alice.emailCarrierConfig!.mail, named);
+    });
 
     test('two devices talk over chatmail when Conest relays fail', () async {
       final server = await FakeMailServer.start();
@@ -22998,6 +23027,64 @@ void main() {
       body,
     );
     expect(notAPicture?.image, isNull);
+  });
+
+  test('with previews off a sent one is not kept; an edit that changes the '
+      'link drops it', () async {
+    final relay = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    await alice.setLinkPreviewMode('sender');
+    final preview = LinkPreview(
+      url: Uri.parse('https://site.example/post'),
+      fetchedAt: DateTime.utc(2026, 10, 21),
+      title: 'A post',
+    );
+    final aliceId = alice.identity!.deviceId;
+    await bob.setLinkPreviewMode('off');
+    await alice.sendMessage(
+      contact: alice.contacts.single,
+      body: 'one https://site.example/post',
+      linkPreview: preview,
+    );
+    await _waitForIroh(
+      () => bob.messagesFor(aliceId).any((m) => m.body.startsWith('one')),
+    );
+    expect(bob.messagesFor(aliceId).last.linkPreview, isNull);
+
+    await bob.setLinkPreviewMode('receiver');
+    await alice.sendMessage(
+      contact: alice.contacts.single,
+      body: 'two https://site.example/post',
+      linkPreview: preview,
+    );
+    await _waitForIroh(
+      () => bob
+          .messagesFor(aliceId)
+          .any((m) => m.body.startsWith('two') && m.linkPreview != null),
+    );
+    final sent = alice
+        .messagesFor(bob.identity!.deviceId)
+        .singleWhere((m) => m.body.startsWith('two'));
+    await alice.editMessage(
+      contact: alice.contacts.single,
+      messageId: sent.id,
+      body: 'two https://other.example/x',
+    );
+    await _waitForIroh(
+      () =>
+          bob.messagesFor(aliceId).any((m) => m.body.contains('other.example')),
+    );
+    expect(
+      bob.messagesFor(aliceId).singleWhere((m) => m.id == sent.id).linkPreview,
+      isNull,
+    );
   });
 
   test('link previews do not come by themselves in battery saver', () async {

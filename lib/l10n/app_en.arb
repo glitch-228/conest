@@ -8188,5 +8188,14 @@
   "settingsLinkPreviewsTorHelp": "When Tor is set up, sites see a Tor exit, not your address, and nothing about the link is looked up on your network. While Tor is not connected, no previews are fetched.",
   "@settingsLinkPreviewsTorHelp": {
     "description": "Help under the Tor previews switch."
+  },
+  "linkPreviewFromSender": "{host} · preview from the sender",
+  "@linkPreviewFromSender": {
+    "description": "Above a link preview its sender attached: the link's real host, and that the sender made the preview.",
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
   }
 }

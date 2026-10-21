@@ -91,15 +91,50 @@ class _LinkPreviewComposerState extends State<LinkPreviewComposer> {
     return null;
   }
 
+  String _lastText = '';
+
+  /// The first link once it is finished (a space or new line after it, or
+  /// pasted whole): a link half typed is never fetched.
+  Uri? _finishedLink(String text, String before) {
+    // What this edit put in: the text between the common start and end.
+    var head = 0;
+    while (head < before.length &&
+        head < text.length &&
+        text[head] == before[head]) {
+      head++;
+    }
+    var tail = 0;
+    while (tail < before.length - head &&
+        tail < text.length - head &&
+        text[text.length - 1 - tail] == before[before.length - 1 - tail]) {
+      tail++;
+    }
+    final inserted = text.substring(head, text.length - tail);
+    for (final found in findLinks(text)) {
+      final uri = found.uri;
+      if (uri.scheme != 'https' && uri.scheme != 'http') continue;
+      final followed =
+          found.end < text.length && text[found.end].trim().isEmpty;
+      final pasted = inserted.contains(text.substring(found.start, found.end));
+      return followed || pasted || uri == _link ? uri : null;
+    }
+    return null;
+  }
+
   void _changed() {
+    final text = widget.controller.text;
+    final before = _lastText;
+    _lastText = text;
     if (!widget.source.linkPreviewsAttached) return;
-    final link = _firstWebLink(widget.controller.text);
+    final link = _finishedLink(text, before);
     if (link == _link) return;
     _debounce?.cancel();
     _link = link;
     _preview = null;
     if (mounted) setState(() {});
     if (link == null || _removed.contains(link)) return;
+    // Not in battery saver, roaming or offline.
+    if (!widget.source.linkPreviewsMayFetchNow) return;
     // Once the link has been still for a moment (not every keystroke).
     _debounce = Timer(const Duration(milliseconds: 700), () async {
       final cached = widget.source.cachedLinkPreview(link);

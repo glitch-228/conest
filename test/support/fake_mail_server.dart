@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -47,6 +48,15 @@ class FakeMailServer {
 
   /// Answers APPEND (off: refused, as a server that does not take it).
   bool append = true;
+
+  /// A slow link that keeps moving: what is sent goes out this many bytes
+  /// at a time, with [throttleDelay] between.
+  int? throttleChunkBytes;
+  Duration throttleDelay = Duration.zero;
+
+  /// Like a network that cuts a connection (a reset) after a few
+  /// kilobytes: once a connection was sent this many bytes, it is closed.
+  int? dropAfterBytes;
 
   /// Tests can announce hostile sizes without allocating oversized bodies.
   final Map<int, int> reportedSizes = {};
@@ -242,11 +252,26 @@ class FakeMailServer {
     // would miss mail arriving after a deletion).
     var reported = 0;
     var sent = 0;
+    var out = Future<void>.value();
     void send(List<int> bytes) {
       sent += bytes.length;
       final limit = freezeAfterBytes;
       if (limit != null && sent > limit) return; // frozen
-      socket.add(bytes);
+      if (dropAfterBytes case final cut? when sent > cut) {
+        socket.destroy();
+        return;
+      }
+      final chunk = throttleChunkBytes;
+      if (chunk == null) {
+        socket.add(bytes);
+        return;
+      }
+      out = out.then((_) async {
+        for (var at = 0; at < bytes.length; at += chunk) {
+          socket.add(bytes.sublist(at, min(at + chunk, bytes.length)));
+          await Future<void>.delayed(throttleDelay);
+        }
+      });
     }
 
     void reply(String line) => send(latin1.encode('$line\r\n'));

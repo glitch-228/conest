@@ -158,7 +158,7 @@ class ImapClient {
   /// takes it for its own mail. Throws [ImapException] when the server
   /// refuses (no APPEND), and never returns when the connection freezes:
   /// the caller sets the time limit.
-  Future<void> checkTransfer({int size = 48 * 1024}) async {
+  Future<void> checkTransfer({int size = 24 * 1024}) async {
     final random = Random.secure();
     final token = List.generate(
       16,
