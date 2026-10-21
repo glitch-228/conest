@@ -21,10 +21,12 @@ const DEFAULT_MAX_QUEUE_PER_MAILBOX: usize = 512;
 const DEFAULT_MAX_FETCH_LIMIT: usize = 128;
 const DEFAULT_MAX_ENVELOPE_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_LINE_BYTES: usize = 300 * 1024;
-const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 240;
+// Per address: many users can share one behind a carrier's NAT. The
+// per-mailbox byte limit is what stops one account flooding the relay.
+const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 1200;
 const DEFAULT_IDENTITY_SEED_FILE: &str = "conest_relay_identity.seed";
 const DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE: u64 = 10 * 1024 * 1024;
-const DEFAULT_SOFT_BAN_THRESHOLD: u32 = 5;
+const DEFAULT_SOFT_BAN_THRESHOLD: u32 = 20;
 const DEFAULT_SOFT_BAN_SECONDS: u64 = 300;
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
 const DEFAULT_DATABASE_PATH: &str = "conest_relay.sqlite3";

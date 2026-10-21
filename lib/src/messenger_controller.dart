@@ -13572,7 +13572,7 @@ class MessengerController extends ChangeNotifier {
       final me = _requireIdentity();
       // Keep encryption inside the queue's recovery boundary too: crypto
       // worker failures must free this slot just like route failures.
-      final lanHint = _localLanDirectHintPayload();
+      final lanHint = _localLanDirectHintPayload(contact);
       final debugTest = _outboundDebugAttachmentTests[descriptor.id];
       final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'attachment_offer',
@@ -17421,7 +17421,7 @@ class MessengerController extends ChangeNotifier {
       // (its group mates, this account's devices): for its Connections
       // map. Nobody else is named.
       'links': ?_linksToShareWith(contact),
-      ..._localLanDirectHintPayload(),
+      ..._localLanDirectHintPayload(contact),
     };
     if (effectiveProbeId != null) {
       routeUpdatePayload['probeId'] = effectiveProbeId;
@@ -20521,7 +20521,7 @@ class MessengerController extends ChangeNotifier {
     // nightly.9: piggy-back our LAN-direct endpoint hint so the sender
     // can PUT subsequent chunks directly to our HTTP server instead of
     // round-tripping through the relay envelope shape.
-    final hint = _localLanDirectHintPayload();
+    final hint = _localLanDirectHintPayload(peer);
     final envelope = await _crypto.encryptPayloadEnvelope(
       kind: 'attachment_chunk_request',
       messageId: _randomId('areq'),
@@ -20899,7 +20899,8 @@ class MessengerController extends ChangeNotifier {
     // before the relay-shaped delivery. Success skips ALL relay round-trips.
     final lanDirectChannel = _lanDirectChannel;
     final lanDirectEndpoint = _peerLanDirect[requester.deviceId];
-    if (lanDirectChannel != null &&
+    if (_effectiveTransports(requester).lan &&
+        lanDirectChannel != null &&
         lanDirectChannel.isRunning &&
         lanDirectEndpoint != null &&
         _lanDirectEndpointUsable(lanDirectEndpoint)) {
@@ -23823,7 +23824,7 @@ class MessengerController extends ChangeNotifier {
     String buildId,
   ) async {
     await _refreshLocalLanDirectAddressCache();
-    final localLanHint = _localLanDirectHintPayload();
+    final localLanHint = _localLanDirectHintPayload(contact);
     final canTryLan =
         _effectiveTransports(contact).lan &&
         _localLanAddressesCache.isNotEmpty &&
@@ -23957,7 +23958,7 @@ class MessengerController extends ChangeNotifier {
     }
     _cachePeerLanDirectFromPayload(contact.deviceId, decoded);
     await _refreshLocalLanDirectAddressCache();
-    final localLanHint = _localLanDirectHintPayload();
+    final localLanHint = _localLanDirectHintPayload(contact);
     final irohOnly =
         requestedIroh ||
         !_effectiveTransports(contact).lan ||
@@ -27196,7 +27197,11 @@ class MessengerController extends ChangeNotifier {
         // It arrived another way: no other route takes over.
         rethrow;
       } catch (error) {
-        lastError = error;
+        // "No eligible route" says nothing new when another route already
+        // failed for a reason (a relay's rate limit, say): keep that one.
+        if (lastError == null || !'$error'.contains('No eligible transport')) {
+          lastError = error;
+        }
         if (!skipIroh && _canUseIrohForContact(contact)) {
           _irohSkipUntil[contact.deviceId] = _now().add(
             const Duration(seconds: 20),
@@ -27325,6 +27330,21 @@ class MessengerController extends ChangeNotifier {
           background: background,
         );
         if (forwarded != null) return forwarded;
+      }
+      // Nothing could even be tried while routes exist: they wait after
+      // earlier failures. Say which, and why they failed, rather than only
+      // that no route was eligible (a relay's rate limit, say).
+      final waiting = [
+        for (final route in candidateRoutes)
+          if (!attemptedRouteKeys.contains(route.routeKey))
+            '${route.host}: ${_routeHealthTracker.healthFor(route)?.error ?? 'waiting'}',
+      ];
+      if (waiting.isNotEmpty &&
+          (lastError == null ||
+              '$lastError'.contains('No eligible transport'))) {
+        lastError = StateError(
+          'Routes wait after earlier failures (${waiting.take(3).join('; ')}).',
+        );
       }
       if (!background) {
         recordError(
@@ -29473,7 +29493,10 @@ class MessengerController extends ChangeNotifier {
   /// (and offer) payloads so peers can cache our LAN-direct endpoint.
   /// Returns an empty map when the channel isn't running, the platform
   /// refused to bind, or no LAN addresses are known.
-  Map<String, dynamic> _localLanDirectHintPayload() {
+  /// This device's LAN-direct endpoint, for [to]; nothing when LAN is off
+  /// for it (it would come back by LAN, only to be dropped).
+  Map<String, dynamic> _localLanDirectHintPayload(ContactRecord to) {
+    if (!_effectiveTransports(to).lan) return const <String, dynamic>{};
     final port =
         _localRelayNode.attachmentIngressPort ?? _lanDirectChannel?.localPort;
     if (port == null) return const <String, dynamic>{};
@@ -36071,16 +36094,34 @@ class _ScoringRelayClient implements RelayClient {
   final _RelayAttemptCallback onAttempt;
   final DateTime Function() nowProvider;
 
+  /// Relays that answered "rate limit exceeded": until when nothing more
+  /// is sent to them, and how long the last wait was. Asking again at once
+  /// would only count more violations (and a relay bans a peer after a
+  /// few); many users share one address behind a carrier's NAT.
+  final Map<String, ({DateTime until, Duration wait})> _rateLimited = {};
+
+  static const _firstRateLimitWait = Duration(seconds: 30);
+  static const _longestRateLimitWait = Duration(minutes: 2);
+
   Future<T> _track<T>({
     required String host,
     required int port,
     required PeerRouteProtocol protocol,
     required Future<T> Function() action,
   }) async {
+    final key = '$host:$port';
+    final limited = _rateLimited[key];
+    if (limited != null && nowProvider().isBefore(limited.until)) {
+      throw StateError(
+        'Relay $host waits out its rate limit (until '
+        '${limited.until.toUtc().toIso8601String()}).',
+      );
+    }
     final stopwatch = Stopwatch()..start();
     try {
       final result = await action();
       stopwatch.stop();
+      _rateLimited.remove(key);
       onAttempt(
         host: host,
         port: port,
@@ -36090,8 +36131,18 @@ class _ScoringRelayClient implements RelayClient {
         at: nowProvider(),
       );
       return result;
-    } catch (_) {
+    } catch (error) {
       stopwatch.stop();
+      if ('$error'.contains('rate limit exceeded')) {
+        // Each time again, twice as long (up to two minutes).
+        final last = _rateLimited[key];
+        final wait = last == null
+            ? _firstRateLimitWait
+            : (last.wait * 2 > _longestRateLimitWait
+                  ? _longestRateLimitWait
+                  : last.wait * 2);
+        _rateLimited[key] = (until: nowProvider().add(wait), wait: wait);
+      }
       onAttempt(
         host: host,
         port: port,

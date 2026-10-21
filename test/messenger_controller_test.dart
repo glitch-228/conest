@@ -23087,6 +23087,69 @@ void main() {
     );
   });
 
+  test('a relay that says "rate limit exceeded" is left alone for a while, '
+      'not asked again at once', () async {
+    var now = DateTime.utc(2026, 10, 21, 12);
+    final relay = _FakeRelayClient();
+    final network = _InProcessIrohNetwork();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      nowProvider: () => now,
+      keepErrorHistory: true,
+      transportRegistryFactory: network.registry,
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      nowProvider: () => now,
+      transportRegistryFactory: network.registry,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    // The relay alone (as the lab's relay-only run): the registry then has
+    // no route of its own to offer.
+    const relayOnly = GlobalConnectivityPreferences(
+      lanEnabled: false,
+      transportPolicies: {
+        TransportKind.conestRelay: TransportPolicy.automatic,
+        TransportKind.iroh: TransportPolicy.disabled,
+      },
+      autoDownloadPreset: AutoDownloadPreset.custom,
+    );
+    await alice.updateGlobalConnectivity(relayOnly);
+    final bobContact = alice.contacts.single;
+    // A message the relay took that Bob never confirmed (he is not
+    // reading): the relay goes last from then on, after the registry.
+    await alice.sendMessage(contact: bobContact, body: 'zero');
+    now = now.add(const Duration(minutes: 1));
+    relay.storeErrorFor = (_) => StateError('rate limit exceeded');
+    await alice
+        .sendMessage(contact: bobContact, body: 'one')
+        .catchError((_) {});
+    final afterFirst = relay.storeAttempts.length;
+    expect(afterFirst, greaterThan(0));
+    // Within the wait: nothing reaches the relay (no more violations).
+    await alice
+        .sendMessage(contact: bobContact, body: 'two')
+        .catchError((_) {});
+    expect(relay.storeAttempts.length, afterFirst);
+    // What failed says why (not only that no route was left).
+    final failures = alice.recentDebugLog
+        .where((line) => line.contains('direct_message to Bob'))
+        .join('\n');
+    expect(failures, contains('rate limit'));
+    expect(failures, isNot(contains('No eligible transport')));
+    // After it, the relay is asked again.
+    now = now.add(const Duration(seconds: 31));
+    relay.storeErrorFor = null;
+    await alice
+        .sendMessage(contact: bobContact, body: 'three')
+        .catchError((_) {});
+    expect(relay.storeAttempts.length, greaterThan(afterFirst));
+  });
+
   test('link previews do not come by themselves in battery saver', () async {
     final alice = await _createController(
       relayClient: _FakeRelayClient(),
@@ -25820,6 +25883,86 @@ void main() {
       },
       timeout: const Timeout(Duration(seconds: 30)),
     );
+
+    group('with LAN off on one side, a file goes by relay and nothing by '
+        'LAN (it would be dropped there)', () {
+      Future<void> sendWithLanOff({required bool onSender}) async {
+        final aliceChannel = _InProcessLanDirectChannel(host: '192.168.52.10');
+        final bobChannel = _InProcessLanDirectChannel(host: '192.168.52.11');
+        addTearDown(aliceChannel.stop);
+        addTearDown(bobChannel.stop);
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+          lanAddresses: const ['192.168.52.10'],
+          lanDirectChannel: aliceChannel,
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+          lanAddresses: const ['192.168.52.11'],
+          lanDirectChannel: bobChannel,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        final lanOff = onSender ? alice : bob;
+        await lanOff.updateGlobalConnectivity(
+          lanOff.identity!.connectivity.copyWith(lanEnabled: false),
+        );
+        await _pairControllers(alice, bob);
+        final bobOnAlice = alice.contacts.firstWhere((c) => c.alias == 'Bob');
+        final payload = Uint8List(64 * 1024 * 3 + 7);
+        for (var i = 0; i < payload.length; i++) {
+          payload[i] = (i * 31 + 5) & 0xff;
+        }
+        await alice.sendAttachment(
+          contact: bobOnAlice,
+          bytes: payload,
+          fileName: 'no_lan.bin',
+        );
+        ChatMessage? received;
+        for (var step = 0; step < 40; step++) {
+          await bob.pollNow();
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 25));
+          received = bob
+              .messagesFor(alice.identity!.deviceId)
+              .where((m) => m.attachment?.fileName == 'no_lan.bin')
+              .firstOrNull;
+          if (received != null &&
+              bob.attachmentBytesFor(received.attachment!.id) != null) {
+            break;
+          }
+        }
+        expect(received, isNotNull);
+        expect(bob.attachmentBytesFor(received!.attachment!.id), payload);
+        expect(bobChannel.acceptedEnvelopes, 0);
+        expect(
+          bob.recentDebugLog.where((line) => line.contains('ingress lan')),
+          isEmpty,
+        );
+        if (!onSender) {
+          // Bob never told Alice where his LAN server is.
+          expect(
+            alice.peerLanDirectEndpointForTesting(bobOnAlice.deviceId),
+            isNull,
+          );
+        }
+      }
+
+      test(
+        'off on the sender: it never pushes blocks by LAN',
+        () => sendWithLanOff(onSender: true),
+        timeout: const Timeout(Duration(seconds: 30)),
+      );
+
+      test(
+        'off on the receiver: it never offers its LAN address',
+        () => sendWithLanOff(onSender: false),
+        timeout: const Timeout(Duration(seconds: 30)),
+      );
+    });
 
     test(
       '31 MiB transfer stays LAN-direct and completes to a disk path',
