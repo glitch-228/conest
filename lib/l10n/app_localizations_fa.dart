@@ -5436,4 +5436,20 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get settingsLinkPreviewsHelp =>
       'عنوان و تصویر پیوند را زیر پیام نشان می‌دهد. این دستگاه آن‌ها را از سایت می‌گیرد و سایت نشانی IP شما را می‌بیند: در گفتگو با مخاطبان و گروه‌هایتان به‌طور خودکار (نه در حالت صرفه‌جویی باتری یا رومینگ) و در گفتگوهای دیگر فقط با ضربهٔ شما.';
+
+  @override
+  String get linkPreviewModeReceiver => 'هر گیرنده خودش می‌گیرد';
+
+  @override
+  String get linkPreviewModeSender =>
+      'همراه پیام فرستاده می‌شود (گیرندگان با سایت تماس نمی‌گیرند)';
+
+  @override
+  String get linkPreviewModeBoth => 'هر دو';
+
+  @override
+  String get linkPreviewModeOff => 'خاموش';
+
+  @override
+  String get linkPreviewRemove => 'فرستادن بدون پیش‌نمایش';
 }

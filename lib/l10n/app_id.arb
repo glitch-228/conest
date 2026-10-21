@@ -1407,5 +1407,10 @@
   "editorSendOriginalAsFile": "Kirim asli sebagai file (tanpa kompresi)",
   "linkPreviewShow": "Tampilkan pratinjau tautan",
   "settingsLinkPreviews": "Pratinjau tautan",
-  "settingsLinkPreviewsHelp": "Menampilkan judul dan gambar tautan di bawah pesan. Perangkat ini mengambilnya dari situs, yang lalu melihat alamat IP Anda: otomatis di obrolan dengan kontak dan grup Anda (tidak saat hemat baterai atau roaming), dan di obrolan lain hanya saat Anda mengetuk."
+  "settingsLinkPreviewsHelp": "Menampilkan judul dan gambar tautan di bawah pesan. Perangkat ini mengambilnya dari situs, yang lalu melihat alamat IP Anda: otomatis di obrolan dengan kontak dan grup Anda (tidak saat hemat baterai atau roaming), dan di obrolan lain hanya saat Anda mengetuk.",
+  "linkPreviewModeReceiver": "Setiap penerima mengambilnya",
+  "linkPreviewModeSender": "Dikirim bersama pesan (penerima tidak menghubungi situs)",
+  "linkPreviewModeBoth": "Keduanya",
+  "linkPreviewModeOff": "Mati",
+  "linkPreviewRemove": "Kirim tanpa pratinjau"
 }

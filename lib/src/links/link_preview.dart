@@ -25,72 +25,9 @@ import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html;
 import 'package:image/image.dart' as img;
 
-/// A link's preview.
-class LinkPreview {
-  const LinkPreview({
-    required this.url,
-    required this.fetchedAt,
-    this.title,
-    this.description,
-    this.siteName,
-    this.image,
-  });
+import 'link_preview_data.dart';
 
-  /// The page it describes (after redirects).
-  final Uri url;
-  final DateTime fetchedAt;
-  final String? title;
-  final String? description;
-  final String? siteName;
-
-  /// A JPEG thumbnail of at most [LinkPreviewFetcher.maxThumbnailBytes].
-  final Uint8List? image;
-
-  bool get isEmpty =>
-      (title ?? '').isEmpty && (description ?? '').isEmpty && image == null;
-
-  Map<String, Object?> toJson() => {
-    'url': url.toString(),
-    'at': fetchedAt.toUtc().toIso8601String(),
-    'title': ?title,
-    'description': ?description,
-    'site': ?siteName,
-    if (image case final bytes?) 'image': base64Encode(bytes),
-  };
-
-  static LinkPreview? fromJson(Object? json) {
-    if (json is! Map) return null;
-    final url = Uri.tryParse(json['url'] as String? ?? '');
-    final at = DateTime.tryParse(json['at'] as String? ?? '');
-    if (url == null || at == null) return null;
-    Uint8List? image;
-    if (json['image'] case final String encoded) {
-      try {
-        image = base64Decode(encoded);
-      } on FormatException {
-        image = null;
-      }
-    }
-    String? text(String key) =>
-        json[key] is String ? _clip(json[key] as String, 300) : null;
-    return LinkPreview(
-      url: url,
-      fetchedAt: at.toUtc(),
-      title: text('title'),
-      description: text('description'),
-      siteName: text('site'),
-      image:
-          image != null && image.length <= LinkPreviewFetcher.maxThumbnailBytes
-          ? image
-          : null,
-    );
-  }
-}
-
-String _clip(String text, int max) {
-  final clean = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-  return clean.length <= max ? clean : '${clean.substring(0, max - 1)}…';
-}
+export 'link_preview_data.dart';
 
 /// What a page's tags say: Open Graph first, then Twitter cards, then its
 /// `<title>` and description; the image as a link, relative to [page].
@@ -108,7 +45,7 @@ parseLinkPreviewPage(String text, Uri page) {
   }
   String? first(List<String> keys) {
     for (final key in keys) {
-      if (meta[key] case final value?) return _clip(value, 300);
+      if (meta[key] case final value?) return clipLinkPreviewText(value, 300);
     }
     return null;
   }
@@ -133,7 +70,7 @@ parseLinkPreviewPage(String text, Uri page) {
   return (
     title:
         first(['og:title', 'twitter:title']) ??
-        (pageTitle.isEmpty ? null : _clip(pageTitle, 300)),
+        (pageTitle.isEmpty ? null : clipLinkPreviewText(pageTitle, 300)),
     description: first([
       'og:description',
       'twitter:description',
@@ -234,7 +171,7 @@ class LinkPreviewFetcher {
   static const maxRedirects = 3;
   static const maxPageBytes = 512 * 1024;
   static const maxImageBytes = 2 * 1024 * 1024;
-  static const maxThumbnailBytes = 64 * 1024;
+  static const maxThumbnailBytes = maxLinkPreviewImageBytes;
 
   /// A picture larger than this (per side, or in all) is not decoded.
   static const maxPictureSide = 8192;
@@ -482,7 +419,11 @@ const _thumbnailEdge = 360;
 /// picture's bytes; null when they are not a picture this reads, or one
 /// too large. The size it declares is read first; only then is it decoded,
 /// by the engine, straight to thumbnail size, and only its first frame.
-Future<Uint8List?> makeLinkPreviewThumbnail(Uint8List bytes) async {
+Future<Uint8List?> makeLinkPreviewThumbnail(
+  Uint8List bytes, {
+  int edge = _thumbnailEdge,
+  int maxBytes = LinkPreviewFetcher.maxThumbnailBytes,
+}) async {
   if (!isPreviewPicture(bytes)) return null;
   final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
   ui.ImageDescriptor? descriptor;
@@ -497,7 +438,7 @@ Future<Uint8List?> makeLinkPreviewThumbnail(Uint8List bytes) async {
         width * height > LinkPreviewFetcher.maxPicturePixels) {
       return null;
     }
-    final scale = min(1.0, _thumbnailEdge / max(width, height));
+    final scale = min(1.0, edge / max(width, height));
     final targetWidth = max(1, (width * scale).round());
     final targetHeight = max(1, (height * scale).round());
     final codec = await descriptor.instantiateCodec(
@@ -521,6 +462,8 @@ Future<Uint8List?> makeLinkPreviewThumbnail(Uint8List bytes) async {
           image.width,
           image.height,
           pixels.buffer.asUint8List(),
+          edge,
+          maxBytes,
         ));
       } finally {
         image.dispose();
@@ -536,8 +479,9 @@ Future<Uint8List?> makeLinkPreviewThumbnail(Uint8List bytes) async {
   }
 }
 
-/// RGBA pixels (at most [_thumbnailEdge] a side) as a small JPEG.
-Uint8List? _encodeThumbnail((int, int, Uint8List) pixels) {
+/// RGBA pixels (at most the given edge a side) as a JPEG of at most the
+/// given bytes.
+Uint8List? _encodeThumbnail((int, int, Uint8List, int, int) pixels) {
   final decoded = img.Image.fromBytes(
     width: pixels.$1,
     height: pixels.$2,
@@ -545,7 +489,7 @@ Uint8List? _encodeThumbnail((int, int, Uint8List) pixels) {
     numChannels: 4,
     order: img.ChannelOrder.rgba,
   );
-  var edge = _thumbnailEdge;
+  var edge = pixels.$4;
   for (var quality = 75; quality >= 35; quality -= 20) {
     final scaled = decoded.width >= decoded.height
         ? img.copyResize(
@@ -557,7 +501,7 @@ Uint8List? _encodeThumbnail((int, int, Uint8List) pixels) {
             height: decoded.height < edge ? decoded.height : edge,
           );
     final encoded = img.encodeJpg(scaled, quality: quality);
-    if (encoded.length <= LinkPreviewFetcher.maxThumbnailBytes) return encoded;
+    if (encoded.length <= pixels.$5) return encoded;
     edge = edge * 3 ~/ 4;
   }
   return null;

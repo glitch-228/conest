@@ -5567,4 +5567,20 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get settingsLinkPreviewsHelp =>
       'يعرض عنوان الرابط وصورته تحت الرسالة. يجلبها هذا الجهاز من الموقع، فيرى الموقع عنوان IP الخاص بك: تلقائيًا في المحادثات مع جهات اتصالك ومجموعاتك (ليس في وضع توفير البطارية أو أثناء التجوال)، وفي المحادثات الأخرى عند النقر فقط.';
+
+  @override
+  String get linkPreviewModeReceiver => 'يجلبها كل مستلم';
+
+  @override
+  String get linkPreviewModeSender =>
+      'تُرسل مع الرسالة (لا يتصل المستلمون بالموقع)';
+
+  @override
+  String get linkPreviewModeBoth => 'كلاهما';
+
+  @override
+  String get linkPreviewModeOff => 'إيقاف';
+
+  @override
+  String get linkPreviewRemove => 'إرسال بلا معاينة';
 }

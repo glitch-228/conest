@@ -11,6 +11,13 @@ import 'linked_text.dart';
 abstract interface class LinkPreviewSource {
   bool get linkPreviewsEnabled;
 
+  /// Whether this device fetches previews of links it gets (not only shows
+  /// those their senders attached).
+  bool get linkPreviewsFetchedHere;
+
+  /// Whether this device sends previews with its messages.
+  bool get linkPreviewsAttached;
+
   /// Whether a preview may be fetched now without being asked.
   bool get linkPreviewsAutomaticNow;
 
@@ -33,9 +40,14 @@ class LinkPreviewCard extends StatefulWidget {
     required this.openUrl,
     required this.accent,
     required this.textColor,
+    this.attached,
   });
 
   final String text;
+
+  /// The preview its sender sent with the message (checked when it came):
+  /// shown as it is, nothing fetched.
+  final LinkPreview? attached;
   final LinkPreviewSource source;
   final bool trusted;
   final Future<void> Function(Uri uri) openUrl;
@@ -61,7 +73,8 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
   @override
   void didUpdateWidget(LinkPreviewCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text) {
+    if (oldWidget.text != widget.text ||
+        oldWidget.attached != widget.attached) {
       _preview = null;
       _tried = false;
       _start();
@@ -72,6 +85,11 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
     _link = _firstWebLink(widget.text);
     final link = _link;
     if (link == null || !widget.source.linkPreviewsEnabled) return;
+    if (widget.attached case final attached?) {
+      _preview = attached;
+      return;
+    }
+    if (!widget.source.linkPreviewsFetchedHere) return;
     _preview = widget.source.cachedLinkPreview(link);
     if (_preview == null && _automatic) unawaited(_load());
   }
@@ -120,7 +138,7 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
     final preview = _preview;
     final theme = Theme.of(context);
     if (preview == null) {
-      if (_tried || _automatic) {
+      if (_tried || _automatic || !widget.source.linkPreviewsFetchedHere) {
         // Nothing to show (or on its way): no space taken.
         return const SizedBox.shrink();
       }
@@ -230,6 +248,12 @@ class MessengerLinkPreviews implements LinkPreviewSource {
 
   @override
   bool get linkPreviewsAutomaticNow => controller.linkPreviewsAutomaticNow;
+
+  @override
+  bool get linkPreviewsFetchedHere => controller.linkPreviewsFetchedHere;
+
+  @override
+  bool get linkPreviewsAttached => controller.linkPreviewsAttached;
 
   @override
   LinkPreview? cachedLinkPreview(Uri url) => controller.cachedLinkPreview(url);

@@ -50,6 +50,7 @@ import 'media_sanitizer.dart';
 import 'links/link_cleaner.dart';
 import 'links/link_preview.dart';
 import 'links/link_preview_cache.dart';
+import 'ui/linked_text.dart' show findLinks;
 import 'file_metadata_consent.dart';
 import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
@@ -6076,14 +6077,113 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: true);
   }
 
-  /// Whether link previews are made (by this device, from the site).
-  bool get linkPreviewsEnabled => _snapshot.linkPreviewMode != 'off';
+  /// How link previews are made: 'receiver' (each device fetches the
+  /// previews of links it gets; the default), 'sender' (the sender's
+  /// device fetches it and sends it with the message, so the receivers
+  /// never contact the site), 'both', or 'off'.
+  String get linkPreviewMode => switch (_snapshot.linkPreviewMode) {
+    final mode? when linkPreviewModes.contains(mode) => mode,
+    _ => 'receiver',
+  };
 
-  Future<void> setLinkPreviewsEnabled(bool value) async {
-    _snapshot = _snapshot.copyWith(linkPreviewMode: value ? 'receiver' : 'off');
+  static const linkPreviewModes = ['receiver', 'sender', 'both', 'off'];
+
+  /// Whether link previews are shown at all.
+  bool get linkPreviewsEnabled => linkPreviewMode != 'off';
+
+  /// Whether this device fetches previews of links it gets.
+  bool get linkPreviewsFetchedHere =>
+      linkPreviewMode == 'receiver' || linkPreviewMode == 'both';
+
+  /// Whether this device sends previews with its messages.
+  bool get linkPreviewsAttached =>
+      linkPreviewMode == 'sender' || linkPreviewMode == 'both';
+
+  Future<void> setLinkPreviewMode(String mode) async {
+    if (!linkPreviewModes.contains(mode)) return;
+    _snapshot = _snapshot.copyWith(linkPreviewMode: mode);
     // Off: what was kept goes too.
-    if (!value) await _linkPreviews?.clear();
+    if (mode == 'off') await _linkPreviews?.clear();
     await _saveSnapshotSilently(notify: true);
+  }
+
+  Future<void> setLinkPreviewsEnabled(bool value) =>
+      setLinkPreviewMode(value ? 'receiver' : 'off');
+
+  /// The largest picture a preview sent with a message carries.
+  static const attachedPreviewImageBytes = 16 * 1024;
+
+  /// [preview] as it goes with a message whose text is [body]: for the
+  /// first link in it, with a smaller picture; null when the preview is
+  /// for another link.
+  Future<LinkPreview?> _previewToSend(LinkPreview? preview, String body) async {
+    if (preview == null || !linkPreviewsAttached) return null;
+    final link = _firstWebLink(body);
+    if (link == null) return null;
+    final image = preview.image;
+    return LinkPreview(
+      url: link,
+      fetchedAt: preview.fetchedAt,
+      title: preview.title,
+      description: preview.description,
+      siteName: preview.siteName,
+      image: image == null
+          ? null
+          : await makeLinkPreviewThumbnail(
+              image,
+              edge: 160,
+              maxBytes: attachedPreviewImageBytes,
+            ),
+    );
+  }
+
+  /// A preview someone sent with a message whose text is [body], as it is
+  /// kept: only for the message's own first link, its picture decoded and
+  /// made again here within the limits (or dropped).
+  Future<LinkPreview?> _receivedPreview(
+    LinkPreview? preview,
+    String body,
+  ) async {
+    if (preview == null) return null;
+    final link = _firstWebLink(body);
+    if (link == null || preview.url != link) return null;
+    final image = preview.image;
+    Uint8List? checked;
+    if (image != null && image.length <= attachedPreviewImageBytes) {
+      try {
+        checked = await makeLinkPreviewThumbnail(
+          image,
+          edge: 160,
+          maxBytes: attachedPreviewImageBytes,
+        );
+      } catch (_) {
+        checked = null;
+      }
+    }
+    final kept = LinkPreview(
+      url: link,
+      fetchedAt: preview.fetchedAt,
+      title: preview.title,
+      description: preview.description,
+      siteName: preview.siteName,
+      image: checked,
+    );
+    return kept.isEmpty ? null : kept;
+  }
+
+  @visibleForTesting
+  Future<LinkPreview?> receivedPreviewForTesting(
+    LinkPreview? preview,
+    String body,
+  ) => _receivedPreview(preview, body);
+
+  static Uri? _firstWebLink(String text) {
+    for (final link in findLinks(text)) {
+      if (link.uri.scheme == 'https' || link.uri.scheme == 'http') {
+        return link.uri;
+      }
+    }
+    return null;
   }
 
   /// Whether a preview may be fetched without being asked: they are on,
@@ -6091,7 +6191,7 @@ class MessengerController extends ChangeNotifier {
   /// (Strangers' chats always wait for a tap: a fetch shows the site this
   /// device's address.)
   bool get linkPreviewsAutomaticNow =>
-      linkPreviewsEnabled &&
+      linkPreviewsFetchedHere &&
       _energyPolicy.modeFor(_networkCostClass) != EnergyMode.saver &&
       _networkCostClass != NetworkCostClass.roaming &&
       _networkCostClass != NetworkCostClass.offline;
@@ -12231,6 +12331,7 @@ class MessengerController extends ChangeNotifier {
     required String body,
     ChatMessage? replyTo,
     String? outgoingMessageId,
+    LinkPreview? linkPreview,
   }) async {
     final me = _requireIdentity();
     final trimmed = body.trim();
@@ -12250,6 +12351,7 @@ class MessengerController extends ChangeNotifier {
       );
     }
 
+    final attached = await _previewToSend(linkPreview, trimmed);
     final message = ChatMessage(
       id: outgoingMessageId ?? _randomId('msg'),
       conversationId: _crypto.conversationIdFor(contact.deviceId),
@@ -12265,6 +12367,7 @@ class MessengerController extends ChangeNotifier {
       replySenderDisplayName: replyTo == null
           ? null
           : _replySenderDisplayName(replyTo),
+      linkPreview: attached,
     );
     _upsertMessage(contact.deviceId, message);
     _syncSentMessage(contact.deviceId, message);
@@ -15023,6 +15126,7 @@ class MessengerController extends ChangeNotifier {
     bool pollClosed = false,
     Map<String, String>? pollClosedCheckpoint,
     String? outgoingMessageId,
+    LinkPreview? linkPreview,
   }) async {
     final me = _requireIdentity();
     final group = _requireGroup(groupId);
@@ -15123,6 +15227,7 @@ class MessengerController extends ChangeNotifier {
     if (recipientContacts.isEmpty) {
       throw ArgumentError('No reachable group member profiles are available.');
     }
+    final attached = await _previewToSend(linkPreview, trimmed);
     final message = ChatMessage(
       id: outgoingMessageId ?? _randomId('gmsg'),
       conversationId: profiledGroup.groupId,
@@ -15147,6 +15252,7 @@ class MessengerController extends ChangeNotifier {
         for (final contact in recipientContacts)
           contact.deviceId: DeliveryState.pending,
       },
+      linkPreview: attached,
     );
     _upsertGroupMessage(profiledGroup.groupId, message);
     _markRuntimeActivity();
@@ -19526,6 +19632,10 @@ class MessengerController extends ChangeNotifier {
             replySenderDeviceId: decodedMessage.replySenderDeviceId,
             replySenderDisplayName: decodedMessage.replySenderDisplayName,
             route: _ingressRoute,
+            linkPreview: await _receivedPreview(
+              decodedMessage.linkPreview,
+              decodedMessage.body,
+            ),
           );
           _upsertMessage(chatId, inbound);
           // They just reached us, so our waiting messages can reach them.
@@ -23170,6 +23280,10 @@ class MessengerController extends ChangeNotifier {
       final order = payload.historyOrder;
       final ordered =
           order != null && order.lamport <= verifiedLamport + _maxLamportLead;
+      final linkPreview = await _receivedPreview(
+        payload.linkPreview,
+        payload.body,
+      );
       _upsertGroupMessage(
         group.groupId,
         ChatMessage(
@@ -23192,6 +23306,7 @@ class MessengerController extends ChangeNotifier {
           replySnippet: payload.replySnippet,
           replySenderDeviceId: payload.replySenderDeviceId,
           replySenderDisplayName: payload.replySenderDisplayName,
+          linkPreview: linkPreview,
         ),
       );
       _showInboundGroupNotification(

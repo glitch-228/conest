@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 
+import 'links/link_preview_data.dart';
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
 import 'feature_models.dart';
@@ -2741,6 +2742,7 @@ class ChatMessage {
     Map<String, DateTime>? reactionClocks,
     List<RouteTrace>? routeTrace,
     Map<String, DateTime>? recipientReadAt,
+    this.linkPreview,
   }) : routeTrace = List.unmodifiable(routeTrace ?? const <RouteTrace>[]),
        recipientReadAt = Map.unmodifiable(
          recipientReadAt ?? const <String, DateTime>{},
@@ -2853,6 +2855,10 @@ class ChatMessage {
   /// When each recipient read it (outgoing), by device id.
   final Map<String, DateTime> recipientReadAt;
 
+  /// The preview of its link that its sender attached (and this device
+  /// checked), if any.
+  final LinkPreview? linkPreview;
+
   /// [routeTrace] with [trace] merged in: a route's mark only goes up, and
   /// keeps the time it was first reached.
   List<RouteTrace> tracedWith(RouteTrace trace) {
@@ -2933,6 +2939,8 @@ class ChatMessage {
     Map<String, DateTime>? reactionClocks,
     List<RouteTrace>? routeTrace,
     Map<String, DateTime>? recipientReadAt,
+    LinkPreview? linkPreview,
+    bool clearLinkPreview = false,
   }) {
     return ChatMessage(
       id: id,
@@ -2975,6 +2983,7 @@ class ChatMessage {
       reactionClocks: reactionClocks ?? this.reactionClocks,
       routeTrace: routeTrace ?? this.routeTrace,
       recipientReadAt: recipientReadAt ?? this.recipientReadAt,
+      linkPreview: clearLinkPreview ? null : linkPreview ?? this.linkPreview,
     );
   }
 
@@ -3038,6 +3047,7 @@ class ChatMessage {
           for (final entry in recipientReadAt.entries)
             entry.key: entry.value.toIso8601String(),
         },
+      if (linkPreview case final preview?) 'linkPreview': preview.toJson(),
     };
   }
 
@@ -3125,6 +3135,7 @@ class ChatMessage {
                 DateTime.tryParse(entry.value as String) != null)
               entry.key: DateTime.parse(entry.value as String).toUtc(),
       },
+      linkPreview: LinkPreview.fromJson(json['linkPreview']),
     );
   }
 }

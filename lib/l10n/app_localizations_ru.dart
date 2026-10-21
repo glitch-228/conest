@@ -5561,4 +5561,20 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get settingsLinkPreviewsHelp =>
       'Показывает заголовок и картинку ссылки под сообщением. Это устройство загружает их с сайта, и сайт видит ваш IP-адрес: само — в чатах с вашими контактами и группами (не в режиме энергосбережения и не в роуминге), в остальных чатах — только по нажатию.';
+
+  @override
+  String get linkPreviewModeReceiver => 'Загружает каждый получатель';
+
+  @override
+  String get linkPreviewModeSender =>
+      'Отправляются с сообщением (получатели не обращаются к сайту)';
+
+  @override
+  String get linkPreviewModeBoth => 'Оба способа';
+
+  @override
+  String get linkPreviewModeOff => 'Выключено';
+
+  @override
+  String get linkPreviewRemove => 'Отправить без предпросмотра';
 }

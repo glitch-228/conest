@@ -8160,5 +8160,25 @@
   "settingsLinkPreviewsHelp": "Shows a link's title and picture under the message. This device fetches them from the site, which then sees your IP address: by itself in chats with your contacts and groups (not in battery saver or when roaming), and only when you tap in other chats.",
   "@settingsLinkPreviewsHelp": {
     "description": "Help under the link previews switch."
+  },
+  "linkPreviewModeReceiver": "Each receiver fetches them",
+  "@linkPreviewModeReceiver": {
+    "description": "Link previews mode: each device fetches previews of links it gets."
+  },
+  "linkPreviewModeSender": "Sent with the message (receivers never contact the site)",
+  "@linkPreviewModeSender": {
+    "description": "Link previews mode: the sender fetches the preview and sends it with the message."
+  },
+  "linkPreviewModeBoth": "Both",
+  "@linkPreviewModeBoth": {
+    "description": "Link previews mode: both."
+  },
+  "linkPreviewModeOff": "Off",
+  "@linkPreviewModeOff": {
+    "description": "Link previews mode: off."
+  },
+  "linkPreviewRemove": "Send without the preview",
+  "@linkPreviewRemove": {
+    "description": "Tooltip: remove the link preview from the message being written."
   }
 }

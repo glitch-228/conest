@@ -22727,6 +22727,75 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('a preview written with the message goes with it, when this '
+      'device sends previews', (tester) async {
+    final relay = _FakeRelayClient();
+    late MessengerController alice;
+    late MessengerController bob;
+    await tester.runAsync(() async {
+      alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      bob = await _createController(relayClient: relay, displayName: 'Bob');
+      await _pairControllers(alice, bob);
+      await alice.setLinkPreviewMode('sender');
+    });
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    alice.linkPreviewFetcherForTesting = _RecordingPreviewFetcher();
+    await tester.runAsync(
+      () => alice.loadLinkPreview(Uri.parse('https://site.example/post')),
+    );
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final updates = _createUpdateService();
+    final theme = app.ConestThemeController.memory();
+    addTearDown(updates.dispose);
+    addTearDown(theme.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListenableBuilder(
+          listenable: alice,
+          builder: (context, _) => app.HomeScreen(
+            controller: alice,
+            updateService: updates,
+            buildInfo: _createBuildInfo(),
+            themeController: theme,
+            palette: app.ConestPalette(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Bob').first);
+    await tester.pump();
+    final composer = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.maxLines != 1,
+    );
+    await tester.enterText(composer.first, 'see https://site.example/post');
+    // The preview comes once the link has been still a moment.
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('composer-link-preview')), findsOneWidget);
+    await tester.runAsync(() async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+    await tester.pump();
+    final sent = alice
+        .messagesFor(bob.identity!.deviceId)
+        .singleWhere((m) => m.body.startsWith('see '));
+    expect(sent.linkPreview?.title, 'Fetched');
+    expect(sent.linkPreview?.url, Uri.parse('https://site.example/post'));
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   test(
     'link settings persist, and a failed service is skipped a day',
     () async {
@@ -22806,6 +22875,129 @@ void main() {
       isNull,
     );
     expect(fetcher.asked, hasLength(1));
+  });
+
+  test('a preview sent with a message reaches the contact and the group, '
+      'checked', () async {
+    final relay = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    final group = await alice.createGroup(title: 'P', members: alice.contacts);
+    await _waitForIroh(() => bob.groups.isNotEmpty);
+    await alice.setLinkPreviewMode('sender');
+    final picture = Uint8List.fromList(
+      img.encodeJpg(img.Image(width: 300, height: 200)),
+    );
+    final preview = LinkPreview(
+      // After redirects; it goes for the link as written.
+      url: Uri.parse('https://site.example/final'),
+      fetchedAt: DateTime.utc(2026, 10, 21),
+      title: 'A post',
+      image: picture,
+    );
+    await alice.sendMessage(
+      contact: alice.contacts.single,
+      body: 'see https://site.example/post',
+      linkPreview: preview,
+    );
+    await alice.sendGroupMessage(
+      groupId: group.groupId,
+      body: 'and https://site.example/post',
+      linkPreview: preview,
+    );
+    final aliceId = alice.identity!.deviceId;
+    await _waitForIroh(
+      () =>
+          bob.messagesFor(aliceId).any((m) => m.linkPreview != null) &&
+          bob.messagesForGroup(group.groupId).any((m) => m.linkPreview != null),
+    );
+    final direct = bob.messagesFor(aliceId).last.linkPreview!;
+    expect(direct.url, Uri.parse('https://site.example/post'));
+    expect(direct.title, 'A post');
+    // Made again here: a small JPEG.
+    expect(direct.image!.length, lessThanOrEqualTo(16 * 1024));
+    expect(img.decodeJpg(direct.image!)!.width, lessThanOrEqualTo(160));
+    final inGroup = bob.messagesForGroup(group.groupId).last.linkPreview!;
+    expect(inGroup.title, 'A post');
+
+    // Receivers-only (the default): nothing goes with the message.
+    await alice.setLinkPreviewMode('receiver');
+    await alice.sendMessage(
+      contact: alice.contacts.single,
+      body: 'again https://site.example/post',
+      linkPreview: preview,
+    );
+    await _waitForIroh(
+      () => bob.messagesFor(aliceId).any((m) => m.body.startsWith('again')),
+    );
+    expect(bob.messagesFor(aliceId).last.linkPreview, isNull);
+  });
+
+  test('a received preview for another link, or with a picture too big, '
+      'is not kept as it came', () async {
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+    LinkPreview preview(String url, {Uint8List? image}) => LinkPreview(
+      url: Uri.parse(url),
+      fetchedAt: DateTime.utc(2026, 10, 21),
+      title: 'T',
+      image: image,
+    );
+    const body = 'see https://site.example/post';
+    expect(
+      await alice.receivedPreviewForTesting(
+        preview('https://elsewhere.example/'),
+        body,
+      ),
+      isNull,
+    );
+    expect(
+      await alice.receivedPreviewForTesting(
+        preview('https://site.example/post'),
+        'no link',
+      ),
+      isNull,
+    );
+    final big = await alice.receivedPreviewForTesting(
+      preview(
+        'https://site.example/post',
+        // A real picture, but over the size one may come with.
+        image: () {
+          final noise = img.Image(width: 300, height: 300);
+          var seed = 7;
+          for (final pixel in noise) {
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+            pixel
+              ..r = seed & 255
+              ..g = (seed >> 8) & 255
+              ..b = (seed >> 16) & 255;
+          }
+          final bytes = Uint8List.fromList(img.encodeJpg(noise, quality: 95));
+          expect(
+            bytes.length,
+            greaterThan(MessengerController.attachedPreviewImageBytes),
+          );
+          return bytes;
+        }(),
+      ),
+      body,
+    );
+    expect(big?.title, 'T');
+    expect(big?.image, isNull);
+    final notAPicture = await alice.receivedPreviewForTesting(
+      preview('https://site.example/post', image: Uint8List.fromList([1, 2])),
+      body,
+    );
+    expect(notAPicture?.image, isNull);
   });
 
   test('link previews do not come by themselves in battery saver', () async {

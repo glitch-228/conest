@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:conest/src/links/link_preview.dart';
 import 'package:conest/src/ui/link_preview_card.dart';
+import 'package:conest/src/ui/link_preview_composer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
@@ -9,6 +10,14 @@ import 'package:image/image.dart' as img;
 class _Source implements LinkPreviewSource {
   bool enabled = true;
   bool automatic = true;
+  bool fetchedHere = true;
+  bool attaches = false;
+
+  @override
+  bool get linkPreviewsFetchedHere => fetchedHere;
+
+  @override
+  bool get linkPreviewsAttached => attaches;
   final cached = <Uri, LinkPreview>{};
   final asked = <Uri>[];
 
@@ -48,6 +57,7 @@ void main() {
     WidgetTester tester,
     String text, {
     required bool trusted,
+    LinkPreview? attached,
   }) => tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -55,6 +65,7 @@ void main() {
           text: text,
           source: source,
           trusted: trusted,
+          attached: attached,
           openUrl: (uri) async => opened.add(uri),
           accent: Colors.blue,
           textColor: Colors.black,
@@ -130,5 +141,90 @@ void main() {
     await tester.pump();
     expect(source.asked, isEmpty);
     expect(find.byType(TextButton), findsNothing);
+  });
+
+  testWidgets('a preview its sender attached shows as it is, even from a '
+      'stranger', (tester) async {
+    await pump(
+      tester,
+      'https://site.example/post',
+      trusted: false,
+      attached: LinkPreview(
+        url: Uri.parse('https://site.example/post'),
+        fetchedAt: DateTime.utc(2026, 10, 21),
+        title: 'From the sender',
+      ),
+    );
+    await tester.pump();
+    expect(find.text('From the sender'), findsOneWidget);
+    expect(source.asked, isEmpty);
+  });
+
+  testWidgets('when only senders attach previews, nothing is fetched here', (
+    tester,
+  ) async {
+    source.fetchedHere = false;
+    await pump(tester, 'https://site.example/post', trusted: true);
+    await tester.pump();
+    expect(source.asked, isEmpty);
+    expect(find.byKey(const ValueKey('link-preview-load')), findsNothing);
+  });
+
+  group('the message box', () {
+    late TextEditingController text;
+
+    setUp(() => text = TextEditingController());
+
+    Future<void> box(WidgetTester tester) => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              LinkPreviewComposer(
+                controller: text,
+                source: source,
+                accent: Colors.blue,
+              ),
+              TextField(controller: text),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    testWidgets('when this device attaches previews, one comes with the '
+        'link, and can be removed', (tester) async {
+      source.attaches = true;
+      await box(tester);
+      text.text = 'look https://site.example/post';
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('composer-link-preview')),
+        findsOneWidget,
+      );
+      expect(composerLinkPreview(text)?.title, 'A fine post');
+
+      await tester.tap(
+        find.byKey(const ValueKey('composer-link-preview-remove')),
+      );
+      await tester.pump();
+      expect(composerLinkPreview(text), isNull);
+      expect(find.byKey(const ValueKey('composer-link-preview')), findsNothing);
+
+      // Another link gets its own.
+      text.text = 'and https://other.example/x';
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump();
+      expect(composerLinkPreview(text), isNotNull);
+    });
+
+    testWidgets('otherwise nothing is fetched while writing', (tester) async {
+      await box(tester);
+      text.text = 'look https://site.example/post';
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(source.asked, isEmpty);
+      expect(composerLinkPreview(text), isNull);
+    });
   });
 }

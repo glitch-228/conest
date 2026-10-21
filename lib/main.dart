@@ -82,6 +82,7 @@ import 'src/ui/chat_paste_scope.dart';
 import 'src/ui/composer_keys.dart';
 import 'src/ui/link_cleaning.dart';
 import 'src/ui/link_preview_card.dart';
+import 'src/ui/link_preview_composer.dart';
 import 'src/links/link_cleaner.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
@@ -2536,6 +2537,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final contact = _selectedContact;
     if (contact == null) return;
     final body = _composerController.text.trim();
+    // Before the box is emptied (it is for what is written there).
+    final linkPreview = composerLinkPreview(_composerController);
     // nightly.10: when files are staged, Send commits the bundle (with
     // the typed text as caption on the first item). When no files are
     // staged, fall through to the text-only send path.
@@ -2563,6 +2566,7 @@ class _HomeScreenState extends State<HomeScreen> {
         contact: contact,
         body: body,
         replyTo: replyTarget,
+        linkPreview: linkPreview,
       );
     } catch (error) {
       widget.controller.setStatus('Could not send message: $error');
@@ -2619,6 +2623,7 @@ class _HomeScreenState extends State<HomeScreen> {
     finishComposerLinks(_composerController);
     final group = _selectedGroup;
     final body = _composerController.text.trim();
+    final linkPreview = composerLinkPreview(_composerController);
     if (group == null || body.isEmpty) {
       return;
     }
@@ -2629,6 +2634,7 @@ class _HomeScreenState extends State<HomeScreen> {
         groupId: group.groupId,
         body: body,
         replyTo: replyTarget,
+        linkPreview: linkPreview,
       );
     } catch (error) {
       widget.controller.setStatus('Could not send group message: $error');
@@ -9683,6 +9689,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                       LinkPreviewCard(
                         text: message.body,
                         source: MessengerLinkPreviews(controller),
+                        attached: message.linkPreview,
                         // From this device, or a member who is an accepted
                         // contact: other members are strangers here.
                         trusted:
@@ -10279,6 +10286,11 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     const SizedBox(height: 12),
                   ],
                   LinkCleanedNote(controller: widget.composerController),
+                  LinkPreviewComposer(
+                    controller: widget.composerController,
+                    source: MessengerLinkPreviews(controller),
+                    accent: palette.primary,
+                  ),
                   _VoiceComposerPanel(
                     service: controller.voiceMessageService,
                     destinationKey: 'group:${group.groupId}',
@@ -11640,6 +11652,7 @@ class _ChatPanelState extends State<_ChatPanel> {
                       LinkPreviewCard(
                         text: message.body,
                         source: MessengerLinkPreviews(controller),
+                        attached: message.linkPreview,
                         // An accepted contact, or Saved messages; a request
                         // waits for a tap.
                         trusted:
@@ -12354,6 +12367,11 @@ class _ChatPanelState extends State<_ChatPanel> {
                     palette: palette,
                   ),
                   LinkCleanedNote(controller: widget.composerController),
+                  LinkPreviewComposer(
+                    controller: widget.composerController,
+                    source: MessengerLinkPreviews(controller),
+                    accent: palette.primary,
+                  ),
                   _VoiceComposerPanel(
                     service: controller.voiceMessageService,
                     destinationKey: 'direct:${contact.deviceId}',
@@ -15464,21 +15482,48 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     }),
                               ),
                             ),
-                            SwitchListTile.adaptive(
-                              key: const ValueKey('settings-link-previews'),
+                            ListTile(
                               contentPadding: EdgeInsets.zero,
-                              value: widget.controller.linkPreviewsEnabled,
                               title: Text(l10nOf(context).settingsLinkPreviews),
                               subtitle: Text(
                                 l10nOf(context).settingsLinkPreviewsHelp,
                               ),
-                              onChanged: (value) => unawaited(
-                                widget.controller
-                                    .setLinkPreviewsEnabled(value)
-                                    .then((_) {
-                                      if (mounted) setState(() {});
-                                    }),
-                              ),
+                            ),
+                            DropdownButton<String>(
+                              key: const ValueKey('settings-link-previews'),
+                              isExpanded: true,
+                              value: widget.controller.linkPreviewMode,
+                              items: [
+                                for (final (mode, label) in [
+                                  (
+                                    'receiver',
+                                    l10nOf(context).linkPreviewModeReceiver,
+                                  ),
+                                  (
+                                    'sender',
+                                    l10nOf(context).linkPreviewModeSender,
+                                  ),
+                                  ('both', l10nOf(context).linkPreviewModeBoth),
+                                  ('off', l10nOf(context).linkPreviewModeOff),
+                                ])
+                                  DropdownMenuItem(
+                                    value: mode,
+                                    child: Text(
+                                      label,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (mode) {
+                                if (mode == null) return;
+                                unawaited(
+                                  widget.controller
+                                      .setLinkPreviewMode(mode)
+                                      .then((_) {
+                                        if (mounted) setState(() {});
+                                      }),
+                                );
+                              },
                             ),
                             const SizedBox(height: 12),
                             SelectableText(

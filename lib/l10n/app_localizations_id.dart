@@ -5423,4 +5423,20 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get settingsLinkPreviewsHelp =>
       'Menampilkan judul dan gambar tautan di bawah pesan. Perangkat ini mengambilnya dari situs, yang lalu melihat alamat IP Anda: otomatis di obrolan dengan kontak dan grup Anda (tidak saat hemat baterai atau roaming), dan di obrolan lain hanya saat Anda mengetuk.';
+
+  @override
+  String get linkPreviewModeReceiver => 'Setiap penerima mengambilnya';
+
+  @override
+  String get linkPreviewModeSender =>
+      'Dikirim bersama pesan (penerima tidak menghubungi situs)';
+
+  @override
+  String get linkPreviewModeBoth => 'Keduanya';
+
+  @override
+  String get linkPreviewModeOff => 'Mati';
+
+  @override
+  String get linkPreviewRemove => 'Kirim tanpa pratinjau';
 }

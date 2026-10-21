@@ -5,6 +5,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:conest/src/crypto_service.dart';
+import 'package:conest/src/links/link_preview_data.dart';
 import 'package:conest/src/models.dart';
 
 Future<IdentityRecord> _createIdentity({required String displayName}) async {
@@ -96,6 +97,50 @@ void main() {
       );
     },
   );
+
+  test('a link preview goes in direct and group payloads, and older '
+      'payloads have none', () {
+    final crypto = CryptoService(
+      identityProvider: () => throw StateError('not needed'),
+    );
+    final preview = LinkPreview(
+      url: Uri.parse('https://site.example/post'),
+      fetchedAt: DateTime.utc(2026, 10, 21),
+      title: 'A post',
+      image: Uint8List.fromList([1, 2, 3]),
+    );
+    final message = ChatMessage(
+      id: 'm',
+      conversationId: 'c',
+      senderDeviceId: 's',
+      recipientDeviceId: 'r',
+      body: 'see https://site.example/post',
+      outbound: true,
+      state: DeliveryState.pending,
+      createdAt: DateTime.utc(2026, 10, 21),
+      linkPreview: preview,
+    );
+    final direct = crypto.decodeDirectMessagePayload(
+      crypto.encodeDirectMessagePayload(message),
+    );
+    expect(direct.body, message.body);
+    expect(direct.linkPreview?.title, 'A post');
+    expect(direct.linkPreview?.image, [1, 2, 3]);
+    expect(crypto.decodeDirectMessagePayload('plain text').linkPreview, isNull);
+
+    final group = GroupRecord.fromJson({
+      'groupId': 'g',
+      'title': 'G',
+      'ownerDeviceId': 's',
+      'memberDeviceIds': ['s', 'r'],
+      'createdAt': '2026-10-21T00:00:00.000Z',
+      'updatedAt': '2026-10-21T00:00:00.000Z',
+    });
+    final inGroup = crypto.decodeGroupMessagePayload(
+      crypto.encodeGroupMessagePayload(group: group, message: message),
+    );
+    expect(inGroup.linkPreview?.url, preview.url);
+  });
 
   test('encrypt-then-decrypt round-trips a direct message body', () async {
     final alice = await _createIdentity(displayName: 'alice');

@@ -5198,4 +5198,19 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get settingsLinkPreviewsHelp =>
       '在消息下方显示链接的标题和图片。本设备从网站获取它们，网站因此会看到你的 IP 地址：在与联系人和群组的聊天中自动获取（省电模式或漫游时除外），在其他聊天中仅在你点按时获取。';
+
+  @override
+  String get linkPreviewModeReceiver => '由每个接收者获取';
+
+  @override
+  String get linkPreviewModeSender => '随消息发送（接收者不访问网站）';
+
+  @override
+  String get linkPreviewModeBoth => '两者';
+
+  @override
+  String get linkPreviewModeOff => '关闭';
+
+  @override
+  String get linkPreviewRemove => '不带预览发送';
 }

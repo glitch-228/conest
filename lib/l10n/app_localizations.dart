@@ -8608,6 +8608,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Shows a link\'s title and picture under the message. This device fetches them from the site, which then sees your IP address: by itself in chats with your contacts and groups (not in battery saver or when roaming), and only when you tap in other chats.'**
   String get settingsLinkPreviewsHelp;
+
+  /// Link previews mode: each device fetches previews of links it gets.
+  ///
+  /// In en, this message translates to:
+  /// **'Each receiver fetches them'**
+  String get linkPreviewModeReceiver;
+
+  /// Link previews mode: the sender fetches the preview and sends it with the message.
+  ///
+  /// In en, this message translates to:
+  /// **'Sent with the message (receivers never contact the site)'**
+  String get linkPreviewModeSender;
+
+  /// Link previews mode: both.
+  ///
+  /// In en, this message translates to:
+  /// **'Both'**
+  String get linkPreviewModeBoth;
+
+  /// Link previews mode: off.
+  ///
+  /// In en, this message translates to:
+  /// **'Off'**
+  String get linkPreviewModeOff;
+
+  /// Tooltip: remove the link preview from the message being written.
+  ///
+  /// In en, this message translates to:
+  /// **'Send without the preview'**
+  String get linkPreviewRemove;
 }
 
 class _AppLocalizationsDelegate

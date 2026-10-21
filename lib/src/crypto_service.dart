@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
 import 'beam_protocol.dart';
+import 'links/link_preview_data.dart';
 import 'models.dart';
 import 'group_file_crypto.dart';
 import 'ratchet.dart';
@@ -672,7 +673,7 @@ class CryptoService {
   }
 
   String encodeDirectMessagePayload(ChatMessage message) {
-    if (!message.hasReplyPreview) {
+    if (!message.hasReplyPreview && message.linkPreview == null) {
       return message.body;
     }
     return jsonEncode({
@@ -682,6 +683,9 @@ class CryptoService {
       'replySnippet': message.replySnippet,
       'replySenderDeviceId': message.replySenderDeviceId,
       'replySenderDisplayName': message.replySenderDisplayName,
+      // Older apps ignore it.
+      if (message.linkPreview case final preview?)
+        'linkPreview': preview.toJson(),
     });
   }
 
@@ -697,6 +701,7 @@ class CryptoService {
           replySnippet: decoded['replySnippet'] as String?,
           replySenderDeviceId: decoded['replySenderDeviceId'] as String?,
           replySenderDisplayName: decoded['replySenderDisplayName'] as String?,
+          linkPreview: LinkPreview.fromJson(decoded['linkPreview']),
         );
       }
     } catch (_) {
@@ -721,6 +726,8 @@ class CryptoService {
       'replySnippet': message.replySnippet,
       'replySenderDeviceId': message.replySenderDeviceId,
       'replySenderDisplayName': message.replySenderDisplayName,
+      if (message.linkPreview case final preview?)
+        'linkPreview': preview.toJson(),
       // Its place in the author's signed history, so every member orders it
       // the same way whatever the author's clock says (checked when the
       // signed event arrives).
@@ -753,6 +760,7 @@ class CryptoService {
       replySnippet: decoded['replySnippet'] as String?,
       replySenderDeviceId: decoded['replySenderDeviceId'] as String?,
       replySenderDisplayName: decoded['replySenderDisplayName'] as String?,
+      linkPreview: LinkPreview.fromJson(decoded['linkPreview']),
       historyOrder: switch (decoded['historyOrder']) {
         {
           'lamport': final int lamport,
@@ -834,6 +842,7 @@ class DecodedDirectMessage {
     this.replySnippet,
     this.replySenderDeviceId,
     this.replySenderDisplayName,
+    this.linkPreview,
   });
 
   final String body;
@@ -841,6 +850,9 @@ class DecodedDirectMessage {
   final String? replySnippet;
   final String? replySenderDeviceId;
   final String? replySenderDisplayName;
+
+  /// What its sender says its link shows (checked before it is kept).
+  final LinkPreview? linkPreview;
 }
 
 class DecodedGroupMessage {
@@ -854,6 +866,7 @@ class DecodedGroupMessage {
     this.replySnippet,
     this.replySenderDeviceId,
     this.replySenderDisplayName,
+    this.linkPreview,
   });
 
   final String groupId;
@@ -867,4 +880,7 @@ class DecodedGroupMessage {
   final String? replySnippet;
   final String? replySenderDeviceId;
   final String? replySenderDisplayName;
+
+  /// What its sender says its link shows (checked before it is kept).
+  final LinkPreview? linkPreview;
 }
