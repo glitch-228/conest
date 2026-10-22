@@ -17309,6 +17309,62 @@ void main() {
       expect(alice.emailCarrierConfig, isNull);
     });
 
+    test('the lab keeps a device\'s mail account: written after signing '
+        'up, used again instead of a new one', () async {
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      final root = Directory.systemTemp.createTempSync('conest_email_');
+      addTearDown(() => root.deleteSync(recursive: true));
+      Future<MessengerController> device() async {
+        final controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'unused',
+          createIdentity: false,
+          mailConnector: server.connect,
+          debugBuildId: 'test@abc',
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final first = await device();
+      await runDebugRequest(
+        first,
+        const DebugRunRequest(
+          what: 'none',
+          name: 'lab',
+          carriers: ['email'],
+          chatmail: 'chat.test',
+          wait: Duration.zero,
+        ),
+        defaultReportPath: () async => '${root.path}/first.json',
+      );
+      final kept = File('${root.path}/first.json.email').readAsStringSync();
+      expect(kept.split(',').first, first.emailCarrierConfig!.mail);
+      expect(
+        DebugRunRequest.fromArgs([
+          '--debug-run=none',
+          '--debug-email=$kept',
+        ])!.email,
+        kept,
+      );
+
+      final second = await device();
+      await runDebugRequest(
+        second,
+        DebugRunRequest(
+          what: 'none',
+          name: 'lab-again',
+          carriers: const ['email'],
+          email: kept,
+          wait: Duration.zero,
+        ),
+        defaultReportPath: () async => '${root.path}/second.json',
+      );
+      expect(second.emailCarrierConfig!.mail, first.emailCarrierConfig!.mail);
+      expect(File('${root.path}/second.json.email').existsSync(), isFalse);
+    });
+
     test('a failed login keeps email off', () async {
       final server = await FakeMailServer.start();
       addTearDown(server.close);

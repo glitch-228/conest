@@ -25,6 +25,12 @@
 ///                                         switch these carriers on first
 ///          [--debug-reticulum=HOST:PORT]  the Reticulum node to use
 ///          [--debug-chatmail=DOMAIN]      the chatmail server for email
+///          [--debug-email=MAIL,PASSWORD,IMAP_HOST,SMTP_HOST]
+///                                         use this mail account instead of
+///                                         signing up (a lab device's own,
+///                                         kept from an earlier run)
+///          [--debug-link-new]             join another lab device's account
+///          [--debug-link-from=LINK_TEXT]  link that new device into this one
 ///          [--debug-matrix=URL,USER,PASSWORD]  sign in to Matrix (lab
 ///                                         accounts on a lab homeserver)
 ///          [--debug-only-transport=KIND]  every other transport off (LAN
@@ -70,6 +76,7 @@ class DebugRunRequest {
     this.carriers = const [],
     this.reticulum,
     this.chatmail,
+    this.email,
     this.matrix,
     this.onlyTransport,
     this.expectContacts = 0,
@@ -131,6 +138,12 @@ class DebugRunRequest {
   /// The chatmail server for the email carrier (a network may block the
   /// default one).
   final String? chatmail;
+
+  /// MAIL,PASSWORD,IMAP_HOST,SMTP_HOST of a mail account to use instead of
+  /// signing up: chatmail servers limit sign-ups per address, and every
+  /// fresh lab run would otherwise make new accounts. After a sign-up the
+  /// account is written to `<report>.email` for the lab to keep.
+  final String? email;
 
   /// URL,USER,PASSWORD of a lab Matrix account.
   final String? matrix;
@@ -237,6 +250,11 @@ class DebugRunRequest {
       ],
       reticulum: value('debug-reticulum'),
       chatmail: value('debug-chatmail'),
+      email: switch (value('debug-email')) {
+        final text? when text.split(',').length == 4 && text.length <= 1024 =>
+          text,
+        _ => null,
+      },
       matrix: value('debug-matrix'),
       onlyTransport: TransportKind.values
           .where((kind) => kind.name == value('debug-only-transport'))
@@ -461,7 +479,29 @@ Future<String> runDebugRequest(
             case 'tor':
               await controller.enableTorCarrier();
             case 'email':
-              await controller.enableChatmailCarrier(request.chatmail);
+              if (request.email case final account?) {
+                final [mail, password, imap, smtp] = account.split(',');
+                await controller.enableOwnEmailCarrier(
+                  mail: mail,
+                  password: password,
+                  imapHost: imap,
+                  smtpHost: smtp,
+                );
+              } else {
+                await controller.enableChatmailCarrier(request.chatmail);
+                // Kept by the lab for the next run (see [email]).
+                if (controller.emailCarrierConfig case final config?) {
+                  await _writeWhole(
+                    '$path.email',
+                    [
+                      config.mail,
+                      config.password,
+                      config.imapHost,
+                      config.smtpHost,
+                    ].join(','),
+                  );
+                }
+              }
             case 'bitchat':
               await controller.enableBitchatCarrier();
             case 'reticulum':

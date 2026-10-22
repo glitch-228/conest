@@ -45,6 +45,10 @@ CARRIERS=${CARRIERS-nostr,tor,email,bitchat,reticulum}
 RETICULUM=${RETICULUM:-}
 # The chatmail server for email (a network may block the default).
 CHATMAIL=${CHATMAIL:-}
+# Each lab device's mail account, kept between runs (chatmail servers limit
+# sign-ups per address, and every fresh run would sign up again): one file
+# per device name, written after a sign-up. Outside the repo.
+EMAIL_DIR=${EMAIL_DIR:-$HOME/conest-lab/email}
 # A lab homeserver with an account per device named lab-android,
 # lab-linux and lab-windows, all with MATRIX_PASSWORD (empty: no Matrix).
 # One transport only (a TransportKind name, such as nostr or tor): every
@@ -69,6 +73,7 @@ carrier_args() { # device name
   [ -n "$carriers" ] && args+=("--debug-carriers=$carriers")
   [ -n "$RETICULUM" ] && args+=("--debug-reticulum=$RETICULUM")
   [ -n "$CHATMAIL" ] && args+=("--debug-chatmail=$CHATMAIL")
+  [ -s "$EMAIL_DIR/$1" ] && args+=("--debug-email=$(tr -d '\r\n' <"$EMAIL_DIR/$1")")
   [ -n "$MATRIX_URL" ] && args+=("--debug-matrix=$MATRIX_URL,$1,$MATRIX_PASSWORD")
   [ -n "$ONLY" ] && args+=("--debug-only-transport=$ONLY")
   echo "${args[*]:-}"
@@ -317,6 +322,25 @@ if [ -n "$ANDROID2" ]; then
     adb -s "$ANDROID2" exec-out run-as "$PACKAGE" cat "$android_report" >"$out/android2.json"
   fi
   adb -s "$ANDROID2" shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
+fi
+# Mail accounts signed up this run, kept for the next (and not left next
+# to the reports).
+mkdir -p "$EMAIL_DIR"
+keep_email() { # device name, file with the account (removed)
+  [ -s "$2" ] && cp "$2" "$EMAIL_DIR/$1"
+  rm -f "$2"
+}
+keep_email lab-linux "$linux_report.email"
+win "type \"$win_report.email\"" 2>/dev/null | tr -d '\r\n' >"$out/.windows.email" || true
+win "if exist \"$win_report.email\" del \"$win_report.email\"" >/dev/null 2>&1 || true
+keep_email lab-windows "$out/.windows.email"
+if [ "$ANDROID" = 1 ]; then
+  adb exec-out run-as "$PACKAGE" cat "$android_report.email" >"$out/.android.email" 2>/dev/null || true
+  keep_email lab-android "$out/.android.email"
+fi
+if [ -n "$ANDROID2" ]; then
+  adb -s "$ANDROID2" exec-out run-as "$PACKAGE" cat "$android_report.email" >"$out/.android2.email" 2>/dev/null || true
+  keep_email lab-android2 "$out/.android2.email"
 fi
 # The lab build only (by its folder): the user's own Conest keeps running.
 win "powershell -NoProfile -Command \"Get-Process conest -ErrorAction SilentlyContinue | Where-Object Path -Like '*\\conest-lab\\*' | Stop-Process -Force\"" >/dev/null 2>&1 || true
