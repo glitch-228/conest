@@ -325,6 +325,7 @@ extension GroupCallController on MessengerController {
   Future<void> _handleGroupCallSignal(RelayEnvelope envelope) async {
     final me = identity;
     final group = _groupById(envelope.conversationId);
+    final from = _shortId(envelope.senderDeviceId);
     if (_disposed ||
         me == null ||
         !conestActive ||
@@ -334,6 +335,14 @@ extension GroupCallController on MessengerController {
         !group.hasActiveMember(envelope.senderDeviceId) ||
         group.localRemovedAt != null ||
         envelope.recipientDeviceId != me.deviceId) {
+      _noteGroupCallTrouble(
+        'refused from $from: '
+        '${group == null
+            ? 'unknown group'
+            : me?.experimentalVoiceCallsEnabled != true
+            ? 'calls off here'
+            : 'not both members'}',
+      );
       return;
     }
     final sender = _groupMemberContact(group, envelope.senderDeviceId);
@@ -343,6 +352,14 @@ extension GroupCallController on MessengerController {
         !sender.featureCapabilities.contains(
           ApplicationCapability.groupVoiceCallsV1,
         )) {
+      _noteGroupCallTrouble(
+        'refused from $from: '
+        '${sender == null
+            ? 'no member record'
+            : !sender.featureCapabilities.contains(ApplicationCapability.groupVoiceCallsV1)
+            ? 'no group-call capability known'
+            : 'not reachable'}',
+      );
       return;
     }
     try {
@@ -352,16 +369,36 @@ extension GroupCallController on MessengerController {
       if (signal.groupId != group.groupId ||
           signal.senderDeviceId != sender.deviceId ||
           (signal.action == 'key' && envelope.protocolVersion != 3)) {
+        _noteGroupCallTrouble('${signal.action} from $from: mismatched');
         return;
       }
       _ensureGroupCallService();
-      await _groupCallService?.receiveSignal(
+      final taken = await _groupCallService?.receiveSignal(
         signal,
         authenticatedSender: sender.deviceId,
       );
-    } catch (_) {
-      /* Do not log plaintext or key-bearing parse exceptions. */
+      if (taken == false) {
+        _noteGroupCallTrouble('${signal.action} from $from: not taken');
+      }
+    } catch (error) {
+      // The kind only: plaintext or key-bearing text never goes to logs.
+      _noteGroupCallTrouble('from $from: ${error.runtimeType}');
     }
+  }
+
+  /// Why group-call signals did not go or were not taken: in the debug
+  /// log (the lab reads it), each reason at most every 10 s.
+  void _noteGroupCallTrouble(String what) {
+    final now = _now();
+    final last = _groupCallTroubleAt[what];
+    if (last != null && now.difference(last) < const Duration(seconds: 10)) {
+      return;
+    }
+    if (_groupCallTroubleAt.length >= 64) {
+      _groupCallTroubleAt.remove(_groupCallTroubleAt.keys.first);
+    }
+    _groupCallTroubleAt[what] = now;
+    appendDebugLog('Group call: $what');
   }
 
   Future<void> _handleGroupCallDatagram(IrohMediaDatagram datagram) async {
@@ -428,6 +465,21 @@ class _ControllerGroupCallTransport implements GroupCallTransport {
   final MessengerController controller;
   @override
   Future<void> sendSignal(
+    GroupCallSignal signal,
+    String recipientDeviceId,
+  ) async {
+    try {
+      await _sendSignal(signal, recipientDeviceId);
+    } catch (error) {
+      controller._noteGroupCallTrouble(
+        '${signal.action} to ${controller._shortId(recipientDeviceId)} '
+        'not sent: ${error is StateError ? error.message : error.runtimeType}',
+      );
+      rethrow;
+    }
+  }
+
+  Future<void> _sendSignal(
     GroupCallSignal signal,
     String recipientDeviceId,
   ) async {

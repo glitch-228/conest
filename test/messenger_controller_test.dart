@@ -4868,6 +4868,48 @@ void main() {
     expect(notified, lessThan(2));
   });
 
+  test(
+    'a group-call signal that cannot go says why in the debug log',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        groupCallMedia: FakeCallMedia(),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        groupCallMedia: FakeCallMedia(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Called',
+        members: alice.contacts,
+      );
+      await _waitForIroh(() => bob.groups.isNotEmpty);
+      // Then Bob cannot be reached: the call's first signal to him fails.
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      network.blockedPairs
+        ..add((alice.identity!.irohEndpointId!, bob.identity!.irohEndpointId!))
+        ..add((bob.identity!.irohEndpointId!, alice.identity!.irohEndpointId!));
+      await alice.joinOrStartGroupCall(group.groupId);
+      await _waitForIroh(() {
+        unawaited(alice.groupCallService?.tick());
+        return alice.recentDebugLog.any(
+          (line) => line.contains('Group call: ') && line.contains('not sent'),
+        );
+      }, reason: 'nothing said why the call signal did not go');
+    },
+  );
+
   testWidgets('a call started in a group is announced in that group only', (
     tester,
   ) async {

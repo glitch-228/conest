@@ -903,6 +903,10 @@ class MessengerController extends ChangeNotifier {
   StreamSubscription<Uint8List>? _voiceCallAudioSubscription;
   StreamSubscription<IrohMediaDatagram>? _voiceCallDatagramSubscription;
   final Map<String, _VoiceMediaReplayWindow> _voiceCallReplayWindows = {};
+
+  /// When each group-call trouble was last logged (see
+  /// _noteGroupCallTrouble).
+  final Map<String, DateTime> _groupCallTroubleAt = {};
   final Map<String, Future<SecretKey>> _voiceCallPeerKeys = {};
   final Map<String, List<int>> _voiceCallMediaSecrets = {};
   String? _voiceCallFrameCallId;

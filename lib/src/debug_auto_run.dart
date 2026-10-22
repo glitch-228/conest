@@ -1249,7 +1249,16 @@ Future<void> _callEveryone(
   await step('group call ${group.title}', () async {
     final started = DateTime.now();
     await controller.joinOrStartGroupCall(group.groupId);
-    await Future<void>.delayed(length);
+    // The most members seen in it at once (did they find each other?).
+    var most = 0;
+    final until = DateTime.now().add(length);
+    while (DateTime.now().isBefore(until)) {
+      most = max(
+        most,
+        groupCalls.roomFor(group.groupId)?.participants.length ?? 0,
+      );
+      await Future<void>.delayed(const Duration(seconds: 1));
+    }
     final room = groupCalls.roomFor(group.groupId);
     final stats = controller.voiceCallStats;
     await groupCalls.leave();
@@ -1258,6 +1267,7 @@ Future<void> _callEveryone(
       'group': group.title,
       'at': started.toUtc().toIso8601String(),
       'participants': room?.participants.length,
+      'mostParticipants': most,
       'stats': stats,
     });
     return room?.participants.length;
