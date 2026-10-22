@@ -31753,9 +31753,17 @@ class MessengerController extends ChangeNotifier {
   bool get mayManageAccountDevices {
     final me = identity;
     if (me == null) return false;
-    return accountDevices?.deviceFor(me.deviceId)?.mayManageDevicesAt(_now()) ??
-        false;
+    final cert = accountDevices?.deviceFor(me.deviceId);
+    if (cert == null) return false;
+    // The device that made the account was never linked to it: it adds
+    // and removes devices at once. Devices linked later wait a day.
+    return _isAccountFounder(me.deviceId) || cert.mayManageDevicesAt(_now());
   }
+
+  /// Whether [deviceId] made this account (the device its upgrade names,
+  /// which that device and the account key signed).
+  bool _isAccountFounder(String deviceId) =>
+      AccountUpgrade.fromJson(identity?.accountUpgrade)?.deviceId == deviceId;
 
   /// Adds a device to the account (once linking has checked it is the
   /// user's).
@@ -32745,13 +32753,15 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(contacts: contacts);
   }
 
-  /// Whether own device [deviceId] may add or remove devices: linked over
-  /// a day ago, by the later of its signed date and when this device first
-  /// saw it.
+  /// Whether own device [deviceId] may add or remove devices: the device
+  /// that made the account, or one linked over a day ago, by the later of
+  /// its signed date and when this device first saw it.
   bool _ownDeviceMayManage(String deviceId, DateTime now) {
     final record = _contactByDeviceId(deviceId);
     final cert = accountDevices?.deviceFor(deviceId);
     if (record == null || !record.ownDevice || cert == null) return false;
+    // The account's first device was never linked to it.
+    if (_isAccountFounder(deviceId)) return true;
     return cert.mayManageDevicesAt(now) &&
         now.difference(record.trustedAt) >= const Duration(hours: 24);
   }
@@ -32835,7 +32845,7 @@ class MessengerController extends ChangeNotifier {
   /// little on its own: one is refused when it removes or revokes this
   /// device or the account's original device, or changes the keys of a
   /// device already listed. New revocations count only from a device that
-  /// may manage devices (linked over a day ago).
+  /// may manage devices (the account's first, or linked over a day ago).
   ///
   /// A newer list that keeps everything known here is taken (and told to
   /// contacts); when the two disagree, this device signs one with both,

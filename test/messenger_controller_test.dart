@@ -18103,6 +18103,61 @@ void main() {
       expect(bob.contacts.length, 1);
     });
 
+    test('the account\'s first device links and removes devices at once, '
+        'even on a new identity; a device it linked waits a day', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          nowProvider: () => now,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final phone = await make('New phone');
+      final tablet = await make('Tablet');
+      Future<void> link(MessengerController added) async {
+        final qr = await added.startLinkAsNewDevice();
+        await alice.startLinkFromQrCode(qr);
+        await _waitForIroh(
+          () => added.linkCode != null && alice.linkCode != null,
+          reason: 'the codes did not show',
+        );
+        await added.confirmLinkCode();
+        await alice.confirmLinkCode();
+        await _waitForIroh(
+          () => added.linkState == LinkState.linked,
+          reason: '${added.identity!.displayName} was not linked',
+        );
+      }
+
+      await link(phone);
+      expect(alice.mayManageAccountDevices, isTrue);
+      expect(phone.mayManageAccountDevices, isFalse);
+      final tabletQr = await tablet.startLinkAsNewDevice();
+      await expectLater(phone.startLinkFromQrCode(tabletQr), throwsStateError);
+      tablet.cancelLink();
+
+      await link(tablet);
+      final tabletId = tablet.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(phone.pollNow());
+        return phone.accountDevices?.deviceFor(tabletId) != null;
+      }, reason: 'the phone did not learn the tablet');
+      // The first device's removal counts on the phone at once.
+      await alice.revokeAccountDevice(tabletId);
+      await _waitForIroh(() {
+        unawaited(phone.pollNow());
+        return phone.accountDevices?.revoked.containsKey(tabletId) ?? false;
+      }, reason: 'the phone did not take the removal');
+    });
+
     test('someone who photographed the QR code cannot pass for the real '
         'device', () async {
       final (alice, bob, phone, advance) = await threeDevices();
@@ -19096,8 +19151,9 @@ void main() {
 
       await alice.createAccount(deviceName: 'Laptop');
       expect(alice.accountDevices?.devices.single.name, 'Laptop');
-      // A brand-new identity waits a day before adding devices.
-      expect(alice.mayManageAccountDevices, isFalse);
+      // The device that made the account adds devices at once, even on a
+      // brand-new identity (only devices linked later wait a day).
+      expect(alice.mayManageAccountDevices, isTrue);
       now = now.add(const Duration(hours: 25));
       expect(alice.mayManageAccountDevices, isTrue);
 
