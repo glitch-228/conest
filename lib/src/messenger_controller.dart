@@ -32604,6 +32604,9 @@ class MessengerController extends ChangeNotifier {
         if (granter != null) _applyMirroredGroupState(granter, item);
       }
     }
+    // The recent history of every chat, from the device that linked this
+    // one (it has them all).
+    _requestHistoryFrom(offer.deviceId);
     await _saveSnapshotSilently(notify: true);
     setStatus('This device is now linked to your account.');
     _advertiseProfileToContacts();
@@ -33783,6 +33786,217 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  // History between own devices (M29e P3): a device linked later fetches
+  // the recent messages of each chat, page by page, from the account's
+  // other devices: Saved in full, other chats within a window. Nothing is
+  // announced or acknowledged; what comes is already read.
+
+  /// Messages per history page (fewer when they are long).
+  @visibleForTesting
+  static int historyPageMessages = 50;
+  static const int _historyMaxPerChat = 500;
+  static const int _historyMaxSaved = 5000;
+  static const Duration _historyWindow = Duration(days: 30);
+  static const int _historyPageChars = 48 * 1024;
+  @visibleForTesting
+  static int historyPagesPerHour = 300;
+  static const int _maxHistoryChats = 256;
+
+  /// Pages served to each own device in the last hour (a bound on what one
+  /// device can ask of another).
+  final Map<String, List<DateTime>> _historyPagesServed = {};
+
+  /// What this device has asked for and taken, per chat (bounded by the
+  /// window and the most per chat).
+  final Map<String, int> _historyTaken = {};
+
+  /// The chats this device shows, by the names history pages use.
+  List<String> get _historyChats {
+    final me = identity;
+    if (me == null) return const [];
+    return [
+      'saved',
+      for (final contact in _snapshot.contacts)
+        if (!contact.ownDevice &&
+            !contact.isHiddenDevice &&
+            !contact.isLinkedDevice &&
+            !contact.isArchived)
+          contact.deviceId,
+      for (final group in _snapshot.groups)
+        if (isActiveInGroup(group)) 'group:${group.groupId}',
+    ].take(_maxHistoryChats).toList();
+  }
+
+  /// Asks [deviceId] for the recent history of every chat shown here.
+  void _requestHistoryFrom(String deviceId) {
+    final chats = _historyChats;
+    for (var start = 0; start < chats.length; start += 32) {
+      _syncToOwnDevices({
+        'type': 'history_req',
+        'chats': [
+          for (final chat in chats.skip(start).take(32)) {'chat': chat},
+        ],
+      }, only: deviceId);
+    }
+  }
+
+  /// The messages of [chat] (a history name) held here, if this device may
+  /// show them to its own devices.
+  List<ChatMessage>? _historyMessages(String chat) {
+    final me = identity;
+    if (me == null) return null;
+    if (chat == 'saved') return _conversationFor(me.deviceId).messages;
+    if (chat.startsWith('group:')) {
+      final group = _groupById(chat.substring(6));
+      if (group == null || !isActiveInGroup(group)) return null;
+      return _groupConversation(group.groupId).messages;
+    }
+    final contact = _contactByDeviceId(chat);
+    if (contact == null ||
+        contact.ownDevice ||
+        contact.isHiddenDevice ||
+        contact.isLinkedDevice) {
+      return null;
+    }
+    return _conversationFor(chat).messages;
+  }
+
+  /// [sender], one of this account's devices, asks for pages of history:
+  /// each chat's next page older than its `before`, within the window.
+  void _answerHistoryRequest(ContactRecord sender, Object? chats) {
+    if (chats is! List) return;
+    final now = _now().toUtc();
+    final served = (_historyPagesServed[sender.deviceId] ?? const [])
+        .where((at) => now.difference(at) < const Duration(hours: 1))
+        .toList();
+    for (final item in chats.take(32)) {
+      if (served.length >= historyPagesPerHour) break;
+      if (item is! Map) continue;
+      final chat = item['chat'];
+      if (chat is! String || chat.isEmpty || chat.length > 170) continue;
+      final held = _historyMessages(chat);
+      if (held == null) continue;
+      final before = DateTime.tryParse(item['before'] as String? ?? '');
+      final oldest = chat == 'saved' ? null : now.subtract(_historyWindow);
+      final candidates = [
+        for (final message in held)
+          if (message.attachment == null &&
+              message.groupFile == null &&
+              message.poll == null &&
+              !message.deleted &&
+              (before == null || message.createdAt.isBefore(before)) &&
+              (oldest == null || message.createdAt.isAfter(oldest)))
+            message,
+      ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final page = <String>[];
+      var chars = 0;
+      for (final message in candidates) {
+        if (page.length >= historyPageMessages) break;
+        final json = jsonEncode(message.toJson());
+        if (chars + json.length > _historyPageChars) break;
+        page.add(json);
+        chars += json.length;
+      }
+      served.add(now);
+      _syncToOwnDevices({
+        'type': 'history_page',
+        'chat': chat,
+        'messages': page,
+        'more': page.length < candidates.length,
+      }, only: sender.deviceId);
+    }
+    _historyPagesServed[sender.deviceId] = served;
+  }
+
+  /// A page of [chat]'s history from [sender]: what is not here yet is
+  /// added, already read; the next page is asked for while there is more.
+  bool _importHistoryPage(ContactRecord sender, Map<String, dynamic> event) {
+    final me = identity;
+    final chat = event['chat'];
+    final raw = event['messages'];
+    if (me == null || chat is! String || raw is! List) return false;
+    final held = _historyMessages(chat);
+    if (held == null) return false;
+    final known = {for (final message in held) message.id};
+    final imported = <ChatMessage>[];
+    for (final item in raw.take(historyPageMessages * 2)) {
+      if (item is! String || item.length > _historyPageChars) continue;
+      final ChatMessage message;
+      try {
+        message = ChatMessage.fromJson(
+          jsonDecode(item) as Map<String, dynamic>,
+        );
+      } catch (_) {
+        continue;
+      }
+      if (message.id.isEmpty ||
+          message.id.length > 160 ||
+          message.attachment != null ||
+          message.groupFile != null ||
+          message.poll != null ||
+          known.contains(message.id) ||
+          _locallyDeletedMessageIds.contains(message.id)) {
+        continue;
+      }
+      imported.add(
+        message.copyWith(receivedAt: message.receivedAt ?? message.createdAt),
+      );
+    }
+    if (imported.isEmpty && raw.isNotEmpty) return false;
+    for (final message in imported) {
+      if (chat.startsWith('group:')) {
+        _upsertGroupMessage(chat.substring(6), message);
+      } else {
+        _upsertMessage(chat == 'saved' ? me.deviceId : chat, message);
+      }
+    }
+    _markHistoryRead(chat, imported);
+    final taken = (_historyTaken[chat] ?? 0) + imported.length;
+    _historyTaken[chat] = taken;
+    final limit = chat == 'saved' ? _historyMaxSaved : _historyMaxPerChat;
+    if (event['more'] == true && imported.isNotEmpty && taken < limit) {
+      final oldest = imported
+          .map((message) => message.createdAt)
+          .reduce((a, b) => a.isBefore(b) ? a : b);
+      _syncToOwnDevices({
+        'type': 'history_req',
+        'chats': [
+          {'chat': chat, 'before': oldest.toUtc().toIso8601String()},
+        ],
+      }, only: sender.deviceId);
+    }
+    return imported.isNotEmpty;
+  }
+
+  /// History comes already read: the read position moves up to it (what
+  /// arrived here later stays unread).
+  void _markHistoryRead(String chat, List<ChatMessage> imported) {
+    if (imported.isEmpty) return;
+    final me = identity!;
+    final newest = imported
+        .map((message) => message.receivedAt ?? message.createdAt)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+    final conversations = List<ConversationRecord>.from(
+      _snapshot.conversations,
+    );
+    final index = chat.startsWith('group:')
+        ? conversations.indexWhere(
+            (c) =>
+                c.kind == ConversationKind.group && c.id == chat.substring(6),
+          )
+        : conversations.indexWhere(
+            (c) =>
+                c.kind == ConversationKind.direct &&
+                c.peerDeviceId == (chat == 'saved' ? me.deviceId : chat),
+          );
+    if (index == -1) return;
+    final read = conversations[index].lastReadAt;
+    if (read == null || read.isBefore(newest)) {
+      conversations[index] = conversations[index].copyWith(lastReadAt: newest);
+      _snapshot = _snapshot.copyWith(conversations: conversations);
+    }
+  }
+
   /// Receipts synced before the message they are about (bounded).
   final Map<String, String> _earlySyncStates = <String, String>{};
 
@@ -33823,6 +34037,12 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       switch (event['type']) {
+        case 'history_req':
+          _answerHistoryRequest(sender, event['chats']);
+          continue;
+        case 'history_page':
+          if (_importHistoryPage(sender, event)) changed = true;
+          continue;
         case 'group_state':
           if (_applyMirroredGroupState(sender, event['group'])) changed = true;
           continue;
