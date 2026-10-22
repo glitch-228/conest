@@ -159,11 +159,23 @@ carrier's NAT), and the defaults suit a public relay:
   stores, which fill the disk, and every UDP request;
 - `--max-long-polls-per-peer 16`: long-polls one address holds open at
   once (more are answered at once);
-- `--soft-ban-threshold 10`: refusals in a row before a 5-minute ban.
+- `--max-connections-per-peer 64`: connections one address holds open at
+  once (not applied with `--trust-forwarded-for`, where every client shares
+  the proxy's address);
+- `--max-total-bytes 4294967296`: everything stored, all mailboxes
+  together; past it, stores are refused;
+- `--soft-ban-threshold 10`: refusals of the general limit in a row before
+  a 5-minute ban.
+
+An IPv6 client is counted by its /64. Over UDP, which anyone can send with
+a forged source, the budgets are kept apart from TCP and HTTP, never lead
+to a ban, and an answer longer than the request (a fetch, a health check)
+first needs a cookie that only a client at that address receives (Conest
+asks for it by itself). Requests must arrive within 10 s.
 
 Open TCP and/or UDP port `7667` on the host firewall or provider security group. The same relay port also accepts HTTP requests, so HTTP tunnels such as LocalTunnel can forward to it. If the host is UDP-only, add it in the app as `udp://your-domain:7667`; for LocalTunnel-style URLs, add the relay as `https://your-subdomain.loca.lt`.
 
-LocalTunnel/ngrok caveat: tunneled relays only work while the tunnel client is alive on the host. When the tunnel process exits or the host reboots, clients pointed at the tunnel URL stop being able to reach that relay. Run the tunnel under a supervisor (systemd, pm2, etc.) for any deployment that must outlive a single shell session. When clients reach the relay through a shared tunnel, every request appears to originate from the tunnel's IP, so the relay's per-IP rate limit becomes shared across all tunneled clients unless the relay is configured to trust `X-Forwarded-For` (see below).
+LocalTunnel/ngrok caveat: tunneled relays only work while the tunnel client is alive on the host. When the tunnel process exits or the host reboots, clients pointed at the tunnel URL stop being able to reach that relay. Run the tunnel under a supervisor (systemd, pm2, etc.) for any deployment that must outlive a single shell session. When clients reach the relay through a shared tunnel, every request appears to originate from the tunnel's IP, so the relay's per-IP rate limit becomes shared across all tunneled clients unless the relay is configured to trust `X-Forwarded-For` (see below; the relay counts the last address in it, the one the proxy saw).
 
 The relay speaks the same JSON protocol as the app over TCP newline-delimited requests, UDP single-datagram requests, and HTTP/HTTPS POST requests:
 

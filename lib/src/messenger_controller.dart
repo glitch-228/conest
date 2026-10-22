@@ -17841,7 +17841,15 @@ class MessengerController extends ChangeNotifier {
   /// in practice). Old relays that ignore `wait_ms` return immediately
   /// empty; the elapsed-time guard at the bottom of the loop keeps that
   /// case from busy-looping the CPU.
+  /// How long to wait after the [count]th empty answer in a row that came
+  /// at once: 1, 2, 4, 8, then 10 s.
+  @visibleForTesting
+  static Duration instantEmptyPollWait(int count) =>
+      Duration(seconds: min(10, 1 << min(max(count, 1) - 1, 4)));
+
   Future<void> _runLongPollLoop({int slot = 0, int? generation}) async {
+    // Empty answers that came at once, in a row (see below).
+    var instantEmpty = 0;
     while (_longPollRunning &&
         hasIdentity &&
         (generation == null || generation == _longPollGeneration)) {
@@ -17935,11 +17943,15 @@ class MessengerController extends ChangeNotifier {
           notifyListeners();
         }
       } else if (stopwatch.elapsed < const Duration(seconds: 1)) {
-        // Relay returned empty almost instantly — either it doesn't speak
-        // `wait_ms` (older build) or there's nothing in the mailbox. Sleep
-        // so we don't busy-loop the request.
-        await Future<void>.delayed(const Duration(seconds: 1));
+        // Relay returned empty almost instantly: it does not wait (an older
+        // build), or this address already holds its share of waiting polls
+        // (many devices behind one NAT). Each time longer (up to 10 s), so
+        // the polls do not use up the address's budget.
+        instantEmpty++;
+        await Future<void>.delayed(instantEmptyPollWait(instantEmpty));
+        continue;
       }
+      instantEmpty = 0;
     }
   }
 
@@ -19436,6 +19448,14 @@ class MessengerController extends ChangeNotifier {
       try {
         if (_locallyDeletedMessageIds.contains(envelope.messageId)) {
           _markSeen(envelope.messageId);
+          // Deleted here (maybe a copy another own device passed on): its
+          // sender still learns it arrived, or would send it again.
+          if (envelope.kind == 'direct_message') {
+            final from = _contactByDeviceId(envelope.senderDeviceId);
+            if (from != null && from.canSendOutbound && !from.ownDevice) {
+              await _sendAck(contact: from, envelope: envelope);
+            }
+          }
           continue;
         }
         if (envelope.protocolVersion != 1 &&
@@ -19754,7 +19774,7 @@ class MessengerController extends ChangeNotifier {
           _upsertMessage(chatId, inbound);
           // The account's other devices: told it came here, and given it
           // if they do not say they have it themselves.
-          _noteSeenForOwnDevices(inbound.id);
+          _noteSeenForOwnDevices(chatId, inbound.id);
           _syncReceivedMessage(chatId, inbound);
           // They just reached us, so our waiting messages can reach them.
           _flushContactSoon(contact.deviceId);
@@ -22928,7 +22948,10 @@ class MessengerController extends ChangeNotifier {
     _applyPeerContentRefusals(
       sender,
       routePayload?['contentRefusals'],
-      sentAt: sentAt ?? envelope.createdAt,
+      // A reply to our probe carries our time, not theirs.
+      sentAt: !requestReply && probeId != null
+          ? envelope.createdAt
+          : sentAt ?? envelope.createdAt,
     );
     // Route updates are stamped when sent (never queued with an old time);
     // over a live route they arrive within moments. A reply echoes our own
@@ -28562,6 +28585,11 @@ class MessengerController extends ChangeNotifier {
     Object? json, {
     required DateTime sentAt,
   }) {
+    sentAt = sentAt.toUtc();
+    // A clock far ahead must not freeze them: never later than a few
+    // minutes from now.
+    final latest = _now().toUtc().add(const Duration(minutes: 5));
+    if (sentAt.isAfter(latest)) sentAt = latest;
     final seen =
         _contentRefusalsSeenAt[sender.deviceId] ?? sender.peerContentRefusalsAt;
     if (seen != null && !sentAt.isAfter(seen)) return;
@@ -32525,6 +32553,20 @@ class MessengerController extends ChangeNotifier {
         existing.encryptionKeyBase64 != offer.encryptionKeyBase64) {
       return;
     }
+    // Which device made the account (it alone manages devices at once):
+    // kept only when the account key and that device both signed it and
+    // the device is in the list with that key.
+    final upgrade = AccountUpgrade.fromJson(grant['accountUpgrade']);
+    final founder = upgrade == null ? null : list.deviceFor(upgrade.deviceId);
+    final founderProven =
+        upgrade != null &&
+        founder != null &&
+        upgrade.accountKeyBase64 == accountKey &&
+        await upgrade.verify(
+          accountId: accountId as String,
+          deviceId: upgrade.deviceId,
+          pinnedDeviceSigningKeyBase64: founder.signingKeyBase64,
+        );
     final contacts = <ContactRecord>[];
     if (grant['contacts'] case final List raw) {
       for (final item in raw.take(4096)) {
@@ -32547,7 +32589,7 @@ class MessengerController extends ChangeNotifier {
         bio: bio is String && bio.length <= 2048 ? bio : me.bio,
         accountKeyPublicBase64: accountKey,
         accountKeyPrivateBase64: accountPrivate,
-        accountUpgrade: grant['accountUpgrade'] is Map<String, dynamic>
+        accountUpgrade: founderProven
             ? grant['accountUpgrade'] as Map<String, dynamic>
             : null,
         accountDeviceList: list.toJson(),
@@ -33192,9 +33234,11 @@ class MessengerController extends ChangeNotifier {
     if (entry.kind != PendingAckKind.accountSync) return null;
     final plaintext = entry.payload?.plaintext;
     if (plaintext == null) return null;
-    // Sent messages are never folded: not worth decoding them for it.
-    if (foldableOnly && plaintext.contains('"type":"sent"')) {
-      return const {'type': 'sent'};
+    // Never folded: not worth decoding them for it.
+    if (foldableOnly) {
+      for (final type in const ['sent', 'rx', 'seen']) {
+        if (plaintext.contains('"type":"$type"')) return {'type': type};
+      }
     }
     try {
       final decoded = jsonDecode(plaintext);
@@ -33238,15 +33282,23 @@ class MessengerController extends ChangeNotifier {
         if (queued == null) {
           kept.add(entry);
         } else if (!supersedes(queued)) {
-          forDevice.add((entry, queued['type'] == 'sent'));
+          forDevice.add((
+            entry,
+            queued['type'] == 'sent' || queued['type'] == 'rx',
+          ));
         }
       }
       // Room for the new one: receipts and read marks go before sent
       // messages, the oldest first.
       final excess = forDevice.length - (_maxQueuedSyncEvents - 1);
       if (excess > 0) {
+        bool seenOnly(PendingAckDelivery entry) =>
+            entry.payload?.plaintext.contains('"type":"seen"') ?? false;
         final order = [...forDevice]
           ..sort((a, b) {
+            if (seenOnly(a.$1) != seenOnly(b.$1)) {
+              return seenOnly(a.$1) ? -1 : 1;
+            }
             if (a.$2 != b.$2) return a.$2 ? 1 : -1;
             final at = a.$1.payload?.createdAt ?? a.$1.lastAttemptedAt;
             final bt = b.$1.payload?.createdAt ?? b.$1.lastAttemptedAt;
@@ -33343,6 +33395,8 @@ class MessengerController extends ChangeNotifier {
           'type': 'rx',
           'chat': chatId,
           'id': message.id,
+          // The contact's device that sent it (it may be a linked one).
+          'from': message.senderDeviceId,
           'createdAt': message.createdAt.toUtc().toIso8601String(),
           'payload': payload,
         },
@@ -33350,6 +33404,10 @@ class MessengerController extends ChangeNotifier {
     });
     final now = _now().toUtc();
     for (final device in devices) {
+      // A device long out of touch gets it when the user confirms it (its
+      // read marks and history come then too), not a queue meanwhile.
+      if (isOwnDeviceUnconfirmed(device)) continue;
+      _makeRoomForReceived(device.deviceId, plaintext.length);
       final envelopeId = _randomId('sync');
       _enqueuePendingAckDelivery(
         PendingAckDelivery(
@@ -33374,22 +33432,65 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// What waits to be passed on to one own device, at most.
+  @visibleForTesting
+  static int maxQueuedReceived = 200;
+  static const int _maxQueuedReceivedChars = 4 * 1024 * 1024;
+
+  /// Room for a new message of [chars] to pass on to [deviceId]: the oldest
+  /// ones queued for it go first.
+  void _makeRoomForReceived(String deviceId, int chars) {
+    final queued = [
+      for (final entry in _snapshot.pendingAckDeliveries)
+        if (entry.targetDeviceId == deviceId &&
+            entry.kind == PendingAckKind.accountSync &&
+            (entry.payload?.plaintext.contains('"type":"rx"') ?? false))
+          entry,
+    ];
+    var count = queued.length;
+    var total = queued.fold<int>(
+      0,
+      (sum, entry) => sum + (entry.payload?.plaintext.length ?? 0),
+    );
+    for (final entry in queued) {
+      if (count < maxQueuedReceived &&
+          total + chars <= _maxQueuedReceivedChars) {
+        break;
+      }
+      _clearPendingAckDelivery(
+        targetDeviceId: entry.targetDeviceId,
+        acknowledgedMessageId: entry.acknowledgedMessageId,
+        kind: entry.kind,
+      );
+      count--;
+      total -= entry.payload?.plaintext.length ?? 0;
+    }
+  }
+
   /// Messages from contacts that came here, to tell this account's other
   /// devices (so they need not pass them on): sent together, shortly.
   final Set<String> _seenToTell = <String>{};
   Timer? _seenTimer;
 
-  void _noteSeenForOwnDevices(String messageId) {
+  void _noteSeenForOwnDevices(String chatId, String messageId) {
     if (!ownDevices.any((device) => device.canSendOutbound)) return;
-    _seenToTell.add(messageId);
-    _seenTimer ??= Timer(const Duration(seconds: 1), () {
-      _seenTimer = null;
-      if (_disposed || _seenToTell.isEmpty) return;
-      final ids = _seenToTell.take(_maxSeenIds).toList();
-      _seenToTell.removeAll(ids);
-      _syncToOwnDevices({'type': 'seen', 'ids': ids});
-      if (_seenToTell.isNotEmpty) _noteSeenForOwnDevices(_seenToTell.first);
-    });
+    // Bounded: a flood of messages is told about in part (the rest are
+    // passed on, which costs only a duplicate).
+    if (_seenToTell.length < _maxSeenIds * 4) {
+      _seenToTell.add('$chatId|$messageId');
+    }
+    _seenTimer ??= Timer(const Duration(seconds: 1), _tellSeen);
+  }
+
+  void _tellSeen() {
+    _seenTimer = null;
+    if (_disposed || _seenToTell.isEmpty) return;
+    final ids = _seenToTell.take(_maxSeenIds).toList();
+    _seenToTell.removeAll(ids);
+    _syncToOwnDevices({'type': 'seen', 'ids': ids});
+    if (_seenToTell.isNotEmpty) {
+      _seenTimer = Timer(const Duration(seconds: 1), _tellSeen);
+    }
   }
 
   static const int _maxSeenIds = 64;
@@ -33410,9 +33511,13 @@ class MessengerController extends ChangeNotifier {
     };
     if (seen.isEmpty) return;
     for (final entry in [..._snapshot.pendingAckDeliveries]) {
-      if (entry.targetDeviceId != senderDeviceId) continue;
+      if (entry.targetDeviceId != senderDeviceId ||
+          !(entry.payload?.plaintext.contains('"type":"rx"') ?? false)) {
+        continue;
+      }
       final queued = _queuedSyncEvent(entry);
-      if (queued?['type'] == 'rx' && seen.contains(queued?['id'])) {
+      if (queued?['type'] == 'rx' &&
+          seen.contains('${queued?['chat']}|${queued?['id']}')) {
         _clearPendingAckDelivery(
           targetDeviceId: entry.targetDeviceId,
           acknowledgedMessageId: entry.acknowledgedMessageId,
@@ -33795,7 +33900,16 @@ class MessengerController extends ChangeNotifier {
           // from the contact, not acknowledged to them (that device did)
           // and never passed on again.
           final payload = event['payload'];
+          final contact = _contactByDeviceId(chat);
+          final from = event['from'] is String ? event['from'] as String : chat;
           if (chat == me.deviceId ||
+              contact == null ||
+              // What this device itself would refuse from them.
+              contact.pendingVerification ||
+              !contact.canSendOutbound ||
+              _droppedByIngressMode(contact, PeerRouteKind.relay) ||
+              (from != chat &&
+                  !linkedDevicesOf(chat).any((d) => d.deviceId == from)) ||
               id is! String ||
               id.isEmpty ||
               id.length > 160 ||
@@ -33811,12 +33925,17 @@ class MessengerController extends ChangeNotifier {
               DateTime.tryParse(event['createdAt'] as String? ?? '')?.toUtc() ??
               envelope.createdAt.toUtc();
           final createdAt = sentAt.isAfter(now) ? now : sentAt;
+          // From before the contact was added again: not this pairing's.
+          if (contact.revivedAt case final revived?
+              when createdAt.isBefore(revived)) {
+            continue;
+          }
           _upsertMessage(
             chat,
             ChatMessage(
               id: id,
               conversationId: _crypto.conversationIdFor(chat),
-              senderDeviceId: chat,
+              senderDeviceId: from,
               recipientDeviceId: me.deviceId,
               body: text.body,
               outbound: false,
@@ -33829,6 +33948,7 @@ class MessengerController extends ChangeNotifier {
               route: MessageRoute.viaOwnDevice,
             ),
           );
+          await _applyDeferredDirectReactions(chat, id);
           changed = true;
           // Only what is new (not a backlog catching up) is announced.
           if (now.difference(createdAt) < const Duration(minutes: 10)) {
@@ -36691,6 +36811,27 @@ typedef _RelayAttemptCallback =
 /// Wraps a [RelayClient] and records the outcome of every call so the
 /// controller can maintain a [RelayHealthScore] per endpoint without
 /// touching the eight individual call sites.
+/// The relay client wrapper that waits out rate limits, for tests: the
+/// client, and until when a relay is left alone.
+@visibleForTesting
+({RelayClient client, DateTime? Function(String, int, [String?]) pausedUntil})
+scoringRelayClientForTesting(RelayClient inner, DateTime Function() now) {
+  final client = _ScoringRelayClient(
+    inner: inner,
+    onAttempt:
+        ({
+          required String host,
+          required int port,
+          required PeerRouteProtocol protocol,
+          required bool success,
+          Duration? latency,
+          required DateTime at,
+        }) {},
+    nowProvider: now,
+  );
+  return (client: client, pausedUntil: client.rateLimitedUntil);
+}
+
 class _ScoringRelayClient implements RelayClient {
   _ScoringRelayClient({
     required this.inner,
@@ -36702,26 +36843,42 @@ class _ScoringRelayClient implements RelayClient {
   final _RelayAttemptCallback onAttempt;
   final DateTime Function() nowProvider;
 
-  /// Relays (by host) that answered "rate limit exceeded": until when
-  /// nothing more is sent to them, and how long the last wait was. Asking
-  /// again at once would only count more violations (and a relay bans a
-  /// peer after a few); many users share one address behind a carrier's
-  /// NAT.
+  /// Relays that answered "rate limit exceeded" (by their pinned identity,
+  /// so every address of one relay pauses together; by host and port when
+  /// none is pinned, so unrelated relays behind one tunnel host do not):
+  /// until when nothing more is sent to them, and how long the last wait
+  /// was. Asking again at once would only count more violations (and a
+  /// relay bans a peer after a few); many users share one address behind
+  /// a carrier's NAT.
   final Map<String, ({DateTime until, Duration wait})> _rateLimited = {};
 
   static const _firstRateLimitWait = Duration(seconds: 30);
   static const _longestRateLimitWait = Duration(minutes: 2);
 
-  /// Until when the relay at [host] is left alone (on every port), or
-  /// null. A wait longer than the longest one means the clock went back:
-  /// it is over.
-  DateTime? rateLimitedUntil(String host, int port) {
-    final limited = _rateLimited[host];
+  /// The key each address was last used under (its relay's identity).
+  final Map<String, String> _pauseKeys = {};
+
+  String _pauseKey(String host, int port, String? identity) {
+    final address = '$host:$port';
+    if (identity == null || identity.isEmpty) {
+      return _pauseKeys[address] ?? address;
+    }
+    if (_pauseKeys.length >= 256 && !_pauseKeys.containsKey(address)) {
+      _pauseKeys.remove(_pauseKeys.keys.first);
+    }
+    return _pauseKeys[address] = 'id:$identity';
+  }
+
+  /// Until when the relay at [host]:[port] is left alone, or null. A wait
+  /// longer than the longest one means the clock went back: it is over.
+  DateTime? rateLimitedUntil(String host, int port, [String? identity]) {
+    final key = _pauseKey(host, port, identity);
+    final limited = _rateLimited[key];
     if (limited == null) return null;
     final now = nowProvider();
     if (!now.isBefore(limited.until)) return null;
     if (limited.until.difference(now) > _longestRateLimitWait) {
-      _rateLimited.remove(host);
+      _rateLimited.remove(key);
       return null;
     }
     return limited.until;
@@ -36732,11 +36889,11 @@ class _ScoringRelayClient implements RelayClient {
     required int port,
     required PeerRouteProtocol protocol,
     required Future<T> Function() action,
+    String? identity,
   }) async {
-    // A relay limits each client address on all its ports at once.
-    final key = host;
+    final key = _pauseKey(host, port, identity);
     final limited = _rateLimited[key];
-    if (limited != null && rateLimitedUntil(host, port) != null) {
+    if (limited != null && rateLimitedUntil(host, port, identity) != null) {
       throw StateError(
         'Relay $host waits out its rate limit (until '
         '${limited.until.toUtc().toIso8601String()}).',
@@ -36792,6 +36949,7 @@ class _ScoringRelayClient implements RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
+      identity: expectedIdentityPublicKeyBase64,
       host: host,
       port: port,
       protocol: protocol,
@@ -36816,6 +36974,7 @@ class _ScoringRelayClient implements RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
+      identity: expectedIdentityPublicKeyBase64,
       host: host,
       port: port,
       protocol: protocol,
@@ -36843,6 +37002,7 @@ class _ScoringRelayClient implements RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
+      identity: expectedIdentityPublicKeyBase64,
       host: host,
       port: port,
       protocol: protocol,
@@ -36872,6 +37032,7 @@ class _ScoringRelayClient implements RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
+      identity: expectedIdentityPublicKeyBase64,
       host: host,
       port: port,
       protocol: protocol,
@@ -36900,6 +37061,7 @@ class _ScoringRelayClient implements RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
+      identity: expectedIdentityPublicKeyBase64,
       host: host,
       port: port,
       protocol: protocol,
@@ -36924,6 +37086,7 @@ class _ScoringRelayClient implements RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
+      identity: expectedIdentityPublicKeyBase64,
       host: host,
       port: port,
       protocol: protocol,
@@ -36946,6 +37109,7 @@ class _ScoringRelayClient implements RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) {
     return _track(
+      identity: expectedIdentityPublicKeyBase64,
       host: host,
       port: port,
       protocol: protocol,

@@ -19112,6 +19112,81 @@ void main() {
         expect(phone.queuedReceivedSyncForTesting, 0);
       });
 
+      test(
+        'what waits for a device out of reach is bounded, newest kept',
+        () async {
+          final saved = MessengerController.maxQueuedReceived;
+          MessengerController.maxQueuedReceived = 3;
+          addTearDown(() => MessengerController.maxQueuedReceived = saved);
+          final (alice, bob, phone, network, relay, _) = await linkedPair();
+          final bobId = bob.identity!.deviceId;
+          final phoneId = phone.identity!.deviceId;
+          final phoneIroh = phone.identity!.irohEndpointId!;
+          // The phone is out of reach of both.
+          relay.shouldFailStore = (_, _, _, _, envelope) =>
+              envelope.recipientDeviceId == phoneId;
+          for (final other in [alice, bob]) {
+            network.blockedPairs
+              ..add((other.identity!.irohEndpointId!, phoneIroh))
+              ..add((phoneIroh, other.identity!.irohEndpointId!));
+          }
+          for (var i = 0; i < 5; i++) {
+            await bob.sendMessage(contact: bob.contacts.single, body: 'm$i');
+          }
+          await _waitForIroh(() {
+            unawaited(alice.pollNow());
+            return alice
+                    .messagesFor(bobId)
+                    .where((m) => m.body.startsWith('m'))
+                    .length ==
+                5;
+          }, reason: 'the laptop did not get them');
+          expect(alice.queuedReceivedSyncForTesting, 3);
+        },
+      );
+
+      test('a device does not take a contact\'s message by another device '
+          'that it would refuse from the contact itself', () async {
+        final (alice, bob, phone, network, relay, advance) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final phoneId = phone.identity!.deviceId;
+        // On the phone, Bob is reached over the local network only.
+        final bobOnPhone = phone.contacts.firstWhere(
+          (c) => c.deviceId == bobId,
+        );
+        await phone.updateContactRoutingPreferences(
+          bobId,
+          bobOnPhone.routing.copyWith(onlineEnabled: false),
+        );
+        relay.shouldFailStore = (_, _, _, _, envelope) =>
+            envelope.recipientDeviceId == phoneId;
+        network.blockedPairs
+          ..add((
+            bob.identity!.irohEndpointId!,
+            phone.identity!.irohEndpointId!,
+          ))
+          ..add((
+            phone.identity!.irohEndpointId!,
+            bob.identity!.irohEndpointId!,
+          ));
+        await bob.sendMessage(contact: bob.contacts.single, body: 'not here');
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice.messagesFor(bobId).any((m) => m.body == 'not here');
+        }, reason: 'the laptop did not get it');
+        advance(const Duration(seconds: 20));
+        // Passed on and taken in (acknowledged), yet not shown.
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return alice.queuedReceivedSyncForTesting == 0;
+        }, reason: 'it was never passed on');
+        expect(
+          phone.messagesFor(bobId).where((m) => m.body == 'not here'),
+          isEmpty,
+        );
+      });
+
       test('one that reached every device is not passed on', () async {
         final (alice, bob, phone, _, _, _) = await linkedPair();
         final bobId = bob.identity!.deviceId;
@@ -23678,6 +23753,49 @@ void main() {
     );
     await alice.pollNow();
     expect(relay.fetchAttempts.length, greaterThan(fetches));
+  });
+
+  test('a rate-limit pause covers one relay\'s addresses, not other relays '
+      'on the same host', () async {
+    final now = DateTime.utc(2026, 10, 22, 12);
+    final inner = _FakeRelayClient()
+      ..storeErrorFor = (_) => StateError('rate limit exceeded');
+    final scoring = scoringRelayClientForTesting(inner, () => now);
+    await expectLater(
+      scoring.client.storeEnvelope(
+        host: 'tunnel.example',
+        port: 7667,
+        recipientDeviceId: 'dev-b',
+        envelope: RelayEnvelope(
+          kind: 'direct_message',
+          messageId: 'msg-1',
+          conversationId: 'conv',
+          senderAccountId: 'acc-a',
+          senderDeviceId: 'dev-a',
+          recipientDeviceId: 'dev-b',
+          createdAt: now,
+          payloadBase64: 'aGVsbG8=',
+        ),
+        expectedIdentityPublicKeyBase64: 'relay-a',
+      ),
+      throwsStateError,
+    );
+    // The same relay at another address waits too.
+    expect(scoring.pausedUntil('tunnel.example', 443, 'relay-a'), isNotNull);
+    expect(scoring.pausedUntil('tunnel.example', 7667), isNotNull);
+    // Another relay behind the same host does not.
+    expect(scoring.pausedUntil('tunnel.example', 8000, 'relay-b'), isNull);
+    expect(scoring.pausedUntil('tunnel.example', 9000), isNull);
+  });
+
+  test('polls a relay answers at once and empty back off, up to 10 s', () {
+    expect(
+      [
+        for (var count = 1; count <= 7; count++)
+          MessengerController.instantEmptyPollWait(count).inSeconds,
+      ],
+      [1, 2, 4, 8, 10, 10, 10],
+    );
   });
 
   test('link previews do not come by themselves in battery saver', () async {

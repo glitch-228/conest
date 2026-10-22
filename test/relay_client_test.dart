@@ -78,6 +78,45 @@ Future<ServerSocket> _startRawLineRelay(
 }
 
 void main() {
+  test('over UDP the client sends the cookie the relay asks for, and keeps '
+      'it', () async {
+    final socket = await RawDatagramSocket.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    addTearDown(socket.close);
+    final seen = <String?>[];
+    socket.listen((event) {
+      if (event != RawSocketEvent.read) return;
+      final datagram = socket.receive();
+      if (datagram == null) return;
+      final request =
+          jsonDecode(utf8.decode(datagram.data)) as Map<String, dynamic>;
+      seen.add(request['cookie'] as String?);
+      final reply = request['cookie'] == 'c00kie'
+          ? {'ok': true, 'messages': <Object>[]}
+          : {'ok': false, 'error': 'udp cookie required', 'cookie': 'c00kie'};
+      socket.send(
+        utf8.encode(jsonEncode(reply)),
+        datagram.address,
+        datagram.port,
+      );
+    });
+    const client = RelayClient();
+    Future<void> fetch() => client.fetchEnvelopes(
+      host: '127.0.0.1',
+      port: socket.port,
+      protocol: PeerRouteProtocol.udp,
+      recipientDeviceId: 'dev-b',
+      timeout: const Duration(seconds: 2),
+    );
+    await fetch();
+    expect(seen, [null, 'c00kie']);
+    // Kept: the next request carries it at once.
+    await fetch();
+    expect(seen, [null, 'c00kie', 'c00kie']);
+  });
+
   test(
     'relay client can store and fetch through UDP local relay protocol',
     () async {

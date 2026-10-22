@@ -669,7 +669,36 @@ class RelayClient {
     }
   }
 
+  /// Cookies UDP relays gave (by host:port): over UDP a relay answers at
+  /// length only a request carrying the cookie it sent to that address,
+  /// so a forged source cannot aim its answers at someone.
+  static final Map<String, String> _udpCookies = <String, String>{};
+
   Future<Map<String, dynamic>> _sendUdpRequest({
+    required String host,
+    required int port,
+    required Duration timeout,
+    required Map<String, dynamic> request,
+    required int maxResponseBytes,
+  }) async {
+    final key = '$host:$port';
+    Future<Map<String, dynamic>> send(String? cookie) => _sendUdpOnce(
+      host: host,
+      port: port,
+      timeout: timeout,
+      request: {...request, 'cookie': ?cookie},
+      maxResponseBytes: maxResponseBytes,
+    );
+    try {
+      return await send(_udpCookies[key]);
+    } on _UdpCookieRequired catch (asked) {
+      if (_udpCookies.length >= 64) _udpCookies.remove(_udpCookies.keys.first);
+      _udpCookies[key] = asked.cookie;
+      return send(asked.cookie);
+    }
+  }
+
+  Future<Map<String, dynamic>> _sendUdpOnce({
     required String host,
     required int port,
     required Duration timeout,
@@ -741,7 +770,13 @@ class RelayClient {
             if (datagram.data.length > maxResponseBytes) {
               throw StateError('Relay response exceeded the allowed size.');
             }
-            return _decodeResponse(utf8.decode(datagram.data));
+            final text = utf8.decode(datagram.data);
+            if (_udpCookieAsked(text) case final cookie?) {
+              throw _UdpCookieRequired(cookie);
+            }
+            return _decodeResponse(text);
+          } on _UdpCookieRequired {
+            rethrow;
           } catch (error) {
             lastError = error;
           }
@@ -891,6 +926,23 @@ class RelayClient {
     return '${normalized.substring(0, 160)}...';
   }
 
+  /// The cookie a UDP relay asks to be sent back, if [text] is that.
+  static String? _udpCookieAsked(String text) {
+    if (!text.contains('udp cookie required')) return null;
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map && decoded['error'] == 'udp cookie required') {
+        final cookie = decoded['cookie'];
+        if (cookie is String && cookie.isNotEmpty && cookie.length <= 64) {
+          return cookie;
+        }
+      }
+    } on FormatException {
+      return null;
+    }
+    return null;
+  }
+
   Map<String, dynamic> _decodeResponse(String line) {
     final Object? decoded;
     try {
@@ -969,4 +1021,11 @@ class _HttpHeaderEnd {
 
   final int headerBytes;
   final int totalHeaderBytes;
+}
+
+/// A UDP relay asks for its cookie before answering at length.
+class _UdpCookieRequired implements Exception {
+  const _UdpCookieRequired(this.cookie);
+
+  final String cookie;
 }
