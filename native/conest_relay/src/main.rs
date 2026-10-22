@@ -21,12 +21,20 @@ const DEFAULT_MAX_QUEUE_PER_MAILBOX: usize = 512;
 const DEFAULT_MAX_FETCH_LIMIT: usize = 128;
 const DEFAULT_MAX_ENVELOPE_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_LINE_BYTES: usize = 300 * 1024;
-// Per address: many users can share one behind a carrier's NAT. The
-// per-mailbox byte limit is what stops one account flooding the relay.
+// Per address, every request: many users can share one behind a carrier's
+// NAT, and fetches, acks and health checks cost the relay little.
 const DEFAULT_MAX_REQUESTS_PER_MINUTE: u32 = 1200;
+// Per address, what fills the disk or answers unproven sources: stores
+// (count and bytes), and every UDP request (a datagram's source can be
+// forged, so its answer must not be worth reflecting).
+const DEFAULT_MAX_STORES_PER_MINUTE: u32 = 240;
+const DEFAULT_MAX_STORE_BYTES_PER_MINUTE: u64 = 32 * 1024 * 1024;
+// Long-polls one address may hold open at once (each holds a worker); more
+// are answered at once instead of waiting.
+const DEFAULT_MAX_LONG_POLLS_PER_PEER: usize = 16;
 const DEFAULT_IDENTITY_SEED_FILE: &str = "conest_relay_identity.seed";
 const DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE: u64 = 10 * 1024 * 1024;
-const DEFAULT_SOFT_BAN_THRESHOLD: u32 = 20;
+const DEFAULT_SOFT_BAN_THRESHOLD: u32 = 10;
 const DEFAULT_SOFT_BAN_SECONDS: u64 = 300;
 const DEFAULT_MAX_CONNECTIONS: usize = 1024;
 const DEFAULT_DATABASE_PATH: &str = "conest_relay.sqlite3";
@@ -49,6 +57,9 @@ struct RelayConfig {
     max_envelope_bytes: usize,
     max_line_bytes: usize,
     max_requests_per_minute: u32,
+    max_stores_per_minute: u32,
+    max_store_bytes_per_minute: u64,
+    max_long_polls_per_peer: usize,
     trust_forwarded_for: bool,
     identity_seed_path: PathBuf,
     identity_seed_inline: Option<String>,
@@ -79,6 +90,18 @@ impl RelayConfig {
             max_requests_per_minute: env_u32(
                 "CONEST_RELAY_MAX_REQUESTS_PER_MINUTE",
                 DEFAULT_MAX_REQUESTS_PER_MINUTE,
+            ),
+            max_stores_per_minute: env_u32(
+                "CONEST_RELAY_MAX_STORES_PER_MINUTE",
+                DEFAULT_MAX_STORES_PER_MINUTE,
+            ),
+            max_store_bytes_per_minute: env_u64(
+                "CONEST_RELAY_MAX_STORE_BYTES_PER_MINUTE",
+                DEFAULT_MAX_STORE_BYTES_PER_MINUTE,
+            ),
+            max_long_polls_per_peer: env_usize(
+                "CONEST_RELAY_MAX_LONG_POLLS_PER_PEER",
+                DEFAULT_MAX_LONG_POLLS_PER_PEER,
             ),
             trust_forwarded_for: env_bool("CONEST_RELAY_TRUST_FORWARDED_FOR", false),
             identity_seed_path: env::var("CONEST_RELAY_IDENTITY_SEED_PATH")
@@ -129,6 +152,15 @@ impl RelayConfig {
                 "--max-requests-per-minute" => {
                     config.max_requests_per_minute = parse_next_u32(&mut args, &arg)?;
                 }
+                "--max-stores-per-minute" => {
+                    config.max_stores_per_minute = parse_next_u32(&mut args, &arg)?;
+                }
+                "--max-store-bytes-per-minute" => {
+                    config.max_store_bytes_per_minute = parse_next_u64(&mut args, &arg)?;
+                }
+                "--max-long-polls-per-peer" => {
+                    config.max_long_polls_per_peer = parse_next_usize(&mut args, &arg)?;
+                }
                 "--trust-forwarded-for" => {
                     config.trust_forwarded_for = true;
                 }
@@ -172,6 +204,11 @@ impl RelayConfig {
         }
         if config.max_requests_per_minute == 0 {
             return Err("max requests per minute must be greater than zero".to_owned());
+        }
+        if config.max_stores_per_minute == 0 || config.max_store_bytes_per_minute == 0 {
+            return Err(
+                "max stores and store bytes per minute must be greater than zero".to_owned(),
+            );
         }
         if config.relay_id.trim().is_empty() {
             return Err("relay id must not be empty".to_owned());
@@ -421,6 +458,31 @@ struct RateBucket {
     count: u32,
 }
 
+/// Stores (and UDP requests) from one address in the current minute.
+struct StoreWindow {
+    window_started_millis: u64,
+    count: u32,
+    bytes: u64,
+}
+
+/// A long-poll slot of one address, given back when dropped.
+struct LongPollSlot {
+    polls: Arc<Mutex<HashMap<String, usize>>>,
+    peer: String,
+}
+
+impl Drop for LongPollSlot {
+    fn drop(&mut self) {
+        let mut polls = self.polls.lock().expect("long-poll lock should not poison");
+        if let Some(count) = polls.get_mut(&self.peer) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                polls.remove(&self.peer);
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct MailboxByteWindow {
     window_started_millis: u64,
@@ -453,6 +515,8 @@ struct RelayState {
     database: Arc<Mutex<Connection>>,
     notifiers: Arc<Mutex<HashMap<String, MailboxNotifier>>>,
     rate_buckets: Arc<Mutex<HashMap<String, RateBucket>>>,
+    store_windows: Arc<Mutex<HashMap<String, StoreWindow>>>,
+    long_polls: Arc<Mutex<HashMap<String, usize>>>,
     mailbox_bytes: Arc<Mutex<HashMap<String, MailboxByteWindow>>>,
     banned_peers: Arc<Mutex<HashMap<String, BanEntry>>>,
     identity: Arc<RelayIdentity>,
@@ -519,6 +583,8 @@ impl RelayState {
             database: Arc::new(Mutex::new(database)),
             notifiers: Arc::new(Mutex::new(HashMap::new())),
             rate_buckets: Arc::new(Mutex::new(HashMap::new())),
+            store_windows: Arc::new(Mutex::new(HashMap::new())),
+            long_polls: Arc::new(Mutex::new(HashMap::new())),
             mailbox_bytes: Arc::new(Mutex::new(HashMap::new())),
             banned_peers: Arc::new(Mutex::new(HashMap::new())),
             identity: Arc::new(identity),
@@ -624,6 +690,54 @@ impl RelayState {
         drop(buckets);
         self.note_rate_compliance(peer);
         true
+    }
+
+    /// The heavier budget: stores (by count and bytes) and UDP requests.
+    /// Going over it counts towards the soft ban like the general limit.
+    fn allow_store(&self, peer: &str, bytes: u64) -> bool {
+        let now = now_millis();
+        let mut windows = self
+            .store_windows
+            .lock()
+            .expect("store window lock should not poison");
+        windows.retain(|_, window| now.saturating_sub(window.window_started_millis) < 120_000);
+        let window = windows.entry(peer.to_owned()).or_insert(StoreWindow {
+            window_started_millis: now,
+            count: 0,
+            bytes: 0,
+        });
+        if now.saturating_sub(window.window_started_millis) >= 60_000 {
+            window.window_started_millis = now;
+            window.count = 0;
+            window.bytes = 0;
+        }
+        if window.count >= self.config.max_stores_per_minute
+            || window.bytes.saturating_add(bytes) > self.config.max_store_bytes_per_minute
+        {
+            drop(windows);
+            self.note_rate_violation(peer, now);
+            return false;
+        }
+        window.count += 1;
+        window.bytes = window.bytes.saturating_add(bytes);
+        true
+    }
+
+    /// A long-poll slot for [peer], or none when it holds its share open.
+    fn long_poll_slot(&self, peer: &str) -> Option<LongPollSlot> {
+        let mut polls = self
+            .long_polls
+            .lock()
+            .expect("long-poll lock should not poison");
+        let count = polls.entry(peer.to_owned()).or_insert(0);
+        if *count >= self.config.max_long_polls_per_peer {
+            return None;
+        }
+        *count += 1;
+        Some(LongPollSlot {
+            polls: self.long_polls.clone(),
+            peer: peer.to_owned(),
+        })
     }
 
     fn note_rate_violation(&self, peer: &str, now_millis_value: u64) {
@@ -1499,10 +1613,21 @@ fn handle_udp_datagram(
     peer: SocketAddr,
 ) -> Value {
     let peer_key = peer.ip().to_string();
-    handle_request_bytes(datagram, bytes_read, state, &peer_key)
+    handle_request_from(datagram, bytes_read, state, &peer_key, true)
 }
 
 fn handle_request_bytes(bytes: &[u8], bytes_read: usize, state: &RelayState, peer: &str) -> Value {
+    handle_request_from(bytes, bytes_read, state, peer, false)
+}
+
+/// One request from [peer]; [datagram] when it came by UDP.
+fn handle_request_from(
+    bytes: &[u8],
+    bytes_read: usize,
+    state: &RelayState,
+    peer: &str,
+    datagram: bool,
+) -> Value {
     if bytes_read > state.config.max_line_bytes {
         return to_wire(RelayResponse::error("request line too large"));
     }
@@ -1538,7 +1663,7 @@ fn handle_request_bytes(bytes: &[u8], bytes_read: usize, state: &RelayState, pee
         .and_then(|value| value.as_str())
         .and_then(|encoded| BASE64_STANDARD.decode(encoded).ok());
     let detached = parsed.get("sig_mode").and_then(|value| value.as_str()) == Some("detached");
-    let request: RelayRequest = match serde_json::from_value(parsed) {
+    let mut request: RelayRequest = match serde_json::from_value(parsed) {
         Ok(request) => request,
         Err(error) => {
             return finalize_wire(
@@ -1549,6 +1674,35 @@ fn handle_request_bytes(bytes: &[u8], bytes_read: usize, state: &RelayState, pee
                 &state.identity,
             );
         }
+    };
+    // The heavier budget, now that the kind of request is known.
+    let heavy = datagram || matches!(request, RelayRequest::Store { .. });
+    let stored_bytes = if matches!(request, RelayRequest::Store { .. }) {
+        bytes_read as u64
+    } else {
+        0
+    };
+    if heavy && !state.allow_store(peer, stored_bytes) {
+        return finalize_wire(
+            RelayResponse::error("rate limit exceeded"),
+            &action,
+            nonce_bytes.as_deref(),
+            detached,
+            &state.identity,
+        );
+    }
+    // A long-poll over this address's share is answered at once instead.
+    let _long_poll = match &mut request {
+        RelayRequest::Fetch { wait_ms, .. } | RelayRequest::FetchLeased { wait_ms, .. }
+            if wait_ms.unwrap_or(0) > 0 =>
+        {
+            let slot = state.long_poll_slot(peer);
+            if slot.is_none() {
+                *wait_ms = Some(0);
+            }
+            slot
+        }
+        _ => None,
     };
     let response = handle_request(request, state);
     finalize_wire(
@@ -1792,7 +1946,10 @@ fn usage() -> String {
            --max-fetch-limit N\n\
            --max-envelope-bytes N\n\
            --max-line-bytes N\n\
-           --max-requests-per-minute N\n\
+           --max-requests-per-minute N   every request, per address\n\
+           --max-stores-per-minute N     stores and UDP requests, per address\n\
+           --max-store-bytes-per-minute N  bytes stored, per address\n\
+           --max-long-polls-per-peer N   long-polls open at once, per address\n\
            --database-path PATH       SQLite WAL queue database\n\
            --max-mailbox-bytes N      durable mailbox byte quota\n\
            --trust-forwarded-for  trust the leftmost X-Forwarded-For address\n\
@@ -1827,6 +1984,9 @@ mod tests {
             max_envelope_bytes: DEFAULT_MAX_ENVELOPE_BYTES,
             max_line_bytes: DEFAULT_MAX_LINE_BYTES,
             max_requests_per_minute: DEFAULT_MAX_REQUESTS_PER_MINUTE,
+            max_stores_per_minute: DEFAULT_MAX_STORES_PER_MINUTE,
+            max_store_bytes_per_minute: DEFAULT_MAX_STORE_BYTES_PER_MINUTE,
+            max_long_polls_per_peer: DEFAULT_MAX_LONG_POLLS_PER_PEER,
             trust_forwarded_for: false,
             identity_seed_path: PathBuf::from(""),
             identity_seed_inline: None,
@@ -2693,5 +2853,94 @@ mod tests {
         let (status, _) =
             handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
         assert_eq!(status, 413);
+    }
+
+    fn store_line(id: &str) -> String {
+        json!({
+            "action": "store",
+            "recipient_device_id": "dev-b",
+            "envelope": envelope("direct_message", id, "dev-a")
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn stores_have_their_own_budget_and_fetches_go_on() {
+        let mut config = test_config();
+        config.max_queue_per_mailbox = 16;
+        config.max_stores_per_minute = 2;
+        let state = RelayState::new(config, test_identity());
+        for (index, expected) in [true, true, false].into_iter().enumerate() {
+            let line = store_line(&format!("msg-{index}"));
+            let response =
+                handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.9");
+            assert_eq!(response["ok"], expected, "store {index}: {response}");
+        }
+        // Over the store budget, the address still fetches.
+        let fetch =
+            json!({"action": "fetch", "recipient_device_id": "dev-b", "limit": 4}).to_string();
+        let fetched = handle_request_bytes(fetch.as_bytes(), fetch.len(), &state, "198.51.100.9");
+        assert_eq!(fetched["ok"], true, "{fetched}");
+        // Another address has a budget of its own.
+        let line = store_line("msg-other");
+        let other = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.10");
+        assert_eq!(other["ok"], true, "{other}");
+    }
+
+    #[test]
+    fn stored_bytes_per_address_are_limited() {
+        let mut config = test_config();
+        config.max_queue_per_mailbox = 16;
+        let line = store_line("msg-0");
+        // Room for one store of this size, not two.
+        config.max_store_bytes_per_minute = line.len() as u64 + 10;
+        let state = RelayState::new(config, test_identity());
+        let first = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.9");
+        assert_eq!(first["ok"], true, "{first}");
+        let line = store_line("msg-1");
+        let second = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.9");
+        assert_eq!(second["ok"], false, "{second}");
+        assert_eq!(second["error"], "rate limit exceeded");
+    }
+
+    #[test]
+    fn every_udp_request_takes_the_store_budget() {
+        let mut config = test_config();
+        config.max_stores_per_minute = 2;
+        let state = RelayState::new(config, test_identity());
+        let peer = "198.51.100.11:40000".parse().expect("test socket addr");
+        let health = json!({"action": "health"}).to_string();
+        for expected in [true, true, false] {
+            let response = handle_udp_datagram(health.as_bytes(), health.len(), &state, peer);
+            assert_eq!(response["ok"], expected, "{response}");
+        }
+        // The same requests over TCP stay within the general budget.
+        let response =
+            handle_request_bytes(health.as_bytes(), health.len(), &state, "198.51.100.11");
+        assert_eq!(response["ok"], true, "{response}");
+    }
+
+    #[test]
+    fn a_long_poll_over_the_address_share_is_answered_at_once() {
+        let mut config = test_config();
+        config.max_long_polls_per_peer = 1;
+        let state = RelayState::new(config, test_identity());
+        let held = state.long_poll_slot("198.51.100.12").expect("a first slot");
+        let poll = json!({
+            "action": "fetch",
+            "recipient_device_id": "dev-b",
+            "limit": 4,
+            "wait_ms": 5000
+        })
+        .to_string();
+        let started = std::time::Instant::now();
+        let response = handle_request_bytes(poll.as_bytes(), poll.len(), &state, "198.51.100.12");
+        assert_eq!(response["ok"], true, "{response}");
+        assert!(started.elapsed() < Duration::from_secs(2), "it waited");
+        drop(held);
+        // The slot came back: another address's share is untouched, and
+        // this one has its slot again.
+        assert!(state.long_poll_slot("198.51.100.12").is_some());
+        assert!(state.long_polls.lock().expect("lock").is_empty());
     }
 }

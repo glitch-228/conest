@@ -147,9 +147,19 @@ cargo build --release -p conest_relay
   --ttl-seconds 604800 \
   --max-queue-per-mailbox 512 \
   --max-fetch-limit 128 \
-  --max-envelope-bytes 262144 \
-  --max-requests-per-minute 240
+  --max-envelope-bytes 262144
 ```
+
+Rate limits are per client address (many people can share one behind a
+carrier's NAT), and the defaults suit a public relay:
+
+- `--max-requests-per-minute 1200`: every request (fetches, acks and
+  health checks are cheap);
+- `--max-stores-per-minute 240` and `--max-store-bytes-per-minute 33554432`:
+  stores, which fill the disk, and every UDP request;
+- `--max-long-polls-per-peer 16`: long-polls one address holds open at
+  once (more are answered at once);
+- `--soft-ban-threshold 10`: refusals in a row before a 5-minute ban.
 
 Open TCP and/or UDP port `7667` on the host firewall or provider security group. The same relay port also accepts HTTP requests, so HTTP tunnels such as LocalTunnel can forward to it. If the host is UDP-only, add it in the app as `udp://your-domain:7667`; for LocalTunnel-style URLs, add the relay as `https://your-subdomain.loca.lt`.
 

@@ -57,6 +57,24 @@ void main() {
       },
     );
 
+    test('a relay waiting out its rate limit backs off just that long, '
+        'and its failure streak does not grow', () {
+      final pausedUntil = now.add(const Duration(seconds: 30));
+      tracker.rateLimitedUntil = (route) =>
+          route.routeKey == relayRoute.routeKey ? pausedUntil : null;
+      for (var i = 0; i < 4; i++) {
+        tracker.recordFailure(relayRoute, error: 'waits out its rate limit');
+      }
+      expect(tracker.runtimeFor(relayRoute)!.failureStreak, 0);
+      expect(tracker.runtimeFor(relayRoute)!.backoffUntil, pausedUntil);
+      now = pausedUntil.add(const Duration(seconds: 1));
+      expect(tracker.isEligibleNow(relayRoute), isTrue);
+      // Once the pause is over, failures count again.
+      tracker.rateLimitedUntil = (_) => null;
+      tracker.recordFailure(relayRoute, error: 'boom');
+      expect(tracker.runtimeFor(relayRoute)!.failureStreak, 1);
+    });
+
     test('recordSuccess clears the backoff and seeds a healthy cache', () {
       tracker.recordFailure(lanRoute);
       expect(tracker.isBackedOff(lanRoute), isTrue);

@@ -23150,6 +23150,75 @@ void main() {
     expect(relay.storeAttempts.length, greaterThan(afterFirst));
   });
 
+  test('waiting out a relay\'s rate limit pauses fetches too, for just as '
+      'long: sends refused meanwhile do not count as failures', () async {
+    var now = DateTime.utc(2026, 10, 21, 12);
+    final relay = _FakeRelayClient();
+    final network = _InProcessIrohNetwork();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      nowProvider: () => now,
+      transportRegistryFactory: network.registry,
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      nowProvider: () => now,
+      transportRegistryFactory: network.registry,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    await alice.updateGlobalConnectivity(
+      const GlobalConnectivityPreferences(
+        lanEnabled: false,
+        transportPolicies: {
+          TransportKind.conestRelay: TransportPolicy.automatic,
+          TransportKind.iroh: TransportPolicy.disabled,
+        },
+        autoDownloadPreset: AutoDownloadPreset.custom,
+      ),
+    );
+    final bobContact = alice.contacts.single;
+    // A message Bob never confirmed: the relay is tried in the last pass,
+    // which does not wait for backoffs.
+    await alice.sendMessage(contact: bobContact, body: 'zero');
+    now = now.add(const Duration(minutes: 1));
+    relay.storeErrorFor = (_) => StateError('rate limit exceeded');
+    await alice
+        .sendMessage(contact: bobContact, body: 'one')
+        .catchError((_) {});
+    relay.storeErrorFor = null;
+    // Sends during the pause are refused here, before the relay.
+    for (final body in ['two', 'three', 'four']) {
+      await alice
+          .sendMessage(contact: bobContact, body: body)
+          .catchError((_) {});
+    }
+    final fetches = relay.fetchAttempts.length;
+    await alice.pollNow();
+    expect(relay.fetchAttempts.length, fetches, reason: 'fetched in the pause');
+    bool relayPreferred() => alice
+        .preferredRoutesForTesting(alice.contacts.single)
+        .any((route) => route.host == 'relay.example');
+    // The relay's routes wait exactly as long as the pause (a failed route
+    // would be tried again after 15 s).
+    now = now.add(const Duration(seconds: 20));
+    expect(relayPreferred(), isFalse);
+    // Right after the pause (not minutes later), it is asked again: the
+    // sends refused in it did not make the relay a failing route.
+    now = now.add(const Duration(seconds: 11));
+    expect(
+      alice
+          .preferredRoutesForTesting(alice.contacts.single)
+          .where((route) => route.host == 'relay.example'),
+      isNotEmpty,
+    );
+    await alice.pollNow();
+    expect(relay.fetchAttempts.length, greaterThan(fetches));
+  });
+
   test('link previews do not come by themselves in battery saver', () async {
     final alice = await _createController(
       relayClient: _FakeRelayClient(),

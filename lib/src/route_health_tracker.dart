@@ -42,6 +42,11 @@ class RouteHealthTracker {
 
   /// Told of every outcome (for the network history).
   void Function(PeerEndpoint route, bool ok, String? error)? onOutcome;
+
+  /// Until when [route] waits out a relay's rate limit, if it does. Such a
+  /// failure is the relay asking for a pause, not a broken route: it backs
+  /// off just that long, and its failure streak does not grow.
+  DateTime? Function(PeerEndpoint route)? rateLimitedUntil;
   final Map<String, PeerRouteHealth> _health = <String, PeerRouteHealth>{};
   final Map<String, RouteRuntimeState> _runtime = <String, RouteRuntimeState>{};
 
@@ -219,12 +224,17 @@ class RouteHealthTracker {
     final relayInstanceId = _health[route.routeKey]?.relayInstanceId;
     final state = ensureRuntime(route.routeKey);
     state.lastFailureAt = timestamp;
-    state.failureStreak += 1;
-    final backoff = backoffDurationFor(
-      route,
-      failureStreak: state.failureStreak,
-    );
-    state.backoffUntil = timestamp.add(backoff);
+    final pausedUntil = rateLimitedUntil?.call(route);
+    if (pausedUntil != null && pausedUntil.isAfter(timestamp)) {
+      state.backoffUntil = pausedUntil;
+    } else {
+      state.failureStreak += 1;
+      final backoff = backoffDurationFor(
+        route,
+        failureStreak: state.failureStreak,
+      );
+      state.backoffUntil = timestamp.add(backoff);
+    }
     _health[route.routeKey] = PeerRouteHealth(
       route: route,
       available: false,

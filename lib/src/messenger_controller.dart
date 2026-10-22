@@ -665,8 +665,10 @@ class MessengerController extends ChangeNotifier {
       nowProvider: _now,
     );
     _routeHealthTracker = RouteHealthTracker(nowProvider: _now)
-      ..onOutcome = (route, ok, error) =>
-          _noteRouteOutcome(_historyRouteOf(route), ok, error);
+      ..onOutcome = ((route, ok, error) =>
+          _noteRouteOutcome(_historyRouteOf(route), ok, error))
+      ..rateLimitedUntil = ((route) => (_relayClient as _ScoringRelayClient)
+          .rateLimitedUntil(route.host, route.port));
     _localRelayNode.onEnvelopeStored = _handleLocalEnvelopeStored;
   }
 
@@ -27336,8 +27338,10 @@ class MessengerController extends ChangeNotifier {
       // that no route was eligible (a relay's rate limit, say).
       final waiting = [
         for (final route in candidateRoutes)
-          if (!attemptedRouteKeys.contains(route.routeKey))
-            '${route.host}: ${_routeHealthTracker.healthFor(route)?.error ?? 'waiting'}',
+          if (!attemptedRouteKeys.contains(route.routeKey) &&
+              _routeHealthTracker.isBackedOff(route))
+            if (_routeHealthTracker.healthFor(route)?.error case final error?)
+              '${route.host}: ${_boundedLogValue(error, 160)}',
       ];
       if (waiting.isNotEmpty &&
           (lastError == null ||
@@ -36094,14 +36098,30 @@ class _ScoringRelayClient implements RelayClient {
   final _RelayAttemptCallback onAttempt;
   final DateTime Function() nowProvider;
 
-  /// Relays that answered "rate limit exceeded": until when nothing more
-  /// is sent to them, and how long the last wait was. Asking again at once
-  /// would only count more violations (and a relay bans a peer after a
-  /// few); many users share one address behind a carrier's NAT.
+  /// Relays (by host) that answered "rate limit exceeded": until when
+  /// nothing more is sent to them, and how long the last wait was. Asking
+  /// again at once would only count more violations (and a relay bans a
+  /// peer after a few); many users share one address behind a carrier's
+  /// NAT.
   final Map<String, ({DateTime until, Duration wait})> _rateLimited = {};
 
   static const _firstRateLimitWait = Duration(seconds: 30);
   static const _longestRateLimitWait = Duration(minutes: 2);
+
+  /// Until when the relay at [host] is left alone (on every port), or
+  /// null. A wait longer than the longest one means the clock went back:
+  /// it is over.
+  DateTime? rateLimitedUntil(String host, int port) {
+    final limited = _rateLimited[host];
+    if (limited == null) return null;
+    final now = nowProvider();
+    if (!now.isBefore(limited.until)) return null;
+    if (limited.until.difference(now) > _longestRateLimitWait) {
+      _rateLimited.remove(host);
+      return null;
+    }
+    return limited.until;
+  }
 
   Future<T> _track<T>({
     required String host,
@@ -36109,9 +36129,10 @@ class _ScoringRelayClient implements RelayClient {
     required PeerRouteProtocol protocol,
     required Future<T> Function() action,
   }) async {
-    final key = '$host:$port';
+    // A relay limits each client address on all its ports at once.
+    final key = host;
     final limited = _rateLimited[key];
-    if (limited != null && nowProvider().isBefore(limited.until)) {
+    if (limited != null && rateLimitedUntil(host, port) != null) {
       throw StateError(
         'Relay $host waits out its rate limit (until '
         '${limited.until.toUtc().toIso8601String()}).',
@@ -36133,9 +36154,12 @@ class _ScoringRelayClient implements RelayClient {
       return result;
     } catch (error) {
       stopwatch.stop();
-      if ('$error'.contains('rate limit exceeded')) {
-        // Each time again, twice as long (up to two minutes).
-        final last = _rateLimited[key];
+      final last = _rateLimited[key];
+      // Each time again, twice as long (up to two minutes); requests that
+      // were already on their way when the first refusal came do not
+      // count again.
+      if ('$error'.contains('rate limit exceeded') &&
+          (last == null || !nowProvider().isBefore(last.until))) {
         final wait = last == null
             ? _firstRateLimitWait
             : (last.wait * 2 > _longestRateLimitWait
