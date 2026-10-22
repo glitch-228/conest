@@ -5595,4 +5595,62 @@ class AppLocalizationsAr extends AppLocalizations {
   String linkPreviewFromSender(String host) {
     return '$host · معاينة من المرسل';
   }
+
+  @override
+  String get contentRoutingTitle => 'ما الذي يُرسل عبر الإنترنت';
+
+  @override
+  String get contentRoutingHelp =>
+      'شبكتك المحلية تنقل كل شيء دائمًا. يعرف جهات اتصالك هذا الاختيار: ما يُستثنى ينتظر وسيلة نقل مسموحًا لها بحمله.';
+
+  @override
+  String get contentRoutingEverything => 'كل شيء';
+
+  @override
+  String get contentRoutingMessagesAndSmallFiles =>
+      'الرسائل والملفات حتى 1 ميغابايت';
+
+  @override
+  String get contentRoutingMessagesOnly =>
+      'الرسائل فقط (الملفات عبر الشبكة المحلية)';
+
+  @override
+  String get contentRoutingCustom => 'مخصص';
+
+  @override
+  String get contentRoutingByTransport => 'حسب وسيلة النقل';
+
+  @override
+  String get contentClassText => 'الرسائل';
+
+  @override
+  String get contentClassOwnSync => 'أجهزتك';
+
+  @override
+  String get contentClassHistory => 'السجل';
+
+  @override
+  String get contentClassFileSmall => 'ملفات حتى 1 ميغابايت';
+
+  @override
+  String get contentClassFileMedium => 'ملفات حتى 30 ميغابايت';
+
+  @override
+  String get contentClassFileLarge => 'ملفات أكبر';
+
+  @override
+  String get contentClassCallSignal => 'المكالمات';
+
+  @override
+  String get contentRoutingCannotCarry => 'لا يمكن لوسيلة النقل هذه حمله';
+
+  @override
+  String get routeViaOwnDevice => 'عبر جهازك الآخر';
+
+  @override
+  String get routeOwnDeviceDescription =>
+      'استلمه جهاز آخر من أجهزتك ومرّره إلى هذا الجهاز، بتشفير تام بين الطرفين.';
+
+  @override
+  String get routeShortOwnDevice => 'جهازك';
 }

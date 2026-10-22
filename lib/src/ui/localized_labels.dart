@@ -61,6 +61,7 @@ String messageRouteLabel(BuildContext? context, MessageRoute value) =>
       MessageRoute.bitchat => l10nOf(context).uiBluetoothMeshC8B7F1,
       MessageRoute.torOnion => l10nOf(context).uiTorED7088,
       MessageRoute.viaContact => l10nOf(context).routeViaContact,
+      MessageRoute.viaOwnDevice => l10nOf(context).routeViaOwnDevice,
     };
 
 String themeModeLabel(BuildContext? context, ConestThemeMode value) =>
@@ -122,6 +123,7 @@ String messageRouteDescription(BuildContext? context, MessageRoute value) =>
       MessageRoute.bitchat => l10nOf(context).routeBluetoothDescription,
       MessageRoute.torOnion => l10nOf(context).routeTorDescription,
       MessageRoute.viaContact => l10nOf(context).routeContactDescription,
+      MessageRoute.viaOwnDevice => l10nOf(context).routeOwnDeviceDescription,
     };
 
 String transportKindLabel(BuildContext? context, TransportKind value) =>

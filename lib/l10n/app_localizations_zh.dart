@@ -5225,4 +5225,59 @@ class AppLocalizationsZh extends AppLocalizations {
   String linkPreviewFromSender(String host) {
     return '$host · 发送者提供的预览';
   }
+
+  @override
+  String get contentRoutingTitle => '通过互联网发送哪些内容';
+
+  @override
+  String get contentRoutingHelp =>
+      '本地网络始终传送所有内容。你的联系人会知道这个选择：被排除的内容会等待允许传送它的方式。';
+
+  @override
+  String get contentRoutingEverything => '全部';
+
+  @override
+  String get contentRoutingMessagesAndSmallFiles => '消息和不超过 1 MB 的文件';
+
+  @override
+  String get contentRoutingMessagesOnly => '仅消息（文件通过本地网络）';
+
+  @override
+  String get contentRoutingCustom => '自定义';
+
+  @override
+  String get contentRoutingByTransport => '按传输方式';
+
+  @override
+  String get contentClassText => '消息';
+
+  @override
+  String get contentClassOwnSync => '你的设备';
+
+  @override
+  String get contentClassHistory => '历史记录';
+
+  @override
+  String get contentClassFileSmall => '≤1 MB 文件';
+
+  @override
+  String get contentClassFileMedium => '≤30 MB 文件';
+
+  @override
+  String get contentClassFileLarge => '更大的文件';
+
+  @override
+  String get contentClassCallSignal => '通话';
+
+  @override
+  String get contentRoutingCannotCarry => '此传输方式无法传送该内容';
+
+  @override
+  String get routeViaOwnDevice => '经由你的另一台设备';
+
+  @override
+  String get routeOwnDeviceDescription => '由你的另一台设备接收，并以端到端加密转交到这台设备。';
+
+  @override
+  String get routeShortOwnDevice => '你的设备';
 }

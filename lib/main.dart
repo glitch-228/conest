@@ -50,6 +50,7 @@ import 'src/models.dart';
 import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
+import 'src/ui/content_routing_settings.dart';
 import 'src/ui/group_call_screen.dart';
 import 'src/ui/read_sweep.dart';
 import 'src/ui/forwarding.dart';
@@ -15813,6 +15814,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 ),
                               ],
                             ),
+                            ContentRoutingSettings(
+                              refusals: identity.connectivity.contentRefusals,
+                              showTable:
+                                  widget.controller.userMode.showsNetworkDetail,
+                              onChanged: (refusals) => _run(
+                                () =>
+                                    widget.controller.updateGlobalConnectivity(
+                                      widget.controller.identity!.connectivity
+                                          .copyWith(contentRefusals: refusals),
+                                    ),
+                              ),
+                            ),
                             if (widget.controller.matrixAvailable) ...[
                               const SizedBox(height: 16),
                               AppModeSelector(controller: widget.controller),
@@ -22054,6 +22067,7 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.bitchat => const Color(0xFF1565C0),
     MessageRoute.torOnion => const Color(0xFF7E57C2),
     MessageRoute.viaContact => const Color(0xFFEF6C00),
+    MessageRoute.viaOwnDevice => const Color(0xFF8D6E63),
   };
 
   String shortLabel(BuildContext context) => switch (this) {
@@ -22074,6 +22088,7 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.bitchat => 'Bluetooth',
     MessageRoute.torOnion => 'Tor',
     MessageRoute.viaContact => l10nOf(context).routeShortContact,
+    MessageRoute.viaOwnDevice => l10nOf(context).routeShortOwnDevice,
   };
 }
 

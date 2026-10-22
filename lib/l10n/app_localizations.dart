@@ -8656,6 +8656,114 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{host} · preview from the sender'**
   String linkPreviewFromSender(String host);
+
+  /// Setting: what may go over the internet transports.
+  ///
+  /// In en, this message translates to:
+  /// **'What goes over the internet'**
+  String get contentRoutingTitle;
+
+  /// Help under the setting.
+  ///
+  /// In en, this message translates to:
+  /// **'Your local network always carries everything. Your contacts learn this choice: what is left out waits for a transport that may carry it.'**
+  String get contentRoutingHelp;
+
+  /// Choice: every transport carries all it can.
+  ///
+  /// In en, this message translates to:
+  /// **'Everything'**
+  String get contentRoutingEverything;
+
+  /// Choice: messages, and files up to 1 MB, over the internet.
+  ///
+  /// In en, this message translates to:
+  /// **'Messages and files up to 1 MB'**
+  String get contentRoutingMessagesAndSmallFiles;
+
+  /// Choice: only messages over the internet; files only on the local network.
+  ///
+  /// In en, this message translates to:
+  /// **'Messages only (files on the local network)'**
+  String get contentRoutingMessagesOnly;
+
+  /// Shown when the table was changed by hand.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom'**
+  String get contentRoutingCustom;
+
+  /// Expandable table: what each transport may carry (Advanced mode).
+  ///
+  /// In en, this message translates to:
+  /// **'By transport'**
+  String get contentRoutingByTransport;
+
+  /// Table column: messages, edits and reactions.
+  ///
+  /// In en, this message translates to:
+  /// **'Messages'**
+  String get contentClassText;
+
+  /// Table column: sync between your own devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Your devices'**
+  String get contentClassOwnSync;
+
+  /// Table column: older messages fetched to catch up.
+  ///
+  /// In en, this message translates to:
+  /// **'History'**
+  String get contentClassHistory;
+
+  /// Table column: files up to 1 MB.
+  ///
+  /// In en, this message translates to:
+  /// **'Files to 1 MB'**
+  String get contentClassFileSmall;
+
+  /// Table column: files up to 30 MB.
+  ///
+  /// In en, this message translates to:
+  /// **'Files to 30 MB'**
+  String get contentClassFileMedium;
+
+  /// Table column: files over 30 MB.
+  ///
+  /// In en, this message translates to:
+  /// **'Larger files'**
+  String get contentClassFileLarge;
+
+  /// Table column: setting up and ending calls.
+  ///
+  /// In en, this message translates to:
+  /// **'Calls'**
+  String get contentClassCallSignal;
+
+  /// Tooltip on a table cell the transport cannot carry at all.
+  ///
+  /// In en, this message translates to:
+  /// **'This transport cannot carry it'**
+  String get contentRoutingCannotCarry;
+
+  /// Message route: passed on by another of your devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Via your other device'**
+  String get routeViaOwnDevice;
+
+  /// Message route description.
+  ///
+  /// In en, this message translates to:
+  /// **'Received by another of your devices, which passed it on to this one, end-to-end encrypted.'**
+  String get routeOwnDeviceDescription;
+
+  /// Short route label on a message.
+  ///
+  /// In en, this message translates to:
+  /// **'Your device'**
+  String get routeShortOwnDevice;
 }
 
 class _AppLocalizationsDelegate

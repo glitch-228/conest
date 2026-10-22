@@ -5464,4 +5464,62 @@ class AppLocalizationsEn extends AppLocalizations {
   String linkPreviewFromSender(String host) {
     return '$host · preview from the sender';
   }
+
+  @override
+  String get contentRoutingTitle => 'What goes over the internet';
+
+  @override
+  String get contentRoutingHelp =>
+      'Your local network always carries everything. Your contacts learn this choice: what is left out waits for a transport that may carry it.';
+
+  @override
+  String get contentRoutingEverything => 'Everything';
+
+  @override
+  String get contentRoutingMessagesAndSmallFiles =>
+      'Messages and files up to 1 MB';
+
+  @override
+  String get contentRoutingMessagesOnly =>
+      'Messages only (files on the local network)';
+
+  @override
+  String get contentRoutingCustom => 'Custom';
+
+  @override
+  String get contentRoutingByTransport => 'By transport';
+
+  @override
+  String get contentClassText => 'Messages';
+
+  @override
+  String get contentClassOwnSync => 'Your devices';
+
+  @override
+  String get contentClassHistory => 'History';
+
+  @override
+  String get contentClassFileSmall => 'Files to 1 MB';
+
+  @override
+  String get contentClassFileMedium => 'Files to 30 MB';
+
+  @override
+  String get contentClassFileLarge => 'Larger files';
+
+  @override
+  String get contentClassCallSignal => 'Calls';
+
+  @override
+  String get contentRoutingCannotCarry => 'This transport cannot carry it';
+
+  @override
+  String get routeViaOwnDevice => 'Via your other device';
+
+  @override
+  String get routeOwnDeviceDescription =>
+      'Received by another of your devices, which passed it on to this one, end-to-end encrypted.';
+
+  @override
+  String get routeShortOwnDevice => 'Your device';
 }

@@ -5451,4 +5451,62 @@ class AppLocalizationsId extends AppLocalizations {
   String linkPreviewFromSender(String host) {
     return '$host · pratinjau dari pengirim';
   }
+
+  @override
+  String get contentRoutingTitle => 'Apa yang dikirim lewat internet';
+
+  @override
+  String get contentRoutingHelp =>
+      'Jaringan lokal Anda selalu membawa semuanya. Kontak Anda mengetahui pilihan ini: yang dikecualikan menunggu jalur yang boleh membawanya.';
+
+  @override
+  String get contentRoutingEverything => 'Semuanya';
+
+  @override
+  String get contentRoutingMessagesAndSmallFiles =>
+      'Pesan dan berkas hingga 1 MB';
+
+  @override
+  String get contentRoutingMessagesOnly =>
+      'Hanya pesan (berkas lewat jaringan lokal)';
+
+  @override
+  String get contentRoutingCustom => 'Kustom';
+
+  @override
+  String get contentRoutingByTransport => 'Per jalur';
+
+  @override
+  String get contentClassText => 'Pesan';
+
+  @override
+  String get contentClassOwnSync => 'Perangkat Anda';
+
+  @override
+  String get contentClassHistory => 'Riwayat';
+
+  @override
+  String get contentClassFileSmall => 'Berkas ≤1 MB';
+
+  @override
+  String get contentClassFileMedium => 'Berkas ≤30 MB';
+
+  @override
+  String get contentClassFileLarge => 'Berkas lebih besar';
+
+  @override
+  String get contentClassCallSignal => 'Panggilan';
+
+  @override
+  String get contentRoutingCannotCarry => 'Jalur ini tidak dapat membawanya';
+
+  @override
+  String get routeViaOwnDevice => 'Lewat perangkat Anda yang lain';
+
+  @override
+  String get routeOwnDeviceDescription =>
+      'Diterima oleh perangkat Anda yang lain, lalu diteruskan ke perangkat ini, terenkripsi ujung ke ujung.';
+
+  @override
+  String get routeShortOwnDevice => 'Perangkat Anda';
 }

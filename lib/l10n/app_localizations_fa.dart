@@ -5464,4 +5464,63 @@ class AppLocalizationsFa extends AppLocalizations {
   String linkPreviewFromSender(String host) {
     return '$host · پیش‌نمایش از فرستنده';
   }
+
+  @override
+  String get contentRoutingTitle => 'چه چیزهایی از طریق اینترنت ارسال شود';
+
+  @override
+  String get contentRoutingHelp =>
+      'شبکه محلی شما همیشه همه چیز را منتقل می‌کند. مخاطبان شما از این انتخاب باخبر می‌شوند: آنچه کنار گذاشته شود منتظر راهی می‌ماند که اجازه انتقال آن را دارد.';
+
+  @override
+  String get contentRoutingEverything => 'همه چیز';
+
+  @override
+  String get contentRoutingMessagesAndSmallFiles =>
+      'پیام‌ها و فایل‌های تا ۱ مگابایت';
+
+  @override
+  String get contentRoutingMessagesOnly =>
+      'فقط پیام‌ها (فایل‌ها از طریق شبکه محلی)';
+
+  @override
+  String get contentRoutingCustom => 'سفارشی';
+
+  @override
+  String get contentRoutingByTransport => 'بر اساس روش انتقال';
+
+  @override
+  String get contentClassText => 'پیام‌ها';
+
+  @override
+  String get contentClassOwnSync => 'دستگاه‌های شما';
+
+  @override
+  String get contentClassHistory => 'تاریخچه';
+
+  @override
+  String get contentClassFileSmall => 'فایل تا ۱ مگابایت';
+
+  @override
+  String get contentClassFileMedium => 'فایل تا ۳۰ مگابایت';
+
+  @override
+  String get contentClassFileLarge => 'فایل‌های بزرگ‌تر';
+
+  @override
+  String get contentClassCallSignal => 'تماس‌ها';
+
+  @override
+  String get contentRoutingCannotCarry =>
+      'این روش انتقال نمی‌تواند آن را منتقل کند';
+
+  @override
+  String get routeViaOwnDevice => 'از طریق دستگاه دیگر شما';
+
+  @override
+  String get routeOwnDeviceDescription =>
+      'دستگاه دیگری از شما آن را دریافت کرد و به این دستگاه فرستاد، با رمزگذاری سرتاسری.';
+
+  @override
+  String get routeShortOwnDevice => 'دستگاه شما';
 }

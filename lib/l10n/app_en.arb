@@ -8197,5 +8197,77 @@
         "type": "String"
       }
     }
+  },
+  "contentRoutingTitle": "What goes over the internet",
+  "@contentRoutingTitle": {
+    "description": "Setting: what may go over the internet transports."
+  },
+  "contentRoutingHelp": "Your local network always carries everything. Your contacts learn this choice: what is left out waits for a transport that may carry it.",
+  "@contentRoutingHelp": {
+    "description": "Help under the setting."
+  },
+  "contentRoutingEverything": "Everything",
+  "@contentRoutingEverything": {
+    "description": "Choice: every transport carries all it can."
+  },
+  "contentRoutingMessagesAndSmallFiles": "Messages and files up to 1 MB",
+  "@contentRoutingMessagesAndSmallFiles": {
+    "description": "Choice: messages, and files up to 1 MB, over the internet."
+  },
+  "contentRoutingMessagesOnly": "Messages only (files on the local network)",
+  "@contentRoutingMessagesOnly": {
+    "description": "Choice: only messages over the internet; files only on the local network."
+  },
+  "contentRoutingCustom": "Custom",
+  "@contentRoutingCustom": {
+    "description": "Shown when the table was changed by hand."
+  },
+  "contentRoutingByTransport": "By transport",
+  "@contentRoutingByTransport": {
+    "description": "Expandable table: what each transport may carry (Advanced mode)."
+  },
+  "contentClassText": "Messages",
+  "@contentClassText": {
+    "description": "Table column: messages, edits and reactions."
+  },
+  "contentClassOwnSync": "Your devices",
+  "@contentClassOwnSync": {
+    "description": "Table column: sync between your own devices."
+  },
+  "contentClassHistory": "History",
+  "@contentClassHistory": {
+    "description": "Table column: older messages fetched to catch up."
+  },
+  "contentClassFileSmall": "Files to 1 MB",
+  "@contentClassFileSmall": {
+    "description": "Table column: files up to 1 MB."
+  },
+  "contentClassFileMedium": "Files to 30 MB",
+  "@contentClassFileMedium": {
+    "description": "Table column: files up to 30 MB."
+  },
+  "contentClassFileLarge": "Larger files",
+  "@contentClassFileLarge": {
+    "description": "Table column: files over 30 MB."
+  },
+  "contentClassCallSignal": "Calls",
+  "@contentClassCallSignal": {
+    "description": "Table column: setting up and ending calls."
+  },
+  "contentRoutingCannotCarry": "This transport cannot carry it",
+  "@contentRoutingCannotCarry": {
+    "description": "Tooltip on a table cell the transport cannot carry at all."
+  },
+  "routeViaOwnDevice": "Via your other device",
+  "@routeViaOwnDevice": {
+    "description": "Message route: passed on by another of your devices."
+  },
+  "routeOwnDeviceDescription": "Received by another of your devices, which passed it on to this one, end-to-end encrypted.",
+  "@routeOwnDeviceDescription": {
+    "description": "Message route description."
+  },
+  "routeShortOwnDevice": "Your device",
+  "@routeShortOwnDevice": {
+    "description": "Short route label on a message."
   }
 }

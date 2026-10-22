@@ -5589,4 +5589,62 @@ class AppLocalizationsRu extends AppLocalizations {
   String linkPreviewFromSender(String host) {
     return '$host · предпросмотр от отправителя';
   }
+
+  @override
+  String get contentRoutingTitle => 'Что передавать через интернет';
+
+  @override
+  String get contentRoutingHelp =>
+      'Локальная сеть всегда передаёт всё. Ваши контакты узнают об этом выборе: то, что исключено, ждёт транспорт, которому это разрешено.';
+
+  @override
+  String get contentRoutingEverything => 'Всё';
+
+  @override
+  String get contentRoutingMessagesAndSmallFiles => 'Сообщения и файлы до 1 МБ';
+
+  @override
+  String get contentRoutingMessagesOnly =>
+      'Только сообщения (файлы — по локальной сети)';
+
+  @override
+  String get contentRoutingCustom => 'Своё';
+
+  @override
+  String get contentRoutingByTransport => 'По транспортам';
+
+  @override
+  String get contentClassText => 'Сообщения';
+
+  @override
+  String get contentClassOwnSync => 'Ваши устройства';
+
+  @override
+  String get contentClassHistory => 'История';
+
+  @override
+  String get contentClassFileSmall => 'Файлы до 1 МБ';
+
+  @override
+  String get contentClassFileMedium => 'Файлы до 30 МБ';
+
+  @override
+  String get contentClassFileLarge => 'Файлы больше';
+
+  @override
+  String get contentClassCallSignal => 'Звонки';
+
+  @override
+  String get contentRoutingCannotCarry =>
+      'Этот транспорт не может это передавать';
+
+  @override
+  String get routeViaOwnDevice => 'Через другое ваше устройство';
+
+  @override
+  String get routeOwnDeviceDescription =>
+      'Получено другим вашим устройством и передано на это, со сквозным шифрованием.';
+
+  @override
+  String get routeShortOwnDevice => 'Ваше устройство';
 }

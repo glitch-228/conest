@@ -9,6 +9,7 @@ import 'transport_models.dart';
 import 'group_file_manifest.dart';
 import 'feature_models.dart';
 import 'group_call/group_call_models.dart';
+import 'content_routing.dart';
 
 export 'feature_models.dart';
 export 'group_call/group_call_models.dart' show GroupCallSummary;
@@ -678,6 +679,7 @@ class GlobalConnectivityPreferences {
     this.storageReserveEnabled = true,
     this.irohTransferLimitEnabled = true,
     this.shareIdentifyingCarriersWithGroups = false,
+    this.contentRefusals = ContentRefusals.none,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -714,6 +716,10 @@ class GlobalConnectivityPreferences {
   /// email and Matrix addresses (they identify a person). Pseudonymous
   /// carriers (Nostr, Tor, radios) are shared with groups regardless.
   final bool shareIdentifyingCarriersWithGroups;
+
+  /// What this device neither sends nor wants over each transport (told
+  /// to contacts, who then send it another way).
+  final ContentRefusals contentRefusals;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -738,9 +744,11 @@ class GlobalConnectivityPreferences {
     bool? storageReserveEnabled,
     bool? irohTransferLimitEnabled,
     bool? shareIdentifyingCarriersWithGroups,
+    ContentRefusals? contentRefusals,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return GlobalConnectivityPreferences(
+      contentRefusals: contentRefusals ?? this.contentRefusals,
       shareIdentifyingCarriersWithGroups:
           shareIdentifyingCarriersWithGroups ??
           this.shareIdentifyingCarriersWithGroups,
@@ -770,6 +778,7 @@ class GlobalConnectivityPreferences {
     'irohTransferLimitEnabled': irohTransferLimitEnabled,
     if (shareIdentifyingCarriersWithGroups)
       'shareIdentifyingCarriersWithGroups': true,
+    if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -789,6 +798,7 @@ class GlobalConnectivityPreferences {
           json['irohTransferLimitEnabled'] as bool? ?? true,
       shareIdentifyingCarriersWithGroups:
           json['shareIdentifyingCarriersWithGroups'] == true,
+      contentRefusals: ContentRefusals.fromJson(json['contentRefusals']),
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])
@@ -818,6 +828,7 @@ class ContactRoutingPreferences {
     this.preferred = RoutingPreference.lan,
     this.irohRelayEnabled = true,
     this.carryForContact = false,
+    this.contentRefusals = ContentRefusals.none,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -844,6 +855,10 @@ class ContactRoutingPreferences {
   /// reach itself (it learns only which device they are for, size and
   /// time; the content stays sealed for the recipient).
   final bool carryForContact;
+
+  /// What is not sent to (nor wanted from) this contact over each
+  /// transport, on top of this device's own refusals.
+  final ContentRefusals contentRefusals;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   TransportPolicy policyFor(TransportKind kind) {
@@ -883,9 +898,11 @@ class ContactRoutingPreferences {
     RoutingPreference? preferred,
     bool? irohRelayEnabled,
     bool? carryForContact,
+    ContentRefusals? contentRefusals,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return ContactRoutingPreferences(
+      contentRefusals: contentRefusals ?? this.contentRefusals,
       lanEnabled: lanEnabled ?? this.lanEnabled,
       onlineEnabled: onlineEnabled ?? this.onlineEnabled,
       preferred: preferred ?? this.preferred,
@@ -913,6 +930,7 @@ class ContactRoutingPreferences {
     'preferred': preferred.name,
     'irohRelayEnabled': irohRelayEnabled,
     if (carryForContact) 'carryForContact': true,
+    if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -934,6 +952,7 @@ class ContactRoutingPreferences {
       preferred: preferred ?? RoutingPreference.lan,
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       carryForContact: json['carryForContact'] == true,
+      contentRefusals: ContentRefusals.fromJson(json['contentRefusals']),
       transportPolicies: transportPoliciesFromJson(
         json['transportPolicies'],
         defaults: defaults,
@@ -1863,6 +1882,8 @@ class ContactRecord {
     this.revivedAt,
     this.groupCarrierAddresses,
     this.groupCarrierAddressesAt,
+    this.peerContentRefusals = ContentRefusals.none,
+    this.peerContentRefusalsAt,
   });
 
   final String accountId;
@@ -1915,6 +1936,14 @@ class ContactRecord {
   /// When the contact sent [groupCarrierAddresses]: an older exchange that
   /// arrives late cannot bring back an address they stopped sharing.
   final DateTime? groupCarrierAddressesAt;
+
+  /// What this contact asked not to be sent over each transport (its
+  /// device's own refusals, from its contact exchange).
+  final ContentRefusals peerContentRefusals;
+
+  /// When the contact sent [peerContentRefusals]: an older exchange that
+  /// arrives late does not bring back what it changed since.
+  final DateTime? peerContentRefusalsAt;
 
   /// When this device last added the contact again (after a removal, or
   /// a cancelled or declined request). Traffic created before it belongs
@@ -2058,6 +2087,8 @@ class ContactRecord {
     DateTime? revivedAt,
     Map<TransportKind, String>? groupCarrierAddresses,
     DateTime? groupCarrierAddressesAt,
+    ContentRefusals? peerContentRefusals,
+    DateTime? peerContentRefusalsAt,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -2127,6 +2158,9 @@ class ContactRecord {
           groupCarrierAddresses ?? this.groupCarrierAddresses,
       groupCarrierAddressesAt:
           groupCarrierAddressesAt ?? this.groupCarrierAddressesAt,
+      peerContentRefusals: peerContentRefusals ?? this.peerContentRefusals,
+      peerContentRefusalsAt:
+          peerContentRefusalsAt ?? this.peerContentRefusalsAt,
     );
   }
 
@@ -2261,6 +2295,12 @@ class ContactRecord {
         'groupCarrierAddressesAt': groupCarrierAddressesAt!
             .toUtc()
             .toIso8601String(),
+      if (!peerContentRefusals.isEmpty)
+        'peerContentRefusals': peerContentRefusals.toJson(),
+      if (peerContentRefusalsAt != null)
+        'peerContentRefusalsAt': peerContentRefusalsAt!
+            .toUtc()
+            .toIso8601String(),
     };
   }
 
@@ -2393,6 +2433,12 @@ class ContactRecord {
       ),
       groupCarrierAddressesAt: DateTime.tryParse(
         json['groupCarrierAddressesAt'] as String? ?? '',
+      )?.toUtc(),
+      peerContentRefusals: ContentRefusals.fromJson(
+        json['peerContentRefusals'],
+      ),
+      peerContentRefusalsAt: DateTime.tryParse(
+        json['peerContentRefusalsAt'] as String? ?? '',
       )?.toUtc(),
     );
   }
@@ -2576,7 +2622,10 @@ enum MessageRoute {
   torOnion,
 
   /// Passed on by another contact who could reach the recipient.
-  viaContact;
+  viaContact,
+
+  /// Received by another of this account's devices, which passed it on.
+  viaOwnDevice;
 
   String get label => switch (this) {
     lanDirect => 'LAN direct',
@@ -2596,6 +2645,7 @@ enum MessageRoute {
     bitchat => 'Bluetooth mesh',
     torOnion => 'Tor',
     viaContact => 'Via a contact',
+    viaOwnDevice => 'Via your other device',
   };
 
   String get description => switch (this) {
@@ -2641,6 +2691,9 @@ enum MessageRoute {
       'Passed on by a contact who could reach the other device; '
           'still end-to-end encrypted, the contact saw only who it '
           'was for and when.',
+    viaOwnDevice =>
+      'Received by another of your devices, which passed it on '
+          'to this one, end-to-end encrypted.',
   };
 
   /// The carrier this route goes over, if it is one.

@@ -77,6 +77,7 @@ import 'package:conest/src/email/delta_mail.dart';
 import 'package:conest/src/email/carrier_mail.dart' show maxCarrierMailBytes;
 import 'package:conest/src/email/delta_content.dart';
 import 'package:conest/src/email/pgp.dart';
+import 'package:conest/src/content_routing.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/network_history.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
@@ -18950,6 +18951,135 @@ void main() {
       }, reason: 'the phone did not carry it');
     });
 
+    group('a contact\'s messages reach every device of the account', () {
+      Future<
+        (
+          MessengerController,
+          MessengerController,
+          MessengerController,
+          _InProcessIrohNetwork,
+          _FakeRelayClient,
+          void Function(Duration),
+        )
+      >
+      linkedPair() async {
+        final network = _InProcessIrohNetwork();
+        final relay = _FakeRelayClient();
+        var now = DateTime.now().toUtc();
+        Future<MessengerController> make(String name) async {
+          final controller = await _createController(
+            relayClient: relay,
+            displayName: name,
+            transportRegistryFactory: network.registry,
+            nowProvider: () => now,
+          );
+          addTearDown(controller.dispose);
+          return controller;
+        }
+
+        final alice = await make('Alice');
+        final bob = await make('Bob');
+        final phone = await make('Phone');
+        await _pairControllers(alice, bob);
+        final qr = await phone.startLinkAsNewDevice();
+        await alice.startLinkFromQrCode(qr);
+        await _waitForIroh(
+          () => phone.linkCode != null && alice.linkCode != null,
+        );
+        await phone.confirmLinkCode();
+        await alice.confirmLinkCode();
+        final phoneId = phone.identity!.deviceId;
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          unawaited(bob.pollNow());
+          return phone.linkState == LinkState.linked &&
+              alice.ownDevices.any((d) => d.deviceId == phoneId) &&
+              bob.linkedDevicesOf(alice.identity!.deviceId).isNotEmpty;
+        }, reason: 'the phone was not linked');
+        return (
+          alice,
+          bob,
+          phone,
+          network,
+          relay,
+          (Duration by) {
+            now = now.add(by);
+          },
+        );
+      }
+
+      test('one that reached only the laptop shows on the phone, once, '
+          'from the contact', () async {
+        final (alice, bob, phone, network, relay, advance) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final phoneId = phone.identity!.deviceId;
+        // Bob reaches the laptop, not the phone.
+        relay.shouldFailStore = (_, _, _, _, envelope) =>
+            envelope.recipientDeviceId == phoneId;
+        network.blockedPairs
+          ..add((
+            bob.identity!.irohEndpointId!,
+            phone.identity!.irohEndpointId!,
+          ))
+          ..add((
+            phone.identity!.irohEndpointId!,
+            bob.identity!.irohEndpointId!,
+          ));
+        await bob.sendMessage(contact: bob.contacts.single, body: 'to both');
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice.messagesFor(bobId).any((m) => m.body == 'to both');
+        }, reason: 'the laptop did not get it');
+        // Passed on once its wait is over.
+        advance(const Duration(seconds: 20));
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return phone.messagesFor(bobId).any((m) => m.body == 'to both');
+        }, reason: 'the phone never got it');
+        final onPhone = phone
+            .messagesFor(bobId)
+            .where((m) => m.body == 'to both')
+            .toList();
+        expect(onPhone, hasLength(1));
+        expect(onPhone.single.outbound, isFalse);
+        expect(onPhone.single.senderDeviceId, bobId);
+        expect(onPhone.single.route, MessageRoute.viaOwnDevice);
+        // The phone does not pass it back.
+        await phone.pollNow();
+        await alice.pollNow();
+        expect(
+          alice.messagesFor(bobId).where((m) => m.body == 'to both'),
+          hasLength(1),
+        );
+        expect(phone.queuedReceivedSyncForTesting, 0);
+      });
+
+      test('one that reached every device is not passed on', () async {
+        final (alice, bob, phone, _, _, _) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        await bob.sendMessage(contact: bob.contacts.single, body: 'to all');
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return alice.messagesFor(bobId).any((m) => m.body == 'to all') &&
+              phone.messagesFor(bobId).any((m) => m.body == 'to all');
+        }, reason: 'both did not get it');
+        // Each says it has it, before the wait is over (the clock stands).
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return alice.queuedReceivedSyncForTesting == 0 &&
+              phone.queuedReceivedSyncForTesting == 0;
+        }, reason: 'what was queued to pass on was not dropped');
+        expect(
+          phone.messagesFor(bobId).single.route,
+          isNot(MessageRoute.viaOwnDevice),
+        );
+      });
+    });
+
     test('a device removed on one device is removed on the others', () async {
       var now = DateTime.now().toUtc();
       final network = _InProcessIrohNetwork();
@@ -26210,6 +26340,122 @@ void main() {
         () => sendWithLanOff(onSender: false),
         timeout: const Timeout(Duration(seconds: 30)),
       );
+    });
+
+    group('what may go over which transport', () {
+      test(
+        'a device that wants messages only over the relay gets no file '
+        'blocks there; its contacts learn so and messages still flow',
+        () async {
+          final relayClient = _FakeRelayClient();
+          final alice = await _createController(
+            relayClient: relayClient,
+            displayName: 'Alice',
+            // The relay is the only route (a LAN one would store in the
+            // same fake relay, and LAN is never narrowed by the presets).
+            lanAddresses: const [],
+          );
+          final bob = await _createController(
+            relayClient: relayClient,
+            displayName: 'Bob',
+            lanAddresses: const [],
+          );
+          addTearDown(alice.dispose);
+          addTearDown(bob.dispose);
+          await _pairControllers(alice, bob);
+          final bobId = bob.identity!.deviceId;
+          final aliceId = alice.identity!.deviceId;
+          final messagesOnly = ContentRoutingPreset.messagesOnly.refusals;
+          await bob.updateGlobalConnectivity(
+            bob.identity!.connectivity.copyWith(contentRefusals: messagesOnly),
+          );
+          for (var step = 0; step < 6; step++) {
+            await alice.pollNow();
+            await bob.pollNow();
+          }
+          final bobOnAlice = alice.contacts.firstWhere(
+            (c) => c.deviceId == bobId,
+          );
+          expect(bobOnAlice.peerContentRefusals, messagesOnly);
+          expect(
+            alice.contentPoliciesForTesting(
+              bobId,
+              ContentClass.fileSmall,
+            )[TransportKind.conestRelay],
+            TransportPolicy.disabled,
+          );
+          expect(
+            alice.contentPoliciesForTesting(
+              bobId,
+              ContentClass.text,
+            )[TransportKind.conestRelay],
+            isNot(TransportPolicy.disabled),
+          );
+
+          relayClient.storedEnvelopes.clear();
+          await alice.sendAttachment(
+            contact: bobOnAlice,
+            bytes: Uint8List.fromList(List.filled(4096, 7)),
+            fileName: 'not_by_relay.bin',
+          );
+          await alice.sendMessage(contact: bobOnAlice, body: 'still by relay');
+          for (var step = 0; step < 10; step++) {
+            await bob.pollNow();
+            await alice.pollNow();
+          }
+          expect(
+            bob.messagesFor(aliceId).map((m) => m.body),
+            contains('still by relay'),
+          );
+          expect(
+            relayClient.storedEnvelopes
+                .map((envelope) => envelope.kind)
+                .where(
+                  (kind) =>
+                      kind == 'attachment_chunk_request' ||
+                      kind == 'attachment_chunk',
+                ),
+            isEmpty,
+          );
+        },
+      );
+
+      test('an older refusal list arriving late changes nothing', () async {
+        final relayClient = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobId = bob.identity!.deviceId;
+        final at = DateTime.utc(2026, 10, 21, 12);
+        final newer = ContentRoutingPreset.messagesAndSmallFiles.refusals;
+        alice.applyPeerContentRefusalsForTesting(
+          bobId,
+          newer.toJson(),
+          sentAt: at,
+        );
+        alice.applyPeerContentRefusalsForTesting(
+          bobId,
+          const <String, Object?>{},
+          sentAt: at.subtract(const Duration(minutes: 1)),
+        );
+        ContactRecord bobOnAlice() =>
+            alice.contacts.firstWhere((c) => c.deviceId == bobId);
+        expect(bobOnAlice().peerContentRefusals, newer);
+        alice.applyPeerContentRefusalsForTesting(
+          bobId,
+          const <String, Object?>{},
+          sentAt: at.add(const Duration(minutes: 1)),
+        );
+        expect(bobOnAlice().peerContentRefusals, ContentRefusals.none);
+      });
     });
 
     test(

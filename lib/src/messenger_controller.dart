@@ -113,6 +113,7 @@ import 'storage.dart';
 import 'storage_capacity.dart';
 import 'tor_carrier.dart';
 import 'transport.dart';
+import 'content_routing.dart';
 
 part 'delta_attachments_controller.dart';
 part 'group_call/group_call_controller.dart';
@@ -3163,6 +3164,7 @@ class MessengerController extends ChangeNotifier {
         envelope: envelope,
         background: true,
         allowForwarding: false,
+        fileSizeBytes: manifest.sizeBytes,
       );
     }
     return true;
@@ -10508,6 +10510,8 @@ class MessengerController extends ChangeNotifier {
     final carrierPolicyChanged = _carrierTransports.keys.any(
       (kind) => me.connectivity.policyFor(kind) != prefs.policyFor(kind),
     );
+    final refusalsChanged =
+        me.connectivity.contentRefusals != prefs.contentRefusals;
     _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: prefs));
     if (restartNative) {
       await _stopTransportRegistry();
@@ -10517,6 +10521,20 @@ class MessengerController extends ChangeNotifier {
         carrierPolicyChanged) {
       // Contacts learn whether to address this device over each carrier.
       _advertiseProfileToContacts();
+    }
+    if (refusalsChanged) {
+      // Contacts learn at once what not to send this device, and where.
+      for (final contact in _snapshot.contacts.where(
+        (entry) => entry.canSendOutbound,
+      )) {
+        unawaited(
+          _sendRouteUpdate(
+            contact,
+            requestReply: false,
+            reason: 'content_refusals',
+          ).catchError((Object _) => false),
+        );
+      }
     }
     _markRuntimeActivity();
     final label = switch ((prefs.lanEnabled, prefs.onlineEnabled)) {
@@ -10639,6 +10657,7 @@ class MessengerController extends ChangeNotifier {
               contacts[index].routing.effectivePolicy(kind, global),
           ];
     final carryBefore = contacts[index].routing.carryForContact;
+    final refusalsBefore = contacts[index].routing.contentRefusals;
     contacts[index] = contacts[index].copyWith(routing: prefs);
     _snapshot = _snapshot.copyWith(
       contacts: contacts,
@@ -10667,6 +10686,17 @@ class MessengerController extends ChangeNotifier {
           contacts[index],
           recipientKnowsIdentity: true,
         ).then<void>((_) {}).catchError((Object _) {}),
+      );
+    }
+    if (contacts[index].canSendOutbound &&
+        prefs.contentRefusals != refusalsBefore) {
+      // The contact learns what not to send this device, and where.
+      unawaited(
+        _sendRouteUpdate(
+          contacts[index],
+          requestReply: false,
+          reason: 'content_refusals',
+        ).catchError((Object _) => false),
       );
     }
   }
@@ -17423,6 +17453,9 @@ class MessengerController extends ChangeNotifier {
       // (its group mates, this account's devices): for its Connections
       // map. Nobody else is named.
       'links': ?_linksToShareWith(contact),
+      // What not to send this device over which transport (empty: all
+      // that each carries).
+      'contentRefusals': _ownContentRefusalsFor(contact).toJson(),
       ..._localLanDirectHintPayload(contact),
     };
     if (effectiveProbeId != null) {
@@ -19705,6 +19738,10 @@ class MessengerController extends ChangeNotifier {
             ),
           );
           _upsertMessage(chatId, inbound);
+          // The account's other devices: told it came here, and given it
+          // if they do not say they have it themselves.
+          _noteSeenForOwnDevices(inbound.id);
+          _syncReceivedMessage(chatId, inbound);
           // They just reached us, so our waiting messages can reach them.
           _flushContactSoon(contact.deviceId);
           await _applyDeferredDirectReactions(chatId, inbound.id);
@@ -20588,6 +20625,7 @@ class MessengerController extends ChangeNotifier {
         allowedUnifiedKinds: inbound.debugTest?.irohOnly == true
             ? {TransportKind.iroh}
             : null,
+        fileSizeBytes: inbound.descriptor.sizeBytes,
       );
     } catch (error) {
       // Retry on next poll cycle; the receiver still has the inbound
@@ -20969,6 +21007,7 @@ class MessengerController extends ChangeNotifier {
         allowedUnifiedKinds: state.requiresLan
             ? const <TransportKind>{TransportKind.iroh}
             : null,
+        fileSizeBytes: state.descriptor.sizeBytes,
       );
       // Sender progress + stall-timer activity refresh. Only advance if
       // this is the active outbound for this contact (the receiver could
@@ -21901,6 +21940,7 @@ class MessengerController extends ChangeNotifier {
         contact: peer,
         recipientDeviceId: peer.deviceId,
         envelope: envelope,
+        fileSizeBytes: totalBytes,
       );
     } catch (_) {
       // Progress envelopes are advisory — losing one just means the
@@ -22869,6 +22909,11 @@ class MessengerController extends ChangeNotifier {
     _applyReportedLinks(
       sender,
       routePayload?['links'],
+      sentAt: sentAt ?? envelope.createdAt,
+    );
+    _applyPeerContentRefusals(
+      sender,
+      routePayload?['contentRefusals'],
       sentAt: sentAt ?? envelope.createdAt,
     );
     // Route updates are stamped when sent (never queued with an old time);
@@ -27056,6 +27101,8 @@ class MessengerController extends ChangeNotifier {
     // Kinds of direct routes to leave out (one LAN address is as good as
     // another for a copy).
     Set<PeerRouteKind> skipLegacyKinds = const {},
+    // For file blocks: the file's size, which picks its content class.
+    int? fileSizeBytes,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -27080,7 +27127,10 @@ class MessengerController extends ChangeNotifier {
       throw const TransportSendCancelled('Its receipt already came.');
     }
     final effective = _effectiveTransports(contact);
-    final policies = _effectiveTransportPolicies(contact);
+    final policies = _contentPolicies(
+      contact,
+      contentClassOfEnvelope(envelope.kind, fileSizeBytes: fileSizeBytes),
+    );
     final candidateRoutes =
         dedupePeerEndpoints(_candidateRoutesForContact(contact))
             .where((route) => _legacyRouteAllowed(route, effective, policies))
@@ -28161,15 +28211,9 @@ class MessengerController extends ChangeNotifier {
     final result = await registry.deliverEnvelope(
       stillWanted: () => !_receiptCameFor(contact.deviceId, envelope),
       peer: _transportPeerForContact(contact, allowRelay: allowRelay),
-      // File chunks stay on transports built for volume; carriers such as
-      // Matrix carry messages only.
-      policies: _isHighFrequencyTransferEnvelope(envelope)
-          ? {
-              ...policies,
-              for (final kind in TransportKind.values)
-                if (!kind.carriesBulk) kind: TransportPolicy.disabled,
-            }
-          : policies,
+      // File chunks stay on transports built for volume: the content
+      // table turned the others off (_contentPolicies).
+      policies: policies,
       envelope: TransportEnvelope(
         id: envelope.messageId,
         recipientDeviceId: envelope.recipientDeviceId,
@@ -28441,6 +28485,82 @@ class MessengerController extends ChangeNotifier {
       online: global.onlineEnabled && c.onlineEnabled,
       preferred: c.preferred,
     );
+  }
+
+  /// The transport policies for [content] to [contact]: those that cannot
+  /// carry it, or that this device, the contact's settings or the contact
+  /// itself refuse it on, are off.
+  Map<TransportKind, TransportPolicy> _contentPolicies(
+    ContactRecord contact,
+    ContentClass content,
+  ) {
+    final policies = _effectiveTransportPolicies(contact);
+    final device =
+        _snapshot.identity?.connectivity.contentRefusals ??
+        ContentRefusals.none;
+    return {
+      for (final MapEntry(key: kind, value: policy) in policies.entries)
+        kind:
+            contentAllowed(
+              kind,
+              content,
+              device: device,
+              contact: contact.routing.contentRefusals,
+              peer: contact.peerContentRefusals,
+            )
+            ? policy
+            : TransportPolicy.disabled,
+    };
+  }
+
+  @visibleForTesting
+  Map<TransportKind, TransportPolicy> contentPoliciesForTesting(
+    String deviceId,
+    ContentClass content,
+  ) => _contentPolicies(_contactByDeviceId(deviceId)!, content);
+
+  @visibleForTesting
+  void applyPeerContentRefusalsForTesting(
+    String deviceId,
+    Object? json, {
+    required DateTime sentAt,
+  }) => _applyPeerContentRefusals(
+    _contactByDeviceId(deviceId)!,
+    json,
+    sentAt: sentAt,
+  );
+
+  /// What this device asks [contact] not to send it, and over what.
+  ContentRefusals _ownContentRefusalsFor(ContactRecord contact) =>
+      (_snapshot.identity?.connectivity.contentRefusals ?? ContentRefusals.none)
+          .union(contact.routing.contentRefusals);
+
+  /// Newest route-update time seen per contact, for [_applyPeerContentRefusals]
+  /// (the record keeps the time of the last change only).
+  final Map<String, DateTime> _contentRefusalsSeenAt = {};
+
+  /// What [sender] asked not to be sent over which transport, from its
+  /// route update sent at [sentAt]; an older one arriving late changes
+  /// nothing. Older builds send none, so none is asked of them.
+  void _applyPeerContentRefusals(
+    ContactRecord sender,
+    Object? json, {
+    required DateTime sentAt,
+  }) {
+    final seen =
+        _contentRefusalsSeenAt[sender.deviceId] ?? sender.peerContentRefusalsAt;
+    if (seen != null && !sentAt.isAfter(seen)) return;
+    _contentRefusalsSeenAt[sender.deviceId] = sentAt;
+    final refusals = ContentRefusals.fromJson(json);
+    if (refusals == sender.peerContentRefusals) return;
+    final current = _contactByDeviceId(sender.deviceId) ?? sender;
+    _replaceContactRecord(
+      current.copyWith(
+        peerContentRefusals: refusals,
+        peerContentRefusalsAt: sentAt,
+      ),
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
   }
 
   bool _hasUsableLargeDirectTransport(ContactRecord contact) {
@@ -33165,6 +33285,115 @@ class MessengerController extends ChangeNotifier {
     });
   }
 
+  /// How long a message from a contact waits before it is passed on to
+  /// this account's other devices: they usually get it from the contact
+  /// themselves, and say so (seen) in the meantime.
+  Duration get _receivedSyncDelay =>
+      switch (_energyPolicy.modeFor(_networkCostClass)) {
+        EnergyMode.unconstrained => const Duration(seconds: 2),
+        EnergyMode.limited => const Duration(seconds: 5),
+        EnergyMode.saver => const Duration(seconds: 15),
+      };
+
+  /// A text a contact sent reaches this account's other devices too: queued
+  /// for each (kept across restarts), sent after [_receivedSyncDelay]
+  /// unless that device says it has it. Files, voice and groups follow.
+  void _syncReceivedMessage(String chatId, ChatMessage message) {
+    if (!conestActive ||
+        message.attachment != null ||
+        message.poll != null ||
+        message.outbound) {
+      return;
+    }
+    final devices = ownDevices.where((device) => device.canSendOutbound);
+    if (devices.isEmpty) return;
+    final payload = _crypto.encodeDirectMessagePayload(message);
+    if (payload.length > _maxSyncedPayloadChars) return;
+    final plaintext = jsonEncode({
+      'events': [
+        {
+          'type': 'rx',
+          'chat': chatId,
+          'id': message.id,
+          'createdAt': message.createdAt.toUtc().toIso8601String(),
+          'payload': payload,
+        },
+      ],
+    });
+    final now = _now().toUtc();
+    for (final device in devices) {
+      final envelopeId = _randomId('sync');
+      _enqueuePendingAckDelivery(
+        PendingAckDelivery(
+          targetDeviceId: device.deviceId,
+          acknowledgedMessageId: envelopeId,
+          conversationId: _crypto.conversationIdFor(device.deviceId),
+          kind: PendingAckKind.accountSync,
+          // The retry pass sends it once this is a first try's wait old.
+          lastAttemptedAt: now
+              .add(_receivedSyncDelay)
+              .subtract(_pendingMessageRetryDelay),
+          attempts: 0,
+          payload: QueuedEnvelopePayload(
+            kind: 'account_sync',
+            messageId: envelopeId,
+            conversationId: _crypto.conversationIdFor(device.deviceId),
+            plaintext: plaintext,
+            createdAt: now,
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Messages from contacts that came here, to tell this account's other
+  /// devices (so they need not pass them on): sent together, shortly.
+  final Set<String> _seenToTell = <String>{};
+  Timer? _seenTimer;
+
+  void _noteSeenForOwnDevices(String messageId) {
+    if (!ownDevices.any((device) => device.canSendOutbound)) return;
+    _seenToTell.add(messageId);
+    _seenTimer ??= Timer(const Duration(seconds: 1), () {
+      _seenTimer = null;
+      if (_disposed || _seenToTell.isEmpty) return;
+      final ids = _seenToTell.take(_maxSeenIds).toList();
+      _seenToTell.removeAll(ids);
+      _syncToOwnDevices({'type': 'seen', 'ids': ids});
+      if (_seenToTell.isNotEmpty) _noteSeenForOwnDevices(_seenToTell.first);
+    });
+  }
+
+  static const int _maxSeenIds = 64;
+
+  /// Messages from contacts queued to be passed on to own devices.
+  @visibleForTesting
+  int get queuedReceivedSyncForTesting => _snapshot.pendingAckDeliveries
+      .where((entry) => _queuedSyncEvent(entry)?['type'] == 'rx')
+      .length;
+
+  /// [sender] has these messages: what was queued to pass them on to it
+  /// is not sent.
+  void _dropQueuedReceived(String senderDeviceId, Object? ids) {
+    if (ids is! List) return;
+    final seen = {
+      for (final id in ids.take(_maxSeenIds))
+        if (id is String && id.isNotEmpty && id.length <= 160) id,
+    };
+    if (seen.isEmpty) return;
+    for (final entry in [..._snapshot.pendingAckDeliveries]) {
+      if (entry.targetDeviceId != senderDeviceId) continue;
+      final queued = _queuedSyncEvent(entry);
+      if (queued?['type'] == 'rx' && seen.contains(queued?['id'])) {
+        _clearPendingAckDelivery(
+          targetDeviceId: entry.targetDeviceId,
+          acknowledgedMessageId: entry.acknowledgedMessageId,
+          kind: entry.kind,
+        );
+      }
+    }
+  }
+
   /// Receipts synced before the message they are about (bounded).
   final Map<String, String> _earlySyncStates = <String, String>{};
 
@@ -33200,6 +33429,10 @@ class MessengerController extends ChangeNotifier {
     var changed = false;
     for (final event in events.take(_maxSyncEvents)) {
       if (event is! Map<String, dynamic>) continue;
+      if (event['type'] == 'seen') {
+        _dropQueuedReceived(sender.deviceId, event['ids']);
+        continue;
+      }
       final rawChat = event['chat'];
       if (rawChat is! String || rawChat.isEmpty || rawChat.length > 160) {
         continue;
@@ -33255,6 +33488,53 @@ class MessengerController extends ChangeNotifier {
               _markMessagesReadThroughMessage(chat, id);
             case 'delivered':
               _updateMessageState(chat, id, DeliveryState.delivered);
+          }
+        case 'rx':
+          // A contact's message that came to that device: shown here as
+          // from the contact, not acknowledged to them (that device did)
+          // and never passed on again.
+          final payload = event['payload'];
+          if (chat == me.deviceId ||
+              id is! String ||
+              id.isEmpty ||
+              id.length > 160 ||
+              payload is! String ||
+              payload.length > _maxSyncedPayloadChars ||
+              _locallyDeletedMessageIds.contains(id) ||
+              _messageById(chat, id) != null) {
+            continue;
+          }
+          final text = _crypto.decodeDirectMessagePayload(payload);
+          final now = _now().toUtc();
+          final sentAt =
+              DateTime.tryParse(event['createdAt'] as String? ?? '')?.toUtc() ??
+              envelope.createdAt.toUtc();
+          final createdAt = sentAt.isAfter(now) ? now : sentAt;
+          _upsertMessage(
+            chat,
+            ChatMessage(
+              id: id,
+              conversationId: _crypto.conversationIdFor(chat),
+              senderDeviceId: chat,
+              recipientDeviceId: me.deviceId,
+              body: text.body,
+              outbound: false,
+              state: DeliveryState.delivered,
+              createdAt: createdAt,
+              replyToMessageId: text.replyToMessageId,
+              replySnippet: text.replySnippet,
+              replySenderDeviceId: text.replySenderDeviceId,
+              replySenderDisplayName: text.replySenderDisplayName,
+              route: MessageRoute.viaOwnDevice,
+            ),
+          );
+          changed = true;
+          // Only what is new (not a backlog catching up) is announced.
+          if (now.difference(createdAt) < const Duration(minutes: 10)) {
+            final from = _contactByDeviceId(chat);
+            if (from != null) {
+              _showInboundMessageNotification(contact: from, body: text.body);
+            }
           }
         case 'state':
           if (id is! String || id.isEmpty || id.length > 160) continue;
@@ -35522,6 +35802,8 @@ class MessengerController extends ChangeNotifier {
     _routeReceiptTimers.clear();
     _linkExpiry?.cancel();
     _linkExpiry = null;
+    _seenTimer?.cancel();
+    _seenTimer = null;
     _lanAdvertiseTimer?.cancel();
     for (final timer in _lanRecheckTimers) {
       timer.cancel();
