@@ -35,14 +35,24 @@ const DEFAULT_MAX_LONG_POLLS_PER_PEER: usize = 16;
 // Connections one address may hold open at once (past it, refused at once):
 // one address cannot take every worker. Not applied behind a trusted proxy,
 // where every client shares the proxy's address.
-const DEFAULT_MAX_CONNECTIONS_PER_PEER: usize = 64;
+const DEFAULT_MAX_CONNECTIONS_PER_PEER: usize = 16;
 // Everything the relay keeps, all mailboxes together: past it, stores are
 // refused (a mailbox's own quota does not bound a flood of new mailboxes).
 const DEFAULT_MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+// What one address (an IPv6 /48) may hold on the relay at once: past it,
+// its stores are refused; when the relay is full, the largest holder's
+// oldest entries make room.
+const DEFAULT_MAX_STORED_BYTES_PER_PEER: u64 = 256 * 1024 * 1024;
 // A request must arrive within this, however slowly its bytes come.
 const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(10);
-// How often the stored total is measured again (between, stores add up).
-const TOTAL_BYTES_REFRESH_MILLIS: u64 = 10_000;
+// A response must be taken within this (a big fetch on a slow link fits).
+const RESPONSE_WRITE_DEADLINE: Duration = Duration::from_secs(120);
+// Addresses tracked by each rate map at most: past it, new ones are refused
+// (a flood of forged UDP sources cannot grow them without bound).
+const DEFAULT_MAX_RATE_KEYS: usize = 100_000;
+// A cookie request (no cookie yet) is answered only when it is at least
+// this long, so the answer is never larger than what came in.
+const UDP_COOKIE_REQUEST_MIN_BYTES: usize = 128;
 const DEFAULT_IDENTITY_SEED_FILE: &str = "conest_relay_identity.seed";
 const DEFAULT_MAX_BYTES_PER_MAILBOX_PER_MINUTE: u64 = 10 * 1024 * 1024;
 const DEFAULT_SOFT_BAN_THRESHOLD: u32 = 10;
@@ -73,6 +83,8 @@ struct RelayConfig {
     max_long_polls_per_peer: usize,
     max_connections_per_peer: usize,
     max_total_bytes: u64,
+    max_stored_bytes_per_peer: u64,
+    max_rate_keys: usize,
     trust_forwarded_for: bool,
     identity_seed_path: PathBuf,
     identity_seed_inline: Option<String>,
@@ -121,6 +133,11 @@ impl RelayConfig {
                 DEFAULT_MAX_CONNECTIONS_PER_PEER,
             ),
             max_total_bytes: env_u64("CONEST_RELAY_MAX_TOTAL_BYTES", DEFAULT_MAX_TOTAL_BYTES),
+            max_stored_bytes_per_peer: env_u64(
+                "CONEST_RELAY_MAX_STORED_BYTES_PER_PEER",
+                DEFAULT_MAX_STORED_BYTES_PER_PEER,
+            ),
+            max_rate_keys: env_usize("CONEST_RELAY_MAX_RATE_KEYS", DEFAULT_MAX_RATE_KEYS),
             trust_forwarded_for: env_bool("CONEST_RELAY_TRUST_FORWARDED_FOR", false),
             identity_seed_path: env::var("CONEST_RELAY_IDENTITY_SEED_PATH")
                 .map(PathBuf::from)
@@ -184,6 +201,9 @@ impl RelayConfig {
                 }
                 "--max-total-bytes" => {
                     config.max_total_bytes = parse_next_u64(&mut args, &arg)?;
+                }
+                "--max-stored-bytes-per-peer" => {
+                    config.max_stored_bytes_per_peer = parse_next_u64(&mut args, &arg)?;
                 }
                 "--trust-forwarded-for" => {
                     config.trust_forwarded_for = true;
@@ -551,6 +571,70 @@ fn peer_key(address: std::net::IpAddr) -> String {
     }
 }
 
+/// The group an address key belongs to for what it may hold: an IPv6 /64
+/// key widened to its /48 (one site can have 65,536 /64s); others as they
+/// are. A UDP key counts with its address.
+fn peer_group(peer: &str) -> String {
+    let peer = peer.strip_prefix("udp:").unwrap_or(peer);
+    match peer.strip_suffix("::/64") {
+        Some(prefix) => {
+            let segments: Vec<&str> = prefix.split(':').collect();
+            if segments.len() == 4 {
+                format!("{}:{}:{}::/48", segments[0], segments[1], segments[2])
+            } else {
+                peer.to_owned()
+            }
+        }
+        None => peer.to_owned(),
+    }
+}
+
+/// The client address a trusted proxy's X-Forwarded-For names: its last
+/// entry (the one the proxy saw), a port stripped.
+fn forwarded_peer(value: &str) -> Option<String> {
+    let last = value.split(',').next_back()?.trim();
+    if last.is_empty() {
+        return None;
+    }
+    if let Ok(address) = last.parse::<std::net::IpAddr>() {
+        return Some(peer_key(address));
+    }
+    if let Ok(address) = last.parse::<SocketAddr>() {
+        return Some(peer_key(address.ip()));
+    }
+    Some(last.to_owned())
+}
+
+/// Writes to a stream that must take the whole response by a deadline from
+/// its first byte: a client reading a byte at a time cannot hold a worker.
+struct DeadlineWriter {
+    stream: std::net::TcpStream,
+    limit: Duration,
+    deadline: Option<std::time::Instant>,
+}
+
+impl Write for DeadlineWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let deadline = *self
+            .deadline
+            .get_or_insert_with(|| std::time::Instant::now() + self.limit);
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "response took too long to be taken",
+            ));
+        }
+        self.stream
+            .set_write_timeout(Some(left.min(Duration::from_secs(10))))?;
+        self.stream.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+}
+
 /// Reads from a stream that must deliver everything by a deadline, however
 /// slowly its bytes come: a client trickling a byte at a time cannot hold a
 /// worker past it.
@@ -611,8 +695,8 @@ struct RelayState {
     store_windows: Arc<Mutex<HashMap<String, StoreWindow>>>,
     long_polls: Arc<Mutex<HashMap<String, usize>>>,
     connections: Arc<Mutex<HashMap<String, usize>>>,
-    // Bytes stored (all mailboxes) and when that was last measured.
-    stored_bytes: Arc<Mutex<(u64, u64)>>,
+    // When the rate maps were last pruned (at most once a second).
+    rates_pruned_at: Arc<std::sync::atomic::AtomicU64>,
     // Signs UDP cookies only (never the relay's identity key).
     udp_cookie_key: Arc<SigningKey>,
     mailbox_bytes: Arc<Mutex<HashMap<String, MailboxByteWindow>>>,
@@ -676,6 +760,30 @@ impl RelayState {
                   WHERE lease_id IS NOT NULL;",
             )
             .map_err(|error| format!("initializing relay database: {error}"))?;
+        // Who stored each entry (older databases get the column; their rows
+        // count as no one's).
+        let _ = database.execute("ALTER TABLE queue_entries ADD COLUMN source TEXT", []);
+        // Everything stored, kept by the database itself on every insert and
+        // delete (measuring it would read every row).
+        database
+            .execute_batch(
+                "CREATE INDEX IF NOT EXISTS queue_source ON queue_entries(source);
+                 CREATE TABLE IF NOT EXISTS stored_total (
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   bytes INTEGER NOT NULL
+                 );
+                 INSERT OR IGNORE INTO stored_total (id, bytes)
+                   SELECT 1, COALESCE(SUM(envelope_bytes), 0) FROM queue_entries;
+                 CREATE TRIGGER IF NOT EXISTS stored_total_insert
+                   AFTER INSERT ON queue_entries BEGIN
+                     UPDATE stored_total SET bytes = bytes + NEW.envelope_bytes WHERE id = 1;
+                   END;
+                 CREATE TRIGGER IF NOT EXISTS stored_total_delete
+                   AFTER DELETE ON queue_entries BEGIN
+                     UPDATE stored_total SET bytes = bytes - OLD.envelope_bytes WHERE id = 1;
+                   END;",
+            )
+            .map_err(|error| format!("initializing relay storage total: {error}"))?;
         Ok(Self {
             config,
             database: Arc::new(Mutex::new(database)),
@@ -684,7 +792,7 @@ impl RelayState {
             store_windows: Arc::new(Mutex::new(HashMap::new())),
             long_polls: Arc::new(Mutex::new(HashMap::new())),
             connections: Arc::new(Mutex::new(HashMap::new())),
-            stored_bytes: Arc::new(Mutex::new((0, 0))),
+            rates_pruned_at: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             udp_cookie_key: Arc::new(SigningKey::generate(&mut rand::rngs::OsRng)),
             mailbox_bytes: Arc::new(Mutex::new(HashMap::new())),
             banned_peers: Arc::new(Mutex::new(HashMap::new())),
@@ -734,6 +842,24 @@ impl RelayState {
         self.allow_request_banning(peer, true)
     }
 
+    /// Whether the rate maps are due a prune (at most once a second; doing
+    /// it on every request cost a full scan each time).
+    fn prune_due(&self, now: u64) -> bool {
+        let last = self
+            .rates_pruned_at
+            .load(std::sync::atomic::Ordering::Relaxed);
+        now.saturating_sub(last) >= 1_000
+            && self
+                .rates_pruned_at
+                .compare_exchange(
+                    last,
+                    now,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Relaxed,
+                )
+                .is_ok()
+    }
+
     /// The general limit. [ban]: refusals count towards the soft ban (not
     /// for datagrams, whose source can be forged to get someone banned).
     fn allow_request_banning(&self, peer: &str, ban: bool) -> bool {
@@ -774,7 +900,12 @@ impl RelayState {
             .rate_buckets
             .lock()
             .expect("rate bucket lock should not poison");
-        buckets.retain(|_, bucket| now.saturating_sub(bucket.window_started_millis) < 120_000);
+        if self.prune_due(now) {
+            buckets.retain(|_, bucket| now.saturating_sub(bucket.window_started_millis) < 120_000);
+        }
+        if buckets.len() >= self.config.max_rate_keys && !buckets.contains_key(peer) {
+            return false;
+        }
         let bucket = buckets.entry(peer.to_owned()).or_insert(RateBucket {
             window_started_millis: now,
             count: 0,
@@ -810,7 +941,12 @@ impl RelayState {
             .store_windows
             .lock()
             .expect("store window lock should not poison");
-        windows.retain(|_, window| now.saturating_sub(window.window_started_millis) < 120_000);
+        if self.prune_due(now) {
+            windows.retain(|_, window| now.saturating_sub(window.window_started_millis) < 120_000);
+        }
+        if windows.len() >= self.config.max_rate_keys && !windows.contains_key(peer) {
+            return false;
+        }
         let window = windows.entry(peer.to_owned()).or_insert(StoreWindow {
             window_started_millis: now,
             count: 0,
@@ -836,11 +972,12 @@ impl RelayState {
         take_peer_slot(&self.long_polls, peer, self.config.max_long_polls_per_peer)
     }
 
-    /// A connection slot for [peer], or none when it holds its share open.
+    /// A connection slot for [peer] (an IPv6 /48 counts as one), or none
+    /// when it holds its share open.
     fn connection_slot(&self, peer: &str) -> Option<PeerSlot> {
         take_peer_slot(
             &self.connections,
-            peer,
+            &peer_group(peer),
             self.config.max_connections_per_peer,
         )
     }
@@ -922,6 +1059,22 @@ impl RelayState {
     }
 
     fn store(&self, recipient_device_id: String, envelope: Value) -> Result<(), String> {
+        self.store_from("", recipient_device_id, envelope)
+    }
+
+    /// Stores [envelope], counting it to [source] (an address key; empty
+    /// for none).
+    fn store_from(
+        &self,
+        source: &str,
+        recipient_device_id: String,
+        envelope: Value,
+    ) -> Result<(), String> {
+        let source = if source.is_empty() {
+            None
+        } else {
+            Some(peer_group(source))
+        };
         validate_mailbox_id(&recipient_device_id)?;
         let envelope_bytes = serde_json::to_vec(&envelope).map_err(|error| error.to_string())?;
         if envelope_bytes.len() > self.config.max_envelope_bytes {
@@ -1053,35 +1206,90 @@ impl RelayState {
             }
         }
 
-        // Everything stored, all mailboxes: measured again every few seconds,
-        // counted up in between.
-        {
-            let mut total = self
-                .stored_bytes
-                .lock()
-                .expect("stored bytes lock should not poison");
-            let now_ms = now_millis();
-            if now_ms.saturating_sub(total.1) >= TOTAL_BYTES_REFRESH_MILLIS {
-                let measured: u64 = transaction
+        // What this address holds already: a bounded share.
+        if let Some(source) = &source {
+            let held: u64 = transaction
+                .query_row(
+                    "SELECT COALESCE(SUM(envelope_bytes), 0) FROM queue_entries
+                      WHERE source = ?1",
+                    params![source],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("measuring an address's share: {error}"))?;
+            if held.saturating_add(encoded_len) > self.config.max_stored_bytes_per_peer {
+                return Err("this address holds too much on the relay".to_owned());
+            }
+        }
+        // Everything stored: when full, the largest holder's oldest entries
+        // make room (refusing everyone would let one holder stop the relay).
+        let total = |transaction: &rusqlite::Transaction| -> Result<u64, String> {
+            transaction
+                .query_row("SELECT bytes FROM stored_total WHERE id = 1", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map(|bytes| bytes.max(0) as u64)
+                .map_err(|error| format!("reading relay storage: {error}"))
+        };
+        let mut largest: Option<Option<String>> = None;
+        while total(&transaction)?.saturating_add(encoded_len) > self.config.max_total_bytes {
+            if largest.is_none() {
+                largest = Some(
+                    transaction
+                        .query_row(
+                            "SELECT source FROM queue_entries WHERE lease_id IS NULL
+                              GROUP BY source ORDER BY SUM(envelope_bytes) DESC LIMIT 1",
+                            [],
+                            |row| row.get::<_, Option<String>>(0),
+                        )
+                        .map_err(|_| "relay storage is full".to_owned())?,
+                );
+            }
+            let holder = largest.clone().flatten();
+            let removed = transaction
+                .execute(
+                    "DELETE FROM queue_entries WHERE id = (
+                       SELECT id FROM queue_entries
+                        WHERE source IS ?1 AND lease_id IS NULL
+                        ORDER BY id LIMIT 1
+                     )",
+                    params![holder],
+                )
+                .map_err(|error| format!("making room on the relay: {error}"))?;
+            if removed == 0 {
+                // That holder has nothing left to give: look again (once).
+                if largest.take().is_none() {
+                    return Err("relay storage is full".to_owned());
+                }
+                largest = None;
+                let again: Option<String> = transaction
                     .query_row(
-                        "SELECT COALESCE(SUM(envelope_bytes), 0) FROM queue_entries",
+                        "SELECT source FROM queue_entries WHERE lease_id IS NULL
+                          GROUP BY source ORDER BY SUM(envelope_bytes) DESC LIMIT 1",
                         [],
                         |row| row.get(0),
                     )
-                    .map_err(|error| format!("measuring relay storage: {error}"))?;
-                *total = (measured, now_ms);
+                    .map_err(|_| "relay storage is full".to_owned())?;
+                let removed = transaction
+                    .execute(
+                        "DELETE FROM queue_entries WHERE id = (
+                           SELECT id FROM queue_entries
+                            WHERE source IS ?1 AND lease_id IS NULL
+                            ORDER BY id LIMIT 1
+                         )",
+                        params![again],
+                    )
+                    .map_err(|error| format!("making room on the relay: {error}"))?;
+                if removed == 0 {
+                    return Err("relay storage is full".to_owned());
+                }
             }
-            if total.0.saturating_add(encoded_len) > self.config.max_total_bytes {
-                return Err("relay storage is full".to_owned());
-            }
-            total.0 = total.0.saturating_add(encoded_len);
         }
         transaction
             .execute(
                 "INSERT INTO queue_entries
                    (mailbox, queued_at_millis, envelope_json, envelope_bytes,
-                    kind, sender_device_id, dedup_key)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    kind, sender_device_id, dedup_key, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     &recipient_device_id,
                     now,
@@ -1089,7 +1297,8 @@ impl RelayState {
                     encoded_len,
                     kind,
                     sender,
-                    dedup_key
+                    dedup_key,
+                    source
                 ],
             )
             .map_err(|error| format!("persisting relay envelope: {error}"))?;
@@ -1515,7 +1724,11 @@ fn handle_client(
     // worst-case response size with plenty of headroom.
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut reader = BufReader::new(reader_stream);
-    let mut writer = BufWriter::new(stream);
+    let mut writer = BufWriter::new(DeadlineWriter {
+        stream,
+        limit: RESPONSE_WRITE_DEADLINE,
+        deadline: None,
+    });
 
     let mut line = String::new();
     let bytes_read = read_line_bounded(&mut reader, &mut line, state.config.max_line_bytes)?;
@@ -1644,20 +1857,13 @@ fn handle_http_request<R: BufRead>(
                         }
                         content_length = Some(parsed);
                     } else if state.config.trust_forwarded_for
-                        && forwarded_for.is_none()
                         && name.eq_ignore_ascii_case("x-forwarded-for")
                     {
-                        // The last address: the one the trusted proxy saw
-                        // (it appends it). Earlier ones come from the client
-                        // and could be anything.
-                        if let Some(last) = value.split(',').next_back() {
-                            let trimmed = last.trim();
-                            if !trimmed.is_empty() {
-                                forwarded_for = Some(match trimmed.parse() {
-                                    Ok(address) => peer_key(address),
-                                    Err(_) => trimmed.to_owned(),
-                                });
-                            }
+                        // The last address of the last line: the one the
+                        // trusted proxy saw (it appends a line or an entry).
+                        // Earlier ones come from the client.
+                        if let Some(peer) = forwarded_peer(value) {
+                            forwarded_for = Some(peer);
                         }
                     }
                 }
@@ -1759,6 +1965,10 @@ fn serve_udp(socket: UdpSocket, state: RelayState, config: RelayConfig) {
         match socket.recv_from(&mut buffer) {
             Ok((bytes_read, peer)) => {
                 let response = handle_udp_datagram(&buffer[..bytes_read], bytes_read, &state, peer);
+                // Nothing goes back for what is refused or invalid.
+                if response.is_null() {
+                    continue;
+                }
                 let response_bytes = match serde_json::to_vec(&response) {
                     Ok(bytes) => bytes,
                     Err(error) => {
@@ -1784,26 +1994,31 @@ fn handle_udp_datagram(
     // Kept apart from TCP and HTTP: a forged source spends only the UDP
     // budget of the address it names.
     let key = format!("udp:{}", peer_key(peer.ip()));
-    handle_request_from(datagram, bytes_read, state, &key, true)
+    // The cookie is the full address's (budgets go by /64): a neighbour in
+    // the same /64 cannot aim answers at another host.
+    let cookie_peer = format!("udp-cookie:{}", peer.ip());
+    handle_request_from(datagram, bytes_read, state, &key, Some(&cookie_peer))
 }
 
 fn handle_request_bytes(bytes: &[u8], bytes_read: usize, state: &RelayState, peer: &str) -> Value {
-    handle_request_from(bytes, bytes_read, state, peer, false)
+    handle_request_from(bytes, bytes_read, state, peer, None)
 }
 
-/// One request from [peer]; [datagram] when it came by UDP.
+/// One request from [peer]; over UDP, [cookie_peer] is the full address
+/// its cookie is for.
 fn handle_request_from(
     bytes: &[u8],
     bytes_read: usize,
     state: &RelayState,
     peer: &str,
-    datagram: bool,
+    cookie_peer: Option<&str>,
 ) -> Value {
-    // Over UDP, a refusal says only that, unsigned: a forged source must not
-    // get back more than it sent.
+    let datagram = cookie_peer.is_some();
+    // Over UDP nothing goes back for a refusal (a forged source must get
+    // nothing back at all).
     let refuse = |message: String| -> Value {
         if datagram {
-            serde_json::json!({"ok": false, "error": "invalid request"})
+            Value::Null
         } else {
             to_wire(RelayResponse::error(message))
         }
@@ -1854,19 +2069,20 @@ fn handle_request_from(
             );
         }
     };
-    // Over UDP, what answers at length (a fetch, a signed health) first
-    // needs the cookie only a client at that address receives.
-    if datagram
-        && matches!(
-            request,
-            RelayRequest::Fetch { .. } | RelayRequest::FetchLeased { .. } | RelayRequest::Health
-        )
-        && !state.valid_udp_cookie(peer, cookie.as_deref())
+    // Over UDP every request first needs the cookie only a client at that
+    // address receives (what it changes is counted to that address, and
+    // what answers at length cannot be aimed elsewhere). The cookie itself
+    // goes back only to a request at least as long as the answer.
+    if let Some(cookie_peer) = cookie_peer
+        && !state.valid_udp_cookie(cookie_peer, cookie.as_deref())
     {
+        if bytes_read < UDP_COOKIE_REQUEST_MIN_BYTES {
+            return Value::Null;
+        }
         return serde_json::json!({
             "ok": false,
             "error": "udp cookie required",
-            "cookie": state.udp_cookie(peer, now_millis() / 60_000),
+            "cookie": state.udp_cookie(cookie_peer, now_millis() / 60_000),
         });
     }
     // The heavier budget, now that the kind of request is known.
@@ -1906,7 +2122,7 @@ fn handle_request_from(
         }
         _ => None,
     };
-    let response = handle_request(request, state);
+    let response = handle_request_for(request, state, peer);
     finalize_wire(
         response,
         &action,
@@ -1974,11 +2190,16 @@ fn finalize_detached_response(
 }
 
 fn handle_request(request: RelayRequest, state: &RelayState) -> RelayResponse {
+    handle_request_for(request, state, "")
+}
+
+/// [request] from [source] (an address key; empty for none).
+fn handle_request_for(request: RelayRequest, state: &RelayState, source: &str) -> RelayResponse {
     match request {
         RelayRequest::Store {
             recipient_device_id,
             envelope,
-        } => match state.store(recipient_device_id, envelope) {
+        } => match state.store_from(source, recipient_device_id, envelope) {
             Ok(()) => RelayResponse::stored(),
             Err(error) => RelayResponse::error(error),
         },
@@ -2154,6 +2375,7 @@ fn usage() -> String {
            --max-long-polls-per-peer N   long-polls open at once, per address\n\
            --max-connections-per-peer N  connections open at once, per address\n\
            --max-total-bytes N           everything stored, all mailboxes\n\
+           --max-stored-bytes-per-peer N what one address may hold at once\n\
            --database-path PATH       SQLite WAL queue database\n\
            --max-mailbox-bytes N      durable mailbox byte quota\n\
            --trust-forwarded-for  trust the last X-Forwarded-For address\n\
@@ -2193,6 +2415,8 @@ mod tests {
             max_long_polls_per_peer: DEFAULT_MAX_LONG_POLLS_PER_PEER,
             max_connections_per_peer: DEFAULT_MAX_CONNECTIONS_PER_PEER,
             max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
+            max_stored_bytes_per_peer: DEFAULT_MAX_STORED_BYTES_PER_PEER,
+            max_rate_keys: DEFAULT_MAX_RATE_KEYS,
             trust_forwarded_for: false,
             identity_seed_path: PathBuf::from(""),
             identity_seed_inline: None,
@@ -2402,7 +2626,16 @@ mod tests {
         })
         .to_string();
 
-        let stored = handle_udp_datagram(store.as_bytes(), store.len(), &state, peer);
+        let _ = store;
+        let stored = udp_with_cookie(
+            &state,
+            peer,
+            json!({
+                "action": "store",
+                "recipient_device_id": "dev-b",
+                "envelope": envelope("direct_message", "msg-udp", "dev-a")
+            }),
+        );
         let fetched = udp_with_cookie(
             &state,
             peer,
@@ -3118,9 +3351,12 @@ mod tests {
         assert_eq!(second["error"], "rate limit exceeded");
     }
 
-    /// [request] over UDP from [peer], with the cookie a first try asks for.
+    /// [request] over UDP from [peer], with the cookie a first try asks for
+    /// (that try padded to the length a cookie request needs).
     fn udp_with_cookie(state: &RelayState, peer: SocketAddr, request: Value) -> Value {
-        let line = request.to_string();
+        let mut first = request.clone();
+        first["pad"] = json!("x".repeat(UDP_COOKIE_REQUEST_MIN_BYTES));
+        let line = first.to_string();
         let first = handle_udp_datagram(line.as_bytes(), line.len(), state, peer);
         let Some(cookie) = first["cookie"].as_str() else {
             return first;
@@ -3138,10 +3374,13 @@ mod tests {
         config.max_queue_per_mailbox = 16;
         let state = RelayState::new(config, test_identity());
         let peer: SocketAddr = "198.51.100.11:40000".parse().expect("test socket addr");
-        for expected in [true, true, false] {
+        for _ in 0..2 {
             let response = udp_with_cookie(&state, peer, json!({"action": "health"}));
-            assert_eq!(response["ok"], expected, "{response}");
+            assert_eq!(response["ok"], true, "{response}");
         }
+        // Over its budget: nothing goes back at all.
+        let response = udp_with_cookie(&state, peer, json!({"action": "health"}));
+        assert!(response.is_null(), "{response}");
         // Forged datagrams naming an address do not spend its TCP budgets.
         let line = store_line("msg-tcp");
         let response = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.11");
@@ -3149,32 +3388,42 @@ mod tests {
     }
 
     #[test]
-    fn over_udp_a_long_answer_needs_the_cookie_of_that_address() {
+    fn over_udp_everything_needs_the_cookie_of_that_very_address() {
         let state = RelayState::new(test_config(), test_identity());
-        let peer: SocketAddr = "198.51.100.13:40000".parse().expect("test socket addr");
-        let other: SocketAddr = "198.51.100.14:40000".parse().expect("test socket addr");
-        let fetch = json!({"action": "fetch", "recipient_device_id": "dev-b", "limit": 4});
+        let peer: SocketAddr = "[2001:db8:1:2::1]:40000".parse().expect("test socket addr");
+        // The same /64, another host.
+        let neighbour: SocketAddr = "[2001:db8:1:2::2]:40000".parse().expect("test socket addr");
+        let mut fetch = json!({"action": "fetch", "recipient_device_id": "dev-b", "limit": 4});
+        // Too short to be answered with a cookie: nothing back.
+        let line = fetch.to_string();
+        assert!(handle_udp_datagram(line.as_bytes(), line.len(), &state, peer).is_null());
+        fetch["pad"] = json!("x".repeat(UDP_COOKIE_REQUEST_MIN_BYTES));
         let line = fetch.to_string();
         let first = handle_udp_datagram(line.as_bytes(), line.len(), &state, peer);
         assert_eq!(first["error"], "udp cookie required");
+        // Never longer than what came in.
+        assert!(first.to_string().len() <= line.len(), "{first}");
         let cookie = first["cookie"].as_str().expect("a cookie").to_owned();
-        // Small: not worth forging a source for.
-        assert!(first.to_string().len() < 160, "{first}");
-        let mut with_cookie = fetch.clone();
+        let mut with_cookie =
+            json!({"action": "fetch", "recipient_device_id": "dev-b", "limit": 4});
         with_cookie["cookie"] = json!(cookie);
         let line = with_cookie.to_string();
-        let elsewhere = handle_udp_datagram(line.as_bytes(), line.len(), &state, other);
-        assert_eq!(elsewhere["error"], "udp cookie required");
+        assert!(handle_udp_datagram(line.as_bytes(), line.len(), &state, neighbour).is_null());
         let answered = handle_udp_datagram(line.as_bytes(), line.len(), &state, peer);
         assert_eq!(answered["ok"], true, "{answered}");
-        // A store answers briefly: no cookie needed.
+        // A store without a cookie is not taken.
         let store = store_line("msg-udp-store");
-        let stored = handle_udp_datagram(store.as_bytes(), store.len(), &state, peer);
+        let refused = handle_udp_datagram(store.as_bytes(), store.len(), &state, peer);
+        assert_eq!(refused["error"], "udp cookie required");
+        let stored = udp_with_cookie(
+            &state,
+            peer,
+            serde_json::from_str(&store_line("msg-udp-store")).expect("json"),
+        );
         assert_eq!(stored["ok"], true, "{stored}");
-        // Nonsense gets a small, unsigned refusal.
+        // Nonsense, signed or not, gets nothing back.
         let junk = br#"{"action":"nope","nonce":"AAAAAAAAAAAAAAAAAAAAAA=="}"#;
-        let refused = handle_udp_datagram(junk, junk.len(), &state, peer);
-        assert_eq!(refused, json!({"ok": false, "error": "invalid request"}));
+        assert!(handle_udp_datagram(junk, junk.len(), &state, peer).is_null());
     }
 
     #[test]
@@ -3191,25 +3440,149 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2), "it waited");
     }
 
+    fn store_to(mailbox: &str, id: &str) -> String {
+        json!({
+            "action": "store",
+            "recipient_device_id": mailbox,
+            "envelope": envelope("direct_message", id, "dev-z")
+        })
+        .to_string()
+    }
+
     #[test]
-    fn stores_stop_when_the_relay_is_full() {
+    fn one_address_holds_a_bounded_share() {
         let mut config = test_config();
         config.max_queue_per_mailbox = 16;
-        let first = store_line("msg-0");
-        config.max_total_bytes = first.len() as u64;
+        let line = store_to("dev-c", "msg-0");
+        config.max_stored_bytes_per_peer = line.len() as u64;
         let state = RelayState::new(config, test_identity());
-        let response = handle_request_bytes(first.as_bytes(), first.len(), &state, "198.51.100.16");
+        let response = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.16");
         assert_eq!(response["ok"], true, "{response}");
-        // Another mailbox, another address: the relay as a whole is full.
-        let line = json!({
-            "action": "store",
-            "recipient_device_id": "dev-c",
-            "envelope": envelope("direct_message", "msg-1", "dev-z")
-        })
-        .to_string();
+        let line = store_to("dev-d", "msg-1");
+        let response = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.16");
+        assert_eq!(
+            response["error"],
+            "this address holds too much on the relay"
+        );
         let response = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.17");
-        assert_eq!(response["ok"], false, "{response}");
-        assert_eq!(response["error"], "relay storage is full");
+        assert_eq!(response["ok"], true, "{response}");
+    }
+
+    #[test]
+    fn a_full_relay_makes_room_from_its_largest_holder() {
+        let mut config = test_config();
+        config.max_queue_per_mailbox = 16;
+        let line = store_to("dev-c", "msg-0");
+        // Room for about three.
+        config.max_total_bytes = line.len() as u64 * 3;
+        let state = RelayState::new(config, test_identity());
+        for (index, mailbox) in ["dev-c", "dev-d", "dev-e"].iter().enumerate() {
+            let line = store_to(mailbox, &format!("big-{index}"));
+            let response =
+                handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.30");
+            assert_eq!(response["ok"], true, "{response}");
+        }
+        // Someone else is not refused: the largest holder's oldest goes.
+        let line = store_to("dev-f", "other-0");
+        let response = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.31");
+        assert_eq!(response["ok"], true, "{response}");
+        let fetched = state.fetch("dev-c", Some(4), None).expect("fetch");
+        assert!(fetched.is_empty(), "the oldest of the largest holder went");
+        let fetched = state.fetch("dev-f", Some(4), None).expect("fetch");
+        assert_eq!(fetched.len(), 1);
+        // The running total follows inserts and deletes.
+        let total: i64 = state
+            .database
+            .lock()
+            .expect("lock")
+            .query_row("SELECT bytes FROM stored_total WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .expect("total");
+        let summed: i64 = state
+            .database
+            .lock()
+            .expect("lock")
+            .query_row(
+                "SELECT COALESCE(SUM(envelope_bytes), 0) FROM queue_entries",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sum");
+        assert_eq!(total, summed);
+    }
+
+    #[test]
+    fn an_ipv6_site_counts_as_one_for_what_it_holds() {
+        assert_eq!(peer_group("2001:db8:1:2::/64"), "2001:db8:1::/48");
+        assert_eq!(peer_group("udp:2001:db8:1:2::/64"), "2001:db8:1::/48");
+        assert_eq!(peer_group("198.51.100.1"), "198.51.100.1");
+        assert_eq!(peer_group("udp:198.51.100.1"), "198.51.100.1");
+    }
+
+    #[test]
+    fn the_rate_maps_track_a_bounded_number_of_addresses() {
+        let mut config = test_config();
+        config.max_rate_keys = 2;
+        let state = RelayState::new(config, test_identity());
+        assert!(state.allow_request("198.51.100.40"));
+        assert!(state.allow_request("198.51.100.41"));
+        assert!(!state.allow_request("198.51.100.42"));
+        // Those already known go on.
+        assert!(state.allow_request("198.51.100.40"));
+    }
+
+    #[test]
+    fn a_proxy_header_counts_its_last_line_and_strips_a_port() {
+        assert_eq!(
+            forwarded_peer("1.1.1.1, 198.51.100.20:5678").as_deref(),
+            Some("198.51.100.20")
+        );
+        assert_eq!(
+            forwarded_peer("[2001:db8:1:2::9]:443").as_deref(),
+            Some("2001:db8:1:2::/64")
+        );
+        let mut config = test_config();
+        config.trust_forwarded_for = true;
+        config.max_requests_per_minute = 2;
+        let state = RelayState::new(config, test_identity());
+        // The client writes the first line; the proxy appends the second.
+        for (forged, expected_status) in [("1.1.1.1", 200_u16), ("2.2.2.2", 200), ("3.3.3.3", 429)]
+        {
+            let headers = format!(
+                "Host: relay.test\r\nX-Forwarded-For: {forged}\r\nX-Forwarded-For: 198.51.100.21\r\n\r\n"
+            );
+            let mut reader = BufReader::new(headers.as_bytes());
+            let (status, _) =
+                handle_http_request("GET /health HTTP/1.1\r\n", &mut reader, &state, "127.0.0.1");
+            assert_eq!(status, expected_status, "{forged}");
+        }
+    }
+
+    #[test]
+    fn a_response_not_taken_ends_at_the_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        // A client that connects and never reads.
+        let client = std::net::TcpStream::connect(address).expect("connect");
+        let (stream, _) = listener.accept().expect("accept");
+        let mut writer = DeadlineWriter {
+            stream,
+            limit: Duration::from_secs(1),
+            deadline: None,
+        };
+        let started = std::time::Instant::now();
+        let chunk = vec![0_u8; 1024 * 1024];
+        let mut result = Ok(());
+        for _ in 0..512 {
+            result = writer.write_all(&chunk);
+            if result.is_err() {
+                break;
+            }
+        }
+        assert!(result.is_err(), "the writes never stopped");
+        assert!(started.elapsed() < Duration::from_secs(4));
+        drop(client);
     }
 
     #[test]

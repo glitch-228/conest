@@ -686,7 +686,13 @@ class RelayClient {
       host: host,
       port: port,
       timeout: timeout,
-      request: {...request, 'cookie': ?cookie},
+      request: {
+        ...request,
+        'cookie': ?cookie,
+        // Without a cookie the relay answers (with one) only a request at
+        // least as long as its answer.
+        if (cookie == null) 'pad': ''.padRight(128, 'x'),
+      },
       maxResponseBytes: maxResponseBytes,
     );
     try {

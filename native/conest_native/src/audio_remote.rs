@@ -289,7 +289,9 @@ mod tests {
         assert!(mixer.streams[&0].jitter.pending.len() <= OPUS_PACKET_QUEUE);
         mixer.push(1, 1, &bytes, now);
         assert!(mixer.render(now).is_some());
-        assert_eq!(mixer.level(0), 0.0);
+        // Stream 0's missing first packet, with audio waiting behind it, is
+        // skipped rather than waited for; stream 1 plays regardless.
+        assert!(mixer.level(0) > 0.0);
         assert!(mixer.level(1) > 0.0);
         assert!(mixer.render(now + Duration::from_millis(110)).is_some());
     }

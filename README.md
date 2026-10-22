@@ -159,19 +159,23 @@ carrier's NAT), and the defaults suit a public relay:
   stores, which fill the disk, and every UDP request;
 - `--max-long-polls-per-peer 16`: long-polls one address holds open at
   once (more are answered at once);
-- `--max-connections-per-peer 64`: connections one address holds open at
-  once (not applied with `--trust-forwarded-for`, where every client shares
+- `--max-connections-per-peer 16`: connections one address (an IPv6 /48)
+  holds open at once (not applied with `--trust-forwarded-for`, where every client shares
   the proxy's address);
 - `--max-total-bytes 4294967296`: everything stored, all mailboxes
-  together; past it, stores are refused;
+  together; when full, the oldest entries of whoever holds the most make
+  room;
+- `--max-stored-bytes-per-peer 268435456`: what one address (an IPv6 /48)
+  may hold at once;
 - `--soft-ban-threshold 10`: refusals of the general limit in a row before
   a 5-minute ban.
 
 An IPv6 client is counted by its /64. Over UDP, which anyone can send with
-a forged source, the budgets are kept apart from TCP and HTTP, never lead
-to a ban, and an answer longer than the request (a fetch, a health check)
-first needs a cookie that only a client at that address receives (Conest
-asks for it by itself). Requests must arrive within 10 s.
+a forged source, the budgets are kept apart from TCP and HTTP and never
+lead to a ban; every request first needs a cookie that only a client at
+that address receives (Conest asks for it by itself), and nothing is sent
+back to what is refused or invalid. Requests must arrive within 10 s, and
+answers be taken within 120 s.
 
 Open TCP and/or UDP port `7667` on the host firewall or provider security group. The same relay port also accepts HTTP requests, so HTTP tunnels such as LocalTunnel can forward to it. If the host is UDP-only, add it in the app as `udp://your-domain:7667`; for LocalTunnel-style URLs, add the relay as `https://your-subdomain.loca.lt`.
 

@@ -93,6 +93,10 @@ void main() {
       final request =
           jsonDecode(utf8.decode(datagram.data)) as Map<String, dynamic>;
       seen.add(request['cookie'] as String?);
+      // A request without a cookie is long enough to be answered.
+      if (request['cookie'] == null) {
+        expect(datagram.data.length, greaterThanOrEqualTo(128));
+      }
       final reply = request['cookie'] == 'c00kie'
           ? {'ok': true, 'messages': <Object>[]}
           : {'ok': false, 'error': 'udp cookie required', 'cookie': 'c00kie'};
