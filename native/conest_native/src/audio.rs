@@ -66,6 +66,15 @@ const APM_FRAME_SAMPLES: usize = VOICE_RATE as usize / 100; // AEC3 runs on 10 m
 const FRAME_PERIOD_NANOS: i128 = 20_000_000;
 const MIN_JITTER_WAIT: Duration = Duration::from_millis(20);
 const MAX_JITTER_WAIT: Duration = Duration::from_millis(100);
+/// Packets waiting behind a missing one (60 ms of audio) that make it not
+/// worth waiting for: it is skipped at once, so a hole never stalls audio
+/// that is already here.
+const SKIP_WAIT_BACKLOG: usize = 3;
+/// Packets held at most (160 ms): past it the oldest go, so after a stall
+/// the delay comes back down instead of growing for good. (Dropping the
+/// newest instead left holes ahead, each waited for in turn: playback fell
+/// to a quarter of real time.)
+const MAX_BUFFERED_PACKETS: usize = 8;
 const HIGH_QUEUE_WATERMARK: usize = OPUS_PACKET_QUEUE * 2 / 3;
 const LOW_QUEUE_WATERMARK: usize = OPUS_PACKET_QUEUE / 6;
 const MIN_BITRATE: u32 = 16_000;
@@ -129,7 +138,9 @@ struct EchoProcessor {
 impl EchoProcessor {
     fn new() -> Self {
         let config = sonora::Config {
-            echo_canceller: if cfg!(target_os = "android") { None } else {
+            echo_canceller: if cfg!(target_os = "android") {
+                None
+            } else {
                 Some(sonora::config::EchoCanceller::default())
             },
             ..Default::default()
@@ -341,8 +352,9 @@ impl VoiceAudioSession {
         let render_reference = Arc::new(ArrayQueue::new(ECHO_REFERENCE_QUEUE_SAMPLES));
         let encoded = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
         let counters = Arc::new(CallCounters::default());
-        let incoming = Arc::new(Mutex::new(RemoteMixer::new()
-            .context("Could not initialize the remote audio mixer")?));
+        let incoming = Arc::new(Mutex::new(
+            RemoteMixer::new().context("Could not initialize the remote audio mixer")?,
+        ));
         let mut encoder = Encoder::new(VOICE_RATE, Channels::Mono, Application::Voip)
             .context("Could not initialize the Opus encoder")?;
         encoder
@@ -430,7 +442,8 @@ impl VoiceAudioSession {
 
     #[cfg(target_os = "android")]
     pub fn set_platform_noise_suppression(&self, enabled: bool) {
-        self.platform_noise_suppression.store(enabled, Ordering::Relaxed);
+        self.platform_noise_suppression
+            .store(enabled, Ordering::Relaxed);
     }
 
     pub fn set_network_congested(&self, congested: bool) {
@@ -471,17 +484,26 @@ impl VoiceAudioSession {
     }
 
     pub fn set_participant_active(&self, participant: u16, active: bool) -> bool {
-        self.incoming.lock().ok().and_then(|mut mixer|
-            mixer.set_active(participant, active).ok()).unwrap_or(false)
+        self.incoming
+            .lock()
+            .ok()
+            .and_then(|mut mixer| mixer.set_active(participant, active).ok())
+            .unwrap_or(false)
     }
 
     pub fn push_participant_packet(&self, participant: u16, sequence: u64, packet: &[u8]) -> bool {
-        self.incoming.lock().ok().map(|mut mixer|
-            mixer.push(participant, sequence, packet, Instant::now())).unwrap_or(false)
+        self.incoming
+            .lock()
+            .ok()
+            .map(|mut mixer| mixer.push(participant, sequence, packet, Instant::now()))
+            .unwrap_or(false)
     }
 
     pub fn participant_level(&self, participant: u16) -> f32 {
-        self.incoming.lock().ok().map_or(0.0, |mixer| mixer.level(participant))
+        self.incoming
+            .lock()
+            .ok()
+            .map_or(0.0, |mixer| mixer.level(participant))
     }
 
     /// Supplies one bounded mono PCM capture slice from Android's audio thread.
@@ -798,8 +820,10 @@ fn encode_loop(
                 }
             }
         }
-        echo.set_noise_suppression(noise_suppression.load(Ordering::Relaxed)
-            && !platform_noise_suppression.load(Ordering::Relaxed));
+        echo.set_noise_suppression(
+            noise_suppression.load(Ordering::Relaxed)
+                && !platform_noise_suppression.load(Ordering::Relaxed),
+        );
         echo.process_frame(
             &mut frame,
             &render_reference,
@@ -841,12 +865,14 @@ fn decode_loop(
             thread::sleep(Duration::from_millis(2));
             continue;
         }
+        // One 20 ms slot, played or silent: a slot with nothing ready is
+        // concealed once (calling again every 2 ms counted each retry as a
+        // concealed frame and a 6 ms wait as an audible gap).
         let frame = incoming.lock().ok().and_then(|mut mixer| mixer.render(now));
+        next_playout = next_playout_after(next_playout, now);
         let Some(frame) = frame else {
-            thread::sleep(Duration::from_millis(2));
             continue;
         };
-        next_playout = next_playout_after(next_playout, now);
         counters.played_frames.fetch_add(1, Ordering::Relaxed);
         if playback.len().saturating_add(frame.len()) > PLAYBACK_QUEUE_SAMPLES * 3 / 4 {
             counters.playback_trimmed.fetch_add(1, Ordering::Relaxed);
@@ -854,7 +880,9 @@ fn decode_loop(
                 let _ = playback.pop();
             }
         }
-        for sample in frame { let _ = playback.push(sample); }
+        for sample in frame {
+            let _ = playback.push(sample);
+        }
     }
 }
 
@@ -900,17 +928,18 @@ impl PacketJitterBuffer {
         if sequence < self.expected || self.pending.contains_key(&sequence) {
             return false;
         }
-        if self.pending.len() >= OPUS_PACKET_QUEUE {
-            // Keep the closest packets to the expected point; a distant
-            // future packet must not displace audio that can play sooner.
-            let furthest = *self.pending.last_key_value().expect("queue is full").0;
-            if sequence >= furthest {
-                return true;
-            }
-            self.pending.pop_last();
-        }
         self.observe_arrival(sequence, arrived_at);
         self.pending.insert(sequence, packet);
+        // Over the bound, the oldest go (and whatever was missing before
+        // them): the newest audio is what is worth playing.
+        while self.pending.len() > MAX_BUFFERED_PACKETS.min(OPUS_PACKET_QUEUE) {
+            let (oldest, _) = self.pending.pop_first().expect("over the bound");
+            self.lost = self
+                .lost
+                .saturating_add(oldest.saturating_sub(self.expected) + 1);
+            self.expected = oldest.saturating_add(1);
+            self.gap_started = None;
+        }
         true
     }
 
@@ -951,7 +980,8 @@ impl PacketJitterBuffer {
         }
         let next_sequence = *self.pending.first_key_value()?.0;
         let gap_started = *self.gap_started.get_or_insert(now);
-        if now.duration_since(gap_started) < self.gap_wait {
+        if self.pending.len() < SKIP_WAIT_BACKLOG && now.duration_since(gap_started) < self.gap_wait
+        {
             return None;
         }
         self.lost = self.lost.saturating_add(next_sequence - self.expected);
@@ -964,8 +994,8 @@ impl PacketJitterBuffer {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveBitrate, Application, Channels, Encoder, MAX_JITTER_WAIT, MIN_JITTER_WAIT,
-        PacketJitterBuffer, next_playout_after,
+        AdaptiveBitrate, Application, Channels, Encoder, MAX_BUFFERED_PACKETS, MAX_JITTER_WAIT,
+        MIN_JITTER_WAIT, PacketJitterBuffer, SKIP_WAIT_BACKLOG, next_playout_after,
     };
     use opus::Decoder;
     use std::time::{Duration, Instant};
@@ -1024,23 +1054,42 @@ mod tests {
         let (mut input_voice, mut output_voice) = (0.0_f64, 0.0_f64);
         for frame_number in 0..500 {
             let voiced = frame_number >= 250;
-            let mut frame: Vec<f32> = (0..FRAME_SAMPLES).map(|i| {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                let noise = ((seed >> 8) as f32 / 16777215.0 - 0.5) * 0.04;
-                let t = (frame_number * FRAME_SAMPLES + i) as f32 / VOICE_RATE as f32;
-                let frequency = 140.0 + 30.0 * (t * 2.3).sin();
-                let voice = (std::f32::consts::TAU * frequency * t).sin() * 0.25
-                    + (std::f32::consts::TAU * frequency * 2.0 * t).sin() * 0.08;
-                noise + if voiced { voice * (0.7 + 0.3 * (t * 6.0).sin()) } else { 0.0 }
-            }).collect();
+            let mut frame: Vec<f32> = (0..FRAME_SAMPLES)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let noise = ((seed >> 8) as f32 / 16777215.0 - 0.5) * 0.04;
+                    let t = (frame_number * FRAME_SAMPLES + i) as f32 / VOICE_RATE as f32;
+                    let frequency = 140.0 + 30.0 * (t * 2.3).sin();
+                    let voice = (std::f32::consts::TAU * frequency * t).sin() * 0.25
+                        + (std::f32::consts::TAU * frequency * 2.0 * t).sin() * 0.08;
+                    noise
+                        + if voiced {
+                            voice * (0.7 + 0.3 * (t * 6.0).sin())
+                        } else {
+                            0.0
+                        }
+                })
+                .collect();
             let input = frame.iter().map(|x| f64::from(x * x)).sum::<f64>();
             processor.process_frame(&mut frame, &render, 0, false);
             let output = frame.iter().map(|x| f64::from(x * x)).sum::<f64>();
-            if (150..250).contains(&frame_number) { input_noise += input; output_noise += output; }
-            if frame_number >= 350 { input_voice += input; output_voice += output; }
+            if (150..250).contains(&frame_number) {
+                input_noise += input;
+                output_noise += output;
+            }
+            if frame_number >= 350 {
+                input_voice += input;
+                output_voice += output;
+            }
         }
-        assert!(output_noise < input_noise * 0.1, "noise {output_noise}/{input_noise}");
-        assert!(output_voice > input_voice * 0.5, "voice {output_voice}/{input_voice}");
+        assert!(
+            output_noise < input_noise * 0.1,
+            "noise {output_noise}/{input_noise}"
+        );
+        assert!(
+            output_voice > input_voice * 0.5,
+            "voice {output_voice}/{input_voice}"
+        );
         processor.set_noise_suppression(false);
         assert!(processor.apm.config().noise_suppression.is_none());
     }
@@ -1173,6 +1222,61 @@ mod tests {
             jitter.pop_ready(start + MIN_JITTER_WAIT + Duration::from_millis(1)),
             Some(vec![4]),
         );
+    }
+
+    #[test]
+    fn a_hole_behind_a_backlog_is_skipped_at_once() {
+        let start = Instant::now();
+        let mut jitter = PacketJitterBuffer::new(1);
+        for sequence in [1_u64, 3, 4, 5] {
+            jitter.insert(sequence, vec![sequence as u8], start);
+        }
+        assert_eq!(jitter.pop_ready(start), Some(vec![1]));
+        // 2 is missing with three waiting behind it: no wait.
+        assert_eq!(jitter.pop_ready(start), Some(vec![3]));
+        assert_eq!(jitter.lost, 1);
+    }
+
+    #[test]
+    fn a_long_backlog_keeps_the_newest_audio() {
+        let start = Instant::now();
+        let mut jitter = PacketJitterBuffer::new(1);
+        for sequence in 1..=20_u64 {
+            assert!(jitter.insert(sequence, vec![sequence as u8], start));
+        }
+        assert_eq!(jitter.pending.len(), MAX_BUFFERED_PACKETS);
+        assert_eq!(jitter.pop_ready(start), Some(vec![13]));
+        assert_eq!(jitter.lost, 12);
+    }
+
+    #[test]
+    fn playout_keeps_up_through_losses_and_a_stall() {
+        // A minute of 20 ms packets: every 50th lost, and a 200 ms stall
+        // that then delivers its packets at once. One slot plays per 20 ms.
+        let start = Instant::now();
+        let mut jitter = PacketJitterBuffer::new(1);
+        let mut played = 0;
+        for slot in 0..3000_u64 {
+            let now = start + Duration::from_millis(20 * slot);
+            let arriving: Vec<u64> = if (500..510).contains(&slot) {
+                Vec::new()
+            } else if slot == 510 {
+                (501..=511).collect()
+            } else {
+                vec![slot + 1]
+            };
+            for sequence in arriving {
+                if sequence % 50 != 0 {
+                    jitter.insert(sequence, vec![0], now);
+                }
+            }
+            if jitter.pop_ready(now).is_some() {
+                played += 1;
+            }
+        }
+        // About 3000 less the 60 lost and a few dropped to catch up.
+        assert!(played >= 2850, "played {played}");
+        assert!(jitter.pending.len() <= SKIP_WAIT_BACKLOG + 1);
     }
 
     #[test]
