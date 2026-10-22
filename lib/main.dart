@@ -50,6 +50,7 @@ import 'src/models.dart';
 import 'src/platform_bridge.dart';
 import 'src/qr_scan_screen.dart';
 import 'src/ui/app_mode_selector.dart';
+import 'src/content_routing.dart';
 import 'src/ui/content_routing_settings.dart';
 import 'src/ui/group_call_screen.dart';
 import 'src/ui/read_sweep.dart';
@@ -18843,6 +18844,7 @@ class _ConnectivityChip extends StatelessWidget {
         initial: contact.routing,
         global: global,
         kinds: controller.configurableTransports,
+        advanced: controller.userMode.showsNetworkDetail,
         onSave: (next) {
           unawaited(
             controller.updateContactRoutingPreferences(contact.deviceId, next),
@@ -18889,10 +18891,14 @@ class _ConnectivityDialog extends StatefulWidget {
     required this.global,
     required this.kinds,
     required this.onSave,
+    this.advanced = false,
   });
 
   final String title;
   final ContactRoutingPreferences initial;
+
+  /// Advanced mode: what goes over which transport, as a table.
+  final bool advanced;
   final GlobalConnectivityPreferences global;
 
   /// Transports with a policy to choose.
@@ -18908,6 +18914,7 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
   late bool _online = widget.initial.onlineEnabled;
   late bool _irohRelay = widget.initial.irohRelayEnabled;
   late bool _carry = widget.initial.carryForContact;
+  late ContentRefusals _refusals = widget.initial.contentRefusals;
   late RoutingPreference _preferred = widget.initial.preferred;
   late final Map<TransportKind, TransportPolicy> _policies =
       Map<TransportKind, TransportPolicy>.from(
@@ -19017,6 +19024,12 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
             subtitle: Text(l10nOf(context).uiWhenThisContactCannotReach5C3FF8),
             contentPadding: EdgeInsets.zero,
           ),
+          // On top of this device's own choices, for this contact.
+          ContentRoutingSettings(
+            refusals: _refusals,
+            showTable: widget.advanced,
+            onChanged: (next) => setState(() => _refusals = next),
+          ),
           const SizedBox(height: 12),
           Text(_resolvedLabel(), style: Theme.of(context).textTheme.bodySmall),
         ],
@@ -19029,13 +19042,16 @@ class _ConnectivityDialogState extends State<_ConnectivityDialog> {
         FilledButton(
           onPressed: canSave
               ? () {
+                  // From what was there: a setting this dialog does not
+                  // show is kept, not reset.
                   widget.onSave(
-                    ContactRoutingPreferences(
+                    widget.initial.copyWith(
                       lanEnabled: _lan,
                       onlineEnabled: _online,
                       preferred: _preferred,
                       irohRelayEnabled: _irohRelay,
                       carryForContact: _carry,
+                      contentRefusals: _refusals,
                       transportPolicies: Map.unmodifiable(_policies),
                     ),
                   );
