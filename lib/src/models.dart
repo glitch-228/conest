@@ -3413,6 +3413,7 @@ class GroupRecord {
     required this.updatedAt,
     this.localRemovedAt,
     this.dissolvedAt,
+    this.mirroredVia,
   }) : adminDeviceIds = _normalizedGroupRoleIds(
          ownerDeviceId: ownerDeviceId,
          memberDeviceIds: memberDeviceIds,
@@ -3465,6 +3466,12 @@ class GroupRecord {
   /// transitions — every recipient drops to the "you left" UX. Carried on
   /// the wire so an inbound dissolve envelope propagates the state.
   final DateTime? dissolvedAt;
+
+  /// Set on a group this device is not a member of but shows through
+  /// another of this account's devices (its gateway, this device id): that
+  /// device passes the group's messages on and posts what is written here.
+  /// Local only.
+  final String? mirroredVia;
 
   bool get isDissolved => dissolvedAt != null;
 
@@ -3546,6 +3553,7 @@ class GroupRecord {
     DateTime? localRemovedAt,
     DateTime? dissolvedAt,
     bool clearLocalRemovedAt = false,
+    String? mirroredVia,
   }) {
     return GroupRecord(
       groupId: groupId,
@@ -3564,6 +3572,7 @@ class GroupRecord {
           ? null
           : (localRemovedAt ?? this.localRemovedAt),
       dissolvedAt: dissolvedAt ?? this.dissolvedAt,
+      mirroredVia: mirroredVia ?? this.mirroredVia,
     );
   }
 
@@ -3585,6 +3594,7 @@ class GroupRecord {
       'updatedAt': updatedAt.toIso8601String(),
       'localRemovedAt': localRemovedAt?.toIso8601String(),
       'dissolvedAt': dissolvedAt?.toIso8601String(),
+      if (mirroredVia != null) 'mirroredVia': mirroredVia,
     };
   }
 
@@ -3619,6 +3629,7 @@ class GroupRecord {
         json['localRemovedAt'] as String? ?? '',
       ),
       dissolvedAt: DateTime.tryParse(json['dissolvedAt'] as String? ?? ''),
+      mirroredVia: json['mirroredVia'] as String?,
     );
   }
 }

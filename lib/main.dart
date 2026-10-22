@@ -6598,7 +6598,7 @@ class _Sidebar extends StatelessWidget {
                   final myDeviceId = controller.identity?.deviceId ?? '';
                   final hasLeft =
                       myDeviceId.isNotEmpty &&
-                      !group.hasActiveMember(myDeviceId);
+                      !controller.isActiveInGroup(group);
                   return InkWell(
                     borderRadius: BorderRadius.circular(18),
                     onTap: () => onGroupSelected(group),
@@ -7595,6 +7595,7 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
           )
         else if (_currentDeviceId != null &&
             !group.hasActiveMember(_currentDeviceId!) &&
+            group.mirroredVia == null &&
             group.localRemovedAt == null)
           TextButton.icon(
             style: TextButton.styleFrom(
@@ -7877,7 +7878,7 @@ class _ForwardPickerDialogState extends State<_ForwardPickerDialog> {
     );
     final groups = widget.controller.visibleGroups.where(
       (group) =>
-          group.hasActiveMember(widget.controller.identity?.deviceId ?? '') &&
+          widget.controller.isActiveInGroup(group) &&
           group.title.toLowerCase().contains(query),
     );
     return AlertDialog(
@@ -10048,7 +10049,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
     _scheduleInitialPosition();
     _scheduleReadSweep();
     final me = controller.identity;
-    final canSend = me != null && group.hasActiveMember(me.deviceId);
+    final canSend = me != null && controller.isActiveInGroup(group);
     final activeReplyTarget =
         widget.replyTarget != null &&
             widget.replyTarget!.conversationId == group.groupId
@@ -23040,7 +23041,7 @@ class _ShareTargetDialog extends StatelessWidget {
     ]..sort((a, b) => a.alias.compareTo(b.alias));
     final groups = [
       for (final group in controller.groups)
-        if (me != null && group.hasActiveMember(me)) group,
+        if (me != null && controller.isActiveInGroup(group)) group,
     ]..sort((a, b) => a.title.compareTo(b.title));
     final count = shared.files.length;
     return AlertDialog(

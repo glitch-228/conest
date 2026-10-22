@@ -19136,6 +19136,102 @@ void main() {
       });
     });
 
+    test('groups show on the account\'s other devices through the one that '
+        'is a member, both ways', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      final before = await alice.createGroup(
+        title: 'Before',
+        members: [alice.contacts.single],
+      );
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => phone.linkCode != null && alice.linkCode != null,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      Future<void> settle(bool Function() done, String reason) =>
+          _waitForIroh(() {
+            unawaited(alice.pollNow());
+            unawaited(phone.pollNow());
+            unawaited(bob.pollNow());
+            return done();
+          }, reason: reason);
+      await settle(
+        () => phone.linkState == LinkState.linked,
+        'the phone was not linked',
+      );
+      final aliceId = alice.identity!.deviceId;
+      // A group from before the link comes with it.
+      final mirrored = phone.groups.firstWhere(
+        (g) => g.groupId == before.groupId,
+      );
+      expect(mirrored.mirroredVia, aliceId);
+      expect(phone.isActiveInGroup(mirrored), isTrue);
+      // One made later follows.
+      final later = await alice.createGroup(
+        title: 'Later',
+        members: [alice.contacts.firstWhere((c) => c.alias == 'Bob')],
+      );
+      await settle(
+        () => phone.groups.any((g) => g.groupId == later.groupId),
+        'the later group did not reach the phone',
+      );
+      await settle(
+        () => bob.groups.any((g) => g.groupId == later.groupId),
+        'Bob was not added',
+      );
+      // Bob writes: the phone shows it, from Bob.
+      await bob.sendGroupMessage(groupId: later.groupId, body: 'from Bob');
+      await settle(
+        () => phone
+            .messagesForGroup(later.groupId)
+            .any((m) => m.body == 'from Bob'),
+        'the phone did not show Bob\'s message',
+      );
+      final fromBob = phone
+          .messagesForGroup(later.groupId)
+          .singleWhere((m) => m.body == 'from Bob');
+      expect(fromBob.outbound, isFalse);
+      expect(fromBob.senderDeviceId, bob.identity!.deviceId);
+      expect(fromBob.route, MessageRoute.viaOwnDevice);
+      // The phone writes: it goes out through the laptop, as Alice.
+      await phone.sendGroupMessage(groupId: later.groupId, body: 'from phone');
+      await settle(
+        () => bob
+            .messagesForGroup(later.groupId)
+            .any((m) => m.body == 'from phone'),
+        'Bob did not get the phone\'s message',
+      );
+      final onBob = bob
+          .messagesForGroup(later.groupId)
+          .singleWhere((m) => m.body == 'from phone');
+      expect(onBob.senderDeviceId, aliceId);
+      final onPhone = phone
+          .messagesForGroup(later.groupId)
+          .where((m) => m.body == 'from phone');
+      expect(onPhone, hasLength(1));
+      await settle(
+        () => onPhoneState(phone, later.groupId) != DeliveryState.pending,
+        'the phone\'s copy did not learn its state',
+      );
+    });
+
     test('a device removed on one device is removed on the others', () async {
       var now = DateTime.now().toUtc();
       final network = _InProcessIrohNetwork();
@@ -27748,3 +27844,9 @@ class _RoutePreviewFetcher extends LinkPreviewFetcher {
     return LinkPreview(url: url, fetchedAt: now().toUtc(), title: 'T');
   }
 }
+
+DeliveryState? onPhoneState(MessengerController phone, String groupId) => phone
+    .messagesForGroup(groupId)
+    .where((message) => message.body == 'from phone')
+    .firstOrNull
+    ?.state;

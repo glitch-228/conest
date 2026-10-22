@@ -15227,6 +15227,20 @@ class MessengerController extends ChangeNotifier {
   }) async {
     final me = _requireIdentity();
     final group = _requireGroup(groupId);
+    if (!group.hasActiveMember(me.deviceId) &&
+        isActiveInGroup(group) &&
+        poll == null &&
+        pollVote == null &&
+        !pollClosed) {
+      await _sendGroupMessageThroughGateway(
+        group,
+        body: body,
+        replyTo: replyTo,
+        outgoingMessageId: outgoingMessageId,
+        linkPreview: linkPreview,
+      );
+      return;
+    }
     final trimmed = body.trim();
     if (trimmed.isEmpty) {
       return;
@@ -23427,6 +23441,7 @@ class MessengerController extends ChangeNotifier {
         sender: sender,
         body: payload.body,
       );
+      _syncGroupMessageToMirrors(group.groupId, envelope.messageId);
     }
     _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _sendAck(contact: sender, envelope: envelope);
@@ -30781,6 +30796,7 @@ class MessengerController extends ChangeNotifier {
     );
     if (index == -1) {
       groups.add(group);
+      _syncGroupStateToMirrors(group);
     } else {
       final before = groups[index];
       final gone = before.activeMemberDeviceIds
@@ -30799,6 +30815,7 @@ class MessengerController extends ChangeNotifier {
       groups[index] = group.profileRevision < revision
           ? group.copyWith(profileRevision: revision)
           : group;
+      if (_groupShapeChanged(before, group)) _syncGroupStateToMirrors(group);
     }
     _snapshot = _snapshot.copyWith(groups: groups);
   }
@@ -32452,6 +32469,8 @@ class MessengerController extends ChangeNotifier {
         for (final contact in _snapshot.contacts)
           if (!contact.isArchived && !contact.ownDevice) contact.toJson(),
       ],
+      // Shown there through this device (step 1 of groups on own devices).
+      'groups': [for (final group in _groupsToMirror) group.toJson()],
     };
     final bodyHash = base64Encode(
       sha256Bytes(accountSigningBytes('link-grant-body', grant)),
@@ -32537,6 +32556,12 @@ class MessengerController extends ChangeNotifier {
       contacts: _dedupeContacts([...contacts, ..._snapshot.contacts]),
     );
     _reconcileOwnDevices(vouchedDeviceId: offer.deviceId);
+    if (grant['groups'] case final List raw) {
+      for (final item in raw.take(_maxMirroredGroups)) {
+        final granter = _contactByDeviceId(offer.deviceId);
+        if (granter != null) _applyMirroredGroupState(granter, item);
+      }
+    }
     await _saveSnapshotSilently(notify: true);
     setStatus('This device is now linked to your account.');
     _advertiseProfileToContacts();
@@ -33184,10 +33209,13 @@ class MessengerController extends ChangeNotifier {
   /// Tells this account's other devices [event] (queued until each gets
   /// it). A newer read position or receipt replaces a queued one for the
   /// same chat or message.
-  void _syncToOwnDevices(Map<String, Object?> event) {
+  void _syncToOwnDevices(Map<String, Object?> event, {String? only}) {
     if (!conestActive) return;
     // Unconfirmed devices get theirs queued, not sent (until confirmed).
-    final devices = ownDevices.where((device) => device.canSendOutbound);
+    final devices = ownDevices.where(
+      (device) =>
+          device.canSendOutbound && (only == null || device.deviceId == only),
+    );
     if (devices.isEmpty) return;
     final plaintext = jsonEncode({
       'events': [event],
@@ -33196,8 +33224,8 @@ class MessengerController extends ChangeNotifier {
         queued['type'] == event['type'] &&
         queued['chat'] == event['chat'] &&
         switch (event['type']) {
-          'read' => true,
-          'state' => queued['id'] == event['id'],
+          'read' || 'group_state' => true,
+          'state' || 'group_message' => queued['id'] == event['id'],
           _ => false,
         };
     for (final device in devices) {
@@ -33394,6 +33422,262 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  // Groups through a gateway (M29e, step 1): this account's other devices
+  // show the groups this device is a member of; this device passes their
+  // messages on and posts what is written there, as the account.
+
+  static const int _maxMirroredGroups = 256;
+
+  /// Whether this device takes part in [group]: a member, or showing it
+  /// through another of this account's devices (its gateway).
+  bool isActiveInGroup(GroupRecord group) {
+    final me = identity;
+    if (me == null) return false;
+    if (group.hasActiveMember(me.deviceId)) return true;
+    final via = group.mirroredVia;
+    return via != null &&
+        !group.isDissolved &&
+        group.hasActiveMember(via) &&
+        ownDevices.any((device) => device.deviceId == via);
+  }
+
+  /// The groups this device passes on to the account's other devices.
+  List<GroupRecord> get _groupsToMirror {
+    final me = identity;
+    if (me == null) return const [];
+    return [
+      for (final group in _snapshot.groups)
+        if (group.hasActiveMember(me.deviceId) && !group.isDissolved) group,
+    ].take(_maxMirroredGroups).toList();
+  }
+
+  bool _groupShapeChanged(GroupRecord before, GroupRecord after) =>
+      before.title != after.title ||
+      before.membershipVersion != after.membershipVersion ||
+      before.ownerDeviceId != after.ownerDeviceId ||
+      before.dissolvedAt != after.dissolvedAt ||
+      !listEquals(before.adminDeviceIds, after.adminDeviceIds) ||
+      !listEquals(before.moderatorDeviceIds, after.moderatorDeviceIds);
+
+  void _syncGroupStateToMirrors(GroupRecord group) {
+    final me = identity;
+    if (me == null || !group.hasActiveMember(me.deviceId)) return;
+    _syncToOwnDevices({
+      'type': 'group_state',
+      'chat': group.groupId,
+      'group': group.toJson(),
+    });
+  }
+
+  /// A message of [groupId] this device has (sent or received) shows on
+  /// the account's other devices, which only see the group through it.
+  void _syncGroupMessageToMirrors(String groupId, String messageId) {
+    final me = identity;
+    final group = _groupById(groupId);
+    if (me == null || group == null || !group.hasActiveMember(me.deviceId)) {
+      return;
+    }
+    final message = _groupConversation(
+      groupId,
+    ).messages.where((candidate) => candidate.id == messageId).firstOrNull;
+    if (message == null ||
+        message.attachment != null ||
+        message.groupFile != null ||
+        message.poll != null) {
+      return;
+    }
+    final json = jsonEncode(message.toJson());
+    if (json.length > _maxSyncedPayloadChars) return;
+    _syncToOwnDevices({
+      'type': 'group_message',
+      'chat': groupId,
+      'id': messageId,
+      'message': json,
+    });
+  }
+
+  /// [sender], one of this account's devices, shows this device a group it
+  /// is a member of. A group this device is itself a member of keeps its
+  /// own state; one shown through another device is not taken over.
+  bool _applyMirroredGroupState(ContactRecord sender, Object? raw) {
+    final me = identity;
+    if (me == null || raw is! Map<String, dynamic>) return false;
+    final GroupRecord incoming;
+    try {
+      incoming = GroupRecord.fromJson(raw);
+    } catch (_) {
+      return false;
+    }
+    if (incoming.groupId.isEmpty || incoming.groupId.length > 160) {
+      return false;
+    }
+    final existing = _groupById(incoming.groupId);
+    if (existing != null) {
+      if (existing.hasActiveMember(me.deviceId) ||
+          existing.mirroredVia != sender.deviceId ||
+          incoming.membershipVersion < existing.membershipVersion) {
+        return false;
+      }
+    } else if (!incoming.hasActiveMember(sender.deviceId) ||
+        _snapshot.groups.where((g) => g.mirroredVia != null).length >=
+            _maxMirroredGroups) {
+      return false;
+    }
+    final mirrored = GroupRecord.fromJson({
+      ...incoming.toJson(),
+      'localRemovedAt': existing?.localRemovedAt?.toIso8601String(),
+      'mirroredVia': sender.deviceId,
+    });
+    _upsertGroup(mirrored);
+    _groupConversation(mirrored.groupId);
+    return true;
+  }
+
+  /// A message of a group shown here through [sender] (its gateway).
+  bool _applyMirroredGroupMessage(
+    ContactRecord sender,
+    Object? groupId,
+    Object? raw,
+  ) {
+    final group = groupId is String ? _groupById(groupId) : null;
+    if (group == null ||
+        group.mirroredVia != sender.deviceId ||
+        raw is! String ||
+        raw.length > _maxSyncedPayloadChars) {
+      return false;
+    }
+    final ChatMessage message;
+    try {
+      message = ChatMessage.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return false;
+    }
+    if (message.id.isEmpty ||
+        message.id.length > 160 ||
+        message.conversationId != group.groupId ||
+        message.attachment != null ||
+        message.groupFile != null ||
+        message.poll != null ||
+        _locallyDeletedMessageIds.contains(message.id)) {
+      return false;
+    }
+    final known = _groupConversation(
+      group.groupId,
+    ).messages.where((candidate) => candidate.id == message.id).firstOrNull;
+    if (known != null) {
+      // Written here and posted there: its state follows from there.
+      if (known.outbound && message.outbound && known.state != message.state) {
+        _upsertGroupMessage(
+          group.groupId,
+          known.copyWith(state: message.state),
+        );
+        return true;
+      }
+      return false;
+    }
+    _upsertGroupMessage(
+      group.groupId,
+      message.outbound
+          ? message
+          : message.copyWith(route: MessageRoute.viaOwnDevice),
+    );
+    if (!message.outbound &&
+        _now().toUtc().difference(message.createdAt.toUtc()) <
+            const Duration(minutes: 10)) {
+      final from = _groupMemberContact(group, message.senderDeviceId);
+      if (from != null) {
+        _showInboundGroupNotification(
+          group: group,
+          sender: from,
+          body: message.body,
+        );
+      }
+    }
+    return true;
+  }
+
+  /// Writing in a group shown here through another device: the message is
+  /// kept here and that device posts it, as the account, with the same id
+  /// (queued until it is reachable).
+  Future<void> _sendGroupMessageThroughGateway(
+    GroupRecord group, {
+    required String body,
+    ChatMessage? replyTo,
+    String? outgoingMessageId,
+    LinkPreview? linkPreview,
+  }) async {
+    final me = _requireIdentity();
+    final message = ChatMessage(
+      id: outgoingMessageId ?? _randomId('msg'),
+      conversationId: group.groupId,
+      senderDeviceId: me.deviceId,
+      recipientDeviceId: group.groupId,
+      body: body,
+      outbound: true,
+      state: DeliveryState.pending,
+      createdAt: _now().toUtc(),
+      replyToMessageId: replyTo?.id,
+      replySnippet: replyTo?.body,
+      replySenderDeviceId: replyTo?.senderDeviceId,
+      replySenderDisplayName: replyTo?.senderDisplayName,
+      linkPreview: linkPreview,
+    );
+    _upsertGroupMessage(group.groupId, message);
+    _syncToOwnDevices({
+      'type': 'gtx',
+      'chat': group.groupId,
+      'id': message.id,
+      'message': jsonEncode(message.toJson()),
+    }, only: group.mirroredVia);
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// [sender], one of this account's devices, wrote [raw] in a group it
+  /// shows through this one: posted here, as the account, once.
+  Future<void> _postForOwnDevice(
+    ContactRecord sender,
+    Object? groupId,
+    Object? raw,
+  ) async {
+    final me = identity;
+    final group = groupId is String ? _groupById(groupId) : null;
+    if (me == null ||
+        group == null ||
+        !group.hasActiveMember(me.deviceId) ||
+        raw is! String ||
+        raw.length > _maxSyncedPayloadChars) {
+      return;
+    }
+    final ChatMessage message;
+    try {
+      message = ChatMessage.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return;
+    }
+    if (message.id.isEmpty ||
+        message.id.length > 160 ||
+        message.body.isEmpty ||
+        message.body.length > 64 * 1024 ||
+        _groupConversation(
+          group.groupId,
+        ).messages.any((candidate) => candidate.id == message.id)) {
+      return;
+    }
+    final replyId = message.replyToMessageId;
+    final replyTo = replyId == null
+        ? null
+        : _groupConversation(
+            group.groupId,
+          ).messages.where((candidate) => candidate.id == replyId).firstOrNull;
+    await sendGroupMessage(
+      groupId: group.groupId,
+      body: message.body,
+      replyTo: replyTo,
+      outgoingMessageId: message.id,
+      linkPreview: message.linkPreview,
+    );
+  }
+
   /// Receipts synced before the message they are about (bounded).
   final Map<String, String> _earlySyncStates = <String, String>{};
 
@@ -33432,6 +33716,23 @@ class MessengerController extends ChangeNotifier {
       if (event['type'] == 'seen') {
         _dropQueuedReceived(sender.deviceId, event['ids']);
         continue;
+      }
+      switch (event['type']) {
+        case 'group_state':
+          if (_applyMirroredGroupState(sender, event['group'])) changed = true;
+          continue;
+        case 'group_message':
+          if (_applyMirroredGroupMessage(
+            sender,
+            event['chat'],
+            event['message'],
+          )) {
+            changed = true;
+          }
+          continue;
+        case 'gtx':
+          await _postForOwnDevice(sender, event['chat'], event['message']);
+          continue;
       }
       final rawChat = event['chat'];
       if (rawChat is! String || rawChat.isEmpty || rawChat.length > 160) {
@@ -35202,10 +35503,21 @@ class MessengerController extends ChangeNotifier {
         recipientStates: states,
       );
     }).toList();
+    final changed = [
+      for (final (index, message) in updatedMessages.indexed)
+        if (message.outbound &&
+            message.state !=
+                conversations[conversationIndex].messages[index].state)
+          message.id,
+    ];
     conversations[conversationIndex] = conversations[conversationIndex]
         .copyWith(messages: updatedMessages);
     _snapshot = _snapshot.copyWith(conversations: conversations);
     _markConversationMutationForBatch();
+    // What the account's other devices show follows.
+    for (final id in changed) {
+      _syncGroupMessageToMirrors(groupId, id);
+    }
   }
 
   DeliveryState _aggregateGroupDeliveryState(
