@@ -7,7 +7,8 @@
 ///          messages to every chat and group half a second apart, and
 ///          1, 10 and 50 MB files; or calls: the device that makes the
 ///          group calls each contact for a minute, then the group; the
-///          others answer and join)
+///          others answer and join; or serve: set up and pair once, then
+///          run the phases the lab writes to PATH.cmd, see [LabPhase])
 ///          [--debug-name=NAME]            set up storage and an identity
 ///          [--debug-relay=HOST:PORT]      add a relay
 ///          [--debug-accept-invite=CODE]   add a contact (repeatable)
@@ -92,7 +93,8 @@ class DebugRunRequest {
   });
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', 'contacts',
-  /// 'burst', 'calls', or 'none' (only set up).
+  /// 'burst', 'calls', 'none' (only set up), or 'serve' (set up, then run
+  /// [LabPhase]s until told to stop).
   final String what;
   final String? reportPath;
   final bool exitAfter;
@@ -200,6 +202,7 @@ class DebugRunRequest {
     'burst',
     'calls',
     'none',
+    'serve',
   };
 
   bool get setsUp => name != null;
@@ -289,6 +292,51 @@ class DebugRunRequest {
   }
 }
 
+/// One phase of a 'serve' run: a line `ID KIND [TRANSPORT]` the lab appends
+/// to `<report>.cmd` (KIND one of the run kinds, TRANSPORT a transport kind
+/// left on alone, or `all` for everything set up at the start, the default),
+/// or `ID stop`. The devices stay up and paired between phases: each phase
+/// switches transports at runtime, runs, and writes `<report>.ID.json`.
+class LabPhase {
+  const LabPhase({required this.id, required this.kind, this.only});
+
+  final String id;
+
+  /// A run kind, or 'stop'.
+  final String kind;
+
+  /// The one transport left on; null for all of them.
+  final TransportKind? only;
+
+  static final RegExp _id = RegExp(r'^[A-Za-z0-9_-]{1,32}$');
+
+  static const Set<String> phaseKinds = {
+    'routes',
+    'messages',
+    'files',
+    'interactions',
+    'all',
+    'contacts',
+    'burst',
+    'calls',
+    'stop',
+  };
+
+  /// Null for anything else (blank lines, comments, typos).
+  static LabPhase? parse(String line) {
+    final parts = line.trim().split(RegExp(r'\s+'));
+    if (parts.length < 2 || parts.length > 3) return null;
+    final [id, kind, ...rest] = parts;
+    if (!_id.hasMatch(id) || !phaseKinds.contains(kind)) return null;
+    final transport = rest.firstOrNull ?? 'all';
+    if (transport == 'all') return LabPhase(id: id, kind: kind);
+    final only = TransportKind.values
+        .where((value) => value.name == transport)
+        .firstOrNull;
+    return only == null ? null : LabPhase(id: id, kind: kind, only: only);
+  }
+}
+
 /// Runs [request] on [controller] (already set up) and writes the report.
 /// Returns where it was written.
 Future<String> runDebugRequest(
@@ -367,12 +415,14 @@ Future<String> runDebugRequest(
   // Calls: answered and joined here, and their statistics written down
   // when each ends.
   final calls = <Map<String, Object?>>[];
+  // The kind running now (a serve run's current phase).
+  var running = request.what;
   String? callOpen;
   final joining = <String>{};
   final joinedAt = <String, DateTime>{};
   final leaving = <String>{};
   void watchCalls() {
-    if (request.what != 'calls') return;
+    if (running != 'calls') return;
     final service = controller.voiceCallService;
     final active = service?.active;
     if (active != null &&
@@ -543,7 +593,7 @@ Future<String> runDebugRequest(
         return matrix[1];
       });
     }
-    if (request.what == 'calls') {
+    if (request.what == 'calls' || request.what == 'serve') {
       // On by default; lab data kept from earlier runs may have them off.
       // Before the invite: contacts learn at pairing that calls work here.
       await step('calls on', () async {
@@ -664,129 +714,144 @@ Future<String> runDebugRequest(
       return DateTime.now().toUtc().difference(startedAt).inMilliseconds;
     });
   }
-  await Future<void>.delayed(request.wait);
-  final carriersAtStart = _carrierReport(controller);
+  // The tests of one kind, then the done exchange and the linger; returns
+  // the carriers as they were at its start.
+  Future<List<Map<String, Object?>>> runPhase(
+    String what,
+    String doneBody,
+    List<Map<String, Object?>> contacts,
+    List<Map<String, Object?>> timings,
+  ) async {
+    await Future<void>.delayed(request.wait);
+    final carriersAtStart = _carrierReport(controller);
 
-  final what = request.what;
-  final contacts = <Map<String, Object?>>[];
-  if (what == 'routes' || what == 'all') {
-    for (final contact in _contacts(controller)) {
-      try {
-        // Carriers (mail, Tor, Nostr) can take far longer than 15 s.
-        final probes = request.wait * 3 > const Duration(seconds: 15)
-            ? request.wait * 3
-            : const Duration(seconds: 15);
-        final report = await controller.runTransportExchangeTest(
-          contact,
-          probeTimeout: probes,
-          remoteTimeout: probes + const Duration(seconds: 45),
-        );
-        contacts.add({
-          'contact': contact.alias,
-          'deviceId': contact.deviceId,
-          'report': report.toJson(),
-          'text': report.toText(),
-        });
-      } catch (error) {
-        contacts.add({
-          'contact': contact.alias,
-          'deviceId': contact.deviceId,
-          'error': '$error',
-        });
-      }
-    }
-  }
-  if (what == 'messages' || what == 'all') {
-    await _sendMessages(controller, step, request.wait);
-  }
-  if (what == 'files' || what == 'all') {
-    await _sendFiles(controller, step);
-  }
-  if (what == 'messages' || what == 'files' || what == 'all') {
-    // Time for receipts (and files) to come back.
-    await Future<void>.delayed(request.wait * 3);
-  }
-  final timings = <Map<String, Object?>>[];
-  if (what == 'contacts') {
-    await _removeAndAddBack(controller, step, request, timings);
-  }
-  if (what == 'calls' && request.group != null) {
-    await _callEveryone(controller, step, request, timings);
-  }
-  if (what == 'burst') {
-    await _burst(controller, step, request.burstFileSizes);
-    await _untilConfirmed(controller, const Duration(minutes: 3));
-  }
-  if (what == 'interactions' || what == 'all') {
-    await _interact(controller, step, request.wait);
-    await Future<void>.delayed(request.wait * 2);
-    // And what the others did meanwhile, so their read marks show too.
-    await step('read everything', () async {
+    if (what == 'routes' || what == 'all') {
       for (final contact in _contacts(controller)) {
-        await controller.markConversationRead(contact.deviceId);
-      }
-      for (final group in _labGroups(controller)) {
-        final last = controller
-            .messagesForGroup(group.groupId)
-            .where((m) => !m.outbound)
-            .lastOrNull;
-        if (last != null) {
-          await controller.markGroupReadThroughMessage(group.groupId, last);
+        try {
+          // Carriers (mail, Tor, Nostr) can take far longer than 15 s.
+          final probes = request.wait * 3 > const Duration(seconds: 15)
+              ? request.wait * 3
+              : const Duration(seconds: 15);
+          final report = await controller.runTransportExchangeTest(
+            contact,
+            probeTimeout: probes,
+            remoteTimeout: probes + const Duration(seconds: 45),
+          );
+          contacts.add({
+            'contact': contact.alias,
+            'deviceId': contact.deviceId,
+            'report': report.toJson(),
+            'text': report.toText(),
+          });
+        } catch (error) {
+          contacts.add({
+            'contact': contact.alias,
+            'deviceId': contact.deviceId,
+            'error': '$error',
+          });
         }
       }
-      return null;
-    });
-  }
-  // Done: say so to every contact, over the transport being tested, then
-  // stay (answering, taking late receipts) until each has said so too.
-  for (final contact in _contacts(controller)) {
-    await step('done ${contact.alias}', () async {
-      await controller.sendMessage(contact: contact, body: _doneBody);
-      return null;
-    });
-  }
-  final lingerUntil = DateTime.now().add(request.linger);
-  bool allDone() => _contacts(controller).every(
-    (contact) => controller
-        .messagesFor(contact.deviceId)
-        .any((m) => !m.outbound && m.body == _doneBody),
-  );
-  while (!allDone() && DateTime.now().isBefore(lingerUntil)) {
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-  }
-  // Still in a group call (the others left): leave it, and write down
-  // what its audio did.
-  if (controller.groupCallService?.active case final room?
-      when room.joined && leaving.add(room.callId)) {
-    await step('leave group call', () async {
-      await controller.groupCallService!.leave();
-      calls.add({
-        'groupCall': room.callId,
-        'group': room.groupId,
-        'at': DateTime.now().toUtc().toIso8601String(),
-        'stats': controller.voiceCallStats,
+    }
+    if (what == 'messages' || what == 'all') {
+      await _sendMessages(controller, step, request.wait);
+    }
+    if (what == 'files' || what == 'all') {
+      await _sendFiles(controller, step);
+    }
+    if (what == 'messages' || what == 'files' || what == 'all') {
+      // Time for receipts (and files) to come back.
+      await Future<void>.delayed(request.wait * 3);
+    }
+    if (what == 'contacts') {
+      await _removeAndAddBack(controller, step, request, timings);
+    }
+    if (what == 'calls' && request.group != null) {
+      await _callEveryone(controller, step, request, timings);
+    }
+    if (what == 'burst') {
+      await _burst(controller, step, request.burstFileSizes);
+      await _untilConfirmed(controller, const Duration(minutes: 3));
+    }
+    if (what == 'interactions' || what == 'all') {
+      await _interact(controller, step, request.wait);
+      await Future<void>.delayed(request.wait * 2);
+      // And what the others did meanwhile, so their read marks show too.
+      await step('read everything', () async {
+        for (final contact in _contacts(controller)) {
+          await controller.markConversationRead(contact.deviceId);
+        }
+        for (final group in _labGroups(controller)) {
+          final last = controller
+              .messagesForGroup(group.groupId)
+              .where((m) => !m.outbound)
+              .lastOrNull;
+          if (last != null) {
+            await controller.markGroupReadThroughMessage(group.groupId, last);
+          }
+        }
+        return null;
       });
-      return null;
-    });
+    }
+    // Done: say so to every contact, over the transport being tested, then
+    // stay (answering, taking late receipts) until each has said so too.
+    for (final contact in _contacts(controller)) {
+      await step('done ${contact.alias}', () async {
+        await controller.sendMessage(contact: contact, body: doneBody);
+        return null;
+      });
+    }
+    final lingerUntil = DateTime.now().add(request.linger);
+    bool allDone() => _contacts(controller).every(
+      (contact) => controller
+          .messagesFor(contact.deviceId)
+          .any((m) => !m.outbound && m.body == doneBody),
+    );
+    while (!allDone() && DateTime.now().isBefore(lingerUntil)) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    // Still in a group call (the others left): leave it, and write down
+    // what its audio did.
+    if (controller.groupCallService?.active case final room?
+        when room.joined && leaving.add(room.callId)) {
+      await step('leave group call', () async {
+        await controller.groupCallService!.leave();
+        calls.add({
+          'groupCall': room.callId,
+          'group': room.groupId,
+          'at': DateTime.now().toUtc().toIso8601String(),
+          'stats': controller.voiceCallStats,
+        });
+        return null;
+      });
+    }
+    // A moment for this device's own last receipts to arrive.
+    await Future<void>.delayed(request.wait);
+    return carriersAtStart;
   }
-  // A moment for this device's own last receipts to arrive.
-  await Future<void>.delayed(request.wait);
-  ticker.cancel();
-  observe();
-  // Without this run's own 250 ms ticker, which would cost what is measured.
-  final idleFrom = DateTime.now().toUtc();
-  if (request.idle > Duration.zero) await Future<void>.delayed(request.idle);
-  final report = {
+
+  // What happened since [from]: the whole run, or one serve phase (whose
+  // chats then hold only what was sent or arrived during it).
+  Map<String, Object?> reportFrom(
+    ({DateTime at, int steps, int calls, int events}) from, {
+    required String what,
+    required TransportKind? only,
+    required List<Map<String, Object?>> carriersAtStart,
+    required List<Map<String, Object?>> contacts,
+    required List<Map<String, Object?>> timings,
+    String? phase,
+    DateTime? idleFrom,
+  }) => {
     'kind': what,
+    'phase': ?phase,
     'build': controller.debugBuildId,
     'deviceId': controller.identity?.deviceId,
     'name': controller.identity?.displayName,
-    'startedAt': startedAt.toIso8601String(),
+    'startedAt': from.at.toIso8601String(),
     'finishedAt': DateTime.now().toUtc().toIso8601String(),
-    'steps': steps,
+    'steps': steps.sublist(from.steps),
     'contacts': contacts,
-    'onlyTransport': request.onlyTransport?.name,
-    if (request.idle > Duration.zero)
+    'onlyTransport': only?.name,
+    if (idleFrom != null)
       'idle': {
         'from': idleFrom.toIso8601String(),
         'seconds': request.idle.inSeconds,
@@ -794,8 +859,8 @@ Future<String> runDebugRequest(
     'pairedAfterMs': pairedAfter,
     'pairedAfterInviteMs': pairedAfterInvite,
     'timings': timings,
-    'calls': calls,
-    'events': events,
+    'calls': calls.sublist(from.calls),
+    'events': events.sublist(from.events),
     // This device's relays in order, and the one it holds a waiting fetch
     // on (on battery, the only one it watches promptly).
     'relays': [
@@ -804,11 +869,115 @@ Future<String> runDebugRequest(
     ],
     'watchedRelay': controller.watchedRelay?.label,
     'carriers': {'start': carriersAtStart, 'end': _carrierReport(controller)},
-    'chats': _chatReport(controller),
+    'chats': _chatReport(controller, since: phase == null ? null : from.at),
     'errorHistory': controller.exportErrorHistory(),
   };
+
+  final contacts = <Map<String, Object?>>[];
+  final timings = <Map<String, Object?>>[];
+  List<Map<String, Object?>>? carriersAtStart;
+  if (request.what == 'serve') {
+    // Every transport as set up: what a phase on all of them goes back to.
+    final setUp = controller.identity?.connectivity;
+    final done = <String>{};
+    final commands = File('$path.cmd');
+    while (true) {
+      List<String> lines;
+      try {
+        lines = commands.existsSync() ? await commands.readAsLines() : [];
+      } catch (_) {
+        lines = [];
+      }
+      final phase = lines
+          .map(LabPhase.parse)
+          .nonNulls
+          .where((phase) => !done.contains(phase.id))
+          .firstOrNull;
+      if (phase == null) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
+      done.add(phase.id);
+      if (phase.kind == 'stop') break;
+      final from = (
+        at: DateTime.now().toUtc(),
+        steps: steps.length,
+        calls: calls.length,
+        events: events.length,
+      );
+      final only = phase.only;
+      if (setUp != null) {
+        await step('phase ${phase.id} on ${only?.name ?? 'all'}', () async {
+          await controller.updateGlobalConnectivity(
+            only == null
+                ? setUp
+                : setUp.copyWith(
+                    lanEnabled: only == TransportKind.lan,
+                    transportPolicies: {
+                      for (final kind in TransportKind.values)
+                        kind: kind == only
+                            ? TransportPolicy.automatic
+                            : TransportPolicy.disabled,
+                    },
+                  ),
+          );
+          return null;
+        });
+      }
+      running = phase.kind;
+      final phaseContacts = <Map<String, Object?>>[];
+      final phaseTimings = <Map<String, Object?>>[];
+      final carriers = await runPhase(
+        phase.kind,
+        '$_doneBody ${phase.id}',
+        phaseContacts,
+        phaseTimings,
+      );
+      running = 'serve';
+      observe();
+      await _writeWhole(
+        '$path.${phase.id}.json',
+        const JsonEncoder.withIndent('  ').convert(
+          reportFrom(
+            from,
+            what: phase.kind,
+            only: only,
+            phase: phase.id,
+            carriersAtStart: carriers,
+            contacts: phaseContacts,
+            timings: phaseTimings,
+          ),
+        ),
+      );
+      controller.recordError('test', 'Lab phase ${phase.id} written');
+    }
+  } else {
+    carriersAtStart = await runPhase(
+      request.what,
+      _doneBody,
+      contacts,
+      timings,
+    );
+  }
+  ticker.cancel();
+  observe();
+  // Without this run's own 250 ms ticker, which would cost what is measured.
+  final idleFrom = DateTime.now().toUtc();
+  if (request.idle > Duration.zero) await Future<void>.delayed(request.idle);
+  final report = reportFrom(
+    (at: startedAt, steps: 0, calls: 0, events: 0),
+    what: request.what,
+    only: request.onlyTransport,
+    carriersAtStart: carriersAtStart ?? _carrierReport(controller),
+    contacts: contacts,
+    timings: timings,
+    idleFrom: request.idle > Duration.zero ? idleFrom : null,
+  );
   await _writeWhole(path, const JsonEncoder.withIndent('  ').convert(report));
-  controller.recordError('test', 'Automatic $what run written to $path');
+  controller.recordError(
+    'test',
+    'Automatic ${request.what} run written to $path',
+  );
   return path;
 }
 
@@ -1390,7 +1559,10 @@ List<Map<String, Object?>> _carrierReport(MessengerController controller) => [
 const String _doneBody = 'lab-done';
 
 /// What came of every lab message and file, per chat.
-List<Map<String, Object?>> _chatReport(MessengerController controller) {
+List<Map<String, Object?>> _chatReport(
+  MessengerController controller, {
+  DateTime? since,
+}) {
   Map<String, Object?> describe(ChatMessage message) => {
     'id': message.id,
     'outbound': message.outbound,
@@ -1436,9 +1608,13 @@ List<Map<String, Object?>> _chatReport(MessengerController controller) {
     'at': message.createdAt.toUtc().toIso8601String(),
   };
   bool isLab(ChatMessage message) =>
-      message.body.startsWith('lab ') ||
-      (message.attachment?.fileName ?? message.groupFile?.fileName ?? '')
-          .startsWith('lab-');
+      (message.body.startsWith('lab ') ||
+          (message.attachment?.fileName ?? message.groupFile?.fileName ?? '')
+              .startsWith('lab-')) &&
+      (since == null ||
+          !(message.outbound ? message.createdAt : message.arrivedAt).isBefore(
+            since,
+          ));
   return [
     for (final contact in _contacts(controller))
       {

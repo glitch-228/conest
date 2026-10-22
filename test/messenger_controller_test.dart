@@ -21113,6 +21113,174 @@ void main() {
     );
   });
 
+  test('lab phase lines parse', () {
+    expect(
+      LabPhase.parse('p1 messages conestRelay')?.only,
+      TransportKind.conestRelay,
+    );
+    final all = LabPhase.parse('  p2   burst  ')!;
+    expect((all.id, all.kind, all.only), ('p2', 'burst', null));
+    expect(LabPhase.parse('p3 calls all')?.only, isNull);
+    expect(LabPhase.parse('p4 stop')?.kind, 'stop');
+    for (final bad in [
+      '',
+      'p1',
+      'p1 nonsense',
+      'p1 messages pigeon',
+      'p1 serve',
+      'p1 none',
+      'bad/id messages',
+      'p1 messages lan extra',
+    ]) {
+      expect(LabPhase.parse(bad), isNull, reason: bad);
+    }
+  });
+
+  test(
+    'serving lab devices pair once and switch transports per phase',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> device() async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: 'unused',
+          createIdentity: false,
+          transportRegistryFactory: network.registry,
+          debugBuildId: 'test@abc',
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final phone = await device();
+      final laptop = await device();
+      var polling = true;
+      addTearDown(() => polling = false);
+      unawaited(() async {
+        while (polling) {
+          await Future.wait([
+            if (phone.hasIdentity) phone.pollNow(),
+            if (laptop.hasIdentity) laptop.pollNow(),
+          ]).catchError((_) => const <void>[]);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }());
+      final root = Directory.systemTemp.createTempSync('conest_serve_');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final phoneRun = runDebugRequest(
+        phone,
+        const DebugRunRequest(
+          what: 'serve',
+          name: 'phone',
+          approve: true,
+          serve: Duration(seconds: 30),
+          expectContacts: 1,
+          expectGroup: 'lab-all',
+          wait: Duration(seconds: 3),
+          linger: Duration(seconds: 20),
+          relay: 'relay.example:7667',
+        ),
+        defaultReportPath: () async => '${root.path}/phone.json',
+      );
+      final inviteFile = File('${root.path}/phone.json.invite');
+      for (var i = 0; i < 100 && !inviteFile.existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      final laptopRun = runDebugRequest(
+        laptop,
+        DebugRunRequest(
+          what: 'serve',
+          name: 'laptop',
+          invites: [inviteFile.readAsStringSync()],
+          approve: true,
+          serve: const Duration(seconds: 30),
+          expectContacts: 1,
+          group: 'lab-all',
+          wait: const Duration(seconds: 3),
+          linger: const Duration(seconds: 20),
+          relay: 'relay.example:7667',
+        ),
+        defaultReportPath: () async => '${root.path}/laptop.json',
+      );
+      // The lab: one line at a time to both, waiting for both reports.
+      Future<List<Map>> phase(String line) async {
+        final id = line.split(' ').first;
+        for (final name in ['phone', 'laptop']) {
+          File(
+            '${root.path}/$name.json.cmd',
+          ).writeAsStringSync('$line\n', mode: FileMode.append);
+        }
+        final reports = <Map>[];
+        if (line.endsWith(' stop')) return reports;
+        for (final name in ['phone', 'laptop']) {
+          final file = File('${root.path}/$name.json.$id.json');
+          for (var i = 0; i < 1200 && !file.existsSync(); i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+          }
+          reports.add(jsonDecode(file.readAsStringSync()) as Map);
+        }
+        return reports;
+      }
+
+      List<Map> outbound(Map report) => [
+        for (final chat in report['chats'] as List)
+          if (chat['contact'] != null)
+            for (final message in chat['messages'] as List)
+              if (message['outbound'] == true) message as Map,
+      ];
+
+      final [phoneOne, laptopOne] = await phase('p1 messages conestRelay');
+      final identities = {phone.identity!.deviceId, laptop.identity!.deviceId};
+      for (final report in [phoneOne, laptopOne]) {
+        expect(report['phase'], 'p1');
+        expect(report['onlyTransport'], 'conestRelay');
+        final sent = outbound(report);
+        expect(sent, hasLength(3));
+        expect(
+          sent.map((message) => message['route']),
+          everyElement('conestRelay'),
+          reason: 'everything else is off in this phase',
+        );
+      }
+      expect(phone.identity!.connectivity.lanEnabled, isFalse);
+      final [phoneTwo, laptopTwo] = await phase('p2 messages all');
+      // Still the same two devices: paired once, not again per phase.
+      expect({phone.identity!.deviceId, laptop.identity!.deviceId}, identities);
+      for (final report in [phoneTwo, laptopTwo]) {
+        expect(report['onlyTransport'], isNull);
+        // This phase's messages only, not the first phase's again.
+        expect(outbound(report), hasLength(3));
+        expect(
+          outbound(report).map((message) => message['route']),
+          isNot(everyElement('conestRelay')),
+        );
+      }
+      for (final controller in [phone, laptop]) {
+        final connectivity = controller.identity!.connectivity;
+        expect(connectivity.lanEnabled, isTrue);
+        expect(
+          connectivity.policyFor(TransportKind.iroh),
+          isNot(TransportPolicy.disabled),
+        );
+        expect(controller.contacts, hasLength(1));
+      }
+      await phase('p3 stop');
+      final whole = jsonDecode(File(await phoneRun).readAsStringSync()) as Map;
+      await laptopRun;
+      expect(whole['kind'], 'serve');
+      expect(
+        [
+          for (final step in whole['steps'] as List)
+            if ((step['step'] as String).startsWith('phase ')) step['step'],
+        ],
+        ['phase p1 on conestRelay', 'phase p2 on all'],
+      );
+      expect(File('${root.path}/phone.json.p3.json').existsSync(), isFalse);
+    },
+    timeout: const Timeout(Duration(minutes: 4)),
+  );
+
   group('lab devices link into one account through files', () {
     Future<(Map, Map, MessengerController, MessengerController)> link({
       required bool sameCode,
