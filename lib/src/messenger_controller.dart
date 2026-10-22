@@ -17103,7 +17103,7 @@ class MessengerController extends ChangeNotifier {
     final payload = jsonEncode({
       'version': 1,
       'reason': reason,
-      'group': profiledGroup.toJson(),
+      'group': _groupForWire(profiledGroup),
       'historyProof': ?historyProof,
     });
     final now = _now();
@@ -17269,7 +17269,7 @@ class MessengerController extends ChangeNotifier {
       final payload = jsonEncode({
         'version': 1,
         'reason': entry.reason,
-        'group': profiledGroup.toJson(),
+        'group': _groupForWire(profiledGroup),
       });
       final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'group_membership',
@@ -19456,7 +19456,10 @@ class MessengerController extends ChangeNotifier {
           // sender still learns it arrived, or would send it again.
           if (envelope.kind == 'direct_message') {
             final from = _contactByDeviceId(envelope.senderDeviceId);
-            if (from != null && from.canSendOutbound && !from.ownDevice) {
+            if (from != null &&
+                from.canSendOutbound &&
+                !from.ownDevice &&
+                !_droppedByIngressMode(from, ingressKind)) {
               await _sendAck(contact: from, envelope: envelope);
             }
           }
@@ -23135,7 +23138,9 @@ class MessengerController extends ChangeNotifier {
     if (groupPayload is! Map<String, dynamic>) {
       return;
     }
-    final incoming = GroupRecord.fromJson(groupPayload);
+    final incoming = GroupRecord.fromJson(
+      Map<String, dynamic>.of(groupPayload)..remove('mirroredVia'),
+    );
     for (final profile in incoming.memberProfiles) {
       final signingKey = profile.signingPublicKeyBase64;
       final endpoint = profile.irohEndpointId;
@@ -23468,7 +23473,6 @@ class MessengerController extends ChangeNotifier {
         sender: sender,
         body: payload.body,
       );
-      _syncGroupMessageToMirrors(group.groupId, envelope.messageId);
     }
     _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _sendAck(contact: sender, envelope: envelope);
@@ -33318,6 +33322,12 @@ class MessengerController extends ChangeNotifier {
         pendingAckDeliveries: [...kept, for (final e in forDevice) e.$1],
       );
     }
+    // Message content (not bookkeeping) is not queued for a device long out
+    // of touch: it catches up through history once confirmed.
+    final bulky = const {
+      'group_message',
+      'history_page',
+    }.contains(event['type']);
     for (final device in devices) {
       final payload = QueuedEnvelopePayload(
         kind: 'account_sync',
@@ -33327,6 +33337,7 @@ class MessengerController extends ChangeNotifier {
         createdAt: _now().toUtc(),
       );
       if (isOwnDeviceUnconfirmed(device)) {
+        if (bulky) continue;
         _enqueuePendingAckDelivery(
           PendingAckDelivery(
             targetDeviceId: device.deviceId,
@@ -33540,6 +33551,22 @@ class MessengerController extends ChangeNotifier {
 
   static const int _maxMirroredGroups = 256;
 
+  /// A group record as members see it: without what is this device's own.
+  Map<String, dynamic> _groupForWire(GroupRecord group) => group.toJson()
+    ..remove('localRemovedAt')
+    ..remove('mirroredVia');
+
+  static bool _sameReactions(
+    Map<String, Set<String>> a,
+    Map<String, Set<String>> b,
+  ) =>
+      a.length == b.length &&
+      a.entries.every(
+        (entry) =>
+            b[entry.key]?.length == entry.value.length &&
+            b[entry.key]!.containsAll(entry.value),
+      );
+
   /// Whether this device takes part in [group]: a member, or showing it
   /// through another of this account's devices (its gateway).
   bool isActiveInGroup(GroupRecord group) {
@@ -33584,6 +33611,9 @@ class MessengerController extends ChangeNotifier {
   /// A message of [groupId] this device has (sent or received) shows on
   /// the account's other devices, which only see the group through it.
   void _syncGroupMessageToMirrors(String groupId, String messageId) {
+    if (_disposed || !ownDevices.any((device) => device.canSendOutbound)) {
+      return;
+    }
     final me = identity;
     final group = _groupById(groupId);
     if (me == null || group == null || !group.hasActiveMember(me.deviceId)) {
@@ -33677,15 +33707,24 @@ class MessengerController extends ChangeNotifier {
       group.groupId,
     ).messages.where((candidate) => candidate.id == message.id).firstOrNull;
     if (known != null) {
-      // Written here and posted there: its state follows from there.
-      if (known.outbound && message.outbound && known.state != message.state) {
-        _upsertGroupMessage(
-          group.groupId,
-          known.copyWith(state: message.state),
-        );
-        return true;
+      // Its state (written here, posted there), and edits, reactions and
+      // deletions, follow from there.
+      final updated = known.copyWith(
+        state: known.outbound && message.outbound ? message.state : null,
+        body: message.body,
+        editedAt: message.editedAt,
+        deleted: message.deleted,
+        reactions: message.reactions,
+      );
+      if (updated.state == known.state &&
+          updated.body == known.body &&
+          updated.editedAt == known.editedAt &&
+          updated.deleted == known.deleted &&
+          _sameReactions(updated.reactions, known.reactions)) {
+        return false;
       }
-      return false;
+      _upsertGroupMessage(group.groupId, updated);
+      return true;
     }
     _upsertGroupMessage(
       group.groupId,
@@ -33770,6 +33809,7 @@ class MessengerController extends ChangeNotifier {
         message.id.length > 160 ||
         message.body.isEmpty ||
         message.body.length > 64 * 1024 ||
+        _locallyDeletedMessageIds.contains(message.id) ||
         _groupConversation(
           group.groupId,
         ).messages.any((candidate) => candidate.id == message.id)) {
@@ -33810,8 +33850,14 @@ class MessengerController extends ChangeNotifier {
   /// device can ask of another).
   final Map<String, List<DateTime>> _historyPagesServed = {};
 
-  /// What this device has asked for and taken, per chat (bounded by the
-  /// window and the most per chat).
+  /// Chats still to ask each own device about, and those asked and not yet
+  /// finished (a few at a time, so a link does not flood the new device's
+  /// relay mailbox).
+  final Map<String, List<String>> _historyQueue = {};
+  final Map<String, Set<String>> _historyAsked = {};
+  static const int _historyChatsAtOnce = 4;
+
+  /// Messages taken per chat (bounded by the most per chat).
   final Map<String, int> _historyTaken = {};
 
   /// The chats this device shows, by the names history pages use.
@@ -33824,7 +33870,8 @@ class MessengerController extends ChangeNotifier {
         if (!contact.ownDevice &&
             !contact.isHiddenDevice &&
             !contact.isLinkedDevice &&
-            !contact.isArchived)
+            !contact.isArchived &&
+            !contact.pendingVerification)
           contact.deviceId,
       for (final group in _snapshot.groups)
         if (isActiveInGroup(group)) 'group:${group.groupId}',
@@ -33833,15 +33880,30 @@ class MessengerController extends ChangeNotifier {
 
   /// Asks [deviceId] for the recent history of every chat shown here.
   void _requestHistoryFrom(String deviceId) {
-    final chats = _historyChats;
-    for (var start = 0; start < chats.length; start += 32) {
-      _syncToOwnDevices({
-        'type': 'history_req',
-        'chats': [
-          for (final chat in chats.skip(start).take(32)) {'chat': chat},
-        ],
-      }, only: deviceId);
+    _historyQueue[deviceId] = _historyChats;
+    _historyAsked[deviceId] = {};
+    _pumpHistory(deviceId);
+  }
+
+  /// Asks for the next chats while fewer than a few are under way.
+  void _pumpHistory(String deviceId) {
+    final queue = _historyQueue[deviceId];
+    final asked = _historyAsked[deviceId];
+    if (queue == null || asked == null) return;
+    while (asked.length < _historyChatsAtOnce && queue.isNotEmpty) {
+      final chat = queue.removeAt(0);
+      asked.add(chat);
+      _askHistory(deviceId, chat);
     }
+  }
+
+  void _askHistory(String deviceId, String chat, {Object? cursor}) {
+    _syncToOwnDevices({
+      'type': 'history_req',
+      'chats': [
+        {'chat': chat, 'cursor': ?cursor},
+      ],
+    }, only: deviceId);
   }
 
   /// The messages of [chat] (a history name) held here, if this device may
@@ -33859,28 +33921,57 @@ class MessengerController extends ChangeNotifier {
     if (contact == null ||
         contact.ownDevice ||
         contact.isHiddenDevice ||
-        contact.isLinkedDevice) {
+        contact.isLinkedDevice ||
+        contact.isArchived ||
+        contact.pendingVerification) {
       return null;
     }
     return _conversationFor(chat).messages;
   }
 
+  /// Newest first, then by id: one order on both devices, so a cursor
+  /// (time and id) loses nothing at a page boundary.
+  static int _historyOrder(ChatMessage a, ChatMessage b) {
+    final byTime = b.createdAt.compareTo(a.createdAt);
+    return byTime != 0 ? byTime : b.id.compareTo(a.id);
+  }
+
   /// [sender], one of this account's devices, asks for pages of history:
-  /// each chat's next page older than its `before`, within the window.
+  /// each chat's next page past its cursor, within the window. Past this
+  /// hour's pages, it is told when to ask again.
   void _answerHistoryRequest(ContactRecord sender, Object? chats) {
     if (chats is! List) return;
     final now = _now().toUtc();
     final served = (_historyPagesServed[sender.deviceId] ?? const [])
         .where((at) => now.difference(at) < const Duration(hours: 1))
         .toList();
+    final later = <Object?>[];
     for (final item in chats.take(32)) {
-      if (served.length >= historyPagesPerHour) break;
       if (item is! Map) continue;
+      if (served.length >= historyPagesPerHour) {
+        later.add(item);
+        continue;
+      }
       final chat = item['chat'];
       if (chat is! String || chat.isEmpty || chat.length > 170) continue;
       final held = _historyMessages(chat);
-      if (held == null) continue;
-      final before = DateTime.tryParse(item['before'] as String? ?? '');
+      if (held == null) {
+        // Nothing for that chat here: an empty last page ends the asking.
+        _syncToOwnDevices({
+          'type': 'history_page',
+          'chat': chat,
+          'messages': const <String>[],
+          'more': false,
+        }, only: sender.deviceId);
+        continue;
+      }
+      final cursor = item['cursor'];
+      final before = cursor is Map && cursor['at'] is String
+          ? DateTime.tryParse(cursor['at'] as String)
+          : null;
+      final beforeId = cursor is Map && cursor['id'] is String
+          ? cursor['id'] as String
+          : '';
       final oldest = chat == 'saved' ? null : now.subtract(_historyWindow);
       final candidates = [
         for (final message in held)
@@ -33888,18 +33979,23 @@ class MessengerController extends ChangeNotifier {
               message.groupFile == null &&
               message.poll == null &&
               !message.deleted &&
-              (before == null || message.createdAt.isBefore(before)) &&
-              (oldest == null || message.createdAt.isAfter(oldest)))
+              (oldest == null || message.createdAt.isAfter(oldest)) &&
+              (before == null ||
+                  message.createdAt.isBefore(before) ||
+                  (message.createdAt.isAtSameMomentAs(before) &&
+                      message.id.compareTo(beforeId) < 0)))
             message,
-      ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      ]..sort(_historyOrder);
       final page = <String>[];
       var chars = 0;
+      ChatMessage? last;
       for (final message in candidates) {
         if (page.length >= historyPageMessages) break;
         final json = jsonEncode(message.toJson());
         if (chars + json.length > _historyPageChars) break;
         page.add(json);
         chars += json.length;
+        last = message;
       }
       served.add(now);
       _syncToOwnDevices({
@@ -33907,46 +34003,144 @@ class MessengerController extends ChangeNotifier {
         'chat': chat,
         'messages': page,
         'more': page.length < candidates.length,
+        if (last != null)
+          'cursor': {
+            'at': last.createdAt.toUtc().toIso8601String(),
+            'id': last.id,
+          },
       }, only: sender.deviceId);
     }
     _historyPagesServed[sender.deviceId] = served;
+    if (later.isNotEmpty) {
+      final wait = served.isEmpty
+          ? const Duration(minutes: 1)
+          : const Duration(hours: 1) - now.difference(served.first);
+      _syncToOwnDevices({
+        'type': 'history_wait',
+        'chats': later,
+        'seconds': wait.inSeconds.clamp(10, 3600),
+      }, only: sender.deviceId);
+    }
   }
 
-  /// A page of [chat]'s history from [sender]: what is not here yet is
-  /// added, already read; the next page is asked for while there is more.
+  /// [deviceId] serves no more pages this hour: these are asked again
+  /// when it says.
+  void _historyWait(String deviceId, Map<String, dynamic> event) {
+    final chats = event['chats'];
+    final seconds = event['seconds'];
+    if (chats is! List || seconds is! int) return;
+    final asked = _historyAsked[deviceId];
+    if (asked == null) return;
+    final again = [
+      for (final item in chats.take(32))
+        if (item is Map &&
+            item['chat'] is String &&
+            asked.contains(item['chat']))
+          item,
+    ];
+    if (again.isEmpty) return;
+    Timer(Duration(seconds: seconds.clamp(10, 3600)), () {
+      if (_disposed) return;
+      _syncToOwnDevices({
+        'type': 'history_req',
+        'chats': again,
+      }, only: deviceId);
+    });
+  }
+
+  @visibleForTesting
+  bool importHistoryPageForTesting(
+    String fromDeviceId,
+    Map<String, dynamic> event,
+  ) {
+    (_historyAsked[fromDeviceId] ??= {}).add(event['chat'] as String);
+    return _importHistoryPage(_contactByDeviceId(fromDeviceId)!, event);
+  }
+
+  /// Whether [message], from a page of [chat], is what that chat can hold:
+  /// the same checks a passed-on message gets.
+  bool _historyMessageFits(String chat, ChatMessage message) {
+    final me = identity!;
+    final own = {me.deviceId, for (final device in ownDevices) device.deviceId};
+    if (message.id.isEmpty ||
+        message.id.length > 160 ||
+        message.attachment != null ||
+        message.groupFile != null ||
+        message.poll != null ||
+        _locallyDeletedMessageIds.contains(message.id)) {
+      return false;
+    }
+    if (chat == 'saved') return message.outbound;
+    if (chat.startsWith('group:')) {
+      final group = _groupById(chat.substring(6));
+      if (group == null || message.conversationId != group.groupId) {
+        return false;
+      }
+      return message.outbound
+          ? own.contains(message.senderDeviceId)
+          : group.memberProfileFor(message.senderDeviceId) != null ||
+                group.removedDeviceIds.contains(message.senderDeviceId);
+    }
+    final contact = _contactByDeviceId(chat);
+    if (contact == null) return false;
+    if (contact.revivedAt case final revived?
+        when message.createdAt.isBefore(revived)) {
+      return false;
+    }
+    return message.outbound
+        ? own.contains(message.senderDeviceId)
+        : message.senderDeviceId == chat ||
+              linkedDevicesOf(
+                chat,
+              ).any((device) => device.deviceId == message.senderDeviceId);
+  }
+
+  /// A page of [chat]'s history from [sender], when asked for: what is not
+  /// here yet is added, already read; the next page is asked for while
+  /// there is more (through pages that were all here already, too).
   bool _importHistoryPage(ContactRecord sender, Map<String, dynamic> event) {
     final me = identity;
     final chat = event['chat'];
     final raw = event['messages'];
-    if (me == null || chat is! String || raw is! List) return false;
+    final asked = _historyAsked[sender.deviceId];
+    if (me == null ||
+        chat is! String ||
+        raw is! List ||
+        asked == null ||
+        !asked.contains(chat)) {
+      return false;
+    }
     final held = _historyMessages(chat);
-    if (held == null) return false;
+    if (held == null) {
+      asked.remove(chat);
+      _pumpHistory(sender.deviceId);
+      return false;
+    }
     final known = {for (final message in held) message.id};
+    final now = _now().toUtc();
     final imported = <ChatMessage>[];
     for (final item in raw.take(historyPageMessages * 2)) {
       if (item is! String || item.length > _historyPageChars) continue;
       final ChatMessage message;
       try {
-        message = ChatMessage.fromJson(
-          jsonDecode(item) as Map<String, dynamic>,
-        );
+        final json = jsonDecode(item) as Map<String, dynamic>;
+        // No time from another device's clock lies ahead of this one's.
+        final created = DateTime.tryParse(json['createdAt'] as String? ?? '');
+        if (created != null && created.isAfter(now)) {
+          json['createdAt'] = now.toIso8601String();
+        }
+        message = ChatMessage.fromJson(json);
       } catch (_) {
         continue;
       }
-      if (message.id.isEmpty ||
-          message.id.length > 160 ||
-          message.attachment != null ||
-          message.groupFile != null ||
-          message.poll != null ||
-          known.contains(message.id) ||
-          _locallyDeletedMessageIds.contains(message.id)) {
+      if (known.contains(message.id) || !_historyMessageFits(chat, message)) {
         continue;
       }
+      final arrived = message.receivedAt ?? message.createdAt;
       imported.add(
-        message.copyWith(receivedAt: message.receivedAt ?? message.createdAt),
+        message.copyWith(receivedAt: arrived.isAfter(now) ? now : arrived),
       );
     }
-    if (imported.isEmpty && raw.isNotEmpty) return false;
     for (final message in imported) {
       if (chat.startsWith('group:')) {
         _upsertGroupMessage(chat.substring(6), message);
@@ -33955,29 +34149,25 @@ class MessengerController extends ChangeNotifier {
       }
     }
     _markHistoryRead(chat, imported);
-    final taken = (_historyTaken[chat] ?? 0) + imported.length;
+    final taken = (_historyTaken[chat] ?? 0) + raw.length;
     _historyTaken[chat] = taken;
     final limit = chat == 'saved' ? _historyMaxSaved : _historyMaxPerChat;
-    if (event['more'] == true && imported.isNotEmpty && taken < limit) {
-      final oldest = imported
-          .map((message) => message.createdAt)
-          .reduce((a, b) => a.isBefore(b) ? a : b);
-      _syncToOwnDevices({
-        'type': 'history_req',
-        'chats': [
-          {'chat': chat, 'before': oldest.toUtc().toIso8601String()},
-        ],
-      }, only: sender.deviceId);
+    final cursor = event['cursor'];
+    if (event['more'] == true && cursor is Map && taken < limit) {
+      _askHistory(sender.deviceId, chat, cursor: cursor);
+    } else {
+      asked.remove(chat);
+      _pumpHistory(sender.deviceId);
     }
     return imported.isNotEmpty;
   }
 
-  /// History comes already read: the read position moves up to it (what
-  /// arrived here later stays unread).
+  /// History comes already read: the read position moves up to it, but
+  /// never past a message that arrived here unread.
   void _markHistoryRead(String chat, List<ChatMessage> imported) {
     if (imported.isEmpty) return;
     final me = identity!;
-    final newest = imported
+    var newest = imported
         .map((message) => message.receivedAt ?? message.createdAt)
         .reduce((a, b) => a.isAfter(b) ? a : b);
     final conversations = List<ConversationRecord>.from(
@@ -33994,9 +34184,21 @@ class MessengerController extends ChangeNotifier {
                 c.peerDeviceId == (chat == 'saved' ? me.deviceId : chat),
           );
     if (index == -1) return;
-    final read = conversations[index].lastReadAt;
+    final conversation = conversations[index];
+    final importedIds = {for (final message in imported) message.id};
+    for (final message in conversation.messages) {
+      if (importedIds.contains(message.id) ||
+          !_isUnreadMessageInConversation(conversation, message)) {
+        continue;
+      }
+      final arrived = message.arrivedAt;
+      if (!arrived.isAfter(newest)) {
+        newest = arrived.subtract(const Duration(microseconds: 1));
+      }
+    }
+    final read = conversation.lastReadAt;
     if (read == null || read.isBefore(newest)) {
-      conversations[index] = conversations[index].copyWith(lastReadAt: newest);
+      conversations[index] = conversation.copyWith(lastReadAt: newest);
       _snapshot = _snapshot.copyWith(conversations: conversations);
     }
   }
@@ -34040,28 +34242,41 @@ class MessengerController extends ChangeNotifier {
         _dropQueuedReceived(sender.deviceId, event['ids']);
         continue;
       }
-      switch (event['type']) {
-        case 'history_req':
-          _answerHistoryRequest(sender, event['chats']);
-          continue;
-        case 'history_page':
-          if (_importHistoryPage(sender, event)) changed = true;
-          continue;
-        case 'group_state':
-          if (_applyMirroredGroupState(sender, event['group'])) changed = true;
-          continue;
-        case 'group_message':
-          if (_applyMirroredGroupMessage(
-            sender,
-            event['chat'],
-            event['message'],
-          )) {
-            changed = true;
-          }
-          continue;
-        case 'gtx':
-          await _postForOwnDevice(sender, event['chat'], event['message']);
-          continue;
+      try {
+        switch (event['type']) {
+          case 'history_req':
+            _answerHistoryRequest(sender, event['chats']);
+            continue;
+          case 'history_page':
+            if (_importHistoryPage(sender, event)) changed = true;
+            continue;
+          case 'history_wait':
+            _historyWait(sender.deviceId, event);
+            continue;
+          case 'group_state':
+            if (_applyMirroredGroupState(sender, event['group'])) {
+              changed = true;
+            }
+            continue;
+          case 'group_message':
+            if (_applyMirroredGroupMessage(
+              sender,
+              event['chat'],
+              event['message'],
+            )) {
+              changed = true;
+            }
+            continue;
+          case 'gtx':
+            await _postForOwnDevice(sender, event['chat'], event['message']);
+            continue;
+        }
+      } catch (error) {
+        appendDebugLog(
+          'Own-device ${_boundedLogValue(event['type'])} not taken: '
+          '${error.runtimeType}',
+        );
+        continue;
       }
       final rawChat = event['chat'];
       if (rawChat is! String || rawChat.isEmpty || rawChat.length > 160) {
@@ -35502,7 +35717,9 @@ class MessengerController extends ChangeNotifier {
     }
     if (conversation.kind == ConversationKind.group) {
       final group = _groupById(conversation.id);
-      if (group == null) return;
+      // A device that only shows the group (through another of this
+      // account's devices) does not write to its members itself.
+      if (group == null || !group.hasActiveMember(identity!.deviceId)) return;
       for (final MapEntry(key: senderId, value: message)
           in newestBySender.entries) {
         final member = _groupMemberContact(group, senderId);
@@ -35646,6 +35863,21 @@ class MessengerController extends ChangeNotifier {
           conversation.kind == ConversationKind.group &&
           conversation.id == groupId,
     );
+    // However it came (live, history, a carrier) or changed (an edit, a
+    // reaction, a deletion): the account's devices showing the group
+    // through this one follow. Delivery states follow separately.
+    final before = index == -1
+        ? null
+        : conversations[index].messages
+              .where((candidate) => candidate.id == message.id)
+              .firstOrNull;
+    if (before == null ||
+        before.body != message.body ||
+        before.deleted != message.deleted ||
+        before.editedAt != message.editedAt ||
+        !_sameReactions(before.reactions, message.reactions)) {
+      scheduleMicrotask(() => _syncGroupMessageToMirrors(groupId, message.id));
+    }
     if (index == -1) {
       conversations.add(
         ConversationRecord(

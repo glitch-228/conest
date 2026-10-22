@@ -7596,7 +7596,8 @@ class _GroupDetailsDialogState extends State<GroupDetailsDialog> {
           )
         else if (_currentDeviceId != null &&
             !group.hasActiveMember(_currentDeviceId!) &&
-            group.mirroredVia == null &&
+            (group.mirroredVia == null ||
+                !widget.controller.isActiveInGroup(group)) &&
             group.localRemovedAt == null)
           TextButton.icon(
             style: TextButton.styleFrom(

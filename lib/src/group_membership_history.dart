@@ -42,7 +42,8 @@ class GroupMembershipRecord {
   // Return a fresh snapshot: GroupRecord currently owns mutable lists. The
   // signed event's deeply immutable payload remains the authority.
   GroupRecord get group => GroupRecord.fromJson(
-    Map<String, dynamic>.from(proof.payload['group'] as Map),
+    Map<String, dynamic>.from(proof.payload['group'] as Map)
+      ..remove('mirroredVia'),
   );
 
   static String rootReference(String groupId, String ownerSigningKey) => hashes
@@ -65,7 +66,9 @@ class GroupMembershipRecord {
     required Map<String, String?> admissions,
     Map<String, GroupHistoryCheckpoint> checkpoints = const {},
   }) {
-    final snapshot = group.toJson()..remove('localRemovedAt');
+    final snapshot = group.toJson()
+      ..remove('localRemovedAt')
+      ..remove('mirroredVia');
     return {
       'group': snapshot,
       'parents': List<String>.of(parents)..sort(),

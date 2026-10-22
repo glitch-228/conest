@@ -221,7 +221,9 @@ start_phone() { # serial ("" = adb's default), name, group title or "", invitesâ
   # BACKGROUND=home: the run goes on with the lab app behind the home
   # screen (the screen stays on); does a backgrounded app keep its network?
   if [ "$BACKGROUND" = home ]; then
-    "${adb[@]}" shell input keyevent KEYCODE_HOME >/dev/null
+    # The home screen by intent: some phones (Xiaomi) refuse injected keys.
+    "${adb[@]}" shell am start -a android.intent.action.MAIN \
+      -c android.intent.category.HOME >/dev/null
     echo "$name app sent to the background."
   fi
 }

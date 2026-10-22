@@ -19229,6 +19229,82 @@ void main() {
         );
       });
 
+      test('a history page takes only what the chat can hold, and leaves '
+          'what arrived here unread', () async {
+        final (alice, bob, phone, _, _, _) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        await bob.sendMessage(contact: bob.contacts.single, body: 'live');
+        await _waitForIroh(() {
+          unawaited(phone.pollNow());
+          return phone.messagesFor(bobId).any((m) => m.body == 'live');
+        }, reason: 'the phone did not get it');
+        expect(phone.unreadCountFor(bobId), 1);
+        final now = DateTime.now().toUtc();
+        String page(
+          String id,
+          String from, {
+          required bool outbound,
+          DateTime? at,
+          DateTime? received,
+        }) => jsonEncode(
+          ChatMessage(
+            id: id,
+            conversationId: phone.contactByDeviceId(bobId)!.deviceId == bobId
+                ? 'conv'
+                : 'conv',
+            senderDeviceId: from,
+            recipientDeviceId: phone.identity!.deviceId,
+            body: 'history $id',
+            outbound: outbound,
+            state: DeliveryState.delivered,
+            createdAt: at ?? now.subtract(const Duration(hours: 1)),
+          ).copyWith(receivedAt: received).toJson(),
+        );
+        phone.importHistoryPageForTesting(aliceId, {
+          'chat': bobId,
+          'messages': [
+            // From Bob, "arrived" in the future on the other device.
+            page(
+              'h1',
+              bobId,
+              outbound: false,
+              received: now.add(const Duration(hours: 1)),
+            ),
+            // From someone who is not Bob.
+            page('h2', 'dev-stranger', outbound: false),
+            // "Sent" by Bob, which only this account can send.
+            page('h3', bobId, outbound: true),
+            // From the future.
+            page(
+              'h4',
+              bobId,
+              outbound: false,
+              at: now.add(const Duration(days: 1)),
+            ),
+          ],
+          'more': false,
+        });
+        final ids = phone.messagesFor(bobId).map((m) => m.id).toSet();
+        expect(ids.containsAll({'h1', 'h4'}), isTrue);
+        expect(ids.intersection({'h2', 'h3'}), isEmpty);
+        final future = phone
+            .messagesFor(bobId)
+            .singleWhere((m) => m.id == 'h4');
+        expect(
+          future.createdAt.isAfter(
+            DateTime.now().toUtc().add(const Duration(seconds: 5)),
+          ),
+          isFalse,
+        );
+        // What arrived here unread is still unread.
+        expect(phone.unreadCountFor(bobId), greaterThanOrEqualTo(1));
+        expect(
+          phone.messagesFor(bobId).singleWhere((m) => m.body == 'live').body,
+          'live',
+        );
+      });
+
       test('one that reached every device is not passed on', () async {
         final (alice, bob, phone, _, _, _) = await linkedPair();
         final bobId = bob.identity!.deviceId;
@@ -19327,6 +19403,39 @@ void main() {
       expect(fromBob.outbound, isFalse);
       expect(fromBob.senderDeviceId, bob.identity!.deviceId);
       expect(fromBob.route, MessageRoute.viaOwnDevice);
+      // Reading it on the phone tells Bob nothing from the phone (it is
+      // not in the group).
+      final phoneId = phone.identity!.deviceId;
+      await phone.markGroupReadThroughMessage(later.groupId, fromBob);
+      for (var i = 0; i < 5; i++) {
+        await phone.pollNow();
+        await bob.pollNow();
+      }
+      expect(
+        [...network.envelopes, ...relay.storedEnvelopes].where(
+          (e) =>
+              e.senderDeviceId == phoneId &&
+              e.recipientDeviceId == bob.identity!.deviceId &&
+              e.conversationId == later.groupId,
+        ),
+        isEmpty,
+      );
+      // A change to it (a reaction) follows too.
+      await bob.toggleGroupReaction(
+        groupId: later.groupId,
+        messageId: fromBob.id,
+        emoji: '👍',
+      );
+      await settle(
+        () =>
+            phone
+                .messagesForGroup(later.groupId)
+                .singleWhere((m) => m.id == fromBob.id)
+                .reactions['👍']
+                ?.isNotEmpty ??
+            false,
+        'the reaction did not reach the phone',
+      );
       // The phone writes: it goes out through the laptop, as Alice.
       await phone.sendGroupMessage(groupId: later.groupId, body: 'from phone');
       await settle(
