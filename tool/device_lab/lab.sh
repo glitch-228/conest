@@ -76,6 +76,13 @@ carrier_args() { # device name
 
 win() { sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"; }
 
+# ANDROID2=SERIAL: a second phone (adb serial) joins as lab-android2: every
+# device then has three contacts, and phone-to-phone routes (the Bluetooth
+# mesh over real radios) get tested too.
+ANDROID2=${ANDROID2:-}
+contacts_each=2
+[ -n "$ANDROID2" ] && contacts_each=3
+
 # FRESH=1: every device starts from empty lab data (new identities, no
 # contacts), so pairing is tested again. Only the lab instances' data.
 if [ "${FRESH:-0}" = 1 ]; then
@@ -85,6 +92,11 @@ if [ "${FRESH:-0}" = 1 ]; then
     adb shell am force-stop "$PACKAGE"
     adb shell "su -c 'pm clear $PACKAGE'" >/dev/null 2>&1 ||
       adb shell "run-as $PACKAGE sh -c 'for f in * .[!.]*; do [ \"\$f\" = lib ] || rm -rf \"\$f\"; done'" 2>/dev/null || true
+  fi
+  if [ -n "$ANDROID2" ]; then
+    adb -s "$ANDROID2" shell am force-stop "$PACKAGE"
+    adb -s "$ANDROID2" shell "su -c 'pm clear $PACKAGE'" >/dev/null 2>&1 ||
+      adb -s "$ANDROID2" shell "run-as $PACKAGE sh -c 'for f in * .[!.]*; do [ \"\$f\" = lib ] || rm -rf \"\$f\"; done'" 2>/dev/null || true
   fi
   rm -rf "$LINUX_BUNDLE/conest_data"
   win "if exist \"$WINDOWS_DIR\\conest_data\" rmdir /S /Q \"$WINDOWS_DIR\\conest_data\"" || true
@@ -101,8 +113,21 @@ if [ "${ANDROID:-1}" = 1 ]; then
   adb shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
   adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
 fi
+stay_on2="" bluetooth2=""
+if [ -n "$ANDROID2" ]; then
+  stay_on2=$(adb -s "$ANDROID2" shell settings get global stay_on_while_plugged_in 2>/dev/null | tr -d '\r')
+  bluetooth2=$(adb -s "$ANDROID2" shell settings get global bluetooth_on 2>/dev/null | tr -d '\r')
+  adb -s "$ANDROID2" shell svc power stayon true >/dev/null 2>&1 || true
+  adb -s "$ANDROID2" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1 || true
+  adb -s "$ANDROID2" shell wm dismiss-keyguard >/dev/null 2>&1 || true
+  [ "$bluetooth2" = 0 ] && adb -s "$ANDROID2" shell svc bluetooth enable >/dev/null 2>&1
+fi
 restore_phone() {
   [ -n "$stay_on" ] && adb shell settings put global stay_on_while_plugged_in "$stay_on" >/dev/null 2>&1
+  if [ -n "$ANDROID2" ]; then
+    [ -n "$stay_on2" ] && adb -s "$ANDROID2" shell settings put global stay_on_while_plugged_in "$stay_on2" >/dev/null 2>&1
+    [ "$bluetooth2" = 0 ] && adb -s "$ANDROID2" shell svc bluetooth disable >/dev/null 2>&1
+  fi
   true
 }
 trap restore_phone EXIT
@@ -113,12 +138,13 @@ if [ -n "$tunnel_ports" ]; then
   forwards=()
   for port in $tunnel_ports; do
     [ "${ANDROID:-1}" = 1 ] && adb reverse "tcp:$port" "tcp:$port" >/dev/null
+    [ -n "$ANDROID2" ] && adb -s "$ANDROID2" reverse "tcp:$port" "tcp:$port" >/dev/null
     forwards+=(-R "$port:localhost:$port")
   done
   sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
     -N "${forwards[@]}" "$WINDOWS" 2>/dev/null &
   tunnel_pid=$!
-  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; for port in $tunnel_ports; do adb reverse --remove "tcp:$port" 2>/dev/null; done; restore_phone' EXIT
+  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; for port in $tunnel_ports; do adb reverse --remove "tcp:$port" 2>/dev/null; [ -n "$ANDROID2" ] && adb -s "$ANDROID2" reverse --remove "tcp:$port" 2>/dev/null; done; restore_phone' EXIT
 fi
 
 wait_for() { # description, command that succeeds when ready, tries
@@ -143,6 +169,9 @@ ORDER=${ORDER:-normal}
 # per device for the whole run (tool/device_lab/energy.sh).
 IDLE=${IDLE:-0}
 ENERGY=${ENERGY:-0}
+# BACKGROUND=home: the Android app is sent behind the home screen as soon
+# as it is up, and stays there for the whole run.
+BACKGROUND=${BACKGROUND:-}
 android_report=files/conest-debug-report.json
 linux_report="$PWD/$out/linux.json"
 win_report="$WINDOWS_DIR\\lab-report.json"
@@ -154,23 +183,42 @@ adb_root() { adb shell "su -c '$1'" >/dev/null 2>&1 || adb shell "$1" >/dev/null
 linux_pid=""
 
 start_android() { # group title or "", invites…
-  local group=$1; shift
-  adb shell am force-stop "$PACKAGE"
+  start_phone "" lab-android "$@"
+  invite_android=$phone_invite
+}
+
+start_android2() { # group title or "", invites…
+  start_phone "$ANDROID2" lab-android2 "$@"
+  invite_android2=$phone_invite
+}
+
+start_phone() { # serial ("" = adb's default), name, group title or "", invites…
+  local serial=$1 name=$2 group=$3; shift 3
+  local adb=(adb)
+  [ -n "$serial" ] && adb=(adb -s "$serial")
+  "${adb[@]}" shell am force-stop "$PACKAGE"
   # The Bluetooth mesh asks for these and nobody is there to tap Allow;
   # some phones (Xiaomi) refuse pm grant from adb, but not as root.
   for permission in BLUETOOTH_SCAN BLUETOOTH_CONNECT BLUETOOTH_ADVERTISE \
-    ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION POST_NOTIFICATIONS NEARBY_WIFI_DEVICES; do
-    adb_root "pm grant $PACKAGE android.permission.$permission"
+    ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION POST_NOTIFICATIONS NEARBY_WIFI_DEVICES \
+    RECORD_AUDIO; do
+    ANDROID_SERIAL=${serial:-${ANDROID_SERIAL:-}} adb_root "pm grant $PACKAGE android.permission.$permission"
   done
-  adb shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
-  local args="--debug-run=$RUN --debug-name=lab-android --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-idle=$IDLE --debug-serve=600 --debug-expect-contacts=2 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-android)"
+  "${adb[@]}" shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
+  local args="--debug-run=$RUN --debug-name=$name --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-idle=$IDLE --debug-serve=600 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args "$name")"
   if [ -n "$group" ]; then args="$args --debug-group=$group"; else args="$args --debug-expect-group=lab-all"; fi
   for invite in "$@"; do args="$args --debug-accept-invite=$invite"; done
-  adb shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
+  "${adb[@]}" shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
     --es conestDebugArgs "'$args'" >/dev/null
-  wait_for "the Android invite" "adb shell run-as $PACKAGE test -s $android_report.invite" 300
-  invite_android=$(adb exec-out run-as "$PACKAGE" cat "$android_report.invite")
-  echo "Android is up."
+  wait_for "the $name invite" "${adb[*]} shell run-as $PACKAGE test -s $android_report.invite" 300
+  phone_invite=$("${adb[@]}" exec-out run-as "$PACKAGE" cat "$android_report.invite")
+  echo "$name is up."
+  # BACKGROUND=home: the run goes on with the lab app behind the home
+  # screen (the screen stays on); does a backgrounded app keep its network?
+  if [ "$BACKGROUND" = home ]; then
+    "${adb[@]}" shell input keyevent KEYCODE_HOME >/dev/null
+    echo "$name app sent to the background."
+  fi
 }
 
 start_linux() { # group title or "", invites…
@@ -179,7 +227,7 @@ start_linux() { # group title or "", invites…
   if [ -n "$group" ]; then args+=("--debug-group=$group"); else args+=("--debug-expect-group=lab-all"); fi
   for invite in "$@"; do args+=("--debug-accept-invite=$invite"); done
   "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
-    "${args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-idle="$IDLE" --debug-serve=540 --debug-expect-contacts=2 \
+    "${args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-idle="$IDLE" --debug-serve=540 --debug-expect-contacts="$contacts_each" \
     --debug-wait="$WAIT" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
     --debug-exit >"$out/linux.log" 2>&1 &
   linux_pid=$!
@@ -199,7 +247,7 @@ start_windows() { # group title or "", invites…
   for invite in "$@"; do extra="$extra \"--debug-accept-invite=$(cmd_escape "$invite")\""; done
   cat >"$out/start-windows.cmd" <<EOF
 @echo off
-"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $extra --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-idle=$IDLE --debug-serve=540 --debug-expect-contacts=2 --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
+"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $extra --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-idle=$IDLE --debug-serve=540 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
 EOF
   sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
   # LAN tests need inbound connections to the lab exe (only it, and only
@@ -226,14 +274,26 @@ PS1
 if [ "$ORDER" = reverse ]; then
   start_windows ""
   start_linux "" "$invite_windows"
-  if [ "$ANDROID" = 1 ]; then
-    start_android lab-all "$invite_windows" "$invite_linux"
+  invites=("$invite_windows" "$invite_linux")
+  if [ -n "$ANDROID2" ]; then
+    if [ "$ANDROID" = 1 ]; then
+      start_android2 "" "${invites[@]}"
+      start_android lab-all "${invites[@]}" "$invite_android2"
+    else
+      start_android2 lab-all "${invites[@]}"
+    fi
+  elif [ "$ANDROID" = 1 ]; then
+    start_android lab-all "${invites[@]}"
   fi
 else
   invites=()
   if [ "$ANDROID" = 1 ]; then
     start_android ""
     invites=("$invite_android")
+  fi
+  if [ -n "$ANDROID2" ]; then
+    start_android2 "" "${invites[@]}"
+    invites+=("$invite_android2")
   fi
   start_linux "" "${invites[@]}"
   start_windows lab-all "${invites[@]}" "$invite_linux"
@@ -251,6 +311,12 @@ if [ "$ANDROID" = 1 ]; then
     adb exec-out run-as "$PACKAGE" cat "$android_report" >"$out/android.json"
   fi
   adb shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
+fi
+if [ -n "$ANDROID2" ]; then
+  if wait_for "the Android 2 report" "adb -s $ANDROID2 shell run-as $PACKAGE test -s $android_report" 300; then
+    adb -s "$ANDROID2" exec-out run-as "$PACKAGE" cat "$android_report" >"$out/android2.json"
+  fi
+  adb -s "$ANDROID2" shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
 fi
 # The lab build only (by its folder): the user's own Conest keeps running.
 win "powershell -NoProfile -Command \"Get-Process conest -ErrorAction SilentlyContinue | Where-Object Path -Like '*\\conest-lab\\*' | Stop-Process -Force\"" >/dev/null 2>&1 || true

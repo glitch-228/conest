@@ -60,12 +60,14 @@ def desktop(path):
 def lines(folder):
     folder = pathlib.Path(folder)
     out = []
-    phone = folder / "energy-android.txt"
-    if phone.exists():
+    for phone in sorted(folder.glob("energy-android*.txt")):
+        if phone.name.endswith("-start.txt"):
+            continue
         a = android(phone.read_text(errors="replace"))
         h = a["hours"] or 1
+        name = phone.stem.removeprefix("energy-")
         out.append(
-            f"  android: {h * 60:.0f} min, CPU {a['cpu_s'] / h:.0f} s/h, "
+            f"  {name}: {h * 60:.0f} min, CPU {a['cpu_s'] / h:.0f} s/h, "
             f"{a['wakeups'] / h:.0f} wakeups/h, "
             f"{(a['rx'] + a['tx']) / h / 1024 ** 2:.1f} MB/h")
     for side in ("linux", "windows"):

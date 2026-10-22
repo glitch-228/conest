@@ -45,14 +45,24 @@ sample_windows() {
   done
 }
 
+# adb for one phone: the given serial, or adb's default (ANDROID_SERIAL).
+phone_adb() { # serial or "", adb arguments…
+  local serial=$1; shift
+  if [ -n "$serial" ]; then adb -s "$serial" "$@"; else adb "$@"; fi
+}
+
 case "$action" in
   start)
     touch "$out/.energy-on"
-    if adb get-state >/dev/null 2>&1; then
-      adb shell dumpsys batterystats --reset >/dev/null
-      adb shell dumpsys batterystats --enable full-wake-history >/dev/null 2>&1 || true
-      date -u +%FT%TZ >"$out/energy-android-start.txt"
-    fi
+    for phone in android ${ANDROID2:+android2}; do
+      serial=""
+      [ "$phone" = android2 ] && serial=$ANDROID2
+      if phone_adb "$serial" get-state >/dev/null 2>&1; then
+        phone_adb "$serial" shell dumpsys batterystats --reset >/dev/null
+        phone_adb "$serial" shell dumpsys batterystats --enable full-wake-history >/dev/null 2>&1 || true
+        date -u +%FT%TZ >"$out/energy-$phone-start.txt"
+      fi
+    done
     [ -n "${LINUX_BUNDLE:-}" ] && { sample_linux & echo $! >"$out/.energy-linux.pid"; }
     [ -n "${WINDOWS:-}" ] && [ -n "${SSHPASS:-}" ] && { sample_windows & echo $! >"$out/.energy-windows.pid"; }
     ;;
@@ -62,16 +72,19 @@ case "$action" in
     # within their 10 s period and write their last line.
     sleep 12
     rm -f "$out"/.energy-*.pid
-    if adb get-state >/dev/null 2>&1; then
+    for phone in android ${ANDROID2:+android2}; do
+      serial=""
+      [ "$phone" = android2 ] && serial=$ANDROID2
+      phone_adb "$serial" get-state >/dev/null 2>&1 || continue
       # The machine-readable form, keyed by the app's uid.
-      uid=$(adb shell cmd package list packages -U "$PACKAGE" | tr -d '\r' |
+      uid=$(phone_adb "$serial" shell cmd package list packages -U "$PACKAGE" | tr -d '\r' |
         sed -n "s/^package:$PACKAGE uid:\([0-9]*\)$/\1/p")
       {
-        echo "from $(cat "$out/energy-android-start.txt" 2>/dev/null) to $(date -u +%FT%TZ)"
+        echo "from $(cat "$out/energy-$phone-start.txt" 2>/dev/null) to $(date -u +%FT%TZ)"
         echo "uid $uid"
-        adb shell dumpsys batterystats --checkin | tr -d '\r' | grep "^9,$uid,l,"
-      } >"$out/energy-android.txt" 2>&1
-    fi
+        phone_adb "$serial" shell dumpsys batterystats --checkin | tr -d '\r' | grep "^9,$uid,l,"
+      } >"$out/energy-$phone.txt" 2>&1
+    done
     python3 "$(dirname "$0")/energy_summary.py" "$out" || true
     ;;
 esac

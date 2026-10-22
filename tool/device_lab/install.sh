@@ -34,4 +34,10 @@ gh run download "$run" -n "conest-debug-android-arm64-$number" -D "$art/android"
 adb uninstall "$PACKAGE" >/dev/null 2>&1 || true
 adb install "$art/android/conest-debug-android-arm64-$number.apk" >/dev/null
 echo "Android: build $number"
+# A second phone (ANDROID2=serial), when the lab has one.
+if [ -n "${ANDROID2:-}" ]; then
+  adb -s "$ANDROID2" uninstall "$PACKAGE" >/dev/null 2>&1 || true
+  adb -s "$ANDROID2" install "$art/android/conest-debug-android-arm64-$number.apk" >/dev/null
+  echo "Android 2: build $number"
+fi
 rm -rf "$art"

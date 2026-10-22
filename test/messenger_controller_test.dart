@@ -20454,6 +20454,129 @@ void main() {
     );
   });
 
+  group('lab devices link into one account through files', () {
+    Future<(Map, Map, MessengerController, MessengerController)> link({
+      required bool sameCode,
+    }) async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> device({required bool identity}) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: 'main',
+          createIdentity: identity,
+          transportRegistryFactory: network.registry,
+          debugBuildId: 'test@abc',
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      // Both start from nothing, as on a fresh lab run.
+      final main = await device(identity: false);
+      final added = await device(identity: false);
+      var polling = true;
+      addTearDown(() => polling = false);
+      unawaited(() async {
+        while (polling) {
+          await Future.wait([
+            if (main.hasIdentity) main.pollNow(),
+            if (added.hasIdentity) added.pollNow(),
+          ]).catchError((_) => const <void>[]);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }());
+      final root = Directory.systemTemp.createTempSync('conest_link_');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final addedRun = runDebugRequest(
+        added,
+        const DebugRunRequest(
+          what: 'none',
+          name: 'added',
+          linkNew: true,
+          serve: Duration(seconds: 20),
+          wait: Duration.zero,
+        ),
+        defaultReportPath: () async => '${root.path}/added.json',
+      );
+      Future<String> whenWritten(String path) async {
+        final file = File(path);
+        for (var i = 0; i < 400 && !file.existsSync(); i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        return file.readAsStringSync();
+      }
+
+      final linkText = await whenWritten('${root.path}/added.json.link');
+      final mainRun = runDebugRequest(
+        main,
+        DebugRunRequest(
+          what: 'none',
+          name: 'main',
+          linkFrom: linkText,
+          serve: const Duration(seconds: 20),
+          wait: Duration.zero,
+        ),
+        defaultReportPath: () async => '${root.path}/main.json',
+      );
+      // The lab: each side gets the other's code (or a wrong one).
+      final mainCode = await whenWritten('${root.path}/main.json.code');
+      final addedCode = await whenWritten('${root.path}/added.json.code');
+      File(
+        '${root.path}/added.json.peer-code',
+      ).writeAsStringSync(sameCode ? mainCode : '000000');
+      File('${root.path}/main.json.peer-code').writeAsStringSync(addedCode);
+      Map report(String path) =>
+          jsonDecode(File(path).readAsStringSync()) as Map;
+      return (report(await mainRun), report(await addedRun), main, added);
+    }
+
+    Map linkStep(Map report) =>
+        (report['steps'] as List).firstWhere((step) => step['step'] == 'link')
+            as Map;
+
+    test('--debug-link-new and --debug-link-from parse', () {
+      final parsed = DebugRunRequest.fromArgs(const [
+        '--debug-run=none',
+        '--debug-link-new',
+        '--debug-link-from=cl1|a|b|c||d',
+      ])!;
+      expect(parsed.linkNew, isTrue);
+      expect(parsed.linkFrom, 'cl1|a|b|c||d');
+      expect(
+        DebugRunRequest.fromArgs(const ['--debug-run=none'])!.linkFrom,
+        isNull,
+      );
+    });
+
+    test(
+      'with the same code on both, they link',
+      () async {
+        final (mainReport, addedReport, main, added) = await link(
+          sameCode: true,
+        );
+        expect(linkStep(mainReport)['ok'], isTrue, reason: '$mainReport');
+        expect(linkStep(addedReport)['ok'], isTrue, reason: '$addedReport');
+        expect(added.identity!.accountId, main.identity!.accountId);
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
+
+    test(
+      'a different code is never confirmed',
+      () async {
+        final (_, addedReport, main, added) = await link(sameCode: false);
+        expect(linkStep(addedReport)['ok'], isFalse);
+        expect(
+          '${linkStep(addedReport)['error']}',
+          contains('different codes'),
+        );
+        expect(added.identity!.accountId, isNot(main.identity!.accountId));
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
+  });
+
   Future<(Map, Map)> labPair({
     required String laptopRun,
     Duration linger = const Duration(seconds: 60),

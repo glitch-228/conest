@@ -80,6 +80,8 @@ class DebugRunRequest {
       50 * 1024 * 1024,
     ],
     this.callLength = const Duration(minutes: 1),
+    this.linkNew = false,
+    this.linkFrom,
   });
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', 'contacts',
@@ -135,6 +137,18 @@ class DebugRunRequest {
 
   /// The one transport left on for the whole run (pairing included).
   final TransportKind? onlyTransport;
+
+  /// Join another lab device's account as a new device: the link text is
+  /// written to `<report>.link`, for that device's [linkFrom].
+  final bool linkNew;
+
+  /// Link the new device whose link text this is into this device's
+  /// account.
+  ///
+  /// Either side writes the code it shows to `<report>.code` and confirms
+  /// only once the lab puts the other side's code in `<report>.peer-code`
+  /// and the two match, as a person comparing the screens would.
+  final String? linkFrom;
 
   /// Contacts this device waits for (at most [serve]) before testing: the
   /// wait ends as soon as that many can be written to.
@@ -232,6 +246,11 @@ class DebugRunRequest {
       expectGroup: switch (value('debug-expect-group')) {
         final title? when title.startsWith('lab-') && title.length <= 64 =>
           title,
+        _ => null,
+      },
+      linkNew: args.contains('--debug-link-new'),
+      linkFrom: switch (value('debug-link-from')) {
+        final text? when text.isNotEmpty && text.length <= 4096 => text,
         _ => null,
       },
     );
@@ -509,6 +528,9 @@ Future<String> runDebugRequest(
         );
         return only.name;
       });
+    }
+    if (request.linkNew || request.linkFrom != null) {
+      await step('link', () => _linkLabDevices(controller, request, path));
     }
     await step('invite', () async {
       final code = (await controller.buildInvite()).encodePayload();
@@ -1387,6 +1409,44 @@ List<Map<String, Object?>> _chatReport(MessengerController controller) {
         ],
       },
   ];
+}
+
+/// Links this device and another lab device into one account (see
+/// [DebugRunRequest.linkFrom]); returns the code both showed.
+Future<String> _linkLabDevices(
+  MessengerController controller,
+  DebugRunRequest request,
+  String path,
+) async {
+  final deadline = DateTime.now().add(
+    request.serve > Duration.zero ? request.serve : const Duration(minutes: 5),
+  );
+  Future<void> until(bool Function() done, String what) async {
+    while (!done()) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw TimeoutException('Waited too long for $what.');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+  }
+
+  if (request.linkFrom case final text?) {
+    await controller.startLinkFromQrCode(text);
+  } else {
+    await _writeWhole('$path.link', await controller.startLinkAsNewDevice());
+  }
+  await until(() => controller.linkCode != null, 'the code');
+  final code = controller.linkCode!;
+  await _writeWhole('$path.code', code);
+  final peer = File('$path.peer-code');
+  await until(peer.existsSync, "the other device's code");
+  if ((await peer.readAsString()).trim() != code) {
+    controller.cancelLink();
+    throw StateError('The two devices show different codes.');
+  }
+  await controller.confirmLinkCode();
+  await until(() => controller.linkState == LinkState.linked, 'the link');
+  return code;
 }
 
 /// Whole or not at all: a script waiting for the file never reads half.
