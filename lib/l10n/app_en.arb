@@ -8326,5 +8326,22 @@
   "trayQuit": "Quit",
   "@trayQuit": {
     "description": "Tray menu: end Conest."
+  },
+  "notificationReply": "Reply",
+  "@notificationReply": {
+    "description": "Action on a message notification (Android): answer from the notification."
+  },
+  "notificationMarkRead": "Mark as read",
+  "@notificationMarkRead": {
+    "description": "Action on a message notification (Android): mark the chat read without opening it."
+  },
+  "notificationReplyNotSent": "Not sent: {text}",
+  "@notificationReplyNotSent": {
+    "description": "Notification shown when a reply typed in a notification could not be sent; text is the reply.",
+    "placeholders": {
+      "text": {
+        "type": "String"
+      }
+    }
   }
 }

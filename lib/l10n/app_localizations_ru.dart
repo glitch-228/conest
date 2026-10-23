@@ -5693,4 +5693,15 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get trayQuit => 'Выйти';
+
+  @override
+  String get notificationReply => 'Ответить';
+
+  @override
+  String get notificationMarkRead => 'Прочитано';
+
+  @override
+  String notificationReplyNotSent(String text) {
+    return 'Не отправлено: $text';
+  }
 }

@@ -8,7 +8,23 @@ import 'desktop_notifications.dart';
 import 'energy_policy.dart';
 import 'voice_audio_ffi.dart';
 
+/// Reply or "Mark as read" chosen on a message notification (Android).
+/// [throughMessageId] is the newest message the notification showed: what
+/// "read" covers, not messages that came after it.
+typedef NotificationAction = ({
+  String conversationId,
+  String action,
+  String? text,
+  String? throughMessageId,
+});
+
+/// Native calls. Each bridge takes the system channel's callbacks for
+/// itself, so the app keeps one (the controller's); elsewhere use static
+/// helpers such as [PlatformBridge.openUrl].
 class PlatformBridge {
+  static const notificationReply = 'reply';
+  static const notificationMarkRead = 'markRead';
+
   PlatformBridge({MethodChannel? channel})
     : _channel = channel ?? const MethodChannel('dev.conest.conest/system') {
     // Some pure-Dart unit tests construct PlatformBridge without a Flutter
@@ -36,6 +52,9 @@ class PlatformBridge {
         } else if (call.method == 'openConversation' &&
             call.arguments is String) {
           _conversationOpens.add(call.arguments as String);
+        } else if (call.method == 'notificationAction') {
+          final action = notificationActionFrom(call.arguments);
+          if (action != null) _notificationActions.add(action);
         }
       });
     } on AssertionError {
@@ -52,6 +71,60 @@ class PlatformBridge {
       StreamController<void>.broadcast();
   final StreamController<String> _conversationOpens =
       StreamController<String>.broadcast();
+  final StreamController<NotificationAction> _notificationActions =
+      StreamController<NotificationAction>.broadcast();
+
+  /// Reply and "Mark as read" from message notifications while Conest runs;
+  /// those from before it ran come from [takePendingNotificationActions].
+  Stream<NotificationAction> get notificationActions =>
+      _notificationActions.stream;
+
+  /// What Android sends for a notification action; null for anything else.
+  static NotificationAction? notificationActionFrom(Object? arguments) {
+    if (arguments is! Map) return null;
+    final conversationId = arguments['conversationId'];
+    final action = arguments['action'];
+    final text = arguments['text'];
+    final through = arguments['throughMessageId'];
+    if (conversationId is! String || action is! String) return null;
+    return (
+      conversationId: conversationId,
+      action: action,
+      text: text is String ? text : null,
+      throughMessageId: through is String ? through : null,
+    );
+  }
+
+  /// The notification actions taken so far are handled: Android lets
+  /// Conest leave the foreground again (unless it runs in the background).
+  Future<void> notificationActionsDone() async {
+    if (!_supportsAndroidSystemCalls) return;
+    try {
+      await _channel.invokeMethod<void>('notificationActionsDone');
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+
+  /// Notification actions taken while Conest was not running yet (Android).
+  Future<List<NotificationAction>> takePendingNotificationActions() async {
+    if (!_supportsAndroidSystemCalls) return const [];
+    try {
+      final pending = await _channel.invokeMethod<List<Object?>>(
+        'takePendingNotificationActions',
+      );
+      return [
+        for (final entry in pending ?? const <Object?>[])
+          ?notificationActionFrom(entry),
+      ];
+    } on MissingPluginException {
+      return const [];
+    } on PlatformException {
+      return const [];
+    }
+  }
 
   /// Another app shared something with Conest (Android): take it with
   /// [takePendingShare].
@@ -526,6 +599,9 @@ class PlatformBridge {
     String? selfName,
     List<({String sender, String body, int timestampMs})> recentMessages =
         const [],
+    String? replyLabel,
+    String? markReadLabel,
+    String? throughMessageId,
   }) async {
     if (!_supportsAndroidSystemCalls) {
       await _desktopNotifications?.show(
@@ -542,6 +618,9 @@ class PlatformBridge {
         'conversationId': conversationId,
         'senderName': ?senderName,
         'selfName': ?selfName,
+        'replyLabel': ?replyLabel,
+        'markReadLabel': ?markReadLabel,
+        'throughMessageId': ?throughMessageId,
         'recentMessages': recentMessages
             .map(
               (m) => <String, Object?>{
@@ -650,11 +729,18 @@ class PlatformBridge {
   /// Show a native toast on Android. Other platforms / missing-plugin
   /// gracefully no-op so the call site doesn't need a platform guard.
   /// Opens [url] in the system browser.
-  Future<void> openExternalUrl(Uri url) async {
+  Future<void> openExternalUrl(Uri url) => openUrl(url, channel: _channel);
+
+  /// Opens [url] in the system's browser or mail app, with no bridge of
+  /// its own (see the class note).
+  static Future<void> openUrl(
+    Uri url, {
+    MethodChannel channel = const MethodChannel('dev.conest.conest/system'),
+  }) async {
     if (kIsWeb) return;
     final link = url.toString();
     if (Platform.isAndroid) {
-      await _channel.invokeMethod<void>('openUrl', {'url': link});
+      await channel.invokeMethod<void>('openUrl', {'url': link});
     } else if (Platform.isWindows) {
       // `start` would split the link at each `&` of its query.
       await Process.start('rundll32', ['url.dll,FileProtocolHandler', link]);

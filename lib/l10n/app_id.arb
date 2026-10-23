@@ -1446,5 +1446,8 @@
   "closeToTrayTitle": "Tetap berjalan di baki saat ditutup",
   "closeToTrayHelp": "Pesan tetap masuk. Buka Conest lagi dari ikon baki, atau keluar dari sana.",
   "trayShow": "Tampilkan Conest",
-  "trayQuit": "Keluar"
+  "trayQuit": "Keluar",
+  "notificationReply": "Balas",
+  "notificationMarkRead": "Tandai sudah dibaca",
+  "notificationReplyNotSent": "Tidak terkirim: {text}"
 }

@@ -5324,4 +5324,15 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get trayQuit => '退出';
+
+  @override
+  String get notificationReply => '回复';
+
+  @override
+  String get notificationMarkRead => '标记为已读';
+
+  @override
+  String notificationReplyNotSent(String text) {
+    return '未发送：$text';
+  }
 }

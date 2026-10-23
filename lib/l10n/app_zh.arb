@@ -1446,5 +1446,8 @@
   "closeToTrayTitle": "关闭窗口后保留在托盘中",
   "closeToTrayHelp": "消息会继续到达。可从托盘图标再次打开 Conest，或在那里退出。",
   "trayShow": "显示 Conest",
-  "trayQuit": "退出"
+  "trayQuit": "退出",
+  "notificationReply": "回复",
+  "notificationMarkRead": "标记为已读",
+  "notificationReplyNotSent": "未发送：{text}"
 }

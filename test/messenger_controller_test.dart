@@ -1555,6 +1555,229 @@ void main() {
     expect(alice.chatForNotification('nothing-like-it'), isNull);
   });
 
+  test('a reply from a notification is sent and reads the chat', () async {
+    final relay = _FakeRelayClient();
+    final recorder = _RecordingPlatformBridge();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      platformBridge: recorder,
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    alice.setAppForegroundState(false);
+    final bobId = bob.identity!.deviceId;
+    await bob.sendMessage(contact: bob.contacts.single, body: 'are you up?');
+    for (var i = 0; i < 5 && alice.unreadCountFor(bobId) == 0; i++) {
+      await alice.pollNow();
+    }
+    final shown = recorder.shown.firstWhere((c) => c.body == 'are you up?');
+    // The actions are labelled in the app's language.
+    expect(shown.replyLabel, 'Reply');
+    expect(shown.markReadLabel, 'Mark as read');
+    expect(
+      shown.throughMessageId,
+      alice.messagesFor(bobId).singleWhere((m) => !m.outbound).id,
+    );
+    expect(alice.unreadCountFor(bobId), 1);
+
+    final doneBefore = recorder.actionsDone;
+    recorder.actions.add((
+      conversationId: shown.conversationId,
+      action: PlatformBridge.notificationReply,
+      text: '  yes  ',
+      throughMessageId: shown.throughMessageId,
+    ));
+    for (var i = 0; i < 50; i++) {
+      if (alice.messagesFor(bobId).any((m) => m.outbound && m.body == 'yes')) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(
+      alice.messagesFor(bobId).where((m) => m.outbound).map((m) => m.body),
+      ['yes'],
+    );
+    for (var i = 0; i < 50 && alice.unreadCountFor(bobId) > 0; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(alice.unreadCountFor(bobId), 0);
+    // Android may let Conest leave the foreground again.
+    for (var i = 0; i < 250 && recorder.actionsDone == doneBefore; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(recorder.actionsDone, greaterThan(doneBefore));
+    final aliceId = alice.identity!.deviceId;
+    for (var i = 0; i < 5; i++) {
+      await bob.pollNow();
+    }
+    expect(
+      bob.messagesFor(aliceId).where((m) => !m.outbound).map((m) => m.body),
+      contains('yes'),
+    );
+    // An empty reply sends nothing.
+    recorder.actions.add((
+      conversationId: shown.conversationId,
+      action: PlatformBridge.notificationReply,
+      text: '   ',
+      throughMessageId: shown.throughMessageId,
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(alice.messagesFor(bobId).where((m) => m.outbound), hasLength(1));
+    // A reply that cannot be sent comes back, with its text.
+    recorder.actions.add((
+      conversationId: 'a-chat-since-removed',
+      action: PlatformBridge.notificationReply,
+      text: 'lost words',
+      throughMessageId: null,
+    ));
+    for (var i = 0; i < 50; i++) {
+      if (recorder.shown.any((c) => c.body.contains('lost words'))) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    final notSent = recorder.shown.singleWhere(
+      (c) => c.body.contains('lost words'),
+    );
+    expect(notSent.body, 'Not sent: lost words');
+    expect(notSent.conversationId, 'a-chat-since-removed');
+  });
+
+  test('on a group notification, "Mark as read" reads it and a reply posts '
+      'in it', () async {
+    final relay = _FakeRelayClient();
+    final recorder = _RecordingPlatformBridge();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      platformBridge: recorder,
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    alice.setAppForegroundState(false);
+    final group = await bob.createGroup(title: 'Night', members: bob.contacts);
+    await bob.sendGroupMessage(groupId: group.groupId, body: 'one');
+    await bob.sendGroupMessage(groupId: group.groupId, body: 'two');
+    for (
+      var i = 0;
+      i < 8 && alice.unreadGroupCountFor(group.groupId) < 2;
+      i++
+    ) {
+      await alice.pollNow();
+    }
+    expect(alice.unreadGroupCountFor(group.groupId), 2);
+    final shown = recorder.shown.lastWhere((c) => c.body.endsWith('two'));
+    // One more comes in, seen nowhere yet (Conest in front: no notice).
+    alice.setAppForegroundState(true);
+    await bob.sendGroupMessage(groupId: group.groupId, body: 'three');
+    for (
+      var i = 0;
+      i < 8 && alice.unreadGroupCountFor(group.groupId) < 3;
+      i++
+    ) {
+      await alice.pollNow();
+    }
+    expect(alice.unreadGroupCountFor(group.groupId), 3);
+    recorder.dismissed.clear();
+    recorder.actions.add((
+      conversationId: shown.conversationId,
+      action: PlatformBridge.notificationMarkRead,
+      text: null,
+      throughMessageId: shown.throughMessageId,
+    ));
+    // Reading waits for its save (a couple of seconds) before it goes on.
+    for (var i = 0; i < 250; i++) {
+      if (recorder.dismissed.contains(group.groupId)) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    // What the notification showed is read; the newer one is not.
+    expect(alice.unreadGroupCountFor(group.groupId), 1);
+    expect(recorder.dismissed, contains(group.groupId));
+    // Reading sends nothing into the group.
+    expect(
+      alice.messagesForGroup(group.groupId).where((m) => m.outbound),
+      isEmpty,
+    );
+    // A reply goes into the group.
+    recorder.actions.add((
+      conversationId: shown.conversationId,
+      action: PlatformBridge.notificationReply,
+      text: 'night',
+      throughMessageId: shown.throughMessageId,
+    ));
+    for (var i = 0; i < 50; i++) {
+      if (alice.messagesForGroup(group.groupId).any((m) => m.outbound)) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    for (var i = 0; i < 5; i++) {
+      await bob.pollNow();
+    }
+    expect(
+      bob
+          .messagesForGroup(group.groupId)
+          .where((m) => !m.outbound)
+          .map((m) => m.body),
+      ['night'],
+    );
+  });
+
+  test('a reply chosen before Conest ran is sent once it starts', () async {
+    final relay = _FakeRelayClient();
+    final vault = _MemoryVaultStore();
+    final firstRun = _RecordingPlatformBridge();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      vaultStore: vault,
+      platformBridge: firstRun,
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    final bobId = bob.identity!.deviceId;
+    alice.setAppForegroundState(false);
+    await bob.sendMessage(contact: bob.contacts.single, body: 'call me');
+    for (var i = 0; i < 5 && alice.unreadCountFor(bobId) == 0; i++) {
+      await alice.pollNow();
+    }
+    final shown = firstRun.shown.firstWhere((c) => c.body == 'call me');
+    alice.dispose();
+
+    // Android kept the reply while it started Conest without a screen.
+    final recorder = _RecordingPlatformBridge()
+      ..pendingActions = [
+        (
+          conversationId: shown.conversationId,
+          action: PlatformBridge.notificationReply,
+          text: 'on my way',
+          throughMessageId: shown.throughMessageId,
+        ),
+      ];
+    final again = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      vaultStore: vault,
+      createIdentity: false,
+      platformBridge: recorder,
+    );
+    addTearDown(again.dispose);
+    // Done after the reply and the read (which waits for its save).
+    for (var i = 0; i < 250; i++) {
+      if (recorder.actionsDone > 0) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(
+      again.messagesFor(bobId).where((m) => m.outbound).map((m) => m.body),
+      ['on my way'],
+    );
+    expect(again.unreadCountFor(bobId), 0);
+    expect(recorder.pendingActions, isEmpty);
+    expect(recorder.actionsDone, greaterThanOrEqualTo(1));
+  });
+
   test('closing to the tray is on by default, and off stays off', () async {
     final vault = _MemoryVaultStore();
     final first = await _createController(
@@ -28926,6 +29149,9 @@ class _RecordingPlatformBridge extends PlatformBridge {
     String? selfName,
     List<({String sender, String body, int timestampMs})> recentMessages =
         const [],
+    String? replyLabel,
+    String? markReadLabel,
+    String? throughMessageId,
   }) async {
     shown.add(
       _ShowCall(
@@ -28935,8 +29161,34 @@ class _RecordingPlatformBridge extends PlatformBridge {
         senderName: senderName,
         selfName: selfName,
         recentMessages: List.of(recentMessages),
+        replyLabel: replyLabel,
+        markReadLabel: markReadLabel,
+        throughMessageId: throughMessageId,
       ),
     );
+  }
+
+  /// How often Conest said its notification actions were handled.
+  int actionsDone = 0;
+
+  @override
+  Future<void> notificationActionsDone() async => actionsDone++;
+
+  /// Notification actions, as Android would send them.
+  final StreamController<NotificationAction> actions =
+      StreamController<NotificationAction>.broadcast();
+
+  /// Actions taken before Conest ran, handed over once.
+  List<NotificationAction> pendingActions = [];
+
+  @override
+  Stream<NotificationAction> get notificationActions => actions.stream;
+
+  @override
+  Future<List<NotificationAction>> takePendingNotificationActions() async {
+    final taken = pendingActions;
+    pendingActions = [];
+    return taken;
   }
 }
 
@@ -28948,6 +29200,9 @@ class _ShowCall {
     required this.senderName,
     required this.selfName,
     required this.recentMessages,
+    this.replyLabel,
+    this.markReadLabel,
+    this.throughMessageId,
   });
   final String title;
   final String body;
@@ -28955,6 +29210,9 @@ class _ShowCall {
   final String? senderName;
   final String? selfName;
   final List<({String sender, String body, int timestampMs})> recentMessages;
+  final String? replyLabel;
+  final String? markReadLabel;
+  final String? throughMessageId;
 }
 
 /// An in-memory carrier network: each joined controller gets a Nostr

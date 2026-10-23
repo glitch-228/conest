@@ -79,6 +79,9 @@
             android:exported="false"
             android:foregroundServiceType="dataSync|microphone|remoteMessaging" />
         <receiver
+            android:name=".NotificationActionReceiver"
+            android:exported="false" />
+        <receiver
             android:name=".ConestBootReceiver"
             android:exported="true">
             <intent-filter>

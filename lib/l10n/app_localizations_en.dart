@@ -5568,4 +5568,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get trayQuit => 'Quit';
+
+  @override
+  String get notificationReply => 'Reply';
+
+  @override
+  String get notificationMarkRead => 'Mark as read';
+
+  @override
+  String notificationReplyNotSent(String text) {
+    return 'Not sent: $text';
+  }
 }

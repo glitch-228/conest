@@ -894,7 +894,7 @@ class _MatrixBubble extends StatelessWidget {
         return SelectionArea(
           child: LinkedText(
             item.body,
-            openUrl: PlatformBridge().openExternalUrl,
+            openUrl: PlatformBridge.openUrl,
             style: TextStyle(color: foreground),
           ),
         );

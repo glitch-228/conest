@@ -80,7 +80,17 @@ object ConestSystem {
                     call.argument<String>("senderName") ?: title,
                     call.argument<String>("selfName") ?: "me",
                     call.argument<List<Map<String, Any?>>>("recentMessages") ?: emptyList(),
+                    replyLabel = call.argument<String>("replyLabel"),
+                    markReadLabel = call.argument<String>("markReadLabel"),
+                    throughMessageId = call.argument<String>("throughMessageId"),
                 )
+                result.success(null)
+            }
+            "takePendingNotificationActions" -> {
+                result.success(NotificationActionReceiver.takePending(context))
+            }
+            "notificationActionsDone" -> {
+                ConestBackgroundService.finishNotificationWork()
                 result.success(null)
             }
             "dismissMessageNotification" -> {
@@ -243,7 +253,10 @@ object ConestSystem {
         conversationId: String,
         senderName: String,
         selfName: String,
-        recentMessages: List<Map<String, Any?>>
+        recentMessages: List<Map<String, Any?>>,
+        replyLabel: String? = null,
+        markReadLabel: String? = null,
+        throughMessageId: String? = null,
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
@@ -293,9 +306,53 @@ object ConestSystem {
         } else {
             builder.setStyle(Notification.BigTextStyle().bigText(body))
         }
+        // Reply and "Mark as read" right from the notification (Android 7+).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            if (!replyLabel.isNullOrBlank()) {
+                val input = android.app.RemoteInput.Builder(NotificationActionReceiver.KEY_REPLY)
+                    .setLabel(replyLabel)
+                    .build()
+                builder.addAction(
+                    Notification.Action.Builder(
+                        null,
+                        replyLabel,
+                        NotificationActionReceiver.pendingIntent(
+                            context,
+                            conversationId,
+                            NotificationActionReceiver.ACTION_REPLY,
+                            throughMessageId,
+                            mutable = true,
+                        )
+                    ).addRemoteInput(input).setAllowGeneratedReplies(false)
+                        .requireUnlock().build()
+                )
+            }
+            if (!markReadLabel.isNullOrBlank()) {
+                builder.addAction(
+                    Notification.Action.Builder(
+                        null,
+                        markReadLabel,
+                        NotificationActionReceiver.pendingIntent(
+                            context,
+                            conversationId,
+                            NotificationActionReceiver.ACTION_MARK_READ,
+                            throughMessageId,
+                            mutable = false,
+                        )
+                    ).requireUnlock().build()
+                )
+            }
+        }
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(conversationId.hashCode(), builder.build())
         postOrRefreshGroupSummary(context, manager)
+    }
+
+    /// Not from a locked phone: a reply or a read sent from the lock screen
+    /// needs the phone unlocked first (Android 12+).
+    private fun Notification.Action.Builder.requireUnlock(): Notification.Action.Builder {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setAuthenticationRequired(true)
+        return this
     }
 
     fun dismissMessageNotification(context: Context, conversationId: String) {

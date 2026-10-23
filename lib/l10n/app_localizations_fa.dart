@@ -5569,4 +5569,15 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get trayQuit => 'خروج';
+
+  @override
+  String get notificationReply => 'پاسخ';
+
+  @override
+  String get notificationMarkRead => 'علامت‌گذاری به‌عنوان خوانده‌شده';
+
+  @override
+  String notificationReplyNotSent(String text) {
+    return 'ارسال نشد: $text';
+  }
 }

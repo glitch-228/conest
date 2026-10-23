@@ -5699,4 +5699,15 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get trayQuit => 'إنهاء';
+
+  @override
+  String get notificationReply => 'رد';
+
+  @override
+  String get notificationMarkRead => 'تعليم كمقروء';
+
+  @override
+  String notificationReplyNotSent(String text) {
+    return 'لم تُرسل: $text';
+  }
 }

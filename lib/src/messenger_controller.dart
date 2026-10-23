@@ -75,6 +75,8 @@ import 'nostr_carrier.dart';
 import 'native_attachment_crypto.dart';
 import 'network_errors.dart';
 import 'network_history.dart';
+import '../l10n/app_localizations.dart';
+import 'app_locales.dart';
 import 'platform_bridge.dart';
 import 'radio/byte_link.dart';
 import 'ratchet.dart';
@@ -646,6 +648,10 @@ class MessengerController extends ChangeNotifier {
         .listen((_) {
           if (!_disposed) unawaited(_pumpScheduledMessages());
         });
+    _notificationActionSubscription = _platformBridge.notificationActions
+        .listen((action) {
+          if (!_disposed) unawaited(_handleNotificationAction(action));
+        });
     _voiceCallAudioSubscription = _platformBridge.voiceCallAudioFrames.listen(
       (frame) => unawaited(
         _groupCallService?.active != null
@@ -801,6 +807,11 @@ class MessengerController extends ChangeNotifier {
   late final RouteHealthTracker _routeHealthTracker;
   late final StreamSubscription<String> _transferControlSubscription;
   late final StreamSubscription<int> _scheduledMessageWakeupSubscription;
+  late final StreamSubscription<NotificationAction>
+  _notificationActionSubscription;
+
+  /// Notification actions that came before the vault was open.
+  final List<NotificationAction> _notificationActionsBeforeReady = [];
   Timer? _transferNotificationTimer;
   final bool _longPollEnabled;
   final bool _pairingBeaconEnabled;
@@ -4688,7 +4699,96 @@ class MessengerController extends ChangeNotifier {
     } finally {
       _ready = true;
       notifyListeners();
+      unawaited(_runNotificationActionsFromBeforeStart());
     }
+  }
+
+  /// Replies and "Mark as read" chosen on notifications while Conest was
+  /// not running yet, or still opening its vault.
+  Future<void> _runNotificationActionsFromBeforeStart() async {
+    final early = [..._notificationActionsBeforeReady];
+    _notificationActionsBeforeReady.clear();
+    final pending = [
+      ...early,
+      ...await _platformBridge.takePendingNotificationActions(),
+    ];
+    for (final action in pending) {
+      await _handleNotificationAction(action, finish: false);
+    }
+    await _platformBridge.notificationActionsDone();
+  }
+
+  /// Reply or "Mark as read" from a message notification: a reply is sent
+  /// like any message and reads the chat, as answering in it would.
+  ///
+  /// Read covers what the notification showed, never messages that came
+  /// after it. A reply that cannot be sent comes back as a notification
+  /// with its text, so it is never lost unseen.
+  Future<void> _handleNotificationAction(
+    NotificationAction action, {
+    bool finish = true,
+  }) async {
+    if (!_ready || identity == null) {
+      if (_notificationActionsBeforeReady.length < 32) {
+        _notificationActionsBeforeReady.add(action);
+      }
+      return;
+    }
+    final reply = action.action == PlatformBridge.notificationReply;
+    if (!reply && action.action != PlatformBridge.notificationMarkRead) return;
+    final chat = chatForNotification(action.conversationId);
+    final group = chat?.group;
+    final contact = chat?.contact;
+    final text = action.text?.trim() ?? '';
+    try {
+      if (reply) {
+        if (text.isEmpty) return;
+        if (group != null) {
+          await sendGroupMessage(groupId: group.groupId, body: text);
+        } else if (contact != null) {
+          await sendMessage(contact: contact, body: text);
+        } else {
+          throw StateError('no such chat');
+        }
+      }
+      final messages = group != null
+          ? _groupConversation(group.groupId).messages
+          : contact != null
+          ? _conversationFor(contact.deviceId).messages
+          : const <ChatMessage>[];
+      final through = action.throughMessageId == null
+          ? _newestInbound(messages)
+          : messages
+                .where((m) => !m.outbound && m.id == action.throughMessageId)
+                .firstOrNull;
+      if (through != null && group != null) {
+        await markGroupReadThroughMessage(group.groupId, through);
+      } else if (through != null && contact != null) {
+        await markConversationReadThroughMessage(contact.deviceId, through);
+      }
+    } catch (error) {
+      appendDebugLog('Notification ${action.action} failed: $error');
+      if (reply && text.isNotEmpty) {
+        await _platformBridge.showMessageNotification(
+          title: group?.title ?? contact?.alias ?? 'Conest',
+          body: _notificationLabels.notificationReplyNotSent(text),
+          conversationId: action.conversationId,
+        );
+      }
+    } finally {
+      if (finish) await _platformBridge.notificationActionsDone();
+    }
+  }
+
+  ChatMessage? _newestInbound(Iterable<ChatMessage> messages) {
+    ChatMessage? newest;
+    for (final message in messages) {
+      if (message.outbound) continue;
+      if (newest == null || message.createdAt.isAfter(newest.createdAt)) {
+        newest = message;
+      }
+    }
+    return newest;
   }
 
   Future<void> _recoverScheduledMessageTransitions() async {
@@ -23938,6 +24038,11 @@ class MessengerController extends ChangeNotifier {
         senderName: contact.alias,
         selfName: me.displayName,
         recentMessages: recent,
+        replyLabel: _notificationLabels.notificationReply,
+        markReadLabel: _notificationLabels.notificationMarkRead,
+        throughMessageId: _newestInbound(
+          _conversationFor(contact.deviceId).messages,
+        )?.id,
       ),
     );
   }
@@ -23963,9 +24068,17 @@ class MessengerController extends ChangeNotifier {
         senderName: sender.alias,
         selfName: me.displayName,
         recentMessages: recent,
+        replyLabel: _notificationLabels.notificationReply,
+        markReadLabel: _notificationLabels.notificationMarkRead,
+        throughMessageId: _newestInbound(
+          _groupConversation(group.groupId).messages,
+        )?.id,
       ),
     );
   }
+
+  /// Notification strings in the app's language.
+  AppLocalizations get _notificationLabels => l10nForCode(localeCode);
 
   /// A desktop notification while Conest's window is in front only gets
   /// in the way (Android shows its own while the app is open too).
@@ -37039,6 +37152,7 @@ class MessengerController extends ChangeNotifier {
     }
     unawaited(_transferControlSubscription.cancel());
     unawaited(_scheduledMessageWakeupSubscription.cancel());
+    unawaited(_notificationActionSubscription.cancel());
     unawaited(_platformBridge.scheduleAndroidScheduledMessageWakeup(null));
     unawaited(_platformBridge.stopTransferForeground());
     _localRelayNode.onEnvelopeStored = null;

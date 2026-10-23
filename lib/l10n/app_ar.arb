@@ -1446,5 +1446,8 @@
   "closeToTrayTitle": "البقاء في شريط النظام عند الإغلاق",
   "closeToTrayHelp": "تستمر الرسائل في الوصول. افتح Conest مجددًا من أيقونته في شريط النظام أو أنهِه من هناك.",
   "trayShow": "إظهار Conest",
-  "trayQuit": "إنهاء"
+  "trayQuit": "إنهاء",
+  "notificationReply": "رد",
+  "notificationMarkRead": "تعليم كمقروء",
+  "notificationReplyNotSent": "لم تُرسل: {text}"
 }

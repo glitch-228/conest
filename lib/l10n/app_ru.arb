@@ -1446,5 +1446,8 @@
   "closeToTrayTitle": "Оставаться в трее после закрытия",
   "closeToTrayHelp": "Сообщения продолжают приходить. Откройте Conest снова через значок в трее или закройте его там.",
   "trayShow": "Показать Conest",
-  "trayQuit": "Выйти"
+  "trayQuit": "Выйти",
+  "notificationReply": "Ответить",
+  "notificationMarkRead": "Прочитано",
+  "notificationReplyNotSent": "Не отправлено: {text}"
 }

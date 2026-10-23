@@ -1,6 +1,8 @@
 /// The languages Conest ships, by code, with their own names.
 library;
 
+import 'dart:ui' as ui;
+
 import 'package:flutter/widgets.dart';
 
 import '../l10n/app_localizations.dart';
@@ -25,3 +27,16 @@ AppLocalizations l10nOf(BuildContext? context) =>
         ? null
         : Localizations.of<AppLocalizations>(context, AppLocalizations)) ??
     lookupAppLocalizations(const Locale('en'));
+
+/// The app's strings in [code] (the system's language when null), for text
+/// made outside widgets such as notification actions; English for a
+/// language Conest does not ship.
+AppLocalizations l10nForCode(String? code) {
+  try {
+    return lookupAppLocalizations(
+      Locale(code ?? ui.PlatformDispatcher.instance.locale.languageCode),
+    );
+  } catch (_) {
+    return lookupAppLocalizations(const Locale('en'));
+  }
+}

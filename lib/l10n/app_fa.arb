@@ -1446,5 +1446,8 @@
   "closeToTrayTitle": "پس از بستن، در سینی سیستم بماند",
   "closeToTrayHelp": "پیام‌ها همچنان می‌رسند. Conest را دوباره از نماد سینی باز کنید یا از همان‌جا خارج شوید.",
   "trayShow": "نمایش Conest",
-  "trayQuit": "خروج"
+  "trayQuit": "خروج",
+  "notificationReply": "پاسخ",
+  "notificationMarkRead": "علامت‌گذاری به‌عنوان خوانده‌شده",
+  "notificationReplyNotSent": "ارسال نشد: {text}"
 }

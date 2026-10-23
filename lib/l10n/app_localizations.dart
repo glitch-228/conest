@@ -8842,6 +8842,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Quit'**
   String get trayQuit;
+
+  /// Action on a message notification (Android): answer from the notification.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply'**
+  String get notificationReply;
+
+  /// Action on a message notification (Android): mark the chat read without opening it.
+  ///
+  /// In en, this message translates to:
+  /// **'Mark as read'**
+  String get notificationMarkRead;
+
+  /// Notification shown when a reply typed in a notification could not be sent; text is the reply.
+  ///
+  /// In en, this message translates to:
+  /// **'Not sent: {text}'**
+  String notificationReplyNotSent(String text);
 }
 
 class _AppLocalizationsDelegate

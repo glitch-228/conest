@@ -5555,4 +5555,15 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get trayQuit => 'Keluar';
+
+  @override
+  String get notificationReply => 'Balas';
+
+  @override
+  String get notificationMarkRead => 'Tandai sudah dibaca';
+
+  @override
+  String notificationReplyNotSent(String text) {
+    return 'Tidak terkirim: $text';
+  }
 }

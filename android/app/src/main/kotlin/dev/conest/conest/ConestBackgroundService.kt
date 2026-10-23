@@ -26,6 +26,21 @@ class ConestBackgroundService : Service() {
     private var voiceAudioLibraryLoaded = false
     private var voiceCallAudioStarting = false
 
+    /// A reply or "Mark as read" from a notification being handled: Conest
+    /// stays in the foreground until Dart is done, so Android does not end
+    /// the process first.
+    private var notificationWork = false
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val endNotificationWork = Runnable {
+        notificationWork = false
+        if (!backgroundEnabled && !callsEnabled && !hasCall() && !transferActive) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        } else {
+            promoteToForeground()
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         CrashReports.install(this)
@@ -98,8 +113,17 @@ class ConestBackgroundService : Service() {
                 transferPaused = intent.getBooleanExtra(EXTRA_PAUSED, false)
             }
             ACTION_STOP_TRANSFER -> transferActive = false
+            ACTION_NOTIFICATION_WORK -> {
+                notificationWork = true
+                // Never longer than this, even if Dart cannot finish (a
+                // profile locked by a passphrase).
+                mainHandler.removeCallbacks(endNotificationWork)
+                mainHandler.postDelayed(endNotificationWork, NOTIFICATION_WORK_LIMIT_MS)
+            }
         }
-        if (!backgroundEnabled && !callsEnabled && !hasCall() && !transferActive) {
+        if (!backgroundEnabled && !callsEnabled && !hasCall() && !transferActive &&
+            !notificationWork
+        ) {
             // Started with startForegroundService, a service must call
             // startForeground before it stops, even with nothing to show;
             // otherwise Android kills the app (ForegroundServiceDidNot-
@@ -110,7 +134,7 @@ class ConestBackgroundService : Service() {
             return START_NOT_STICKY
         }
         promoteToForeground()
-        if (backgroundEnabled || callsEnabled) {
+        if (backgroundEnabled || callsEnabled || notificationWork) {
             // Conest runs without its screen: the same engine the activity
             // shows when it opens.
             try {
@@ -150,6 +174,7 @@ class ConestBackgroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(endNotificationWork)
         stopVoiceCallAudio()
         if (currentInstance === this) currentInstance = null
         super.onDestroy()
@@ -270,6 +295,10 @@ class ConestBackgroundService : Service() {
                     )
                 )
                 .addAction(action("Cancel all", CONTROL_CANCEL_ALL, 2))
+        } else if (notificationWork && !backgroundEnabled && !callsEnabled) {
+            builder
+                .setContentTitle("Conest")
+                .setContentText("Sending…")
         } else if (callsEnabled) {
             builder
                 .setContentTitle("Conest call availability")
@@ -368,6 +397,38 @@ class ConestBackgroundService : Service() {
             "dev.conest.action.SET_CALL_SPEAKERPHONE"
         const val ACTION_UPDATE_TRANSFER = "dev.conest.action.UPDATE_TRANSFER"
         const val ACTION_STOP_TRANSFER = "dev.conest.action.STOP_TRANSFER"
+        const val ACTION_NOTIFICATION_WORK = "dev.conest.action.NOTIFICATION_WORK"
+        private const val NOTIFICATION_WORK_LIMIT_MS = 120_000L
+        private const val NOTIFICATION_WORK_GRACE_MS = 15_000L
+
+        /// Keeps Conest in the foreground while it handles a notification
+        /// action (allowed from one: the user just acted on Conest's
+        /// notification). False when Android refused.
+        fun startNotificationWork(context: Context): Boolean = try {
+            val intent = Intent(context, ConestBackgroundService::class.java)
+                .setAction(ACTION_NOTIFICATION_WORK)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            true
+        } catch (error: Exception) {
+            android.util.Log.w("Conest", "No foreground for a notification action: $error")
+            false
+        }
+
+        /// Dart handled the notification actions: a little longer for the
+        /// sends to leave, then the service goes unless wanted for more.
+        fun finishNotificationWork() {
+            val service = currentInstance ?: return
+            if (!service.notificationWork) return
+            service.mainHandler.removeCallbacks(service.endNotificationWork)
+            service.mainHandler.postDelayed(
+                service.endNotificationWork,
+                NOTIFICATION_WORK_GRACE_MS
+            )
+        }
         const val EXTRA_ENABLED = "enabled"
         const val EXTRA_PERSIST = "persist"
         const val EXTRA_CALLS_ENABLED = "callsEnabled"
@@ -398,7 +459,7 @@ class ConestBackgroundService : Service() {
             val service = currentInstance ?: return
             service.transferActive = false
             if (!service.backgroundEnabled && !service.callsEnabled &&
-                !service.hasCall()
+                !service.hasCall() && !service.notificationWork
             ) {
                 service.stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE)
                 service.stopSelf()
@@ -412,7 +473,8 @@ class ConestBackgroundService : Service() {
             return service.backgroundEnabled ||
                 service.callsEnabled ||
                 service.hasCall() ||
-                service.transferActive
+                service.transferActive ||
+                service.notificationWork
         }
 
         // Call audio starts asynchronously through a service intent. These
