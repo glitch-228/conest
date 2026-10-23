@@ -494,7 +494,7 @@ jobs:
         with:
           key: linux-debug
           # The bundle build reuses this target directory: cache it, not ./target.
-          workspaces: ". -> build/linux/x64/debug/conest_native_target"
+          workspaces: ". -> build/linux/x64/profile/conest_native_target"
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
@@ -508,51 +508,55 @@ jobs:
         run: |
           cargo build --locked \
             --manifest-path native/conest_native/Cargo.toml \
-            --target-dir build/linux/x64/debug/conest_native_target \
+            --target-dir build/linux/x64/profile/conest_native_target \
             --release
       - name: Test native Opus, adaptive jitter and ratchet behavior
         run: |
           cargo test --locked \
             --manifest-path native/conest_native/Cargo.toml \
-            --target-dir build/linux/x64/debug/conest_native_target \
+            --target-dir build/linux/x64/profile/conest_native_target \
             audio::tests
           cargo test --locked \
             --manifest-path native/conest_native/Cargo.toml \
-            --target-dir build/linux/x64/debug/conest_native_target \
+            --target-dir build/linux/x64/profile/conest_native_target \
             voice_recording::tests
           cargo test --locked \
             --manifest-path native/conest_native/Cargo.toml \
-            --target-dir build/linux/x64/debug/conest_native_target \
+            --target-dir build/linux/x64/profile/conest_native_target \
             api::tests::stalled_media_dial_drops_expired_datagram_without_blocking_messages
           cargo test --locked \
             --manifest-path native/conest_native/Cargo.toml \
-            --target-dir build/linux/x64/debug/conest_native_target \
+            --target-dir build/linux/x64/profile/conest_native_target \
             ratchet::tests
           cargo test --locked \
             --manifest-path native/conest_native/Cargo.toml \
-            --target-dir build/linux/x64/debug/conest_native_target \
+            --target-dir build/linux/x64/profile/conest_native_target \
             matrix::tests
           cargo test --locked \
             --manifest-path native/conest_native/Cargo.toml \
-            --target-dir build/linux/x64/debug/conest_native_target \
+            --target-dir build/linux/x64/profile/conest_native_target \
             transfer::tests
       - name: Build Linux debug bundle
         run: |
           flutter config --enable-linux-desktop
-          flutter build linux --debug \
+          # Profile, not debug: compiled ahead of time like what users run,
+          # so lab timings and battery or CPU use mean something (a debug
+          # build is JIT, and idled at a sixth of a core); the VM service
+          # stays for CPU profiles. Lab runs follow the debug channel.
+          flutter build linux --profile \
             --dart-define=CONEST_BUILD_TAG=${DEBUG_TAG} \
             --dart-define=CONEST_BUILD_CHANNEL=debug \
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true
-          tool/build_lyrebird.sh linux-x64 build/linux/x64/debug/bundle/lyrebird
+          tool/build_lyrebird.sh linux-x64 build/linux/x64/profile/bundle/lyrebird
           mkdir -p dist-stage/conest-debug-linux-x64 dist
-          cp -a build/linux/x64/debug/bundle/. dist-stage/conest-debug-linux-x64/
+          cp -a build/linux/x64/profile/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
       - name: Test forward-secrecy sessions against the native library
         env:
-          CONEST_NATIVE_LIBRARY: ${{ github.workspace }}/build/linux/x64/debug/bundle/lib/libconest_native.so
+          CONEST_NATIVE_LIBRARY: ${{ github.workspace }}/build/linux/x64/profile/bundle/lib/libconest_native.so
           CONEST_REQUIRE_NATIVE_RATCHET: "1"
         run: flutter test test/ratchet_test.dart
       - name: Qualify native group transports
@@ -560,7 +564,7 @@ jobs:
         env:
           CONEST_RUN_IROH_GROUP_CERT: "1"
           CONEST_RELAY_TEST_BINARY: ${{ github.workspace }}/target/debug/conest_relay
-          LD_LIBRARY_PATH: ${{ github.workspace }}/build/linux/x64/debug/bundle/lib
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build/linux/x64/profile/bundle/lib
         run: |
           cargo build -p conest_relay --locked
           flutter test test/messenger_controller_test.dart \
@@ -609,16 +613,17 @@ jobs:
         shell: bash
         run: |
           flutter config --enable-windows-desktop
-          flutter build windows --debug \
+          # Profile, as on Linux: lab numbers from what users run.
+          flutter build windows --profile \
             --dart-define=CONEST_BUILD_TAG=${DEBUG_TAG} \
             --dart-define=CONEST_BUILD_CHANNEL=debug \
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true
-          tool/build_lyrebird.sh windows-x64 build/windows/x64/runner/Debug/lyrebird.exe
+          tool/build_lyrebird.sh windows-x64 build/windows/x64/runner/Profile/lyrebird.exe
           mkdir -p dist-stage/conest-debug-windows-x64 dist
-          cp -a build/windows/x64/runner/Debug/. dist-stage/conest-debug-windows-x64/
+          cp -a build/windows/x64/runner/Profile/. dist-stage/conest-debug-windows-x64/
           powershell -Command "Compress-Archive -Path dist-stage/conest-debug-windows-x64 -DestinationPath dist/conest-debug-windows-x64-${GITHUB_RUN_NUMBER}.zip"
       - uses: actions/upload-artifact@v4
         with:
