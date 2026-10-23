@@ -27,6 +27,10 @@ WORTH = re.compile(
 def main(folder: str) -> None:
     reports = {}
     for path in sorted(pathlib.Path(folder).glob("*.json")):
+        # A serve run's phase reports (linux.json.p1.json) are summarised
+        # in their own folders.
+        if "." in path.stem:
+            continue
         try:
             reports[path.stem] = json.loads(path.read_text())
         except (ValueError, OSError) as error:
@@ -111,6 +115,10 @@ def verdict(folder: str) -> str:
     went out and were confirmed, and that came in."""
     reports = {}
     for path in sorted(pathlib.Path(folder).glob("*.json")):
+        # A serve run's phase reports (linux.json.p1.json) are summarised
+        # in their own folders.
+        if "." in path.stem:
+            continue
         try:
             reports[path.stem] = json.loads(path.read_text())
         except (ValueError, OSError):

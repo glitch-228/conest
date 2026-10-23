@@ -15677,6 +15677,67 @@ void main() {
       },
     );
 
+    test('with every transport but one carrier switched off, contacts are '
+        'reached over it', () async {
+      // The lab's serve mode: carriers first, pairing with everything on,
+      // then one carrier alone at runtime.
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await network.join(alice, 'npub-alice|wss://relay.one');
+      await network.join(bob, 'npub-bob|wss://relay.two');
+      await network.join(
+        alice,
+        'alice@mail.example',
+        kind: TransportKind.deltaChat,
+      );
+      await network.join(
+        bob,
+        'bob@mail.example',
+        kind: TransportKind.deltaChat,
+      );
+      await _pairControllers(alice, bob);
+      await settle([alice, bob]);
+      expect(
+        alice.contacts.single.carrierAddress(TransportKind.nostr),
+        'npub-bob|wss://relay.two',
+      );
+      for (final controller in [alice, bob]) {
+        await controller.updateGlobalConnectivity(
+          controller.identity!.connectivity.copyWith(
+            lanEnabled: false,
+            transportPolicies: {
+              for (final kind in TransportKind.values)
+                kind: kind == TransportKind.nostr
+                    ? TransportPolicy.automatic
+                    : TransportPolicy.disabled,
+            },
+          ),
+        );
+      }
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'over Nostr alone',
+      );
+      await settle([alice, bob]);
+      expect(
+        bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'over Nostr alone'),
+        isTrue,
+      );
+    });
+
     test('contacts can be added over a carrier alone', () async {
       final network = _FakeCarrierNetwork();
       final relay = _FakeRelayClient();

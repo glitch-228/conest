@@ -1639,6 +1639,13 @@ List<Map<String, Object?>> _chatReport(
       {
         'contact': contact.alias,
         'deviceId': contact.deviceId,
+        // The carriers this device knows an address of theirs on (kinds
+        // only): a carrier without one cannot reach them.
+        'carriers': [
+          for (final kind in TransportKind.values)
+            if (kind.isCarrier && contact.carrierAddress(kind) != null)
+              kind.name,
+        ],
         'messages': [
           for (final message in controller.messagesFor(contact.deviceId))
             if (isLab(message)) describe(message),
