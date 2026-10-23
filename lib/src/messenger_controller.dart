@@ -5016,12 +5016,15 @@ class MessengerController extends ChangeNotifier {
     ContactRecord contact,
     GlobalConnectivityPreferences global,
   ) => {
+    // A carrier switched off is paused, not forgotten: contacts keep its
+    // address, so turning it on again when nothing else is left (the mesh
+    // in a blackout) still reaches them. Removing it forgets it, and a
+    // contact it is off for never learns it.
     for (final MapEntry(key: kind, value: carrier)
         in _carrierTransports.entries)
       if (carrier.localAddress case final address?
-          when _carrierAllowed(kind) &&
-              contact.routing.effectivePolicy(kind, global) !=
-                  TransportPolicy.disabled)
+          when conestActive &&
+              contact.routing.policyFor(kind) != TransportPolicy.disabled)
         kind.name: address,
   };
 

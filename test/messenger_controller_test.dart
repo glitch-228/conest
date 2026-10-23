@@ -15847,6 +15847,77 @@ void main() {
       );
     });
 
+    test('a carrier switched off and on again still reaches contacts, with '
+        'no other route left', () async {
+      // The mesh in a blackout: paused while other routes worked, then the
+      // only one. Its address must not have been forgotten meanwhile.
+      final network = _FakeCarrierNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await network.join(alice, 'npub-alice|wss://relay.one');
+      await network.join(bob, 'npub-bob|wss://relay.two');
+      await network.join(
+        alice,
+        'alice@mail.example',
+        kind: TransportKind.deltaChat,
+      );
+      await network.join(
+        bob,
+        'bob@mail.example',
+        kind: TransportKind.deltaChat,
+      );
+      await _pairControllers(alice, bob);
+      await settle([alice, bob]);
+      Future<void> only(TransportKind kept) async {
+        for (final controller in [alice, bob]) {
+          await controller.updateGlobalConnectivity(
+            controller.identity!.connectivity.copyWith(
+              lanEnabled: false,
+              transportPolicies: {
+                for (final kind in TransportKind.values)
+                  kind: kind == kept
+                      ? TransportPolicy.automatic
+                      : TransportPolicy.disabled,
+              },
+            ),
+          );
+        }
+        // Each tells the other what it can be reached on now.
+        for (final controller in [alice, bob]) {
+          await controller.checkContactRoutes(controller.contacts.single);
+        }
+        await settle([alice, bob]);
+      }
+
+      relay.shouldFailStore = (_, _, _, _, _) => true;
+      await only(TransportKind.nostr);
+      await only(TransportKind.deltaChat);
+      expect(
+        alice.contacts.single.carrierAddress(TransportKind.deltaChat),
+        'bob@mail.example',
+      );
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'over mail alone, after a pause',
+      );
+      await settle([alice, bob]);
+      expect(
+        bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'over mail alone, after a pause'),
+        isTrue,
+      );
+    });
+
     test('contacts can be added over a carrier alone', () async {
       final network = _FakeCarrierNetwork();
       final relay = _FakeRelayClient();
