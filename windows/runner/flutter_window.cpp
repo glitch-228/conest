@@ -87,6 +87,30 @@ bool FlutterWindow::OnCreate() {
         } else if (method == "show") {
           ShowFromTray();
           result->Success();
+        } else if (method == "notify") {
+          const auto* map =
+              std::get_if<flutter::EncodableMap>(call.arguments());
+          if (map == nullptr) {
+            result->Error("bad_arguments", "A map is required.");
+            return;
+          }
+          if (!Notify(StringArgument(*map, "chat"),
+                      Widen(StringArgument(*map, "title")),
+                      Widen(StringArgument(*map, "body")))) {
+            result->Error("no_tray", "No tray icon to notify from.");
+            return;
+          }
+          result->Success();
+        } else if (method == "dismissNotification") {
+          const auto* chat = std::get_if<std::string>(call.arguments());
+          if (chat != nullptr && *chat == notified_chat_ && tray_added_) {
+            tray_icon_.uFlags = NIF_INFO;
+            tray_icon_.szInfo[0] = L'\0';
+            tray_icon_.szInfoTitle[0] = L'\0';
+            Shell_NotifyIconW(NIM_MODIFY, &tray_icon_);
+            notified_chat_.clear();
+          }
+          result->Success();
         } else if (method == "quit") {
           SetTray(false, L"");
           result->Success();
@@ -128,6 +152,19 @@ void FlutterWindow::SetTray(bool enabled, const std::wstring& tooltip) {
   // Closing hides the window only when the tray icon is there to bring it
   // back.
   close_to_tray_ = tray_added_;
+}
+
+bool FlutterWindow::Notify(const std::string& chat, const std::wstring& title,
+                           const std::wstring& body) {
+  if (!tray_added_) return false;
+  tray_icon_.uFlags = NIF_INFO;
+  tray_icon_.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
+  tray_icon_.hBalloonIcon =
+      LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
+  wcsncpy_s(tray_icon_.szInfoTitle, title.c_str(), _TRUNCATE);
+  wcsncpy_s(tray_icon_.szInfo, body.empty() ? L" " : body.c_str(), _TRUNCATE);
+  notified_chat_ = chat;
+  return Shell_NotifyIconW(NIM_MODIFY, &tray_icon_) == TRUE;
 }
 
 void FlutterWindow::ShowFromTray() {
@@ -204,6 +241,14 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         case WM_RBUTTONUP:
         case WM_CONTEXTMENU:
           ShowTrayMenu();
+          return 0;
+        case NIN_BALLOONUSERCLICK:
+          ShowFromTray();
+          if (window_channel_ && !notified_chat_.empty()) {
+            window_channel_->InvokeMethod(
+                "notificationClicked",
+                std::make_unique<flutter::EncodableValue>(notified_chat_));
+          }
           return 0;
       }
       return 0;

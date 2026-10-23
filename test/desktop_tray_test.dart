@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:conest/src/desktop_notifications.dart';
 import 'package:conest/src/desktop_tray.dart';
 import 'package:conest/src/storage.dart';
 import 'package:dbus/dbus.dart';
@@ -17,6 +18,34 @@ class _FakeWatcher extends DBusObject {
     if (methodCall.name == 'RegisterStatusNotifierItem') {
       registered.add(methodCall.values.first.asString());
       return DBusMethodSuccessResponse();
+    }
+    return DBusMethodErrorResponse.unknownMethod();
+  }
+}
+
+/// The desktop's notification service: notes what is shown and closed.
+class _FakeNotifications extends DBusObject {
+  _FakeNotifications()
+    : super(DBusObjectPath('/org/freedesktop/Notifications'));
+  final shown = <(int, String, String)>[];
+  final closed = <int>[];
+  var _next = 1;
+
+  @override
+  Future<DBusMethodResponse> handleMethodCall(DBusMethodCall methodCall) async {
+    switch (methodCall.name) {
+      case 'Notify':
+        final replaces = methodCall.values[1].asUint32();
+        final id = replaces == 0 ? _next++ : replaces;
+        shown.add((
+          id,
+          methodCall.values[3].asString(),
+          methodCall.values[4].asString(),
+        ));
+        return DBusMethodSuccessResponse([DBusUint32(id)]);
+      case 'CloseNotification':
+        closed.add(methodCall.values.first.asUint32());
+        return DBusMethodSuccessResponse();
     }
     return DBusMethodErrorResponse.unknownMethod();
   }
@@ -162,6 +191,50 @@ void main() {
     expect(quit, 1);
     expect(shown, 1);
   }, skip: skip);
+
+  test(
+    'Linux notifications: one per chat, a click names it, read closes it',
+    () async {
+      final bus = await _privateBus();
+      if (bus == null) return markTestSkipped('no dbus-daemon here');
+      final (daemon, address) = bus;
+      addTearDown(daemon.kill);
+      final desktop = DBusClient(DBusAddress(address));
+      addTearDown(desktop.close);
+      final service = _FakeNotifications();
+      await desktop.requestName('org.freedesktop.Notifications');
+      await desktop.registerObject(service);
+
+      final notifications = DesktopNotifications(
+        sessionBus: () async => DBusClient(DBusAddress(address)),
+      );
+      addTearDown(notifications.close);
+      final opened = <String>[];
+      final listening = notifications.opened.listen(opened.add);
+      addTearDown(listening.cancel);
+      await notifications.show(chat: 'chat-a', title: 'Alice', body: 'hi');
+      await notifications.show(chat: 'chat-a', title: 'Alice', body: 'again');
+      await notifications.show(chat: 'chat-b', title: 'Bob', body: 'yo');
+      // A second message in a chat replaces its notification.
+      expect(service.shown.map((s) => s.$1), [1, 1, 2]);
+      expect(service.shown.first.$2, 'Alice');
+      expect(service.shown[1].$3, 'again');
+
+      await service.emitSignal(
+        'org.freedesktop.Notifications',
+        'ActionInvoked',
+        [const DBusUint32(2), const DBusString('default')],
+      );
+      for (var i = 0; i < 50 && opened.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(opened, ['chat-b']);
+
+      await notifications.dismiss('chat-a');
+      expect(service.closed, [1]);
+    },
+    skip: skip,
+  );
 
   test('another start asks the running Conest to come forward', () async {
     final directory = await Directory.systemTemp.createTemp('conest_show_');

@@ -1483,6 +1483,41 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 void main() {
   deltaContentControllerTests();
   _localizationControllerTests();
+  test('a desktop notifies only while Conest is not in front', () async {
+    final relay = _FakeRelayClient();
+    final recorder = _RecordingPlatformBridge();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      platformBridge: recorder,
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    Future<void> bobWrites(String body) async {
+      await bob.sendMessage(contact: bob.contacts.single, body: body);
+      for (var i = 0; i < 5; i++) {
+        await alice.pollNow();
+        if (alice
+            .messagesFor(bob.identity!.deviceId)
+            .any((m) => m.body == body)) {
+          break;
+        }
+      }
+    }
+
+    alice.setAppForegroundState(true);
+    await bobWrites('while looking');
+    expect(
+      recorder.shown.map((call) => call.body),
+      isNot(contains('while looking')),
+    );
+    alice.setAppForegroundState(false);
+    await bobWrites('while away');
+    expect(recorder.shown.map((call) => call.body), contains('while away'));
+  });
+
   test('closing to the tray is on by default, and off stays off', () async {
     final vault = _MemoryVaultStore();
     final first = await _createController(

@@ -23909,7 +23909,8 @@ class MessengerController extends ChangeNotifier {
     final me = identity;
     if (me == null ||
         !me.notificationsEnabled ||
-        _conversationFor(contact.deviceId).muted) {
+        _conversationFor(contact.deviceId).muted ||
+        _notificationWhileInFront) {
       return;
     }
     final recent = _recentInboundLinesForContact(contact, defaultBody: body);
@@ -23933,7 +23934,8 @@ class MessengerController extends ChangeNotifier {
     final me = identity;
     if (me == null ||
         !me.notificationsEnabled ||
-        _groupConversation(group.groupId).muted) {
+        _groupConversation(group.groupId).muted ||
+        _notificationWhileInFront) {
       return;
     }
     final recent = _recentInboundLinesForGroup(group);
@@ -23948,6 +23950,11 @@ class MessengerController extends ChangeNotifier {
       ),
     );
   }
+
+  /// A desktop notification while Conest's window is in front only gets
+  /// in the way (Android shows its own while the app is open too).
+  bool get _notificationWhileInFront =>
+      !_platformBridge.runsOnAndroid && _appInForeground;
 
   static const int _notificationRecentMessageCap = 5;
 

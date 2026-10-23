@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'desktop_notifications.dart';
 import 'energy_policy.dart';
 import 'voice_audio_ffi.dart';
 
@@ -152,6 +153,20 @@ class PlatformBridge {
 
   /// Whether this is Android (tests stand in for one).
   bool get runsOnAndroid => _supportsAndroidSystemCalls;
+
+  /// Message notifications on Linux and Windows.
+  late final DesktopNotifications? _desktopNotifications =
+      !kIsWeb && (Platform.isLinux || Platform.isWindows)
+      ? DesktopNotifications()
+      : null;
+
+  /// The chat whose notification was clicked (desktops).
+  Stream<String> get notificationOpens =>
+      _desktopNotifications?.opened ?? const Stream<String>.empty();
+
+  /// Windows: the runner reports a click on its tray notification.
+  void notificationClicked(String chat) =>
+      _desktopNotifications?.clickedOnWindows(chat);
 
   /// Whether Android leaves Conest out of battery optimisation; null where
   /// that cannot be told (not Android, an older app part).
@@ -494,6 +509,11 @@ class PlatformBridge {
         const [],
   }) async {
     if (!_supportsAndroidSystemCalls) {
+      await _desktopNotifications?.show(
+        chat: conversationId,
+        title: title,
+        body: body,
+      );
       return;
     }
     try {
@@ -522,6 +542,7 @@ class PlatformBridge {
     required String conversationId,
   }) async {
     if (!_supportsAndroidSystemCalls) {
+      await _desktopNotifications?.dismiss(conversationId);
       return;
     }
     try {

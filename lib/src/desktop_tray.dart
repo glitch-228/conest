@@ -36,15 +36,21 @@ class DesktopTray {
   }
 
   /// Puts Conest in the tray; false where there is no tray to put it in.
-  /// [onQuit] runs for "Quit" (it saves, then calls [quit]).
+  /// [onQuit] runs for "Quit" (it saves, then calls [quit]);
+  /// [onNotificationClicked] for a click on a notification from the tray
+  /// icon (Windows), with its chat.
   Future<bool> start(
     TrayLabels labels, {
     required void Function() onQuit,
+    void Function(String chat)? onNotificationClicked,
   }) async {
     await stop();
     if (Platform.isWindows) {
       _window.setMethodCallHandler((call) async {
         if (call.method == 'quitRequested') onQuit();
+        if (call.method == 'notificationClicked' && call.arguments is String) {
+          onNotificationClicked?.call(call.arguments as String);
+        }
       });
       final added = await _invoke<bool>('setCloseToTray', {
         'enabled': true,

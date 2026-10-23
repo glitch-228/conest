@@ -1163,6 +1163,9 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
           (_) => unawaited(_tray.show()),
           onError: (Object _) {},
         );
+        // A notification clicked: the window comes forward.
+        _notificationOpens = widget.controller.platformBridge.notificationOpens
+            .listen((_) => unawaited(_tray.show()));
         _syncTray();
       }
       final messenger = _messengerKey.currentState;
@@ -1193,6 +1196,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   final DesktopTray _tray = DesktopTray();
   bool? _trayWanted;
   StreamSubscription<void>? _showRequests;
+  StreamSubscription<String>? _notificationOpens;
 
   bool get _desktopTraySupported =>
       !kIsWeb && (Platform.isLinux || Platform.isWindows);
@@ -1223,11 +1227,12 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     }
     final l10n = _trayLocalizations();
     unawaited(
-      _tray.start((
-        tooltip: 'Conest',
-        show: l10n.trayShow,
-        quit: l10n.trayQuit,
-      ), onQuit: () => unawaited(_quitFromTray())),
+      _tray.start(
+        (tooltip: 'Conest', show: l10n.trayShow, quit: l10n.trayQuit),
+        onQuit: () => unawaited(_quitFromTray()),
+        onNotificationClicked:
+            widget.controller.platformBridge.notificationClicked,
+      ),
     );
   }
 
@@ -1313,6 +1318,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     widget.controller.removeListener(_handleControllerChanged);
     widget.updateService.removeListener(_handleUpdateServiceChanged);
     unawaited(_showRequests?.cancel());
+    unawaited(_notificationOpens?.cancel());
     unawaited(_tray.stop());
     _exitListener.dispose();
     CrashCatcher.instance

@@ -1,0 +1,155 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:dbus/dbus.dart';
+import 'package:flutter/services.dart';
+
+/// Message notifications on desktops: Linux through the desktop's
+/// notification service (org.freedesktop.Notifications, over D-Bus with no
+/// native library), Windows from Conest's tray icon. One notification per
+/// chat, replaced as more arrives; clicking it brings Conest forward and
+/// names the chat ([opened]).
+class DesktopNotifications {
+  DesktopNotifications({
+    MethodChannel window = const MethodChannel('dev.conest.conest/window'),
+    Future<DBusClient?> Function()? sessionBus,
+  }) : _window = window,
+       _sessionBus = sessionBus ?? _defaultSessionBus;
+
+  final MethodChannel _window;
+  final Future<DBusClient?> Function() _sessionBus;
+  final _opened = StreamController<String>.broadcast();
+
+  /// The chat whose notification was clicked.
+  Stream<String> get opened => _opened.stream;
+
+  DBusClient? _bus;
+  Future<DBusClient?>? _connecting;
+  StreamSubscription<DBusSignal>? _actions;
+
+  /// Notification ids by chat (Linux), and chats by id.
+  final Map<String, int> _ids = {};
+  final Map<int, String> _chats = {};
+
+  static Future<DBusClient?> _defaultSessionBus() async {
+    try {
+      return DBusClient.session();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static final _path = DBusObjectPath('/org/freedesktop/Notifications');
+  static const _name = 'org.freedesktop.Notifications';
+
+  Future<DBusClient?> _connect() => _connecting ??= () async {
+    final bus = await _sessionBus();
+    if (bus == null) return null;
+    _bus = bus;
+    _actions =
+        DBusSignalStream(
+          bus,
+          sender: _name,
+          interface: _name,
+          name: 'ActionInvoked',
+          path: _path,
+          signature: DBusSignature('us'),
+        ).listen((signal) {
+          final chat = _chats[signal.values.first.asUint32()];
+          if (chat != null) _opened.add(chat);
+        });
+    return bus;
+  }();
+
+  /// Shows (or replaces) [chat]'s notification.
+  Future<void> show({
+    required String chat,
+    required String title,
+    required String body,
+  }) async {
+    if (Platform.isWindows) {
+      try {
+        await _window.invokeMethod<void>('notify', {
+          'chat': chat,
+          'title': title,
+          'body': body,
+        });
+      } on MissingPluginException {
+        // An older runner: no notification.
+      } on PlatformException {
+        // No tray icon to show it from.
+      }
+      return;
+    }
+    if (!Platform.isLinux) return;
+    final bus = await _connect();
+    if (bus == null) return;
+    try {
+      final reply = await bus.callMethod(
+        destination: _name,
+        path: _path,
+        interface: _name,
+        name: 'Notify',
+        values: [
+          const DBusString('Conest'),
+          DBusUint32(_ids[chat] ?? 0),
+          const DBusString('conest'),
+          DBusString(title),
+          DBusString(body),
+          DBusArray.string(const ['default', 'Open']),
+          DBusDict.stringVariant({
+            'category': const DBusString('im.received'),
+            'desktop-entry': const DBusString('conest'),
+          }),
+          const DBusInt32(-1),
+        ],
+        replySignature: DBusSignature('u'),
+      );
+      final id = reply.values.first.asUint32();
+      final previous = _ids[chat];
+      if (previous != null && previous != id) _chats.remove(previous);
+      _ids[chat] = id;
+      _chats[id] = chat;
+    } catch (_) {
+      // No notification service on this desktop.
+    }
+  }
+
+  /// Takes [chat]'s notification away (it was read).
+  Future<void> dismiss(String chat) async {
+    if (Platform.isWindows) {
+      try {
+        await _window.invokeMethod<void>('dismissNotification', chat);
+      } on MissingPluginException {
+        // An older runner.
+      } on PlatformException {
+        // Nothing shown.
+      }
+      return;
+    }
+    final id = _ids.remove(chat);
+    if (id == null) return;
+    _chats.remove(id);
+    final bus = _bus;
+    if (bus == null) return;
+    try {
+      await bus.callMethod(
+        destination: _name,
+        path: _path,
+        interface: _name,
+        name: 'CloseNotification',
+        values: [DBusUint32(id)],
+        replySignature: DBusSignature(''),
+      );
+    } catch (_) {}
+  }
+
+  /// Windows: the runner reports a click on its notification.
+  void clickedOnWindows(String chat) => _opened.add(chat);
+
+  Future<void> close() async {
+    await _actions?.cancel();
+    await _bus?.close();
+    await _opened.close();
+  }
+}

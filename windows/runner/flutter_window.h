@@ -42,10 +42,14 @@ class FlutterWindow : public Win32Window {
   NOTIFYICONDATAW tray_icon_ = {};
   std::wstring tray_show_label_ = L"Show Conest";
   std::wstring tray_quit_label_ = L"Quit";
+  // The chat of the notification last shown from the tray icon.
+  std::string notified_chat_;
 
   void SetTray(bool enabled, const std::wstring& tooltip);
   void ShowFromTray();
   void ShowTrayMenu();
+  bool Notify(const std::string& chat, const std::wstring& title,
+              const std::wstring& body);
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
