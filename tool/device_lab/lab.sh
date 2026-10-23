@@ -203,11 +203,13 @@ start_phone() { # serial ("" = adb's default), name, group title or "", invitesâ
   [ -n "$serial" ] && adb=(adb -s "$serial")
   "${adb[@]}" shell am force-stop "$PACKAGE"
   # The Bluetooth mesh asks for these and nobody is there to tap Allow;
-  # some phones (Xiaomi) refuse pm grant from adb, but not as root.
+  # some phones (Xiaomi) refuse pm grant from adb, but not as root. One the
+  # app does not ask for (or the phone does not have) is refused: that must
+  # not end the run (set -e ended it silently on the second phone).
   for permission in BLUETOOTH_SCAN BLUETOOTH_CONNECT BLUETOOTH_ADVERTISE \
     ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION POST_NOTIFICATIONS NEARBY_WIFI_DEVICES \
     RECORD_AUDIO; do
-    ANDROID_SERIAL=${serial:-${ANDROID_SERIAL:-}} adb_root "pm grant $PACKAGE android.permission.$permission"
+    ANDROID_SERIAL=${serial:-${ANDROID_SERIAL:-}} adb_root "pm grant $PACKAGE android.permission.$permission" || true
   done
   "${adb[@]}" shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
   local args="--debug-run=$RUN --debug-name=$name --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-idle=$IDLE --debug-serve=600 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args "$name")"

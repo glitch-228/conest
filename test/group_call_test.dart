@@ -203,6 +203,42 @@ void main() {
     },
   );
 
+  test('a signal not taken says why', () async {
+    final net = await network(2);
+    await net.connect(['p0', 'p1']);
+    final p0 = net.peers['p0']!.service;
+    final room = p0.active!;
+    GroupCallSignal signal(DateTime issuedAt) => GroupCallSignal(
+      groupId: 'group',
+      callId: room.callId,
+      senderDeviceId: 'p1',
+      action: 'join',
+      issuedAt: issuedAt,
+      payload: const {'admission': 'abcdefghijklmnopqrstuv'},
+    );
+    expect(
+      await p0.receiveSignal(
+        signal(net.time.subtract(const Duration(seconds: 20))),
+        authenticatedSender: 'p1',
+      ),
+      isFalse,
+    );
+    expect(p0.lastRefusal, 'too old (20 s)');
+    expect(
+      await p0.receiveSignal(
+        signal(net.time.add(const Duration(seconds: 5))),
+        authenticatedSender: 'p1',
+      ),
+      isFalse,
+    );
+    expect(p0.lastRefusal, 'from the future');
+    expect(
+      await p0.receiveSignal(signal(net.time), authenticatedSender: 'p0'),
+      isFalse,
+    );
+    expect(p0.lastRefusal, 'not its sender');
+  });
+
   test('a different listener cannot forge another sender signature', () async {
     final net = await network(3);
     await net.connect(net.peers.keys);

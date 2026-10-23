@@ -539,11 +539,22 @@ class GroupCallService {
     );
   }
 
+  /// Why the last signal was not taken (the debug log reads it).
+  String? lastRefusal;
+
+  bool _refuse(String why) {
+    lastRefusal = why;
+    return false;
+  }
+
   Future<bool> receiveSignal(
     GroupCallSignal signal, {
     required String authenticatedSender,
   }) {
-    if (_disposed || _controlJobs >= 32) return Future.value(false);
+    if (_disposed || _controlJobs >= 32) {
+      lastRefusal = _disposed ? 'disposed' : 'busy';
+      return Future.value(false);
+    }
     _controlJobs++;
     return _receiveSignal(
       signal,
@@ -557,23 +568,33 @@ class GroupCallService {
     GroupCallSignal signal, {
     required String authenticatedSender,
   }) => _serial(() async {
-    if (_disposed ||
-        signal.senderDeviceId != authenticatedSender ||
-        authenticatedSender == localDeviceId ||
-        _member(signal.groupId, localDeviceId)?.canJoin != true ||
-        _member(signal.groupId, authenticatedSender)?.canJoin != true ||
-        now().difference(signal.issuedAt).abs() > const Duration(seconds: 15) ||
-        signal.issuedAt.isAfter(now().add(const Duration(seconds: 2))) ||
-        _terminal.contains(_callIdentity(signal.groupId, signal.callId))) {
-      return false;
-    }
+    final refused = _disposed
+        ? 'disposed'
+        : signal.senderDeviceId != authenticatedSender
+        ? 'not its sender'
+        : authenticatedSender == localDeviceId
+        ? 'own'
+        : _member(signal.groupId, localDeviceId)?.canJoin != true
+        ? 'this device cannot join'
+        : _member(signal.groupId, authenticatedSender)?.canJoin != true
+        ? 'sender cannot join'
+        : now().difference(signal.issuedAt).abs() > const Duration(seconds: 15)
+        ? 'too old (${now().difference(signal.issuedAt).inSeconds} s)'
+        : signal.issuedAt.isAfter(now().add(const Duration(seconds: 2)))
+        ? 'from the future'
+        : _terminal.contains(_callIdentity(signal.groupId, signal.callId))
+        ? 'call over'
+        : null;
+    if (refused != null) return _refuse(refused);
     var room = roomFor(signal.groupId);
     try {
       if (signal.action == 'start') {
         // Count before allocation or existing-room early returns. Evicting an
         // idle room cannot reset this global discovery/notification budget.
-        if (!_startRate.accept(now(), 8)) return false;
-        if (room != null && room.callId != signal.callId) return false;
+        if (!_startRate.accept(now(), 8)) return _refuse('L594');
+        if (room != null && room.callId != signal.callId) {
+          return _refuse('L595');
+        }
         final started = DateTime.tryParse(
           signal.payload['startedAt'] as String? ?? '',
         );
@@ -594,7 +615,7 @@ class GroupCallService {
                 (room.startedBy != startedBy ||
                     room.startedAt != started ||
                     room.startSignature != signature))) {
-          return false;
+          return _refuse('L608');
         }
         if (room == null) {
           final proof = base64Decode(signature);
@@ -608,7 +629,7 @@ class GroupCallService {
               !(await (verifyStart == null
                   ? verify(startedBy, bytes, proof)
                   : verifyStart!(signal.groupId, startedBy, bytes, proof)))) {
-            return false;
+            return _refuse('L622');
           }
           room = GroupCallRoom(
             groupId: signal.groupId,
@@ -625,7 +646,7 @@ class GroupCallService {
               coordinator: authenticatedSender,
             ),
           );
-          if (!_applyRoster(room, signal.payload)) return false;
+          if (!_applyRoster(room, signal.payload)) return _refuse('L647');
           _reserveRoom(room);
           room.seen[authenticatedSender] = now();
           _notify();
@@ -634,24 +655,24 @@ class GroupCallService {
         }
         if (!_considerAuthority(room, signal) ||
             !_applyRoster(room, signal.payload, allowSame: true)) {
-          return false;
+          return _refuse('L648');
         }
         room.seen[authenticatedSender] = now();
         if (room.joined && !room.connected) room.lastJoinSent = null;
         _notify();
         return true;
       }
-      if (room == null || room.callId != signal.callId) return false;
+      if (room == null || room.callId != signal.callId) return _refuse('L663');
       if (!room.signalRates
           .putIfAbsent(authenticatedSender, GroupCallRateLimit.new)
           .accept(now(), authenticatedSender == room.coordinator ? 48 : 12)) {
-        return false;
+        return _refuse('L659');
       }
       if (signal.action != 'join' &&
           signal.action != 'roster' &&
           signal.action != 'key' &&
           (signal.payload['term'] ?? 0) != room.term) {
-        return false;
+        return _refuse('L665');
       }
       if (room.participants.any((p) => p.deviceId == authenticatedSender)) {
         room.seen[authenticatedSender] = now();
@@ -665,13 +686,13 @@ class GroupCallService {
               term is! int ||
               term < 0 ||
               term > 0x7fffffff) {
-            return false;
+            return _refuse('L679');
           }
           final intent = room.joinIntents[authenticatedSender];
           if (intent != null &&
               (signal.issuedAt.isBefore(intent.$2) ||
                   (signal.issuedAt == intent.$2 && admission != intent.$1))) {
-            return false;
+            return _refuse('L685');
           }
           if (intent == null && room.joinIntents.length >= 128) {
             final oldest = room.joinIntents.entries.reduce(
@@ -704,7 +725,7 @@ class GroupCallService {
           final old = List<GroupCallParticipant>.of(room.participants);
           if (existing == null) {
             if (room.participants.length >= groupCallMaxParticipants) {
-              return false;
+              return _refuse('L718');
             }
             final index = List.generate(
               groupCallMaxParticipants,
@@ -715,7 +736,7 @@ class GroupCallService {
               GroupCallParticipant(authenticatedSender, index),
             ];
           } else {
-            if (existing.version >= 0x7fffffff) return false;
+            if (existing.version >= 0x7fffffff) return _refuse('L737');
             room.participants = room.participants
                 .map(
                   (p) => p.deviceId == authenticatedSender
@@ -731,9 +752,9 @@ class GroupCallService {
           if (!room.participants.any(
             (p) => p.deviceId == authenticatedSender,
           )) {
-            return false;
+            return _refuse('L745');
           }
-          if (signal.payload['epoch'] != room.epoch) return false;
+          if (signal.payload['epoch'] != room.epoch) return _refuse('L755');
           await _remove(room, authenticatedSender);
         case 'roster':
         case 'key':
@@ -744,7 +765,7 @@ class GroupCallService {
                 signal.payload['admission'] != room.admission ||
                 signal.payload['key'] is! String ||
                 (signal.payload['key'] as String).length != 44) {
-              return false;
+              return _refuse('L758');
             }
             final key = base64Decode(signal.payload['key'] as String);
             try {
@@ -760,13 +781,13 @@ class GroupCallService {
                   !GroupCallParticipant.parse(
                     signal.payload['participants'],
                   ).any((p) => p.deviceId == localDeviceId)) {
-                return false;
+                return _refuse('L774');
               }
               // Rejected key messages must not close the current cipher or
               // advance leadership. Validate the entire key action first.
-              if (!_considerAuthority(room, signal)) return false;
+              if (!_considerAuthority(room, signal)) return _refuse('L786');
               if (!_applyRoster(room, signal.payload, allowSame: true)) {
-                return false;
+                return _refuse('L780');
               }
               await room.cipher.install(room.epoch, key, room.participants);
               room.needsAdmission = false;
@@ -774,8 +795,8 @@ class GroupCallService {
               key.fillRange(0, key.length, 0);
             }
           } else {
-            if (!_considerAuthority(room, signal)) return false;
-            if (!_applyRoster(room, signal.payload)) return false;
+            if (!_considerAuthority(room, signal)) return _refuse('L796');
+            if (!_applyRoster(room, signal.payload)) return _refuse('L797');
             if (room.joined &&
                 !room.participants.any((p) => p.deviceId == localDeviceId)) {
               room.needsAdmission = true;
@@ -786,12 +807,12 @@ class GroupCallService {
           if (!room.participants.any(
             (p) => p.deviceId == authenticatedSender,
           )) {
-            return false;
+            return _refuse('L800');
           }
           final stats = GroupCallLinkStats.fromJson(signal.payload);
           if (room.statsIssued[authenticatedSender]?.isAfter(signal.issuedAt) ==
               true) {
-            return false;
+            return _refuse('L805');
           }
           room.stats[authenticatedSender] = stats;
           room.statsIssued[authenticatedSender] = signal.issuedAt;
@@ -804,13 +825,13 @@ class GroupCallService {
         case 'topology':
           if (authenticatedSender != room.coordinator ||
               signal.payload['rosterVersion'] != room.version) {
-            return false;
+            return _refuse('L818');
           }
           final revision = signal.payload['version'];
           if (revision is! int ||
               revision <= room.topologyVersion ||
               revision > 0x7fffffff) {
-            return false;
+            return _refuse('L824');
           }
           final snapshot = parseGroupCallStatsSnapshot(
             signal.payload['stats'],
@@ -827,26 +848,26 @@ class GroupCallService {
                             .toList(),
                         snapshot,
                       ))) {
-            return false;
+            return _refuse('L841');
           }
           if (forwarder == null &&
               room.participants.length > policy.meshLimit) {
-            return false;
+            return _refuse('L845');
           }
           room.topologyVersion = revision;
           _setForwarder(room, forwarder as String?);
           room.stats.addAll(snapshot);
         default:
-          return false;
+          return _refuse('L851');
       }
       _notify();
       return true;
     } on FormatException {
-      return false;
+      return _refuse('L856');
     } on TypeError {
-      return false;
+      return _refuse('L858');
     } on StateError {
-      return false;
+      return _refuse('L860');
     }
   });
 

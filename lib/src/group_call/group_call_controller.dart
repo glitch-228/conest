@@ -378,7 +378,10 @@ extension GroupCallController on MessengerController {
         authenticatedSender: sender.deviceId,
       );
       if (taken == false) {
-        _noteGroupCallTrouble('${signal.action} from $from: not taken');
+        _noteGroupCallTrouble(
+          '${signal.action} from $from: not taken '
+          '(${_groupCallService?.lastRefusal})',
+        );
       }
     } catch (error) {
       // The kind only: plaintext or key-bearing text never goes to logs.
