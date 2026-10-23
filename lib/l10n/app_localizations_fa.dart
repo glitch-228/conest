@@ -5523,4 +5523,37 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get routeShortOwnDevice => 'دستگاه شما';
+
+  @override
+  String get backgroundReceiveTitle => 'دریافت پیام‌ها در پس‌زمینه';
+
+  @override
+  String get backgroundReceiveHelp =>
+      'پیام‌ها و تماس‌ها وقتی Conest بسته است هم می‌رسند. تا وقتی اجرا می‌شود، Android یک اعلان بی‌صدا نشان می‌دهد.';
+
+  @override
+  String get batteryExemptionTitle => 'بهینه‌سازی باتری';
+
+  @override
+  String get batteryExemptionAllowed =>
+      'بدون محدودیت: Android برنامهٔ Conest را در پس‌زمینه متوقف نمی‌کند.';
+
+  @override
+  String get batteryExemptionLimited =>
+      'ممکن است Android برنامهٔ Conest را در پس‌زمینه متوقف کند و پیام‌ها تا باز کردن آن منتظر بمانند.';
+
+  @override
+  String get batteryExemptionAllow => 'اجازه بده';
+
+  @override
+  String get batteryExemptionPromptTitle => 'دریافت پیام‌ها ادامه پیدا کند';
+
+  @override
+  String get batteryExemptionPromptBody =>
+      'برای دریافت پیام‌ها وقتی Conest بسته است، Android باید اجازه دهد در پس‌زمینه اجرا شود. در صفحهٔ بعد، اجازه دهید Conest بدون محدودیت باتری اجرا شود.';
+
+  @override
+  String batteryExemptionVendorHint(String maker) {
+    return 'در گوشی‌های $maker، «شروع خودکار» را هم برای Conest روشن کنید و صرفه‌جویی باتری آن را روی «بدون محدودیت» بگذارید (تنظیمات ← برنامه‌ها ← Conest).';
+  }
 }

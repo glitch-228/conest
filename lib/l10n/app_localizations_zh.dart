@@ -5280,4 +5280,36 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get routeShortOwnDevice => '你的设备';
+
+  @override
+  String get backgroundReceiveTitle => '在后台接收消息';
+
+  @override
+  String get backgroundReceiveHelp =>
+      'Conest 关闭时也能收到消息和通话。运行期间 Android 会显示一条静默通知。';
+
+  @override
+  String get batteryExemptionTitle => '电池优化';
+
+  @override
+  String get batteryExemptionAllowed => '不受限制：Android 不会在后台停止 Conest。';
+
+  @override
+  String get batteryExemptionLimited =>
+      'Android 可能会在后台停止 Conest，届时消息要等你打开它才会到达。';
+
+  @override
+  String get batteryExemptionAllow => '允许';
+
+  @override
+  String get batteryExemptionPromptTitle => '持续接收消息';
+
+  @override
+  String get batteryExemptionPromptBody =>
+      '要在 Conest 关闭时收到消息，Android 必须允许它在后台运行。请在下一个界面允许 Conest 不受电池限制地运行。';
+
+  @override
+  String batteryExemptionVendorHint(String maker) {
+    return '在 $maker 手机上，还请为 Conest 开启“自启动”，并将其省电策略设为“无限制”（设置 → 应用 → Conest）。';
+  }
 }

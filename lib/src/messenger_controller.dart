@@ -118,9 +118,11 @@ import 'content_routing.dart';
 part 'delta_attachments_controller.dart';
 part 'group_call/group_call_controller.dart';
 
+/// Receiving in the background on Android: in every build since v0.4.2
+/// (only debug builds had it before); a build can still leave it out.
 const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
   'CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME',
-  defaultValue: false,
+  defaultValue: true,
 );
 
 /// Fallback attachment cache root used when the constructor caller
@@ -4624,7 +4626,21 @@ class MessengerController extends ChangeNotifier {
           storedIdentity?.androidBackgroundCallsEnabled == true &&
           (!_platformBridge.supportsVoiceCallMedia ||
               !experimentalAndroidBackgroundRuntimeAvailable);
+      // Receiving in the background is on by default on Android, applied
+      // once to devices from before it was (they had no choice of it):
+      // turned off after that, it stays off.
       if (storedIdentity != null &&
+          _platformBridge.runsOnAndroid &&
+          experimentalAndroidBackgroundRuntimeAvailable &&
+          !storedIdentity.androidBackgroundDefaultApplied) {
+        _snapshot = _snapshot.copyWith(
+          identity: storedIdentity.copyWith(
+            androidBackgroundRuntimeEnabled: true,
+            androidBackgroundDefaultApplied: true,
+          ),
+        );
+        await _saveSnapshotSilently(notify: false);
+      } else if (storedIdentity != null &&
           (backgroundRuntimeUnavailable || backgroundCallsUnavailable)) {
         _snapshot = _snapshot.copyWith(
           identity: storedIdentity.copyWith(
@@ -10476,6 +10492,46 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// Whether to ask now to leave Conest out of battery optimisation: on
+  /// Android, receiving in the background, not left out yet, never asked.
+  Future<bool> shouldAskBatteryExemption() async {
+    final me = identity;
+    if (me == null ||
+        !_platformBridge.runsOnAndroid ||
+        !me.androidBackgroundRuntimeEnabled ||
+        me.batteryExemptionAskedAt != null) {
+      return false;
+    }
+    return await _platformBridge.batteryOptimizationExempt() == false;
+  }
+
+  /// Whether Android leaves Conest out of battery optimisation (null where
+  /// that cannot be told).
+  Future<bool?> batteryOptimizationExempt() =>
+      _platformBridge.batteryOptimizationExempt();
+
+  /// Opens Android's request (or its list) to leave Conest out of battery
+  /// optimisation, and remembers it was asked.
+  Future<bool> requestBatteryExemption() async {
+    await _noteBatteryExemptionAsked();
+    return _platformBridge.requestBatteryOptimizationExemption();
+  }
+
+  /// "Not now": not asked again by itself (Settings still offers it).
+  Future<void> declineBatteryExemption() => _noteBatteryExemptionAsked();
+
+  Future<void> _noteBatteryExemptionAsked() async {
+    final me = identity;
+    if (me == null) return;
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(batteryExemptionAskedAt: _now().toUtc()),
+    );
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// The phone's maker, for steps against vendor background limits.
+  Future<String?> deviceManufacturer() => _platformBridge.deviceManufacturer();
+
   Future<void> updateAndroidBackgroundRuntimeEnabled(bool enabled) async {
     if (enabled && !experimentalAndroidBackgroundRuntimeAvailable) {
       throw StateError(
@@ -11321,7 +11377,11 @@ class MessengerController extends ChangeNotifier {
       relayModeEnabled: relayModeEnabled,
       autoUseContactRelays: true,
       notificationsEnabled: true,
-      androidBackgroundRuntimeEnabled: false,
+      // On by default on Android (see androidBackgroundDefaultApplied).
+      androidBackgroundRuntimeEnabled:
+          _platformBridge.runsOnAndroid &&
+          experimentalAndroidBackgroundRuntimeAvailable,
+      androidBackgroundDefaultApplied: true,
       suppressReadReceipts: false,
       lanAddresses: lanAddresses,
       safetyNumber: safetyNumber,
@@ -36945,7 +37005,9 @@ class MessengerController extends ChangeNotifier {
     unawaited(_platformBridge.stopTransferForeground());
     _localRelayNode.onEnvelopeStored = null;
     unawaited(_stopPairingBeacon());
-    unawaited(_platformBridge.setAndroidBackgroundRuntimeEnabled(false));
+    unawaited(
+      _platformBridge.setAndroidBackgroundRuntimeEnabled(false, persist: false),
+    );
     unawaited(_localRelayNode.stop());
     unawaited(_lanDirectChannel?.stop());
     unawaited(_stopTransportRegistry());

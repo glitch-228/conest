@@ -979,6 +979,8 @@ class IdentityRecord {
     required this.notificationsEnabled,
     required this.androidBackgroundRuntimeEnabled,
     this.androidBackgroundCallsEnabled = false,
+    this.androidBackgroundDefaultApplied = false,
+    this.batteryExemptionAskedAt,
     // Calls exist only in builds compiled with call media (nightly/debug);
     // there they are on unless the user opts out.
     this.experimentalVoiceCallsEnabled = true,
@@ -1020,6 +1022,14 @@ class IdentityRecord {
   final bool notificationsEnabled;
   final bool androidBackgroundRuntimeEnabled;
   final bool androidBackgroundCallsEnabled;
+
+  /// Receiving in the background was turned on once by default (Android,
+  /// v0.4.2): a device turned off after that stays off.
+  final bool androidBackgroundDefaultApplied;
+
+  /// When this device was asked to leave Conest out of battery optimisation
+  /// (asked once; Settings can ask again).
+  final DateTime? batteryExemptionAskedAt;
   final bool experimentalVoiceCallsEnabled;
   final bool voiceNoiseSuppressionEnabled;
 
@@ -1091,6 +1101,8 @@ class IdentityRecord {
     bool? notificationsEnabled,
     bool? androidBackgroundRuntimeEnabled,
     bool? androidBackgroundCallsEnabled,
+    bool? androidBackgroundDefaultApplied,
+    DateTime? batteryExemptionAskedAt,
     bool? experimentalVoiceCallsEnabled,
     bool? voiceNoiseSuppressionEnabled,
     List<String>? advertisedFeatureCapabilities,
@@ -1125,6 +1137,11 @@ class IdentityRecord {
           this.androidBackgroundRuntimeEnabled,
       androidBackgroundCallsEnabled:
           androidBackgroundCallsEnabled ?? this.androidBackgroundCallsEnabled,
+      androidBackgroundDefaultApplied:
+          androidBackgroundDefaultApplied ??
+          this.androidBackgroundDefaultApplied,
+      batteryExemptionAskedAt:
+          batteryExemptionAskedAt ?? this.batteryExemptionAskedAt,
       experimentalVoiceCallsEnabled:
           experimentalVoiceCallsEnabled ?? this.experimentalVoiceCallsEnabled,
       voiceNoiseSuppressionEnabled:
@@ -1170,6 +1187,11 @@ class IdentityRecord {
       'notificationsEnabled': notificationsEnabled,
       'androidBackgroundRuntimeEnabled': androidBackgroundRuntimeEnabled,
       'androidBackgroundCallsEnabled': androidBackgroundCallsEnabled,
+      'androidBackgroundDefaultApplied': androidBackgroundDefaultApplied,
+      if (batteryExemptionAskedAt != null)
+        'batteryExemptionAskedAt': batteryExemptionAskedAt!
+            .toUtc()
+            .toIso8601String(),
       'experimentalVoiceCallsEnabled': experimentalVoiceCallsEnabled,
       'voiceNoiseSuppressionEnabled': voiceNoiseSuppressionEnabled,
       if (advertisedFeatureCapabilities != null)
@@ -1246,6 +1268,11 @@ class IdentityRecord {
           json['androidBackgroundRuntimeEnabled'] as bool? ?? false,
       androidBackgroundCallsEnabled:
           json['androidBackgroundCallsEnabled'] as bool? ?? false,
+      androidBackgroundDefaultApplied:
+          json['androidBackgroundDefaultApplied'] as bool? ?? false,
+      batteryExemptionAskedAt: DateTime.tryParse(
+        json['batteryExemptionAskedAt'] as String? ?? '',
+      ),
       experimentalVoiceCallsEnabled:
           json['experimentalVoiceCallsEnabled'] as bool? ?? true,
       voiceNoiseSuppressionEnabled:

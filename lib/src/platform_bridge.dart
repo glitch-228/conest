@@ -150,9 +150,56 @@ class PlatformBridge {
 
   bool get _supportsAndroidSystemCalls => !kIsWeb && Platform.isAndroid;
 
+  /// Whether this is Android (tests stand in for one).
+  bool get runsOnAndroid => _supportsAndroidSystemCalls;
+
+  /// Whether Android leaves Conest out of battery optimisation; null where
+  /// that cannot be told (not Android, an older app part).
+  Future<bool?> batteryOptimizationExempt() async {
+    if (!_supportsAndroidSystemCalls) return null;
+    try {
+      return await _channel.invokeMethod<bool>('batteryOptimizationExempt');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// Opens Android's request to leave Conest out of battery optimisation;
+  /// false when it could not be opened.
+  Future<bool> requestBatteryOptimizationExemption() async {
+    if (!_supportsAndroidSystemCalls) return false;
+    try {
+      return await _channel.invokeMethod<bool>(
+            'requestBatteryOptimizationExemption',
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  /// The phone's maker (for vendor-specific background limits).
+  Future<String?> deviceManufacturer() async {
+    if (!_supportsAndroidSystemCalls) return null;
+    try {
+      return await _channel.invokeMethod<String>('deviceManufacturer');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// [persist]: kept for a start without the app (after a reboot, an
+  /// update, the process killed); false for a shutdown that is no choice.
   Future<void> setAndroidBackgroundRuntimeEnabled(
     bool enabled, {
     bool callsEnabled = false,
+    bool persist = true,
   }) async {
     if (!_supportsAndroidSystemCalls) {
       return;
@@ -161,6 +208,7 @@ class PlatformBridge {
       await _channel.invokeMethod<void>('setBackgroundRuntimeEnabled', {
         'enabled': enabled,
         'callsEnabled': callsEnabled,
+        'persist': persist,
       });
     } on MissingPluginException {
       return;

@@ -42,7 +42,7 @@ class MainActivity : FlutterActivity() {
     private var voiceCallPermissionResult: MethodChannel.Result? = null
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? =
-        FlutterEngineCache.getInstance().get(ENGINE_CACHE_ID)
+        ConestEngine.cached()
 
     override fun shouldDestroyEngineWithHost(): Boolean =
         !ConestBackgroundService.shouldKeepFlutterRuntime()
@@ -50,7 +50,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         CrashReports.install(this)
-        FlutterEngineCache.getInstance().put(ENGINE_CACHE_ID, flutterEngine)
+        FlutterEngineCache.getInstance().put(ConestEngine.CACHE_ID, flutterEngine)
         Thread { clearOldSharedCopies() }.start()
         val channel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -58,28 +58,10 @@ class MainActivity : FlutterActivity() {
         )
         systemChannel = channel
         activeSystemChannel = channel
-        RadioLinkPlugin(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
-        BitchatBlePlugin(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        ConestEngine.systemChannel = channel
+        ConestEngine.attachPlugins(applicationContext, flutterEngine)
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
-                "setBackgroundRuntimeEnabled" -> {
-                    val enabled = call.argument<Boolean>("enabled") == true
-                    updateBackgroundServicePreferences(
-                        enabled,
-                        call.argument<Boolean>("callsEnabled") == true,
-                    )
-                    result.success(null)
-                }
-                "updateVoiceCallForeground" -> {
-                    updateBackgroundServiceState(
-                        call.argument<Boolean>("runtimeEnabled") == true,
-                        call.argument<Boolean>("callsEnabled") == true,
-                        call.argument<String>("peerName"),
-                        call.argument<String>("callState") ?: "idle",
-                        call.argument<Boolean>("incoming") == true,
-                    )
-                    result.success(null)
-                }
                 "requestNotificationPermission" -> {
                     requestNotificationPermissionIfNeeded()
                     result.success(null)
@@ -89,19 +71,6 @@ class MainActivity : FlutterActivity() {
                 }
                 "requestBluetoothPermissions" -> requestBluetoothPermissions(result)
                 "openVoiceCallMedia" -> openVoiceCallMedia(call, result)
-                "scheduleScheduledMessageWakeup" -> {
-                    val timestampMs = call.argument<Number>("timestampMs")?.toLong()
-                    try {
-                        scheduleScheduledMessageWakeup(timestampMs)
-                        result.success(null)
-                    } catch (error: Throwable) {
-                        result.error(
-                            "scheduled_wakeup_failed",
-                            error.message ?: "Could not schedule the background send.",
-                            null
-                        )
-                    }
-                }
                 "setVoiceCallSpeakerphoneEnabled" -> {
                     val enabled = call.argument<Boolean>("enabled") == true
                     try {
@@ -120,64 +89,6 @@ class MainActivity : FlutterActivity() {
                 }
                 "closeVoiceCallMedia" -> {
                     ConestBackgroundService.stopVoiceCallMedia()
-                    result.success(null)
-                }
-                "updateTransferForeground" -> {
-                    val transferred = (call.argument<Number>("transferredBytes"))?.toLong() ?: 0L
-                    val total = (call.argument<Number>("totalBytes"))?.toLong() ?: 0L
-                    val serviceIntent = Intent(this, ConestBackgroundService::class.java).apply {
-                        action = ConestBackgroundService.ACTION_UPDATE_TRANSFER
-                        putExtra(
-                            ConestBackgroundService.EXTRA_TITLE,
-                            call.argument<String>("title") ?: "Transferring files"
-                        )
-                        putExtra(ConestBackgroundService.EXTRA_TRANSFERRED, transferred)
-                        putExtra(ConestBackgroundService.EXTRA_TOTAL, total)
-                        putExtra(
-                            ConestBackgroundService.EXTRA_PAUSED,
-                            call.argument<Boolean>("paused") == true
-                        )
-                    }
-                    startConestForegroundService(serviceIntent)
-                    result.success(null)
-                }
-                "stopTransferForeground" -> {
-                    // Nothing to stop when the service is not running, and
-                    // starting a service from the background throws on
-                    // Android 8+ (each transfer that ended with the screen
-                    // off was recorded as a crash).
-                    if (ConestBackgroundService.isRunning()) {
-                        try {
-                            startService(
-                                Intent(this, ConestBackgroundService::class.java).apply {
-                                    action = ConestBackgroundService.ACTION_STOP_TRANSFER
-                                }
-                            )
-                        } catch (error: IllegalStateException) {
-                            ConestBackgroundService.stopTransferDirectly()
-                        }
-                    }
-                    result.success(null)
-                }
-                "showMessageNotification" -> {
-                    val title = call.argument<String>("title") ?: "Conest"
-                    val body = call.argument<String>("body") ?: "New message"
-                    val conversationId = call.argument<String>("conversationId") ?: title
-                    val senderName = call.argument<String>("senderName") ?: title
-                    val selfName = call.argument<String>("selfName") ?: "me"
-                    @Suppress("UNCHECKED_CAST")
-                    val recent = call.argument<List<Map<String, Any?>>>("recentMessages")
-                        ?: emptyList()
-                    showMessageNotification(title, body, conversationId, senderName, selfName, recent)
-                    result.success(null)
-                }
-                "dismissMessageNotification" -> {
-                    val conversationId = call.argument<String>("conversationId") ?: ""
-                    if (conversationId.isNotEmpty()) {
-                        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        manager.cancel(conversationId.hashCode())
-                        maybeCancelGroupSummary(manager)
-                    }
                     result.success(null)
                 }
                 "copyImageToClipboard" -> {
@@ -219,7 +130,6 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
-                "nativeLibraryDir" -> result.success(applicationInfo.nativeLibraryDir)
                 // `adb shell am start -n dev.conest.conest/.MainActivity
                 // --es conestDebugRun routes` asks for the automatic tests;
                 // only debug-channel builds act on it (checked in Dart).
@@ -321,28 +231,14 @@ class MainActivity : FlutterActivity() {
                     result.success(pendingShare)
                     pendingShare = null
                 }
-                "powerState" -> result.success(powerState())
-                else -> result.notImplemented()
+                // What needs no screen is answered as without one.
+                else -> if (!ConestSystem.handle(applicationContext, call, result)) {
+                    result.notImplemented()
+                }
             }
         }
         dispatchTransferControl(intent)
         dispatchShare(intent)
-    }
-
-    /** Battery, charging and battery saver, for how many routes messages use. */
-    private fun powerState(): Map<String, Any?> {
-        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val present = battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true) ?: true
-        val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1
-        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
-        return mapOf(
-            "hasBattery" to present,
-            "charging" to if (battery == null) null else plugged > 0,
-            "batteryPercent" to if (level >= 0 && scale > 0) level * 100 / scale else null,
-            "batterySaver" to power.isPowerSaveMode,
-        )
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -475,60 +371,6 @@ class MainActivity : FlutterActivity() {
         systemChannel?.invokeMethod("transferControl", mapOf("action" to action))
     }
 
-    private fun updateBackgroundServiceState(
-        runtimeEnabled: Boolean,
-        callsEnabled: Boolean,
-        peerName: String?,
-        callState: String,
-        incoming: Boolean,
-    ) {
-        val intent = Intent(this, ConestBackgroundService::class.java).apply {
-            action = ConestBackgroundService.ACTION_UPDATE_STATE
-            putExtra(ConestBackgroundService.EXTRA_ENABLED, runtimeEnabled)
-            putExtra(ConestBackgroundService.EXTRA_CALLS_ENABLED, callsEnabled)
-            putExtra(ConestBackgroundService.EXTRA_CALL_TITLE, peerName ?: "")
-            putExtra(ConestBackgroundService.EXTRA_CALL_STATE, callState)
-            putExtra(ConestBackgroundService.EXTRA_CALL_INCOMING, incoming)
-        }
-        // A foreground start only when there is something to show (the
-        // runtime, calls, or a call in progress); otherwise a plain update.
-        val callInProgress = callState != "idle" && callState != "ended"
-        if (runtimeEnabled || callsEnabled || callInProgress) {
-            startConestForegroundService(intent)
-        } else {
-            try {
-                startService(intent)
-            } catch (error: IllegalStateException) {
-                // In the background with nothing to run: nothing to update.
-            }
-        }
-    }
-
-    private fun updateBackgroundServicePreferences(
-        runtimeEnabled: Boolean,
-        callsEnabled: Boolean,
-    ) {
-        val intent = Intent(this, ConestBackgroundService::class.java).apply {
-            action = ConestBackgroundService.ACTION_UPDATE_PREFERENCES
-            putExtra(ConestBackgroundService.EXTRA_ENABLED, runtimeEnabled)
-            putExtra(ConestBackgroundService.EXTRA_CALLS_ENABLED, callsEnabled)
-        }
-        if (runtimeEnabled || callsEnabled) {
-            startConestForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-    }
-
-    private fun startConestForegroundService(intent: Intent) {
-        ensureNotificationChannel()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-    }
-
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
@@ -625,7 +467,8 @@ class MainActivity : FlutterActivity() {
         }
         try {
             ConestBackgroundService.requestVoiceCallMedia(handle)
-            startConestForegroundService(
+            ConestSystem.startConestForegroundService(
+                this,
                 Intent(this, ConestBackgroundService::class.java).apply {
                     action = ConestBackgroundService.ACTION_START_CALL_AUDIO
                     putExtra(ConestBackgroundService.EXTRA_CALL_AUDIO_HANDLE, handle)
@@ -645,125 +488,17 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         val keepRuntime = ConestBackgroundService.shouldKeepFlutterRuntime()
         if (!keepRuntime) {
-            FlutterEngineCache.getInstance().remove(ENGINE_CACHE_ID)
+            FlutterEngineCache.getInstance().remove(ConestEngine.CACHE_ID)
             if (activeSystemChannel === systemChannel) activeSystemChannel = null
+            if (ConestEngine.systemChannel === systemChannel) ConestEngine.systemChannel = null
+        } else {
+            // The engine runs on without a screen: its channel answers what
+            // needs none.
+            systemChannel?.setMethodCallHandler(
+                ConestEngine.headlessHandler(applicationContext)
+            )
         }
         super.onDestroy()
-    }
-
-    private fun scheduleScheduledMessageWakeup(timestampMs: Long?) {
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-        val intent = Intent(this, ScheduledMessageWakeupReceiver::class.java).apply {
-            action = ScheduledMessageWakeupReceiver.ACTION_SCHEDULED_MESSAGE_DUE
-        }
-        val pendingIntent = PendingIntent.getBroadcast(
-            this,
-            SCHEDULED_MESSAGE_WAKEUP_REQUEST,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        if (timestampMs == null) {
-            alarmManager.cancel(pendingIntent)
-            pendingIntent.cancel()
-            return
-        }
-        val triggerAt = maxOf(timestampMs, System.currentTimeMillis())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setAndAllowWhileIdle(
-                android.app.AlarmManager.RTC_WAKEUP,
-                triggerAt,
-                pendingIntent
-            )
-        } else {
-            alarmManager.setExact(
-                android.app.AlarmManager.RTC_WAKEUP,
-                triggerAt,
-                pendingIntent
-            )
-        }
-    }
-
-    private fun showMessageNotification(
-        title: String,
-        body: String,
-        conversationId: String,
-        senderName: String,
-        selfName: String,
-        recentMessages: List<Map<String, Any?>>
-    ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        ensureNotificationChannel()
-        val launchIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("conversationId", conversationId)
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            conversationId.hashCode(),
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val builder = notificationBuilder(MESSAGES_CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setGroup(GROUP_KEY_MESSAGES)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val self = Person.Builder().setName(selfName).build()
-            val style = Notification.MessagingStyle(self).setConversationTitle(title)
-            if (recentMessages.isEmpty()) {
-                val sender = Person.Builder().setName(senderName).build()
-                style.addMessage(
-                    Notification.MessagingStyle.Message(body, System.currentTimeMillis(), sender)
-                )
-            } else {
-                for (entry in recentMessages) {
-                    val text = entry["body"] as? String ?: ""
-                    val ts = (entry["timestampMs"] as? Number)?.toLong()
-                        ?: System.currentTimeMillis()
-                    val sender = Person.Builder()
-                        .setName(entry["sender"] as? String ?: senderName)
-                        .build()
-                    style.addMessage(Notification.MessagingStyle.Message(text, ts, sender))
-                }
-            }
-            builder.setStyle(style)
-        } else {
-            builder.setStyle(Notification.BigTextStyle().bigText(body))
-        }
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(conversationId.hashCode(), builder.build())
-        postOrRefreshGroupSummary(manager)
-    }
-
-    private fun postOrRefreshGroupSummary(manager: NotificationManager) {
-        val summary = notificationBuilder(MESSAGES_CHANNEL_ID)
-            .setContentTitle("Conest")
-            .setContentText("New messages")
-            .setGroup(GROUP_KEY_MESSAGES)
-            .setGroupSummary(true)
-            .setAutoCancel(true)
-            .build()
-        manager.notify(SUMMARY_NOTIFICATION_ID, summary)
-    }
-
-    private fun maybeCancelGroupSummary(manager: NotificationManager) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return
-        }
-        val anyChildRemains = manager.activeNotifications.any { sbn ->
-            sbn.id != SUMMARY_NOTIFICATION_ID &&
-                sbn.notification.group == GROUP_KEY_MESSAGES
-        }
-        if (!anyChildRemains) {
-            manager.cancel(SUMMARY_NOTIFICATION_ID)
-        }
     }
 
     private fun saveMediaToGallery(
@@ -992,44 +727,6 @@ class MainActivity : FlutterActivity() {
         startActivity(installIntent)
     }
 
-    private fun notificationBuilder(channelId: String): Notification.Builder {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, channelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-        return builder
-            .setSmallIcon(R.drawable.ic_stat_conest)
-            .setColor(0xFF04F6AF.toInt())
-            .setPriority(Notification.PRIORITY_DEFAULT)
-    }
-
-    private fun ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return
-        }
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (manager.getNotificationChannel(MESSAGES_CHANNEL_ID) == null) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    MESSAGES_CHANNEL_ID,
-                    "Messages",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                )
-            )
-        }
-        if (manager.getNotificationChannel(BACKGROUND_CHANNEL_ID) == null) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    BACKGROUND_CHANNEL_ID,
-                    "Background runtime",
-                    NotificationManager.IMPORTANCE_LOW
-                )
-            )
-        }
-    }
-
     companion object {
         private const val MAX_SHARED_FILES = 50
         private const val MAX_SHARED_FILE_BYTES = 2L * 1024 * 1024 * 1024
@@ -1037,12 +734,11 @@ class MainActivity : FlutterActivity() {
         @Volatile
         private var activeSystemChannel: MethodChannel? = null
 
-        private const val ENGINE_CACHE_ID = "conest_main_engine"
 
         @JvmStatic
         fun reportVoiceCallAudioFailure(reason: String) {
             try {
-                activeSystemChannel?.invokeMethod(
+                (activeSystemChannel ?: ConestEngine.systemChannel)?.invokeMethod(
                     "voiceCallAudioFailure",
                     mapOf("reason" to reason),
                 )
@@ -1053,7 +749,8 @@ class MainActivity : FlutterActivity() {
 
         fun requestScheduledMessagePump() {
             try {
-                activeSystemChannel?.invokeMethod("scheduledMessageDue", null)
+                (activeSystemChannel ?: ConestEngine.systemChannel)
+                    ?.invokeMethod("scheduledMessageDue", null)
             } catch (_: RuntimeException) {
                 // If the activity engine is going away, the next foreground
                 // startup still dispatches every overdue persisted item.
@@ -1061,13 +758,9 @@ class MainActivity : FlutterActivity() {
         }
 
         private const val CHANNEL = "dev.conest.conest/system"
-        private const val MESSAGES_CHANNEL_ID = "conest_messages"
-        const val BACKGROUND_CHANNEL_ID = "conest_background"
+        const val BACKGROUND_CHANNEL_ID = ConestSystem.BACKGROUND_CHANNEL_ID
         private const val NOTIFICATION_PERMISSION_REQUEST = 6017
         private const val VOICE_CALL_PERMISSION_REQUEST = 6018
-        private const val SCHEDULED_MESSAGE_WAKEUP_REQUEST = 6019
         private const val BLUETOOTH_PERMISSION_REQUEST = 6020
-        private const val GROUP_KEY_MESSAGES = "dev.conest.conest.messages"
-        private const val SUMMARY_NOTIFICATION_ID = 0x100b1ade
     }
 }

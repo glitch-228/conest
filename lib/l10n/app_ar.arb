@@ -1433,5 +1433,14 @@
   "contentRoutingCannotCarry": "لا يمكن لوسيلة النقل هذه حمله",
   "routeViaOwnDevice": "عبر جهازك الآخر",
   "routeOwnDeviceDescription": "استلمه جهاز آخر من أجهزتك ومرّره إلى هذا الجهاز، بتشفير تام بين الطرفين.",
-  "routeShortOwnDevice": "جهازك"
+  "routeShortOwnDevice": "جهازك",
+  "backgroundReceiveTitle": "استقبال الرسائل في الخلفية",
+  "backgroundReceiveHelp": "تصل الرسائل والمكالمات وConest مغلق. يعرض Android إشعارًا صامتًا أثناء تشغيله.",
+  "batteryExemptionTitle": "تحسين البطارية",
+  "batteryExemptionAllowed": "بلا قيود: لا يوقف Android تطبيق Conest في الخلفية.",
+  "batteryExemptionLimited": "قد يوقف Android تطبيق Conest في الخلفية، فتنتظر الرسائل حتى تفتحه.",
+  "batteryExemptionAllow": "السماح",
+  "batteryExemptionPromptTitle": "استمر في استقبال الرسائل",
+  "batteryExemptionPromptBody": "لكي تصلك الرسائل وConest مغلق، يجب أن يسمح له Android بالعمل في الخلفية. في الشاشة التالية، اسمح لـ Conest بالعمل دون قيود البطارية.",
+  "batteryExemptionVendorHint": "على هواتف {maker}، فعّل أيضًا التشغيل التلقائي لـ Conest واضبط موفر البطارية له على «بلا قيود» (الإعدادات ← التطبيقات ← Conest)."
 }

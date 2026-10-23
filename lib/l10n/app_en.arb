@@ -8269,5 +8269,46 @@
   "routeShortOwnDevice": "Your device",
   "@routeShortOwnDevice": {
     "description": "Short route label on a message."
+  },
+  "backgroundReceiveTitle": "Receive messages in the background",
+  "@backgroundReceiveTitle": {
+    "description": "Setting (Android): keep Conest receiving while it is closed."
+  },
+  "backgroundReceiveHelp": "Messages and calls arrive while Conest is closed. Android shows a quiet notification while it runs.",
+  "@backgroundReceiveHelp": {
+    "description": "Explains the background receiving setting."
+  },
+  "batteryExemptionTitle": "Battery optimisation",
+  "@batteryExemptionTitle": {
+    "description": "Setting row: whether Android limits Conest in the background."
+  },
+  "batteryExemptionAllowed": "Unrestricted: Android does not stop Conest in the background.",
+  "@batteryExemptionAllowed": {
+    "description": "Battery optimisation status: Conest is left out of it."
+  },
+  "batteryExemptionLimited": "Android may stop Conest in the background, and messages then wait until you open it.",
+  "@batteryExemptionLimited": {
+    "description": "Battery optimisation status: Android may stop Conest."
+  },
+  "batteryExemptionAllow": "Allow",
+  "@batteryExemptionAllow": {
+    "description": "Button: ask Android to leave Conest out of battery optimisation."
+  },
+  "batteryExemptionPromptTitle": "Keep receiving messages",
+  "@batteryExemptionPromptTitle": {
+    "description": "Dialog title: ask to leave Conest out of battery optimisation."
+  },
+  "batteryExemptionPromptBody": "To get messages while Conest is closed, Android has to let it run in the background. On the next screen, allow Conest to run without battery restrictions.",
+  "@batteryExemptionPromptBody": {
+    "description": "Dialog text before Android's battery optimisation request."
+  },
+  "batteryExemptionVendorHint": "On {maker} phones, also turn on Autostart for Conest and set its battery saver to \"No restrictions\" (Settings → Apps → Conest).",
+  "@batteryExemptionVendorHint": {
+    "description": "Extra steps for phone makers that stop background apps.",
+    "placeholders": {
+      "maker": {
+        "type": "String"
+      }
+    }
   }
 }

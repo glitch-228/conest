@@ -36,6 +36,13 @@ class ConestBackgroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         var callAudioHandle: Long? = null
         when (intent?.action) {
+            // Started again by Android (START_STICKY, no intent), after a
+            // reboot or an update: as the app last asked.
+            null, ACTION_RESTORE -> {
+                val preferences = preferences(this)
+                backgroundEnabled = preferences.getBoolean(PREF_ENABLED, false)
+                callsEnabled = preferences.getBoolean(PREF_CALLS_ENABLED, false)
+            }
             ACTION_END_CALL -> {
                 callTitle = ""
                 callState = "idle"
@@ -45,10 +52,14 @@ class ConestBackgroundService : Service() {
             ACTION_UPDATE_PREFERENCES -> {
                 backgroundEnabled = intent.getBooleanExtra(EXTRA_ENABLED, false)
                 callsEnabled = intent.getBooleanExtra(EXTRA_CALLS_ENABLED, false)
+                if (intent.getBooleanExtra(EXTRA_PERSIST, true)) {
+                    savePreferences(this, backgroundEnabled, callsEnabled)
+                }
             }
             ACTION_UPDATE_STATE -> {
                 backgroundEnabled = intent.getBooleanExtra(EXTRA_ENABLED, false)
                 callsEnabled = intent.getBooleanExtra(EXTRA_CALLS_ENABLED, false)
+                savePreferences(this, backgroundEnabled, callsEnabled)
                 callTitle = intent.getStringExtra(EXTRA_CALL_TITLE) ?: ""
                 callState = intent.getStringExtra(EXTRA_CALL_STATE) ?: "idle"
                 callIncoming = intent.getBooleanExtra(EXTRA_CALL_INCOMING, false)
@@ -99,6 +110,15 @@ class ConestBackgroundService : Service() {
             return START_NOT_STICKY
         }
         promoteToForeground()
+        if (backgroundEnabled || callsEnabled) {
+            // Conest runs without its screen: the same engine the activity
+            // shows when it opens.
+            try {
+                ConestEngine.ensureRunning(this)
+            } catch (error: Throwable) {
+                android.util.Log.w("Conest", "Background engine not started: $error")
+            }
+        }
         callAudioHandle?.let(::startVoiceCallAudio)
         return START_STICKY
     }
@@ -106,7 +126,13 @@ class ConestBackgroundService : Service() {
     private fun promoteToForeground() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                // Messaging from Android 14 on: data sync is capped at six
+                // hours a day (Android 15) and may not start at boot.
+                var types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+                } else {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                }
                 if (callUsesMicrophone()) {
                     types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 }
@@ -250,8 +276,8 @@ class ConestBackgroundService : Service() {
                 .setContentText("Ready for approved-contact calls while this service runs")
         } else {
             builder
-                .setContentTitle("Conest background service")
-                .setContentText("Conest keeps its active session available in the background")
+                .setContentTitle("Conest is receiving messages")
+                .setContentText("Messages arrive while Conest is closed")
         }
         return builder.build()
     }
@@ -313,6 +339,27 @@ class ConestBackgroundService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 6018
         const val ACTION_UPDATE_STATE = "dev.conest.action.UPDATE_STATE"
+        const val ACTION_RESTORE = "dev.conest.action.RESTORE"
+        private const val PREFERENCES = "conest_background"
+        private const val PREF_ENABLED = "enabled"
+        private const val PREF_CALLS_ENABLED = "callsEnabled"
+
+        fun preferences(context: Context) =
+            context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+
+        /// What the app last asked for, for a start without it.
+        fun savePreferences(context: Context, enabled: Boolean, callsEnabled: Boolean) {
+            preferences(context).edit()
+                .putBoolean(PREF_ENABLED, enabled)
+                .putBoolean(PREF_CALLS_ENABLED, callsEnabled)
+                .apply()
+        }
+
+        fun backgroundWanted(context: Context): Boolean {
+            val preferences = preferences(context)
+            return preferences.getBoolean(PREF_ENABLED, false) ||
+                preferences.getBoolean(PREF_CALLS_ENABLED, false)
+        }
         const val ACTION_UPDATE_PREFERENCES = "dev.conest.action.UPDATE_PREFERENCES"
         const val ACTION_END_CALL = "dev.conest.action.END_CALL"
         const val ACTION_START_CALL_AUDIO = "dev.conest.action.START_CALL_AUDIO"
@@ -322,6 +369,7 @@ class ConestBackgroundService : Service() {
         const val ACTION_UPDATE_TRANSFER = "dev.conest.action.UPDATE_TRANSFER"
         const val ACTION_STOP_TRANSFER = "dev.conest.action.STOP_TRANSFER"
         const val EXTRA_ENABLED = "enabled"
+        const val EXTRA_PERSIST = "persist"
         const val EXTRA_CALLS_ENABLED = "callsEnabled"
         const val EXTRA_CALL_TITLE = "callTitle"
         const val EXTRA_CALL_STATE = "callState"

@@ -5522,4 +5522,37 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get routeShortOwnDevice => 'Your device';
+
+  @override
+  String get backgroundReceiveTitle => 'Receive messages in the background';
+
+  @override
+  String get backgroundReceiveHelp =>
+      'Messages and calls arrive while Conest is closed. Android shows a quiet notification while it runs.';
+
+  @override
+  String get batteryExemptionTitle => 'Battery optimisation';
+
+  @override
+  String get batteryExemptionAllowed =>
+      'Unrestricted: Android does not stop Conest in the background.';
+
+  @override
+  String get batteryExemptionLimited =>
+      'Android may stop Conest in the background, and messages then wait until you open it.';
+
+  @override
+  String get batteryExemptionAllow => 'Allow';
+
+  @override
+  String get batteryExemptionPromptTitle => 'Keep receiving messages';
+
+  @override
+  String get batteryExemptionPromptBody =>
+      'To get messages while Conest is closed, Android has to let it run in the background. On the next screen, allow Conest to run without battery restrictions.';
+
+  @override
+  String batteryExemptionVendorHint(String maker) {
+    return 'On $maker phones, also turn on Autostart for Conest and set its battery saver to \"No restrictions\" (Settings → Apps → Conest).';
+  }
 }

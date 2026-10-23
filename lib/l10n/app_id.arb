@@ -1433,5 +1433,14 @@
   "contentRoutingCannotCarry": "Jalur ini tidak dapat membawanya",
   "routeViaOwnDevice": "Lewat perangkat Anda yang lain",
   "routeOwnDeviceDescription": "Diterima oleh perangkat Anda yang lain, lalu diteruskan ke perangkat ini, terenkripsi ujung ke ujung.",
-  "routeShortOwnDevice": "Perangkat Anda"
+  "routeShortOwnDevice": "Perangkat Anda",
+  "backgroundReceiveTitle": "Terima pesan di latar belakang",
+  "backgroundReceiveHelp": "Pesan dan panggilan tetap masuk saat Conest ditutup. Android menampilkan notifikasi senyap selama berjalan.",
+  "batteryExemptionTitle": "Optimasi baterai",
+  "batteryExemptionAllowed": "Tanpa batasan: Android tidak menghentikan Conest di latar belakang.",
+  "batteryExemptionLimited": "Android bisa menghentikan Conest di latar belakang, dan pesan menunggu sampai Anda membukanya.",
+  "batteryExemptionAllow": "Izinkan",
+  "batteryExemptionPromptTitle": "Tetap terima pesan",
+  "batteryExemptionPromptBody": "Agar pesan tetap masuk saat Conest ditutup, Android harus mengizinkannya berjalan di latar belakang. Di layar berikutnya, izinkan Conest berjalan tanpa batasan baterai.",
+  "batteryExemptionVendorHint": "Di ponsel {maker}, aktifkan juga Mulai otomatis untuk Conest dan atur penghemat bateranya ke \"Tanpa batasan\" (Setelan → Aplikasi → Conest)."
 }

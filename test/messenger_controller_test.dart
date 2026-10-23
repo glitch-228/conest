@@ -1483,6 +1483,83 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 void main() {
   deltaContentControllerTests();
   _localizationControllerTests();
+  group('receiving in the background on Android', () {
+    test('is on for a new identity on Android, and only there', () async {
+      final android = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        platformBridge: _AndroidBridge(),
+      );
+      addTearDown(android.dispose);
+      expect(android.identity!.androidBackgroundRuntimeEnabled, isTrue);
+      final desktop = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Laptop',
+      );
+      addTearDown(desktop.dispose);
+      expect(desktop.identity!.androidBackgroundRuntimeEnabled, isFalse);
+    });
+
+    test('is turned on once for an older install, and off stays off', () async {
+      final vault = _MemoryVaultStore();
+      final first = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        vaultStore: vault,
+      );
+      first.dispose();
+      // As saved by a version without the default (and off: it had none).
+      final saved = await vault.load();
+      final older = saved.identity!.toJson()
+        ..remove('androidBackgroundDefaultApplied')
+        ..['androidBackgroundRuntimeEnabled'] = false;
+      await vault.save(
+        saved.copyWith(identity: IdentityRecord.fromJson(older)),
+      );
+      final bridge = _AndroidBridge();
+      final upgraded = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        vaultStore: vault,
+        createIdentity: false,
+        platformBridge: bridge,
+      );
+      expect(upgraded.identity!.androidBackgroundRuntimeEnabled, isTrue);
+      await upgraded.updateAndroidBackgroundRuntimeEnabled(false);
+      upgraded.dispose();
+      final again = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        vaultStore: vault,
+        createIdentity: false,
+        platformBridge: _AndroidBridge(),
+      );
+      addTearDown(again.dispose);
+      expect(again.identity!.androidBackgroundRuntimeEnabled, isFalse);
+    });
+
+    test('asks once to leave battery optimisation, then not again', () async {
+      final bridge = _AndroidBridge();
+      final phone = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        platformBridge: bridge,
+      );
+      addTearDown(phone.dispose);
+      expect(await phone.shouldAskBatteryExemption(), isTrue);
+      // Left out already: nothing to ask.
+      bridge.exempt = true;
+      expect(await phone.shouldAskBatteryExemption(), isFalse);
+      bridge.exempt = false;
+      await phone.declineBatteryExemption();
+      expect(await phone.shouldAskBatteryExemption(), isFalse);
+      expect(bridge.exemptionRequests, 0);
+      // Settings can still ask.
+      expect(await phone.requestBatteryExemption(), isTrue);
+      expect(bridge.exemptionRequests, 1);
+    });
+  });
+
   test('chat folders move later and persist their final order', () async {
     final vault = _MemoryVaultStore();
     final controller = await _createController(
@@ -28656,6 +28733,32 @@ class _VoiceRecordingBridge extends _RecordingPlatformBridge {
     required bool incoming,
   }) async {
     foreground.add(callState);
+  }
+}
+
+/// Stands in for Android: background receiving and the battery exemption.
+class _AndroidBridge extends _RecordingPlatformBridge {
+  bool? exempt = false;
+  int exemptionRequests = 0;
+  final runtime = <bool>[];
+
+  @override
+  bool get runsOnAndroid => true;
+  @override
+  Future<bool?> batteryOptimizationExempt() async => exempt;
+  @override
+  Future<bool> requestBatteryOptimizationExemption() async {
+    exemptionRequests++;
+    return true;
+  }
+
+  @override
+  Future<void> setAndroidBackgroundRuntimeEnabled(
+    bool enabled, {
+    bool callsEnabled = false,
+    bool persist = true,
+  }) async {
+    if (persist) runtime.add(enabled);
   }
 }
 

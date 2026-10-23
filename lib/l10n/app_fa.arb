@@ -1433,5 +1433,14 @@
   "contentRoutingCannotCarry": "این روش انتقال نمی‌تواند آن را منتقل کند",
   "routeViaOwnDevice": "از طریق دستگاه دیگر شما",
   "routeOwnDeviceDescription": "دستگاه دیگری از شما آن را دریافت کرد و به این دستگاه فرستاد، با رمزگذاری سرتاسری.",
-  "routeShortOwnDevice": "دستگاه شما"
+  "routeShortOwnDevice": "دستگاه شما",
+  "backgroundReceiveTitle": "دریافت پیام‌ها در پس‌زمینه",
+  "backgroundReceiveHelp": "پیام‌ها و تماس‌ها وقتی Conest بسته است هم می‌رسند. تا وقتی اجرا می‌شود، Android یک اعلان بی‌صدا نشان می‌دهد.",
+  "batteryExemptionTitle": "بهینه‌سازی باتری",
+  "batteryExemptionAllowed": "بدون محدودیت: Android برنامهٔ Conest را در پس‌زمینه متوقف نمی‌کند.",
+  "batteryExemptionLimited": "ممکن است Android برنامهٔ Conest را در پس‌زمینه متوقف کند و پیام‌ها تا باز کردن آن منتظر بمانند.",
+  "batteryExemptionAllow": "اجازه بده",
+  "batteryExemptionPromptTitle": "دریافت پیام‌ها ادامه پیدا کند",
+  "batteryExemptionPromptBody": "برای دریافت پیام‌ها وقتی Conest بسته است، Android باید اجازه دهد در پس‌زمینه اجرا شود. در صفحهٔ بعد، اجازه دهید Conest بدون محدودیت باتری اجرا شود.",
+  "batteryExemptionVendorHint": "در گوشی‌های {maker}، «شروع خودکار» را هم برای Conest روشن کنید و صرفه‌جویی باتری آن را روی «بدون محدودیت» بگذارید (تنظیمات ← برنامه‌ها ← Conest)."
 }

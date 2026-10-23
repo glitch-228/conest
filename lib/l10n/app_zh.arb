@@ -1433,5 +1433,14 @@
   "contentRoutingCannotCarry": "此传输方式无法传送该内容",
   "routeViaOwnDevice": "经由你的另一台设备",
   "routeOwnDeviceDescription": "由你的另一台设备接收，并以端到端加密转交到这台设备。",
-  "routeShortOwnDevice": "你的设备"
+  "routeShortOwnDevice": "你的设备",
+  "backgroundReceiveTitle": "在后台接收消息",
+  "backgroundReceiveHelp": "Conest 关闭时也能收到消息和通话。运行期间 Android 会显示一条静默通知。",
+  "batteryExemptionTitle": "电池优化",
+  "batteryExemptionAllowed": "不受限制：Android 不会在后台停止 Conest。",
+  "batteryExemptionLimited": "Android 可能会在后台停止 Conest，届时消息要等你打开它才会到达。",
+  "batteryExemptionAllow": "允许",
+  "batteryExemptionPromptTitle": "持续接收消息",
+  "batteryExemptionPromptBody": "要在 Conest 关闭时收到消息，Android 必须允许它在后台运行。请在下一个界面允许 Conest 不受电池限制地运行。",
+  "batteryExemptionVendorHint": "在 {maker} 手机上，还请为 Conest 开启“自启动”，并将其省电策略设为“无限制”（设置 → 应用 → Conest）。"
 }

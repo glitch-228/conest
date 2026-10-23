@@ -5653,4 +5653,37 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get routeShortOwnDevice => 'جهازك';
+
+  @override
+  String get backgroundReceiveTitle => 'استقبال الرسائل في الخلفية';
+
+  @override
+  String get backgroundReceiveHelp =>
+      'تصل الرسائل والمكالمات وConest مغلق. يعرض Android إشعارًا صامتًا أثناء تشغيله.';
+
+  @override
+  String get batteryExemptionTitle => 'تحسين البطارية';
+
+  @override
+  String get batteryExemptionAllowed =>
+      'بلا قيود: لا يوقف Android تطبيق Conest في الخلفية.';
+
+  @override
+  String get batteryExemptionLimited =>
+      'قد يوقف Android تطبيق Conest في الخلفية، فتنتظر الرسائل حتى تفتحه.';
+
+  @override
+  String get batteryExemptionAllow => 'السماح';
+
+  @override
+  String get batteryExemptionPromptTitle => 'استمر في استقبال الرسائل';
+
+  @override
+  String get batteryExemptionPromptBody =>
+      'لكي تصلك الرسائل وConest مغلق، يجب أن يسمح له Android بالعمل في الخلفية. في الشاشة التالية، اسمح لـ Conest بالعمل دون قيود البطارية.';
+
+  @override
+  String batteryExemptionVendorHint(String maker) {
+    return 'على هواتف $maker، فعّل أيضًا التشغيل التلقائي لـ Conest واضبط موفر البطارية له على «بلا قيود» (الإعدادات ← التطبيقات ← Conest).';
+  }
 }

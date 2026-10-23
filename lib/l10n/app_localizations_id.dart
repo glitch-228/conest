@@ -5509,4 +5509,37 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get routeShortOwnDevice => 'Perangkat Anda';
+
+  @override
+  String get backgroundReceiveTitle => 'Terima pesan di latar belakang';
+
+  @override
+  String get backgroundReceiveHelp =>
+      'Pesan dan panggilan tetap masuk saat Conest ditutup. Android menampilkan notifikasi senyap selama berjalan.';
+
+  @override
+  String get batteryExemptionTitle => 'Optimasi baterai';
+
+  @override
+  String get batteryExemptionAllowed =>
+      'Tanpa batasan: Android tidak menghentikan Conest di latar belakang.';
+
+  @override
+  String get batteryExemptionLimited =>
+      'Android bisa menghentikan Conest di latar belakang, dan pesan menunggu sampai Anda membukanya.';
+
+  @override
+  String get batteryExemptionAllow => 'Izinkan';
+
+  @override
+  String get batteryExemptionPromptTitle => 'Tetap terima pesan';
+
+  @override
+  String get batteryExemptionPromptBody =>
+      'Agar pesan tetap masuk saat Conest ditutup, Android harus mengizinkannya berjalan di latar belakang. Di layar berikutnya, izinkan Conest berjalan tanpa batasan baterai.';
+
+  @override
+  String batteryExemptionVendorHint(String maker) {
+    return 'Di ponsel $maker, aktifkan juga Mulai otomatis untuk Conest dan atur penghemat bateranya ke \"Tanpa batasan\" (Setelan → Aplikasi → Conest).';
+  }
 }

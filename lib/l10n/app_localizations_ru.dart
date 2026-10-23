@@ -5647,4 +5647,37 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get routeShortOwnDevice => 'Ваше устройство';
+
+  @override
+  String get backgroundReceiveTitle => 'Получать сообщения в фоне';
+
+  @override
+  String get backgroundReceiveHelp =>
+      'Сообщения и звонки приходят, когда Conest закрыт. Пока он работает, Android показывает тихое уведомление.';
+
+  @override
+  String get batteryExemptionTitle => 'Оптимизация батареи';
+
+  @override
+  String get batteryExemptionAllowed =>
+      'Без ограничений: Android не останавливает Conest в фоне.';
+
+  @override
+  String get batteryExemptionLimited =>
+      'Android может остановить Conest в фоне, и тогда сообщения ждут, пока вы его не откроете.';
+
+  @override
+  String get batteryExemptionAllow => 'Разрешить';
+
+  @override
+  String get batteryExemptionPromptTitle => 'Продолжать получать сообщения';
+
+  @override
+  String get batteryExemptionPromptBody =>
+      'Чтобы получать сообщения, когда Conest закрыт, Android должен разрешить ему работать в фоне. На следующем экране разрешите Conest работать без ограничений батареи.';
+
+  @override
+  String batteryExemptionVendorHint(String maker) {
+    return 'На телефонах $maker также включите для Conest автозапуск и установите для него экономию батареи «Нет ограничений» (Настройки → Приложения → Conest).';
+  }
 }

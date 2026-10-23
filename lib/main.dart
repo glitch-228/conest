@@ -42,6 +42,7 @@ import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
 import 'src/ui/file_metadata_consent.dart';
+import 'src/ui/battery_exemption.dart';
 import 'src/ui/internet_transports.dart';
 import 'src/network_errors.dart';
 import 'src/matrix_service.dart';
@@ -1174,7 +1175,31 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     }
   }
 
+  /// Asked at most once a run (and the controller remembers an answer).
+  bool _batteryExemptionChecked = false;
+
+  /// Android: once receiving in the background is on, asks to leave Conest
+  /// out of battery optimisation, which would otherwise stop it there.
+  Future<void> _maybeAskBatteryExemption() async {
+    if (_batteryExemptionChecked || !widget.controller.hasIdentity) return;
+    _batteryExemptionChecked = true;
+    if (!await widget.controller.shouldAskBatteryExemption()) return;
+    final maker = await widget.controller.deviceManufacturer();
+    final dialogContext = _navigatorKey.currentContext;
+    if (!mounted || dialogContext == null || !dialogContext.mounted) return;
+    final allow = await showDialog<bool>(
+      context: dialogContext,
+      builder: (context) => BatteryExemptionDialog(manufacturer: maker),
+    );
+    if (allow == true) {
+      await widget.controller.requestBatteryExemption();
+    } else {
+      await widget.controller.declineBatteryExemption();
+    }
+  }
+
   void _handleControllerChanged() {
+    unawaited(_maybeAskBatteryExemption());
     final ready = widget.controller.isReady;
     final hasIdentity = widget.controller.hasIdentity;
     final matrixOnly = widget.controller.appMode == AppMode.matrixOnly;
@@ -15350,12 +15375,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                               value,
                                             ),
                                       ),
-                                title:  Text(
-                                  l10nOf(context).uiExperimentalAndroidBackgroundReceive60828A,
+                                title: Text(
+                                  l10nOf(context).backgroundReceiveTitle,
                                 ),
-                                subtitle:  Text(
-                                  l10nOf(context).uiDisabledInReleaseBuildsThe45B7DF,
+                                subtitle: Text(
+                                  l10nOf(context).backgroundReceiveHelp,
                                 ),
+                              ),
+                            if (!kIsWeb &&
+                                Platform.isAndroid &&
+                                identity.androidBackgroundRuntimeEnabled)
+                              BatteryExemptionTile(
+                                controller: widget.controller,
                               ),
                             if (!kIsWeb &&
                                 Platform.isAndroid &&

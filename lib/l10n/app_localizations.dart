@@ -8764,6 +8764,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Your device'**
   String get routeShortOwnDevice;
+
+  /// Setting (Android): keep Conest receiving while it is closed.
+  ///
+  /// In en, this message translates to:
+  /// **'Receive messages in the background'**
+  String get backgroundReceiveTitle;
+
+  /// Explains the background receiving setting.
+  ///
+  /// In en, this message translates to:
+  /// **'Messages and calls arrive while Conest is closed. Android shows a quiet notification while it runs.'**
+  String get backgroundReceiveHelp;
+
+  /// Setting row: whether Android limits Conest in the background.
+  ///
+  /// In en, this message translates to:
+  /// **'Battery optimisation'**
+  String get batteryExemptionTitle;
+
+  /// Battery optimisation status: Conest is left out of it.
+  ///
+  /// In en, this message translates to:
+  /// **'Unrestricted: Android does not stop Conest in the background.'**
+  String get batteryExemptionAllowed;
+
+  /// Battery optimisation status: Android may stop Conest.
+  ///
+  /// In en, this message translates to:
+  /// **'Android may stop Conest in the background, and messages then wait until you open it.'**
+  String get batteryExemptionLimited;
+
+  /// Button: ask Android to leave Conest out of battery optimisation.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow'**
+  String get batteryExemptionAllow;
+
+  /// Dialog title: ask to leave Conest out of battery optimisation.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep receiving messages'**
+  String get batteryExemptionPromptTitle;
+
+  /// Dialog text before Android's battery optimisation request.
+  ///
+  /// In en, this message translates to:
+  /// **'To get messages while Conest is closed, Android has to let it run in the background. On the next screen, allow Conest to run without battery restrictions.'**
+  String get batteryExemptionPromptBody;
+
+  /// Extra steps for phone makers that stop background apps.
+  ///
+  /// In en, this message translates to:
+  /// **'On {maker} phones, also turn on Autostart for Conest and set its battery saver to \"No restrictions\" (Settings → Apps → Conest).'**
+  String batteryExemptionVendorHint(String maker);
 }
 
 class _AppLocalizationsDelegate
