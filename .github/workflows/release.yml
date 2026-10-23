@@ -1,7 +1,7 @@
 name: Release
 
 # Dispatched from the branch with the tag to release (pushed first):
-#   gh workflow run release.yml --ref feature/matrix-client -f tag=v0.4.1-nightly.YYYYMMDD.N
+#   gh workflow run release.yml --ref feature/matrix-client -f tag=v0.4.2-nightly.YYYYMMDD.N
 # A run on the branch can use the branch's build caches; a run started by
 # the tag itself never can (tag runs see only their own and main's caches).
 on:
