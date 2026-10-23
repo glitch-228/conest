@@ -14,6 +14,7 @@ mod desktop_camera;
 mod ffi;
 pub mod matrix;
 pub mod ratchet;
+mod signing;
 pub mod tor;
 pub mod transfer;
 #[cfg(any(target_os = "linux", target_os = "windows"))]

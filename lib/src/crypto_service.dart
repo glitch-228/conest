@@ -8,6 +8,7 @@ import 'package:cryptography/cryptography.dart';
 import 'beam_protocol.dart';
 import 'links/link_preview_data.dart';
 import 'models.dart';
+import 'native_ed25519.dart';
 import 'group_file_crypto.dart';
 import 'ratchet.dart';
 
@@ -67,6 +68,8 @@ class CryptoService {
     : _identityProvider = identityProvider;
 
   final IdentityRecord Function() _identityProvider;
+
+  NativeEd25519? get _nativeEd25519 => NativeEd25519.instance;
 
   /// Forward-secret sessions; null when this build or device has none.
   RatchetSessions? ratchet;
@@ -195,6 +198,11 @@ class CryptoService {
     if (publicKeyBase64 == null || privateKeyBase64 == null) {
       throw StateError('The installation signing identity is unavailable.');
     }
+    // Natively where the library has it: group calls sign every frame.
+    if (_nativeEd25519?.sign(base64Decode(privateKeyBase64), bytes)
+        case final signed?) {
+      return base64Encode(signed);
+    }
     final signature = await Ed25519().sign(
       bytes,
       keyPair: SimpleKeyPairData(
@@ -215,6 +223,13 @@ class CryptoService {
     required String publicKeyBase64,
   }) async {
     try {
+      if (_nativeEd25519 case final native?) {
+        return native.verify(
+          base64Decode(publicKeyBase64),
+          bytes,
+          base64Decode(signatureBase64),
+        );
+      }
       return Ed25519().verify(
         bytes,
         signature: Signature(

@@ -21,6 +21,8 @@ anyhow = "1"
 base64 = "0.22"
 bytes = "1"
 chacha20poly1305 = "0.10"
+# Ed25519 for Dart (signing.rs): already in the tree through iroh.
+ed25519-dalek = "2.2"
 flutter_rust_bridge = "2"
 hmac = "0.12"
 iroh = "1.0.3"
