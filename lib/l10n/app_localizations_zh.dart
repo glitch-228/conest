@@ -5335,4 +5335,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String notificationReplyNotSent(String text) {
     return '未发送：$text';
   }
+
+  @override
+  String get startAtLoginTitle => '登录时启动 Conest';
+
+  @override
+  String get startAtLoginHelp => '在托盘中打开，随时接收消息，不显示窗口。';
 }

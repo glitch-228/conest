@@ -5710,4 +5710,11 @@ class AppLocalizationsAr extends AppLocalizations {
   String notificationReplyNotSent(String text) {
     return 'لم تُرسل: $text';
   }
+
+  @override
+  String get startAtLoginTitle => 'تشغيل Conest عند تسجيل الدخول';
+
+  @override
+  String get startAtLoginHelp =>
+      'يفتح في شريط النظام جاهزًا للاستقبال، دون نافذة.';
 }

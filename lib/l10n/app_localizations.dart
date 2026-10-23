@@ -8860,6 +8860,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Not sent: {text}'**
   String notificationReplyNotSent(String text);
+
+  /// Settings switch (Linux, Windows): start Conest at login.
+  ///
+  /// In en, this message translates to:
+  /// **'Start Conest when you log in'**
+  String get startAtLoginTitle;
+
+  /// Help under the start-at-login switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Opens in the tray, ready to receive, without a window.'**
+  String get startAtLoginHelp;
 }
 
 class _AppLocalizationsDelegate

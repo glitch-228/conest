@@ -5579,4 +5579,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String notificationReplyNotSent(String text) {
     return 'Not sent: $text';
   }
+
+  @override
+  String get startAtLoginTitle => 'Start Conest when you log in';
+
+  @override
+  String get startAtLoginHelp =>
+      'Opens in the tray, ready to receive, without a window.';
 }

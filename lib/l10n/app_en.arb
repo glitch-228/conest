@@ -8343,5 +8343,13 @@
         "type": "String"
       }
     }
+  },
+  "startAtLoginTitle": "Start Conest when you log in",
+  "@startAtLoginTitle": {
+    "description": "Settings switch (Linux, Windows): start Conest at login."
+  },
+  "startAtLoginHelp": "Opens in the tray, ready to receive, without a window.",
+  "@startAtLoginHelp": {
+    "description": "Help under the start-at-login switch."
   }
 }

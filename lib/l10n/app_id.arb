@@ -1449,5 +1449,7 @@
   "trayQuit": "Keluar",
   "notificationReply": "Balas",
   "notificationMarkRead": "Tandai sudah dibaca",
-  "notificationReplyNotSent": "Tidak terkirim: {text}"
+  "notificationReplyNotSent": "Tidak terkirim: {text}",
+  "startAtLoginTitle": "Jalankan Conest saat Anda masuk",
+  "startAtLoginHelp": "Terbuka di baki sistem, siap menerima, tanpa jendela."
 }

@@ -1449,5 +1449,7 @@
   "trayQuit": "退出",
   "notificationReply": "回复",
   "notificationMarkRead": "标记为已读",
-  "notificationReplyNotSent": "未发送：{text}"
+  "notificationReplyNotSent": "未发送：{text}",
+  "startAtLoginTitle": "登录时启动 Conest",
+  "startAtLoginHelp": "在托盘中打开，随时接收消息，不显示窗口。"
 }

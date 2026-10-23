@@ -1449,5 +1449,7 @@
   "trayQuit": "خروج",
   "notificationReply": "پاسخ",
   "notificationMarkRead": "علامت‌گذاری به‌عنوان خوانده‌شده",
-  "notificationReplyNotSent": "ارسال نشد: {text}"
+  "notificationReplyNotSent": "ارسال نشد: {text}",
+  "startAtLoginTitle": "اجرای Conest هنگام ورود به سیستم",
+  "startAtLoginHelp": "در سینی سیستم باز می‌شود و بدون پنجره آمادهٔ دریافت است."
 }

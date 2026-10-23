@@ -5704,4 +5704,11 @@ class AppLocalizationsRu extends AppLocalizations {
   String notificationReplyNotSent(String text) {
     return 'Не отправлено: $text';
   }
+
+  @override
+  String get startAtLoginTitle => 'Запускать Conest при входе в систему';
+
+  @override
+  String get startAtLoginHelp =>
+      'Открывается в трее, готов принимать сообщения, без окна.';
 }

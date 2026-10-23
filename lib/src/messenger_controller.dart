@@ -10654,6 +10654,15 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: true);
   }
 
+  /// Desktops: whether Conest starts at login (the app applies it).
+  Future<void> updateDesktopStartAtLogin(bool enabled) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(desktopStartAtLogin: enabled),
+    );
+    await _saveSnapshotSilently(notify: true);
+  }
+
   /// The phone's maker, for steps against vendor background limits.
   Future<String?> deviceManufacturer() => _platformBridge.deviceManufacturer();
 

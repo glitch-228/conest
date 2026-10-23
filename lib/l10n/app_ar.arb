@@ -1449,5 +1449,7 @@
   "trayQuit": "إنهاء",
   "notificationReply": "رد",
   "notificationMarkRead": "تعليم كمقروء",
-  "notificationReplyNotSent": "لم تُرسل: {text}"
+  "notificationReplyNotSent": "لم تُرسل: {text}",
+  "startAtLoginTitle": "تشغيل Conest عند تسجيل الدخول",
+  "startAtLoginHelp": "يفتح في شريط النظام جاهزًا للاستقبال، دون نافذة."
 }

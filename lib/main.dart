@@ -43,6 +43,7 @@ import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
 import 'src/ui/file_metadata_consent.dart';
 import 'src/ui/battery_exemption.dart';
+import 'src/desktop_autostart.dart';
 import 'src/desktop_tray.dart';
 import 'src/ui/internet_transports.dart';
 import 'src/network_errors.dart';
@@ -148,6 +149,10 @@ Future<void> _startDebugRunIfAsked(
 
 /// What a debug build was started to do (read once, at start).
 DebugRunRequest? _debugRequest;
+
+/// Started at login (desktops): the window stays in the tray until asked
+/// for, or shown at once when there is no tray.
+bool _startHidden = false;
 
 /// Debug builds only: the automatic run asked for on the command line or,
 /// on Android, in the launching intent.
@@ -275,6 +280,7 @@ Future<void> _main(List<String> args, CrashCatcher crashes) async {
   final storageResolver = AppStorageResolver();
   var storageResolution = await storageResolver.resolve();
   _debugRequest = await _readDebugRequest(args);
+  _startHidden = args.contains(DesktopAutostart.hiddenFlag);
   if (_debugRequest?.setsUp == true) {
     // A lab device keeps its own data: beside the app on desktops (with its
     // key file), never a profile the user's own Conest uses there; in the
@@ -454,6 +460,7 @@ Future<void> _runConestWithProfile(
       instanceLock: instanceLock,
       themeController: themeController,
       buildInfo: buildInfo,
+      startHidden: _startHidden,
       onResetIdentity: () async {
         // Drop the existing instance lock so the relaunched bootstrap can
         // acquire its own. Best-effort — release errors don't block reset.
@@ -1095,7 +1102,11 @@ class ConestApp extends StatefulWidget {
     required this.themeController,
     required this.buildInfo,
     this.onResetIdentity,
+    this.startHidden = false,
   });
+
+  /// Started at login with no window (desktops): see [DesktopAutostart].
+  final bool startHidden;
 
   final MessengerController controller;
   final UpdateService updateService;
@@ -1148,7 +1159,8 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     _controllerUserMode = widget.controller.userMode;
     _controllerLocale = widget.controller.localeCode;
     widget.controller.addListener(_handleControllerChanged);
-    widget.controller.setAppForegroundState(true);
+    _startedHidden = widget.startHidden && _desktopTraySupported;
+    widget.controller.setAppForegroundState(!_startedHidden);
     widget.updateService.addListener(_handleUpdateServiceChanged);
     _exitListener;
     if (Platform.isAndroid) CrashCatcher.instance.markRunning();
@@ -1195,6 +1207,8 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   // Desktops: Conest stays in the tray when its window is closed.
   final DesktopTray _tray = DesktopTray();
   bool? _trayWanted;
+  bool _startedHidden = false;
+  bool? _autostartApplied;
   StreamSubscription<void>? _showRequests;
   StreamSubscription<String>? _notificationOpens;
 
@@ -1215,7 +1229,8 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
 
   /// Starts or stops the tray as the setting says.
   void _syncTray() {
-    if (!_desktopTraySupported) return;
+    if (!_desktopTraySupported || !widget.controller.isReady) return;
+    _syncAutostart();
     final wanted =
         widget.controller.hasIdentity &&
         (widget.controller.identity?.desktopCloseToTray ?? false);
@@ -1223,16 +1238,43 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     _trayWanted = wanted;
     if (!wanted) {
       unawaited(_tray.stop());
+      _showIfStartedHidden();
       return;
     }
     final l10n = _trayLocalizations();
     unawaited(
-      _tray.start(
-        (tooltip: 'Conest', show: l10n.trayShow, quit: l10n.trayQuit),
-        onQuit: () => unawaited(_quitFromTray()),
-        onNotificationClicked:
-            widget.controller.platformBridge.notificationClicked,
-      ),
+      _tray
+          .start(
+            (tooltip: 'Conest', show: l10n.trayShow, quit: l10n.trayQuit),
+            onQuit: () => unawaited(_quitFromTray()),
+            onNotificationClicked:
+                widget.controller.platformBridge.notificationClicked,
+          )
+          .then((inTray) {
+            if (!inTray) _showIfStartedHidden();
+          }),
+    );
+  }
+
+  /// A start at login with nowhere to come back from (no tray, or the
+  /// setting off) shows the window after all.
+  void _showIfStartedHidden() {
+    if (!_startedHidden) return;
+    _startedHidden = false;
+    unawaited(_tray.show());
+  }
+
+  /// Starting at login, as the setting says (written again at each start,
+  /// so a moved portable build still starts).
+  void _syncAutostart() {
+    if (!widget.controller.hasIdentity) return;
+    final wanted = widget.controller.identity?.desktopStartAtLogin ?? false;
+    if (wanted == _autostartApplied) return;
+    _autostartApplied = wanted;
+    unawaited(
+      DesktopAutostart().apply(wanted).catchError((Object error) {
+        widget.controller.appendDebugLog('Start at login not set: $error');
+      }),
     );
   }
 
@@ -15335,6 +15377,23 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                     : (value) => _run(
                                         () => widget.controller
                                             .updateDesktopCloseToTray(value),
+                                      ),
+                              ),
+                            if (!kIsWeb &&
+                                (Platform.isLinux || Platform.isWindows))
+                              SwitchListTile(
+                                key: const ValueKey('settings-start-at-login'),
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(l10nOf(context).startAtLoginTitle),
+                                subtitle: Text(
+                                  l10nOf(context).startAtLoginHelp,
+                                ),
+                                value: identity.desktopStartAtLogin,
+                                onChanged: _busy
+                                    ? null
+                                    : (value) => _run(
+                                        () => widget.controller
+                                            .updateDesktopStartAtLogin(value),
                                       ),
                               ),
                             SwitchListTile(

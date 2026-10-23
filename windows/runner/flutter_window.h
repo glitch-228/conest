@@ -19,6 +19,10 @@ class FlutterWindow : public Win32Window {
   explicit FlutterWindow(const flutter::DartProject& project);
   virtual ~FlutterWindow();
 
+  // Started at login (--hidden): the window stays hidden, in the tray,
+  // until Dart shows it (it does when there is no tray).
+  void SetStartHidden(bool hidden) { start_hidden_ = hidden; }
+
  protected:
   // Win32Window:
   bool OnCreate() override;
@@ -38,6 +42,7 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       window_channel_;
   bool close_to_tray_ = false;
+  bool start_hidden_ = false;
   bool tray_added_ = false;
   NOTIFYICONDATAW tray_icon_ = {};
   std::wstring tray_show_label_ = L"Show Conest";

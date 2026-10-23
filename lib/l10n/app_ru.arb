@@ -1449,5 +1449,7 @@
   "trayQuit": "Выйти",
   "notificationReply": "Ответить",
   "notificationMarkRead": "Прочитано",
-  "notificationReplyNotSent": "Не отправлено: {text}"
+  "notificationReplyNotSent": "Не отправлено: {text}",
+  "startAtLoginTitle": "Запускать Conest при входе в систему",
+  "startAtLoginHelp": "Открывается в трее, готов принимать сообщения, без окна."
 }

@@ -1778,6 +1778,34 @@ void main() {
     expect(recorder.actionsDone, greaterThanOrEqualTo(1));
   });
 
+  test('starting at login is off by default, and on stays on', () async {
+    final vault = _MemoryVaultStore();
+    final first = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Laptop',
+      vaultStore: vault,
+    );
+    expect(first.identity!.desktopStartAtLogin, isFalse);
+    await first.updateDesktopStartAtLogin(true);
+    first.dispose();
+    final again = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Laptop',
+      vaultStore: vault,
+      createIdentity: false,
+    );
+    addTearDown(again.dispose);
+    expect(again.identity!.desktopStartAtLogin, isTrue);
+    final stored = again.identity!.toJson();
+    expect(IdentityRecord.fromJson(stored).desktopStartAtLogin, isTrue);
+    expect(
+      IdentityRecord.fromJson(
+        stored..remove('desktopStartAtLogin'),
+      ).desktopStartAtLogin,
+      isFalse,
+    );
+  });
+
   test('closing to the tray is on by default, and off stays off', () async {
     final vault = _MemoryVaultStore();
     final first = await _createController(

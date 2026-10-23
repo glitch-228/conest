@@ -5580,4 +5580,11 @@ class AppLocalizationsFa extends AppLocalizations {
   String notificationReplyNotSent(String text) {
     return 'ارسال نشد: $text';
   }
+
+  @override
+  String get startAtLoginTitle => 'اجرای Conest هنگام ورود به سیستم';
+
+  @override
+  String get startAtLoginHelp =>
+      'در سینی سیستم باز می‌شود و بدون پنجره آمادهٔ دریافت است.';
 }

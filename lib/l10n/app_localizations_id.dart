@@ -5566,4 +5566,11 @@ class AppLocalizationsId extends AppLocalizations {
   String notificationReplyNotSent(String text) {
     return 'Tidak terkirim: $text';
   }
+
+  @override
+  String get startAtLoginTitle => 'Jalankan Conest saat Anda masuk';
+
+  @override
+  String get startAtLoginHelp =>
+      'Terbuka di baki sistem, siap menerima, tanpa jendela.';
 }
