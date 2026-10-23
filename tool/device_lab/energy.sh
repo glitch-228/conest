@@ -6,7 +6,13 @@
 #
 # Android (adb, the debug package): battery statistics are reset at start
 # and read at stop (CPU time, wakeup alarms, wakelocks, bytes): the app's
-# lines of `dumpsys batterystats --checkin` in OUT/energy-android.txt. Linux and Windows: the lab instance's CPU seconds
+# lines of `dumpsys batterystats --checkin` in OUT/energy-android.txt.
+# Android counts nothing while charging, and the lab phones charge: the
+# phone is told it runs on battery for the run (`dumpsys battery unplug`,
+# set back at stop), and Android resets its statistics when a phone near
+# full leaves its charger. The app's process CPU and memory are sampled
+# too, every 10 s into OUT/energy-android.csv (from /proc, needing no
+# battery statistics). Linux and Windows: the lab instance's CPU seconds
 # and memory, sampled every 10 s into OUT/energy-linux.csv and
 # OUT/energy-windows.csv (Windows only for conest.exe under conest-lab, never
 # the user's own). lab.sh runs this with ENERGY=1.
@@ -51,6 +57,22 @@ phone_adb() { # serial or "", adb arguments…
   if [ -n "$serial" ]; then adb -s "$serial" "$@"; else adb "$@"; fi
 }
 
+sample_android() { # serial or "", phone name
+  local serial=$1 phone=$2 pid stat
+  echo "time,cpu_seconds,rss_kb" >"$out/energy-$phone.csv"
+  while [ -f "$out/.energy-on" ]; do
+    pid=$(phone_adb "$serial" shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' | awk '{print $1}')
+    if [ -n "$pid" ]; then
+      # utime and stime in ticks (100 a second on Android), and RSS pages.
+      stat=$(phone_adb "$serial" shell cat "/proc/$pid/stat" 2>/dev/null | tr -d '\r' |
+        sed 's/^.*) //' | awk '{print $12 + $13, $22 * 4}')
+      [ -n "$stat" ] && echo "$(date -u +%FT%TZ),$(echo "$stat" |
+        awk '{printf "%d,%d", $1 / 100, $2}')" >>"$out/energy-$phone.csv"
+    fi
+    sleep 10
+  done
+}
+
 case "$action" in
   start)
     touch "$out/.energy-on"
@@ -58,9 +80,11 @@ case "$action" in
       serial=""
       [ "$phone" = android2 ] && serial=$ANDROID2
       if phone_adb "$serial" get-state >/dev/null 2>&1; then
+        phone_adb "$serial" shell dumpsys battery unplug >/dev/null
         phone_adb "$serial" shell dumpsys batterystats --reset >/dev/null
         phone_adb "$serial" shell dumpsys batterystats --enable full-wake-history >/dev/null 2>&1 || true
         date -u +%FT%TZ >"$out/energy-$phone-start.txt"
+        sample_android "$serial" "$phone" &
       fi
     done
     [ -n "${LINUX_BUNDLE:-}" ] && { sample_linux & echo $! >"$out/.energy-linux.pid"; }
@@ -84,6 +108,7 @@ case "$action" in
         echo "uid $uid"
         phone_adb "$serial" shell dumpsys batterystats --checkin | tr -d '\r' | grep "^9,$uid,l,"
       } >"$out/energy-$phone.txt" 2>&1
+      phone_adb "$serial" shell dumpsys battery reset >/dev/null
     done
     python3 "$(dirname "$0")/energy_summary.py" "$out" || true
     ;;

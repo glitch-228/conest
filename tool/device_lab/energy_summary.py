@@ -23,6 +23,7 @@ def android(text):
         hours = max((end - start).total_seconds() / 3600, 1 / 3600)
     cpu = rx = tx = 0.0
     wakeups = 0
+    measured = False
     for line in text.splitlines():
         fields = line.split(",")
         if len(fields) < 5 or fields[0] != "9" or fields[2] != "l":
@@ -31,6 +32,7 @@ def android(text):
         try:
             if kind == "cpu":
                 cpu += (int(values[0]) + int(values[1])) / 1000
+                measured = True
             elif kind == "nt":
                 rx += int(values[0]) + int(values[2])
                 tx += int(values[1]) + int(values[3])
@@ -39,11 +41,12 @@ def android(text):
         except (ValueError, IndexError):
             continue
     return {"hours": hours, "cpu_s": cpu, "wakeups": wakeups,
-            "rx": rx, "tx": tx}
+            "rx": rx, "tx": tx, "measured": measured}
 
 
 def desktop(path):
-    """CPU seconds used, the span in hours, and the largest memory."""
+    """CPU seconds used, the span in hours, and the largest memory. A
+    counter that goes down is a restarted process: its count starts over."""
     rows = list(csv.DictReader(open(path)))
     rows = [r for r in rows if r.get("time")]
     if len(rows) < 2:
@@ -53,7 +56,8 @@ def desktop(path):
     cpu = [float(r["cpu_seconds"]) for r in rows]
     memory = [float(list(r.values())[2]) for r in rows]
     hours = max((times[-1] - times[0]).total_seconds() / 3600, 1 / 3600)
-    return {"hours": hours, "cpu_s": cpu[-1] - cpu[0],
+    used = sum(b - a if b >= a else b for a, b in zip(cpu, cpu[1:]))
+    return {"hours": hours, "cpu_s": used,
             "max_memory_mb": max(memory) / 1024}
 
 
@@ -66,17 +70,25 @@ def lines(folder):
         a = android(phone.read_text(errors="replace"))
         h = a["hours"] or 1
         name = phone.stem.removeprefix("energy-")
+        if not a["measured"]:
+            # No CPU line at all: Android counted nothing (a charging
+            # phone, or stats reset under the run), which is not zero.
+            out.append(f"  {name}: {h * 60:.0f} min, NOT MEASURED "
+                       "(no CPU line in batterystats)")
+            continue
         out.append(
             f"  {name}: {h * 60:.0f} min, CPU {a['cpu_s'] / h:.0f} s/h, "
             f"{a['wakeups'] / h:.0f} wakeups/h, "
             f"{(a['rx'] + a['tx']) / h / 1024 ** 2:.1f} MB/h")
-    for side in ("linux", "windows"):
+    for side in ("android", "android2", "linux", "windows"):
         path = folder / f"energy-{side}.csv"
         if path.exists():
             d = desktop(path)
             if d:
+                name = f"{side} (process)" if side.startswith("android") \
+                    else side
                 out.append(
-                    f"  {side}: {d['hours'] * 60:.0f} min, CPU "
+                    f"  {name}: {d['hours'] * 60:.0f} min, CPU "
                     f"{d['cpu_s'] / d['hours']:.0f} s/h, memory up to "
                     f"{d['max_memory_mb']:.0f} MB")
     return out
