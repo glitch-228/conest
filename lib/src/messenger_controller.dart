@@ -17267,7 +17267,10 @@ class MessengerController extends ChangeNotifier {
   /// **current** group snapshot under a fresh envelope each time so the
   /// recipient always converges on the latest state. Caps `attempts` to
   /// avoid burning relay quota on permanently unreachable peers.
-  Future<void> _retryPendingMembershipDeliveries({bool force = false}) async {
+  Future<void> _retryPendingMembershipDeliveries({
+    bool force = false,
+    String? onlyDevice,
+  }) async {
     if (_snapshot.pendingGroupMembershipDeliveries.isEmpty) {
       return;
     }
@@ -17282,7 +17285,8 @@ class MessengerController extends ChangeNotifier {
       _snapshot.pendingGroupMembershipDeliveries,
     );
     for (final entry in pending) {
-      if (entry.attempts >= maxAttempts) {
+      if (entry.attempts >= maxAttempts ||
+          (onlyDevice != null && entry.targetDeviceId != onlyDevice)) {
         continue;
       }
       if (!force) {
@@ -31417,8 +31421,13 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+    // A group's membership too (an invitation sent just as the sessions
+    // crossed, right after pairing, used to wait for the next retry).
+    final memberships = _snapshot.pendingGroupMembershipDeliveries.any(
+      (entry) => entry.targetDeviceId == peer.deviceId,
+    );
     // Nothing waiting: nothing to do, and no limit spent.
-    if (!direct && grouped.isEmpty) return;
+    if (!direct && grouped.isEmpty && !memberships) return;
     final now = _now();
     final last = _waitingResentAt[peer.deviceId];
     if (last != null && now.difference(last) < const Duration(seconds: 30)) {
@@ -31426,6 +31435,14 @@ class MessengerController extends ChangeNotifier {
     }
     _waitingResentAt[peer.deviceId] = now;
     if (direct) _flushContactSoon(peer.deviceId);
+    if (memberships) {
+      unawaited(
+        _retryPendingMembershipDeliveries(
+          force: true,
+          onlyDevice: peer.deviceId,
+        ),
+      );
+    }
     if (grouped.isEmpty) return;
     // The newest few, one at a time, stopping at the first that does not go:
     // a peer that never acknowledges gets no burst of the whole backlog.

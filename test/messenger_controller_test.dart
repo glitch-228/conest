@@ -26299,6 +26299,24 @@ void main() {
       },
     );
 
+    test('after a reset, a group invitation is sent again at once', () async {
+      // Right after pairing the two sessions can cross: the first group
+      // a contact was added to then waited for the next retry.
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      await bob.forgetRatchetSessionsForTesting(alice.identity!.deviceId);
+      final group = await alice.createGroup(
+        title: 'Crossed',
+        members: alice.contacts,
+      );
+      await pollOnly([alice, bob]);
+      expect(bob.groups.map((g) => g.groupId), contains(group.groupId));
+    });
+
     test('waiting messages are re-sent at most every 30 s per peer', () async {
       // Bundles are cheap: a stream of them must not have everything
       // waiting encrypted and sent again each time.
