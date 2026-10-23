@@ -34714,6 +34714,12 @@ class MessengerController extends ChangeNotifier {
             readThroughMessageId: through?.id,
             fromOwnDevice: true,
           );
+          // Read there: its notification here goes too.
+          unawaited(
+            _platformBridge.dismissMessageNotification(
+              conversationId: _crypto.conversationIdFor(chat),
+            ),
+          );
       }
     }
     if (changed) await _saveSnapshotSilently(notify: true);

@@ -19547,16 +19547,20 @@ void main() {
           void Function(Duration),
         )
       >
-      linkedPair() async {
+      linkedPair({PlatformBridge? phoneBridge}) async {
         final network = _InProcessIrohNetwork();
         final relay = _FakeRelayClient();
         var now = DateTime.now().toUtc();
-        Future<MessengerController> make(String name) async {
+        Future<MessengerController> make(
+          String name, [
+          PlatformBridge? bridge,
+        ]) async {
           final controller = await _createController(
             relayClient: relay,
             displayName: name,
             transportRegistryFactory: network.registry,
             nowProvider: () => now,
+            platformBridge: bridge,
           );
           addTearDown(controller.dispose);
           return controller;
@@ -19564,7 +19568,7 @@ void main() {
 
         final alice = await make('Alice');
         final bob = await make('Bob');
-        final phone = await make('Phone');
+        final phone = await make('Phone', phoneBridge);
         await _pairControllers(alice, bob);
         final qr = await phone.startLinkAsNewDevice();
         await alice.startLinkFromQrCode(qr);
@@ -19593,6 +19597,34 @@ void main() {
           },
         );
       }
+
+      test('read on one device, its notification goes on the other', () async {
+        final recorder = _RecordingPlatformBridge();
+        final (alice, bob, phone, _, _, advance) = await linkedPair(
+          phoneBridge: recorder,
+        );
+        phone.setAppForegroundState(false);
+        final bobId = bob.identity!.deviceId;
+        await bob.sendMessage(contact: bob.contacts.single, body: 'see me');
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          advance(const Duration(seconds: 5));
+          return recorder.shown.any((call) => call.body == 'see me');
+        }, reason: 'the phone never notified');
+        final notified = recorder.shown
+            .firstWhere((call) => call.body == 'see me')
+            .conversationId;
+        final message = alice
+            .messagesFor(bobId)
+            .firstWhere((m) => m.body == 'see me');
+        await alice.markConversationReadThroughMessage(bobId, message);
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return recorder.dismissed.contains(notified);
+        }, reason: 'the phone kept the notification');
+      });
 
       test('one that reached only the laptop shows on the phone, once, '
           'from the contact', () async {
