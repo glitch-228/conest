@@ -262,10 +262,10 @@ EOF
   win "netsh advfirewall firewall add rule name=ConestLab dir=in action=allow program=\"$WINDOWS_DIR\\conest.exe\" enable=yes" >/dev/null ||
     echo "Could not add the Windows firewall rule (LAN may be one-way)."
   # A task, so it runs on the user's desktop; allowed on battery (a laptop
-  # on battery otherwise leaves it queued).
+  # on battery otherwise leaves it queued), and long enough for a serve run.
   cat >"$out/lab-task.ps1" <<'PS1'
 $a = New-ScheduledTaskAction -Execute "$env:USERPROFILE\conest-lab\start-lab.cmd"
-$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 12)
 $p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 Register-ScheduledTask -TaskName ConestLab -Action $a -Settings $s -Principal $p -Force | Out-Null
 Start-ScheduledTask -TaskName ConestLab

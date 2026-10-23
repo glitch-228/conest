@@ -310,6 +310,9 @@ class LabPhase {
 
   static final RegExp _id = RegExp(r'^[A-Za-z0-9_-]{1,32}$');
 
+  /// A serve run with no new phase for this long ends by itself.
+  static const Duration maximumIdle = Duration(hours: 2);
+
   static const Set<String> phaseKinds = {
     'routes',
     'messages',
@@ -881,10 +884,17 @@ Future<String> runDebugRequest(
     final setUp = controller.identity?.connectivity;
     final done = <String>{};
     final commands = File('$path.cmd');
-    while (true) {
+    // A lab that went away (its script stopped) does not keep this device
+    // running for ever.
+    var idleSince = DateTime.now();
+    while (DateTime.now().difference(idleSince) < LabPhase.maximumIdle) {
       List<String> lines;
       try {
-        lines = commands.existsSync() ? await commands.readAsLines() : [];
+        final text = commands.existsSync() ? await commands.readAsString() : '';
+        // A line still being written (no newline yet) waits: "p1 messages"
+        // must not run before " lan" is added to it.
+        lines = text.split('\n');
+        lines.removeLast();
       } catch (_) {
         lines = [];
       }
@@ -950,6 +960,15 @@ Future<String> runDebugRequest(
         ),
       );
       controller.recordError('test', 'Lab phase ${phase.id} written');
+      idleSince = DateTime.now();
+    }
+    // Every transport back on, as set up: kept lab data starts the next run
+    // from there.
+    if (setUp != null) {
+      await step('transports as set up', () async {
+        await controller.updateGlobalConnectivity(setUp);
+        return null;
+      });
     }
   } else {
     carriersAtStart = await runPhase(

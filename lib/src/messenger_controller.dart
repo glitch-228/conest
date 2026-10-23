@@ -8376,9 +8376,14 @@ class MessengerController extends ChangeNotifier {
           envelope.recipientDeviceId != _snapshot.identity?.deviceId) {
         throw const FormatException('Iroh envelope identity mismatch.');
       }
+      // Pairing only, until approved: a contact's reply (version 2), or a
+      // known contact asking again (version 1, a removal or a lost
+      // acceptance; checked against the keys pinned for them, as over a
+      // relay). The Iroh identity already names this contact.
       if (!contact.canSendOutbound &&
           (envelope.kind != 'contact_exchange' ||
-              envelope.protocolVersion != 2)) {
+              (envelope.protocolVersion != 1 &&
+                  envelope.protocolVersion != 2))) {
         appendDebugLog(
           'Rejected non-pairing Iroh traffic before contact approval.',
         );
@@ -23336,7 +23341,10 @@ class MessengerController extends ChangeNotifier {
     if (groupId == null || groupId.isEmpty || groupId != existing.groupId) {
       return;
     }
-    if (!existing.activeMemberDeviceIds.contains(envelope.senderDeviceId)) {
+    // Only members follow leaves; a device showing the group through
+    // another of this account's devices takes membership from there.
+    if (!existing.activeMemberDeviceIds.contains(envelope.senderDeviceId) ||
+        !existing.hasActiveMember(me.deviceId)) {
       return;
     }
     final updated = existing.copyWith(
@@ -33264,12 +33272,18 @@ class MessengerController extends ChangeNotifier {
   /// Tells this account's other devices [event] (queued until each gets
   /// it). A newer read position or receipt replaces a queued one for the
   /// same chat or message.
-  void _syncToOwnDevices(Map<String, Object?> event, {String? only}) {
+  void _syncToOwnDevices(
+    Map<String, Object?> event, {
+    String? only,
+    bool Function(ContactRecord device)? to,
+  }) {
     if (!conestActive) return;
     // Unconfirmed devices get theirs queued, not sent (until confirmed).
     final devices = ownDevices.where(
       (device) =>
-          device.canSendOutbound && (only == null || device.deviceId == only),
+          device.canSendOutbound &&
+          (only == null || device.deviceId == only) &&
+          (to == null || to(device)),
     );
     if (devices.isEmpty) return;
     final plaintext = jsonEncode({
@@ -33519,6 +33533,41 @@ class MessengerController extends ChangeNotifier {
       .where((entry) => _queuedSyncEvent(entry)?['type'] == 'rx')
       .length;
 
+  /// Asks [gatewayId] to post [body] in [groupId] as a device shown the
+  /// group through it would (whether or not this one is).
+  @visibleForTesting
+  Future<void> postThroughGatewayForTesting(
+    String groupId,
+    String gatewayId,
+    String body,
+  ) => _sendGroupMessageThroughGateway(
+    _requireGroup(groupId).copyWith(mirroredVia: gatewayId),
+    body: body,
+  );
+
+  /// Forgets what history was asked for, as a restart does.
+  @visibleForTesting
+  void forgetHistoryAsksForTesting() {
+    _historyQueue.clear();
+    _historyAsked.clear();
+    _historyAskedAt.clear();
+  }
+
+  /// Asks [deviceId] for history, as after a link.
+  @visibleForTesting
+  void askHistoryForTesting(String deviceId) => _requestHistoryFrom(deviceId);
+
+  /// Own-device sync events of [type] waiting for [deviceId].
+  @visibleForTesting
+  int queuedSyncForTesting(String type, String deviceId) => _snapshot
+      .pendingAckDeliveries
+      .where(
+        (entry) =>
+            entry.targetDeviceId == deviceId &&
+            _queuedSyncEvent(entry)?['type'] == type,
+      )
+      .length;
+
   /// [sender] has these messages: what was queued to pass them on to it
   /// is not sent.
   void _dropQueuedReceived(String senderDeviceId, Object? ids) {
@@ -33605,8 +33654,14 @@ class MessengerController extends ChangeNotifier {
       'type': 'group_state',
       'chat': group.groupId,
       'group': group.toJson(),
-    });
+    }, to: (device) => _mayMirror(group, device.deviceId));
   }
+
+  /// Whether this account's [deviceId] is shown [group] through this
+  /// device: not a member itself, and not one removed from the group.
+  bool _mayMirror(GroupRecord group, String deviceId) =>
+      !group.hasActiveMember(deviceId) &&
+      !group.removedDeviceIds.contains(deviceId);
 
   /// A message of [groupId] this device has (sent or received) shows on
   /// the account's other devices, which only see the group through it.
@@ -33635,7 +33690,7 @@ class MessengerController extends ChangeNotifier {
       'chat': groupId,
       'id': messageId,
       'message': json,
-    });
+    }, to: (device) => _mayMirror(group, device.deviceId));
   }
 
   /// [sender], one of this account's devices, shows this device a group it
@@ -33795,6 +33850,7 @@ class MessengerController extends ChangeNotifier {
     if (me == null ||
         group == null ||
         !group.hasActiveMember(me.deviceId) ||
+        !_mayMirror(group, sender.deviceId) ||
         raw is! String ||
         raw.length > _maxSyncedPayloadChars) {
       return;
@@ -33857,6 +33913,17 @@ class MessengerController extends ChangeNotifier {
   final Map<String, Set<String>> _historyAsked = {};
   static const int _historyChatsAtOnce = 4;
 
+  /// When each asked chat was last asked for, from which cursor, and how
+  /// often: a request or page lost on the way is asked for again, and a
+  /// chat that never answers is given up, so the others go on.
+  final Map<String, Map<String, (DateTime, Object?, int)>> _historyAskedAt = {};
+  final Map<String, Timer> _historyTimers = {};
+  @visibleForTesting
+  static Duration historyAskTimeout = const Duration(minutes: 3);
+  @visibleForTesting
+  int historyAsksForTesting = 0;
+  static const int _historyAskTries = 3;
+
   /// Messages taken per chat (bounded by the most per chat).
   final Map<String, int> _historyTaken = {};
 
@@ -33897,13 +33964,51 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  void _askHistory(String deviceId, String chat, {Object? cursor}) {
+  void _askHistory(
+    String deviceId,
+    String chat, {
+    Object? cursor,
+    int tries = 1,
+  }) {
+    (_historyAskedAt[deviceId] ??= {})[chat] = (_now(), cursor, tries);
+    historyAsksForTesting++;
+    _historyTimers[deviceId] ??= Timer(
+      historyAskTimeout,
+      () => _checkHistoryAsks(deviceId),
+    );
     _syncToOwnDevices({
       'type': 'history_req',
       'chats': [
         {'chat': chat, 'cursor': ?cursor},
       ],
     }, only: deviceId);
+  }
+
+  /// Chats asked of [deviceId] with no page back in time: asked again, or
+  /// given up after a few tries.
+  void _checkHistoryAsks(String deviceId) {
+    _historyTimers.remove(deviceId);
+    final asked = _historyAsked[deviceId];
+    final at = _historyAskedAt[deviceId];
+    if (_disposed || asked == null || at == null) return;
+    final now = _now();
+    for (final chat in [...asked]) {
+      final (askedAt, cursor, tries) = at[chat] ?? (now, null, 1);
+      if (now.difference(askedAt) < historyAskTimeout) continue;
+      if (tries < _historyAskTries) {
+        _askHistory(deviceId, chat, cursor: cursor, tries: tries + 1);
+      } else {
+        asked.remove(chat);
+        at.remove(chat);
+      }
+    }
+    _pumpHistory(deviceId);
+    if (asked.isNotEmpty) {
+      _historyTimers[deviceId] ??= Timer(
+        historyAskTimeout,
+        () => _checkHistoryAsks(deviceId),
+      );
+    }
   }
 
   /// The messages of [chat] (a history name) held here, if this device may
@@ -33957,6 +34062,7 @@ class MessengerController extends ChangeNotifier {
       final held = _historyMessages(chat);
       if (held == null) {
         // Nothing for that chat here: an empty last page ends the asking.
+        served.add(now);
         _syncToOwnDevices({
           'type': 'history_page',
           'chat': chat,
@@ -33988,13 +34094,19 @@ class MessengerController extends ChangeNotifier {
       ]..sort(_historyOrder);
       final page = <String>[];
       var chars = 0;
+      var considered = 0;
       ChatMessage? last;
       for (final message in candidates) {
         if (page.length >= historyPageMessages) break;
         final json = jsonEncode(message.toJson());
-        if (chars + json.length > _historyPageChars) break;
-        page.add(json);
-        chars += json.length;
+        // One too large for any page is left out (the cursor moves past
+        // it); one that only overfills this page starts the next.
+        if (json.length <= _historyPageChars) {
+          if (chars + json.length > _historyPageChars) break;
+          page.add(json);
+          chars += json.length;
+        }
+        considered++;
         last = message;
       }
       served.add(now);
@@ -34002,7 +34114,7 @@ class MessengerController extends ChangeNotifier {
         'type': 'history_page',
         'chat': chat,
         'messages': page,
-        'more': page.length < candidates.length,
+        'more': considered < candidates.length,
         if (last != null)
           'cursor': {
             'at': last.createdAt.toUtc().toIso8601String(),
@@ -34102,6 +34214,12 @@ class MessengerController extends ChangeNotifier {
     final me = identity;
     final chat = event['chat'];
     final raw = event['messages'];
+    // After a restart nothing is remembered as asked: a page still on its
+    // way (only confirmed own devices get here) goes on from where it is.
+    if (chat is String && !_historyAsked.containsKey(sender.deviceId)) {
+      _historyAsked[sender.deviceId] = {chat};
+      _historyQueue[sender.deviceId] = [];
+    }
     final asked = _historyAsked[sender.deviceId];
     if (me == null ||
         chat is! String ||
@@ -34157,6 +34275,7 @@ class MessengerController extends ChangeNotifier {
       _askHistory(sender.deviceId, chat, cursor: cursor);
     } else {
       asked.remove(chat);
+      _historyAskedAt[sender.deviceId]?.remove(chat);
       _pumpHistory(sender.deviceId);
     }
     return imported.isNotEmpty;
@@ -36692,6 +36811,10 @@ class MessengerController extends ChangeNotifier {
     _linkExpiry = null;
     _seenTimer?.cancel();
     _seenTimer = null;
+    for (final timer in _historyTimers.values) {
+      timer.cancel();
+    }
+    _historyTimers.clear();
     _lanAdvertiseTimer?.cancel();
     for (final timer in _lanRecheckTimers) {
       timer.cancel();

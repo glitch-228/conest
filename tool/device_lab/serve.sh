@@ -81,14 +81,18 @@ done
 mv "$lab_log" "$out/lab.log"
 lab_log="$out/lab.log"
 
-tell() { # one line for every device
+tell() { # one line for every device (one out of reach must not stop it)
   echo "$1" >>"$linux_report.cmd"
-  win "echo $1>> \"$win_report.cmd\""
+  win "echo $1>> \"$win_report.cmd\"" || echo "Could not tell Windows: $1" >&2
   local entry
   for entry in "${phones[@]}"; do
-    $(adb_for "${entry#*:}") shell "run-as $PACKAGE sh -c 'echo \"$1\" >> $android_report.cmd'"
+    $(adb_for "${entry#*:}") shell "run-as $PACKAGE sh -c 'echo \"$1\" >> $android_report.cmd'" ||
+      echo "Could not tell ${entry%%:*}: $1" >&2
   done
 }
+# However this script ends, the devices are told to stop (each also stops
+# by itself after two hours with no phase).
+trap 'tell "stop stop" 2>/dev/null || true' EXIT
 
 has_report() { # device, phase id
   case "$1" in
@@ -139,4 +143,5 @@ for phase in $PHASES; do
 done
 
 tell "stop stop"
+trap - EXIT
 wait "$lab_pid" || true

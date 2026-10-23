@@ -2823,6 +2823,67 @@ void main() {
     });
   });
 
+  test('a removed contact is added again over Iroh alone', () async {
+    // The lab's contacts run: the side that added removes, then asks again
+    // with the same invite; the removed side keeps its record of them.
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    Future<MessengerController> device(String name) async {
+      final controller = await _createController(
+        relayClient: relay,
+        displayName: name,
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(controller.dispose);
+      await controller.updateGlobalConnectivity(_irohOnlyConnectivity);
+      return controller;
+    }
+
+    final alice = await device('Alice');
+    final bob = await device('Bob');
+    final invite = (await bob.buildInvite()).encodePayload();
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: invite,
+      codephrase: '',
+    );
+    await _waitForIroh(
+      () => bob.pendingContactRequests.isNotEmpty,
+      reason: 'the first request',
+    );
+    await bob.approvePendingContactRequest(
+      bob.pendingContactRequests.single.id,
+    );
+    final bobId = bob.identity!.deviceId;
+    final aliceId = alice.identity!.deviceId;
+    await _waitForIroh(
+      () => alice.contactByDeviceId(bobId)?.canSendOutbound == true,
+      reason: 'paired',
+    );
+    await alice.removeContact(bobId);
+    await _waitForIroh(
+      () => bob.contactByDeviceId(aliceId)?.remoteRemovedAt != null,
+      reason: 'the removal reached Bob',
+    );
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: invite,
+      codephrase: '',
+    );
+    await _waitForIroh(
+      () => bob.pendingContactRequests.isNotEmpty,
+      reason: 'the request to add Alice again reached Bob over Iroh',
+    );
+    await bob.approvePendingContactRequest(
+      bob.pendingContactRequests.single.id,
+    );
+    await _waitForIroh(
+      () => alice.contactByDeviceId(bobId)?.canSendOutbound == true,
+      reason: 'Alice has Bob back',
+    );
+    expect(bob.contactByDeviceId(aliceId)!.remoteRemovedAt, isNull);
+  });
+
   test('cancelled pairing ignores a late acceptance response', () async {
     final relay = _FakeRelayClient();
     final alice = await _createController(
@@ -19456,6 +19517,133 @@ void main() {
         () => onPhoneState(phone, later.groupId) != DeliveryState.pending,
         'the phone\'s copy did not learn its state',
       );
+      // A member cannot change (or freeze) the group on a device that only
+      // shows it: a leave sent straight to the phone is not followed.
+      final shown = phone.groups.singleWhere((g) => g.groupId == later.groupId);
+      final bobCrypto = CryptoService(identityProvider: () => bob.identity!);
+      final leave = await bobCrypto.encryptPayloadEnvelope(
+        kind: 'group_leave',
+        messageId: 'forged-leave',
+        conversationId: later.groupId,
+        senderAccountId: bob.identity!.accountId,
+        senderDeviceId: bob.identity!.deviceId,
+        recipientDeviceId: phoneId,
+        contact: bob.contactByDeviceId(phoneId)!,
+        plaintext: jsonEncode({
+          'groupId': later.groupId,
+          'membershipVersion': 1 << 52,
+        }),
+      );
+      network.inject(phone.identity!, bob.identity!.irohEndpointId!, leave);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final after = phone.groups.singleWhere((g) => g.groupId == later.groupId);
+      expect(after.membershipVersion, shown.membershipVersion);
+      expect(after.hasActiveMember(bob.identity!.deviceId), isTrue);
+    });
+
+    test('group content goes only to own devices shown the group', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => phone.linkCode != null && alice.linkCode != null,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      final phoneId = phone.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(bob.pollNow());
+        unawaited(phone.pollNow());
+        return phone.linkState == LinkState.linked &&
+            bob.contactByDeviceId(phoneId)?.canSendOutbound == true;
+      }, reason: 'linked, and Bob knows the phone');
+      // The phone is a member itself here: it gets the group from Bob.
+      final group = await bob.createGroup(
+        title: 'Both of Alice',
+        members: [
+          bob.contactByDeviceId(alice.identity!.deviceId)!,
+          bob.contactByDeviceId(phoneId)!,
+        ],
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.groups.any((g) => g.groupId == group.groupId);
+      }, reason: 'Alice in the group');
+      await _waitForIroh(() {
+        unawaited(phone.pollNow());
+        return phone.groups.any((g) => g.groupId == group.groupId);
+      }, reason: 'the phone in the group');
+      // A device that is a member itself does not post through Alice.
+      await phone.postThroughGatewayForTesting(
+        group.groupId,
+        alice.identity!.deviceId,
+        'as Alice, from a member',
+      );
+      for (var i = 0; i < 10; i++) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(
+        bob
+            .messagesForGroup(group.groupId)
+            .where((m) => m.body == 'as Alice, from a member'),
+        isEmpty,
+      );
+      // The phone is away from here on: what is meant for it waits.
+      final phoneIroh = phone.identity!.irohEndpointId!;
+      for (final other in [alice, bob]) {
+        network.blockedPairs
+          ..add((other.identity!.irohEndpointId!, phoneIroh))
+          ..add((phoneIroh, other.identity!.irohEndpointId!));
+      }
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.recipientDeviceId == phoneId;
+      Future<void> bobWrites(String body) async {
+        await bob.sendGroupMessage(groupId: group.groupId, body: body);
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice
+              .messagesForGroup(group.groupId)
+              .any((m) => m.body == body);
+        }, reason: 'Alice got "$body"');
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+
+      await bobWrites('to members');
+      expect(alice.queuedSyncForTesting('group_message', phoneId), 0);
+      expect(alice.queuedSyncForTesting('group_state', phoneId), 0);
+      // Removed from the group: nothing of it through Alice either.
+      await bob.removeGroupMember(
+        groupId: group.groupId,
+        memberDeviceId: phoneId,
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.groups
+            .singleWhere((g) => g.groupId == group.groupId)
+            .removedDeviceIds
+            .contains(phoneId);
+      }, reason: 'Alice saw the phone removed');
+      await bobWrites('after the removal');
+      expect(alice.queuedSyncForTesting('group_message', phoneId), 0);
+      expect(alice.queuedSyncForTesting('group_state', phoneId), 0);
     });
 
     test('a device linked later catches up: each chat\'s recent history, '
@@ -19607,6 +19795,139 @@ void main() {
       }
       // One page of two, in this hour.
       expect(imported(), 2);
+    });
+
+    test('history goes on past a message too large for any page', () async {
+      final size = MessengerController.historyPageMessages;
+      MessengerController.historyPageMessages = 2;
+      addTearDown(() => MessengerController.historyPageMessages = size);
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      final toBob = alice.contacts.single;
+      // Newest first: a3, a2 | the large one, a0.
+      await alice.sendMessage(contact: toBob, body: 'a0');
+      await alice.sendMessage(contact: toBob, body: 'x' * (60 * 1024));
+      await alice.sendMessage(contact: toBob, body: 'a2');
+      await alice.sendMessage(contact: toBob, body: 'a3');
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => phone.linkCode != null && alice.linkCode != null,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      final bobId = bob.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return phone.messagesFor(bobId).any((m) => m.body == 'a0');
+      }, reason: 'history stopped at the large message');
+      expect(
+        phone.messagesFor(bobId).map((m) => m.body),
+        containsAll(['a0', 'a2', 'a3']),
+      );
+    });
+
+    test('history on its way goes on after a restart', () async {
+      final size = MessengerController.historyPageMessages;
+      MessengerController.historyPageMessages = 1;
+      addTearDown(() => MessengerController.historyPageMessages = size);
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      for (var i = 0; i < 6; i++) {
+        await alice.sendMessage(contact: alice.contacts.single, body: 'h$i');
+      }
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => phone.linkCode != null && alice.linkCode != null,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      final bobId = bob.identity!.deviceId;
+      int got() =>
+          phone.messagesFor(bobId).where((m) => m.body.startsWith('h')).length;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return got() > 0;
+      }, reason: 'no history came');
+      phone.forgetHistoryAsksForTesting();
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return got() == 6;
+      }, reason: 'history stopped at the restart');
+    });
+
+    test('history not answered in time is asked for again', () async {
+      final timeout = MessengerController.historyAskTimeout;
+      final pages = MessengerController.historyPagesPerHour;
+      MessengerController.historyAskTimeout = const Duration(milliseconds: 200);
+      // No device serves pages: nothing comes back in time.
+      MessengerController.historyPagesPerHour = 0;
+      addTearDown(() {
+        MessengerController.historyAskTimeout = timeout;
+        MessengerController.historyPagesPerHour = pages;
+      });
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final phone = await make('Phone');
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => phone.linkCode != null && alice.linkCode != null,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return phone.linkState == LinkState.linked &&
+            phone.historyAsksForTesting > 0;
+      }, reason: 'linked, and history asked for');
+      final asked = phone.historyAsksForTesting;
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      expect(phone.historyAsksForTesting, greaterThan(asked));
     });
 
     test('a device removed on one device is removed on the others', () async {
@@ -21265,7 +21586,20 @@ void main() {
         );
         expect(controller.contacts, hasLength(1));
       }
-      await phase('p3 stop');
+      await phase('p3 messages conestRelay');
+      // A line not finished yet (no newline) waits.
+      for (final name in ['phone', 'laptop']) {
+        File(
+          '${root.path}/$name.json.cmd',
+        ).writeAsStringSync('p4 stop', mode: FileMode.append);
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+      expect(File('${root.path}/phone.json').existsSync(), isFalse);
+      for (final name in ['phone', 'laptop']) {
+        File(
+          '${root.path}/$name.json.cmd',
+        ).writeAsStringSync('\n', mode: FileMode.append);
+      }
       final whole = jsonDecode(File(await phoneRun).readAsStringSync()) as Map;
       await laptopRun;
       expect(whole['kind'], 'serve');
@@ -21274,9 +21608,17 @@ void main() {
           for (final step in whole['steps'] as List)
             if ((step['step'] as String).startsWith('phase ')) step['step'],
         ],
-        ['phase p1 on conestRelay', 'phase p2 on all'],
+        [
+          'phase p1 on conestRelay',
+          'phase p2 on all',
+          'phase p3 on conestRelay',
+        ],
       );
-      expect(File('${root.path}/phone.json.p3.json').existsSync(), isFalse);
+      expect(File('${root.path}/phone.json.p4.json').existsSync(), isFalse);
+      // Every transport back on at the end, after a one-transport phase.
+      for (final controller in [phone, laptop]) {
+        expect(controller.identity!.connectivity.lanEnabled, isTrue);
+      }
     },
     timeout: const Timeout(Duration(minutes: 4)),
   );
