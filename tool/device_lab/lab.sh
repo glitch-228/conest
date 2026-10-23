@@ -127,7 +127,20 @@ if [ -n "$ANDROID2" ]; then
   adb -s "$ANDROID2" shell wm dismiss-keyguard >/dev/null 2>&1 || true
   [ "$bluetooth2" = 0 ] && adb -s "$ANDROID2" shell svc bluetooth enable >/dev/null 2>&1
 fi
+# SCREEN=off: once a phone's app is up and behind the home screen, the
+# screen may turn off (after 15 s) and the phone doze, as in a pocket: what
+# still arrives is the background service's doing. Each phone's own
+# timeout is put back at the end.
+SCREEN=${SCREEN:-on}
+screen_timeout="" screen_timeout2=""
+if [ "$SCREEN" = off ]; then
+  BACKGROUND=home
+  [ "${ANDROID:-1}" = 1 ] && screen_timeout=$(adb shell settings get system screen_off_timeout 2>/dev/null | tr -d '\r')
+  [ -n "$ANDROID2" ] && screen_timeout2=$(adb -s "$ANDROID2" shell settings get system screen_off_timeout 2>/dev/null | tr -d '\r')
+fi
 restore_phone() {
+  [ -n "$screen_timeout" ] && adb shell settings put system screen_off_timeout "$screen_timeout" >/dev/null 2>&1
+  [ -n "$screen_timeout2" ] && adb -s "$ANDROID2" shell settings put system screen_off_timeout "$screen_timeout2" >/dev/null 2>&1
   [ -n "$stay_on" ] && adb shell settings put global stay_on_while_plugged_in "$stay_on" >/dev/null 2>&1
   if [ -n "$ANDROID2" ]; then
     [ -n "$stay_on2" ] && adb -s "$ANDROID2" shell settings put global stay_on_while_plugged_in "$stay_on2" >/dev/null 2>&1
@@ -227,6 +240,11 @@ start_phone() { # serial ("" = adb's default), name, group title or "", invitesâ
     "${adb[@]}" shell am start -a android.intent.action.MAIN \
       -c android.intent.category.HOME >/dev/null
     echo "$name app sent to the background."
+    if [ "$SCREEN" = off ]; then
+      "${adb[@]}" shell svc power stayon false >/dev/null 2>&1 || true
+      "${adb[@]}" shell settings put system screen_off_timeout 15000 >/dev/null 2>&1 || true
+      echo "$name screen may turn off now."
+    fi
   fi
 }
 
