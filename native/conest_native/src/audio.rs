@@ -60,12 +60,14 @@ pub(crate) fn usable_config(
 
 /// Whether an output device with this ALSA id is offered. With a sound
 /// server (PipeWire or PulseAudio, which ALSA offers as "pipewire" and
-/// "pulse"), a card's own devices (CARD=…) are not: opening one takes the
-/// card from the server, and every other app went silent during the call.
-/// The server's own devices, and "default" through it, are shared.
+/// "pulse"), only its own devices and "default" through it (and JACK): a
+/// card's own devices (CARD=…) take the card from the server, and every
+/// other app went silent during the call; ALSA's plugins ("null", rate
+/// converters, OSS…) play nothing useful.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn offered_output(id: &str, sound_server: bool) -> bool {
-    !(cfg!(target_os = "linux") && sound_server && id.contains("CARD="))
+    !(cfg!(target_os = "linux") && sound_server)
+        || matches!(id, "default" | "pipewire" | "pulse" | "jack")
 }
 
 /// The output devices a call may use (see [offered_output]).
@@ -1068,7 +1070,7 @@ mod config_tests {
     use super::{offered_output, usable_config};
 
     #[test]
-    fn with_a_sound_server_a_cards_own_devices_are_not_offered() {
+    fn with_a_sound_server_only_its_devices_are_offered() {
         for id in ["default", "pipewire", "pulse", "jack"] {
             assert!(offered_output(id, true), "{id}");
         }
@@ -1076,6 +1078,9 @@ mod config_tests {
             "front:CARD=Headset,DEV=0",
             "hdmi:CARD=NVidia,DEV=0",
             "sysdefault:CARD=Generic",
+            "null",
+            "speexrate",
+            "oss",
         ] {
             assert_eq!(offered_output(id, true), !cfg!(target_os = "linux"), "{id}");
             // Without a server, the card is the only way out.
