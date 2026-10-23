@@ -1451,5 +1451,12 @@
   "notificationMarkRead": "Tandai sudah dibaca",
   "notificationReplyNotSent": "Tidak terkirim: {text}",
   "startAtLoginTitle": "Jalankan Conest saat Anda masuk",
-  "startAtLoginHelp": "Terbuka di baki sistem, siap menerima, tanpa jendela."
+  "startAtLoginHelp": "Terbuka di baki sistem, siap menerima, tanpa jendela.",
+  "notificationNewMessage": "Pesan baru",
+  "notificationNewMessageFrom": "Pesan baru dari {name}",
+  "notificationReplyNotSentPlain": "Sebuah balasan tidak terkirim",
+  "notificationPreviewTitle": "Tampilkan di notifikasi",
+  "notificationPreviewFull": "Nama dan pesan",
+  "notificationPreviewSender": "Nama saja",
+  "notificationPreviewHidden": "Tidak ada"
 }

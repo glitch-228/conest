@@ -1555,6 +1555,66 @@ void main() {
     expect(alice.chatForNotification('nothing-like-it'), isNull);
   });
 
+  test('notifications show only what the privacy setting allows', () async {
+    final relay = _FakeRelayClient();
+    final recorder = _RecordingPlatformBridge();
+    final vault = _MemoryVaultStore();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      platformBridge: recorder,
+      vaultStore: vault,
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    alice.setAppForegroundState(false);
+    final group = await bob.createGroup(title: 'Plans', members: bob.contacts);
+    Future<_ShowCall> notified(Future<void> Function() send) async {
+      final before = recorder.shown.length;
+      await send();
+      for (var i = 0; i < 8 && recorder.shown.length == before; i++) {
+        await alice.pollNow();
+      }
+      return recorder.shown.last;
+    }
+
+    expect(alice.identity!.notificationPreview, NotificationPreview.full);
+    await alice.updateNotificationPreview(NotificationPreview.senderOnly);
+    final direct = await notified(
+      () => bob.sendMessage(contact: bob.contacts.single, body: 'secret plan'),
+    );
+    expect(direct.title, 'Bob');
+    expect(direct.body, 'New message');
+    expect(direct.recentMessages, isEmpty);
+    final inGroup = await notified(
+      () => bob.sendGroupMessage(groupId: group.groupId, body: 'meet at 6'),
+    );
+    expect(inGroup.title, 'Plans');
+    expect(inGroup.body, 'New message from Bob');
+    expect(inGroup.recentMessages, isEmpty);
+
+    await alice.updateNotificationPreview(NotificationPreview.hidden);
+    final hidden = await notified(
+      () => bob.sendGroupMessage(groupId: group.groupId, body: 'bring cash'),
+    );
+    expect(hidden.title, 'Conest');
+    expect(hidden.body, 'New message');
+    expect(hidden.senderName, 'Conest');
+    for (final call in recorder.shown) {
+      expect(
+        '${call.title} ${call.body} ${call.recentMessages}',
+        isNot(anyOf(contains('secret'), contains('meet'), contains('cash'))),
+      );
+    }
+    // Kept as chosen.
+    expect(
+      IdentityRecord.fromJson(alice.identity!.toJson()).notificationPreview,
+      NotificationPreview.hidden,
+    );
+  });
+
   test('a reply from a notification is sent and reads the chat', () async {
     final relay = _FakeRelayClient();
     final recorder = _RecordingPlatformBridge();

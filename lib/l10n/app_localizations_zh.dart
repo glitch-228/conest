@@ -5341,4 +5341,27 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get startAtLoginHelp => '在托盘中打开，随时接收消息，不显示窗口。';
+
+  @override
+  String get notificationNewMessage => '新消息';
+
+  @override
+  String notificationNewMessageFrom(String name) {
+    return '来自 $name 的新消息';
+  }
+
+  @override
+  String get notificationReplyNotSentPlain => '有一条回复未发送';
+
+  @override
+  String get notificationPreviewTitle => '通知中显示';
+
+  @override
+  String get notificationPreviewFull => '名字和消息';
+
+  @override
+  String get notificationPreviewSender => '仅名字';
+
+  @override
+  String get notificationPreviewHidden => '不显示';
 }

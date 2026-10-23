@@ -15488,6 +15488,49 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 l10nOf(context).uiShowASystemNotificationWhen90113B,
                               ),
                             ),
+                            if (identity.notificationsEnabled)
+                              ListTile(
+                                key: const ValueKey(
+                                  'settings-notification-preview',
+                                ),
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                  l10nOf(context).notificationPreviewTitle,
+                                ),
+                                trailing: DropdownButton<NotificationPreview>(
+                                  value: identity.notificationPreview,
+                                  onChanged: _busy
+                                      ? null
+                                      : (value) {
+                                          if (value == null) return;
+                                          _run(
+                                            () => widget.controller
+                                                .updateNotificationPreview(
+                                                  value,
+                                                ),
+                                          );
+                                        },
+                                  items: [
+                                    for (final preview
+                                        in NotificationPreview.values)
+                                      DropdownMenuItem(
+                                        value: preview,
+                                        child: Text(switch (preview) {
+                                          NotificationPreview.full => l10nOf(
+                                            context,
+                                          ).notificationPreviewFull,
+                                          NotificationPreview.senderOnly =>
+                                            l10nOf(
+                                              context,
+                                            ).notificationPreviewSender,
+                                          NotificationPreview.hidden => l10nOf(
+                                            context,
+                                          ).notificationPreviewHidden,
+                                        }),
+                                      ),
+                                  ],
+                                ),
+                              ),
                             if (widget
                                     .controller
                                     .voiceCallService

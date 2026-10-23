@@ -8351,5 +8351,38 @@
   "startAtLoginHelp": "Opens in the tray, ready to receive, without a window.",
   "@startAtLoginHelp": {
     "description": "Help under the start-at-login switch."
+  },
+  "notificationNewMessage": "New message",
+  "@notificationNewMessage": {
+    "description": "Notification text when its content is hidden."
+  },
+  "notificationNewMessageFrom": "New message from {name}",
+  "@notificationNewMessageFrom": {
+    "description": "Group notification text when only names are shown; name is the sender.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationReplyNotSentPlain": "A reply was not sent",
+  "@notificationReplyNotSentPlain": {
+    "description": "Notification when a reply from a notification failed and content is hidden."
+  },
+  "notificationPreviewTitle": "Show in notifications",
+  "@notificationPreviewTitle": {
+    "description": "Settings: what message notifications show."
+  },
+  "notificationPreviewFull": "Name and message",
+  "@notificationPreviewFull": {
+    "description": "Notifications show the sender and the message."
+  },
+  "notificationPreviewSender": "Name only",
+  "@notificationPreviewSender": {
+    "description": "Notifications show only the sender (or group)."
+  },
+  "notificationPreviewHidden": "Nothing",
+  "@notificationPreviewHidden": {
+    "description": "Notifications show neither sender nor message."
   }
 }

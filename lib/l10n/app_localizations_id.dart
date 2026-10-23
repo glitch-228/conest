@@ -5573,4 +5573,27 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get startAtLoginHelp =>
       'Terbuka di baki sistem, siap menerima, tanpa jendela.';
+
+  @override
+  String get notificationNewMessage => 'Pesan baru';
+
+  @override
+  String notificationNewMessageFrom(String name) {
+    return 'Pesan baru dari $name';
+  }
+
+  @override
+  String get notificationReplyNotSentPlain => 'Sebuah balasan tidak terkirim';
+
+  @override
+  String get notificationPreviewTitle => 'Tampilkan di notifikasi';
+
+  @override
+  String get notificationPreviewFull => 'Nama dan pesan';
+
+  @override
+  String get notificationPreviewSender => 'Nama saja';
+
+  @override
+  String get notificationPreviewHidden => 'Tidak ada';
 }

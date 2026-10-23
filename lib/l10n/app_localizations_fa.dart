@@ -5587,4 +5587,27 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get startAtLoginHelp =>
       'در سینی سیستم باز می‌شود و بدون پنجره آمادهٔ دریافت است.';
+
+  @override
+  String get notificationNewMessage => 'پیام جدید';
+
+  @override
+  String notificationNewMessageFrom(String name) {
+    return 'پیام جدید از $name';
+  }
+
+  @override
+  String get notificationReplyNotSentPlain => 'یک پاسخ ارسال نشد';
+
+  @override
+  String get notificationPreviewTitle => 'نمایش در اعلان‌ها';
+
+  @override
+  String get notificationPreviewFull => 'نام و پیام';
+
+  @override
+  String get notificationPreviewSender => 'فقط نام';
+
+  @override
+  String get notificationPreviewHidden => 'هیچ';
 }

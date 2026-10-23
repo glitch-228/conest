@@ -8872,6 +8872,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Opens in the tray, ready to receive, without a window.'**
   String get startAtLoginHelp;
+
+  /// Notification text when its content is hidden.
+  ///
+  /// In en, this message translates to:
+  /// **'New message'**
+  String get notificationNewMessage;
+
+  /// Group notification text when only names are shown; name is the sender.
+  ///
+  /// In en, this message translates to:
+  /// **'New message from {name}'**
+  String notificationNewMessageFrom(String name);
+
+  /// Notification when a reply from a notification failed and content is hidden.
+  ///
+  /// In en, this message translates to:
+  /// **'A reply was not sent'**
+  String get notificationReplyNotSentPlain;
+
+  /// Settings: what message notifications show.
+  ///
+  /// In en, this message translates to:
+  /// **'Show in notifications'**
+  String get notificationPreviewTitle;
+
+  /// Notifications show the sender and the message.
+  ///
+  /// In en, this message translates to:
+  /// **'Name and message'**
+  String get notificationPreviewFull;
+
+  /// Notifications show only the sender (or group).
+  ///
+  /// In en, this message translates to:
+  /// **'Name only'**
+  String get notificationPreviewSender;
+
+  /// Notifications show neither sender nor message.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing'**
+  String get notificationPreviewHidden;
 }
 
 class _AppLocalizationsDelegate

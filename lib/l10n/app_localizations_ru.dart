@@ -5711,4 +5711,27 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get startAtLoginHelp =>
       'Открывается в трее, готов принимать сообщения, без окна.';
+
+  @override
+  String get notificationNewMessage => 'Новое сообщение';
+
+  @override
+  String notificationNewMessageFrom(String name) {
+    return 'Новое сообщение от $name';
+  }
+
+  @override
+  String get notificationReplyNotSentPlain => 'Ответ не отправлен';
+
+  @override
+  String get notificationPreviewTitle => 'Показывать в уведомлениях';
+
+  @override
+  String get notificationPreviewFull => 'Имя и сообщение';
+
+  @override
+  String get notificationPreviewSender => 'Только имя';
+
+  @override
+  String get notificationPreviewHidden => 'Ничего';
 }

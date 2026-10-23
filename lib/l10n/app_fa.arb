@@ -1451,5 +1451,12 @@
   "notificationMarkRead": "علامت‌گذاری به‌عنوان خوانده‌شده",
   "notificationReplyNotSent": "ارسال نشد: {text}",
   "startAtLoginTitle": "اجرای Conest هنگام ورود به سیستم",
-  "startAtLoginHelp": "در سینی سیستم باز می‌شود و بدون پنجره آمادهٔ دریافت است."
+  "startAtLoginHelp": "در سینی سیستم باز می‌شود و بدون پنجره آمادهٔ دریافت است.",
+  "notificationNewMessage": "پیام جدید",
+  "notificationNewMessageFrom": "پیام جدید از {name}",
+  "notificationReplyNotSentPlain": "یک پاسخ ارسال نشد",
+  "notificationPreviewTitle": "نمایش در اعلان‌ها",
+  "notificationPreviewFull": "نام و پیام",
+  "notificationPreviewSender": "فقط نام",
+  "notificationPreviewHidden": "هیچ"
 }

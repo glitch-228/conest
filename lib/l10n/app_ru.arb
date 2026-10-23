@@ -1451,5 +1451,12 @@
   "notificationMarkRead": "Прочитано",
   "notificationReplyNotSent": "Не отправлено: {text}",
   "startAtLoginTitle": "Запускать Conest при входе в систему",
-  "startAtLoginHelp": "Открывается в трее, готов принимать сообщения, без окна."
+  "startAtLoginHelp": "Открывается в трее, готов принимать сообщения, без окна.",
+  "notificationNewMessage": "Новое сообщение",
+  "notificationNewMessageFrom": "Новое сообщение от {name}",
+  "notificationReplyNotSentPlain": "Ответ не отправлен",
+  "notificationPreviewTitle": "Показывать в уведомлениях",
+  "notificationPreviewFull": "Имя и сообщение",
+  "notificationPreviewSender": "Только имя",
+  "notificationPreviewHidden": "Ничего"
 }

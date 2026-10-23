@@ -983,6 +983,7 @@ class IdentityRecord {
     this.batteryExemptionAskedAt,
     this.desktopCloseToTray = true,
     this.desktopStartAtLogin = false,
+    this.notificationPreview = NotificationPreview.full,
     // Calls exist only in builds compiled with call media (nightly/debug);
     // there they are on unless the user opts out.
     this.experimentalVoiceCallsEnabled = true,
@@ -1039,6 +1040,9 @@ class IdentityRecord {
 
   /// Desktops: Conest starts when the user logs in, hidden in the tray.
   final bool desktopStartAtLogin;
+
+  /// What message notifications show (privacy on shared or locked screens).
+  final NotificationPreview notificationPreview;
   final bool experimentalVoiceCallsEnabled;
   final bool voiceNoiseSuppressionEnabled;
 
@@ -1114,6 +1118,7 @@ class IdentityRecord {
     DateTime? batteryExemptionAskedAt,
     bool? desktopCloseToTray,
     bool? desktopStartAtLogin,
+    NotificationPreview? notificationPreview,
     bool? experimentalVoiceCallsEnabled,
     bool? voiceNoiseSuppressionEnabled,
     List<String>? advertisedFeatureCapabilities,
@@ -1155,6 +1160,7 @@ class IdentityRecord {
           batteryExemptionAskedAt ?? this.batteryExemptionAskedAt,
       desktopCloseToTray: desktopCloseToTray ?? this.desktopCloseToTray,
       desktopStartAtLogin: desktopStartAtLogin ?? this.desktopStartAtLogin,
+      notificationPreview: notificationPreview ?? this.notificationPreview,
       experimentalVoiceCallsEnabled:
           experimentalVoiceCallsEnabled ?? this.experimentalVoiceCallsEnabled,
       voiceNoiseSuppressionEnabled:
@@ -1203,6 +1209,7 @@ class IdentityRecord {
       'androidBackgroundDefaultApplied': androidBackgroundDefaultApplied,
       'desktopCloseToTray': desktopCloseToTray,
       'desktopStartAtLogin': desktopStartAtLogin,
+      'notificationPreview': notificationPreview.name,
       if (batteryExemptionAskedAt != null)
         'batteryExemptionAskedAt': batteryExemptionAskedAt!
             .toUtc()
@@ -1287,6 +1294,9 @@ class IdentityRecord {
           json['androidBackgroundDefaultApplied'] as bool? ?? false,
       desktopCloseToTray: json['desktopCloseToTray'] as bool? ?? true,
       desktopStartAtLogin: json['desktopStartAtLogin'] as bool? ?? false,
+      notificationPreview:
+          NotificationPreview.values.asNameMap()[json['notificationPreview']] ??
+          NotificationPreview.full,
       batteryExemptionAskedAt: DateTime.tryParse(
         json['batteryExemptionAskedAt'] as String? ?? '',
       ),
@@ -5082,6 +5092,18 @@ enum AppMode {
 }
 
 /// How much of Conest a user sees. Append only.
+/// What a message notification shows.
+enum NotificationPreview {
+  /// The sender (or group) and the message.
+  full,
+
+  /// The sender (or group) only: "New message".
+  senderOnly,
+
+  /// Neither: "Conest", "New message".
+  hidden,
+}
+
 enum UserMode {
   /// One chat list, large text, the fewest settings: for people who just
   /// want to message.

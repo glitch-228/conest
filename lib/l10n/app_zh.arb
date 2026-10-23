@@ -1451,5 +1451,12 @@
   "notificationMarkRead": "标记为已读",
   "notificationReplyNotSent": "未发送：{text}",
   "startAtLoginTitle": "登录时启动 Conest",
-  "startAtLoginHelp": "在托盘中打开，随时接收消息，不显示窗口。"
+  "startAtLoginHelp": "在托盘中打开，随时接收消息，不显示窗口。",
+  "notificationNewMessage": "新消息",
+  "notificationNewMessageFrom": "来自 {name} 的新消息",
+  "notificationReplyNotSentPlain": "有一条回复未发送",
+  "notificationPreviewTitle": "通知中显示",
+  "notificationPreviewFull": "名字和消息",
+  "notificationPreviewSender": "仅名字",
+  "notificationPreviewHidden": "不显示"
 }

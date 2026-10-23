@@ -1451,5 +1451,12 @@
   "notificationMarkRead": "تعليم كمقروء",
   "notificationReplyNotSent": "لم تُرسل: {text}",
   "startAtLoginTitle": "تشغيل Conest عند تسجيل الدخول",
-  "startAtLoginHelp": "يفتح في شريط النظام جاهزًا للاستقبال، دون نافذة."
+  "startAtLoginHelp": "يفتح في شريط النظام جاهزًا للاستقبال، دون نافذة.",
+  "notificationNewMessage": "رسالة جديدة",
+  "notificationNewMessageFrom": "رسالة جديدة من {name}",
+  "notificationReplyNotSentPlain": "لم يُرسل رد",
+  "notificationPreviewTitle": "المعروض في الإشعارات",
+  "notificationPreviewFull": "الاسم والرسالة",
+  "notificationPreviewSender": "الاسم فقط",
+  "notificationPreviewHidden": "لا شيء"
 }

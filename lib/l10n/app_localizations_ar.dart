@@ -5717,4 +5717,27 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get startAtLoginHelp =>
       'يفتح في شريط النظام جاهزًا للاستقبال، دون نافذة.';
+
+  @override
+  String get notificationNewMessage => 'رسالة جديدة';
+
+  @override
+  String notificationNewMessageFrom(String name) {
+    return 'رسالة جديدة من $name';
+  }
+
+  @override
+  String get notificationReplyNotSentPlain => 'لم يُرسل رد';
+
+  @override
+  String get notificationPreviewTitle => 'المعروض في الإشعارات';
+
+  @override
+  String get notificationPreviewFull => 'الاسم والرسالة';
+
+  @override
+  String get notificationPreviewSender => 'الاسم فقط';
+
+  @override
+  String get notificationPreviewHidden => 'لا شيء';
 }

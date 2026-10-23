@@ -4769,9 +4769,13 @@ class MessengerController extends ChangeNotifier {
     } catch (error) {
       appendDebugLog('Notification ${action.action} failed: $error');
       if (reply && text.isNotEmpty) {
+        final hidden =
+            identity?.notificationPreview == NotificationPreview.hidden;
         await _platformBridge.showMessageNotification(
-          title: group?.title ?? contact?.alias ?? 'Conest',
-          body: _notificationLabels.notificationReplyNotSent(text),
+          title: hidden ? 'Conest' : group?.title ?? contact?.alias ?? 'Conest',
+          body: hidden
+              ? _notificationLabels.notificationReplyNotSentPlain
+              : _notificationLabels.notificationReplyNotSent(text),
           conversationId: action.conversationId,
         );
       }
@@ -10650,6 +10654,15 @@ class MessengerController extends ChangeNotifier {
     final me = _requireIdentity();
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(desktopCloseToTray: enabled),
+    );
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// What message notifications show.
+  Future<void> updateNotificationPreview(NotificationPreview preview) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(notificationPreview: preview),
     );
     await _saveSnapshotSilently(notify: true);
   }
@@ -24038,13 +24051,22 @@ class MessengerController extends ChangeNotifier {
         _notificationWhileInFront) {
       return;
     }
-    final recent = _recentInboundLinesForContact(contact, defaultBody: body);
+    final preview = me.notificationPreview;
+    final labels = _notificationLabels;
+    final title = preview == NotificationPreview.hidden
+        ? 'Conest'
+        : contact.alias;
+    final recent = preview == NotificationPreview.full
+        ? _recentInboundLinesForContact(contact, defaultBody: body)
+        : const <({String sender, String body, int timestampMs})>[];
     unawaited(
       _platformBridge.showMessageNotification(
-        title: contact.alias,
-        body: body,
+        title: title,
+        body: preview == NotificationPreview.full
+            ? body
+            : labels.notificationNewMessage,
         conversationId: _crypto.conversationIdFor(contact.deviceId),
-        senderName: contact.alias,
+        senderName: title,
         selfName: me.displayName,
         recentMessages: recent,
         replyLabel: _notificationLabels.notificationReply,
@@ -24068,13 +24090,25 @@ class MessengerController extends ChangeNotifier {
         _notificationWhileInFront) {
       return;
     }
-    final recent = _recentInboundLinesForGroup(group);
+    final preview = me.notificationPreview;
+    final labels = _notificationLabels;
+    final recent = preview == NotificationPreview.full
+        ? _recentInboundLinesForGroup(group)
+        : const <({String sender, String body, int timestampMs})>[];
     unawaited(
       _platformBridge.showMessageNotification(
-        title: group.title,
-        body: '${sender.alias}: $body',
+        title: preview == NotificationPreview.hidden ? 'Conest' : group.title,
+        body: switch (preview) {
+          NotificationPreview.full => '${sender.alias}: $body',
+          NotificationPreview.senderOnly => labels.notificationNewMessageFrom(
+            sender.alias,
+          ),
+          NotificationPreview.hidden => labels.notificationNewMessage,
+        },
         conversationId: group.groupId,
-        senderName: sender.alias,
+        senderName: preview == NotificationPreview.hidden
+            ? 'Conest'
+            : sender.alias,
         selfName: me.displayName,
         recentMessages: recent,
         replyLabel: _notificationLabels.notificationReply,

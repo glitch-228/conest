@@ -5586,4 +5586,27 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get startAtLoginHelp =>
       'Opens in the tray, ready to receive, without a window.';
+
+  @override
+  String get notificationNewMessage => 'New message';
+
+  @override
+  String notificationNewMessageFrom(String name) {
+    return 'New message from $name';
+  }
+
+  @override
+  String get notificationReplyNotSentPlain => 'A reply was not sent';
+
+  @override
+  String get notificationPreviewTitle => 'Show in notifications';
+
+  @override
+  String get notificationPreviewFull => 'Name and message';
+
+  @override
+  String get notificationPreviewSender => 'Name only';
+
+  @override
+  String get notificationPreviewHidden => 'Nothing';
 }
