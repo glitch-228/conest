@@ -5176,6 +5176,47 @@ void main() {
     },
   );
 
+  test('a call whose audio cannot open says why in the log', () async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    final bridge = _VoiceRecordingBridge()..openFails = true;
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      platformBridge: bridge,
+      transportRegistryFactory: network.registry,
+      ratchetEngine: FakeRatchetEngine(),
+      keepErrorHistory: true,
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      platformBridge: _VoiceRecordingBridge(),
+      transportRegistryFactory: network.registry,
+      ratchetEngine: FakeRatchetEngine(),
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+    await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+    await _pairControllers(alice, bob);
+    await _waitForIroh(
+      () => alice.contacts.single.featureCapabilities.contains(
+        ApplicationCapability.voiceCallsV1,
+      ),
+    );
+    final call = await alice.voiceCallService!.startOutgoing(
+      bob.identity!.deviceId,
+    );
+    await alice.voiceCallService!.onAccepted(callId: call.callId);
+    await _waitForIroh(
+      () => alice.exportErrorHistory().contains(
+        'Unsupported microphone sample format',
+      ),
+      reason: 'the reason the call ended is not in the log',
+    );
+  });
+
   Future<void> groupCallRevocation({bool foreignClaim = false}) async {
     final network = _InProcessIrohNetwork();
     final relay = _FakeRelayClient();
@@ -28419,6 +28460,9 @@ class _StatsVoiceBridge extends _VoiceRecordingBridge {
 
 class _VoiceRecordingBridge extends _RecordingPlatformBridge {
   final foreground = <String>[];
+
+  /// The device's audio cannot be opened (as a 24-bit microphone once).
+  bool openFails = false;
   @override
   bool get supportsVoiceCallMedia => true;
   @override
@@ -28427,7 +28471,12 @@ class _VoiceRecordingBridge extends _RecordingPlatformBridge {
   Future<bool> openVoiceCallMedia({
     required String peerDeviceId,
     required bool outgoing,
-  }) async => true;
+  }) async {
+    if (openFails) {
+      throw StateError('Unsupported microphone sample format: I24');
+    }
+    return true;
+  }
   @override
   Future<void> closeVoiceCallMedia() async {}
   @override

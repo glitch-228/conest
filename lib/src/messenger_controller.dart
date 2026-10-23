@@ -1512,6 +1512,12 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _persistVoiceCallSummary(VoiceCallSummary summary) async {
+    // Why each call ended, for the debug log (a failed audio device used to
+    // show only in the call screen).
+    appendDebugLog(
+      'Call ${summary.outcome}: '
+      '${_boundedLogValue(summary.reason ?? '', 200)}',
+    );
     final summaries = [
       ..._snapshot.voiceCallSummaries.where(
         (previous) => previous.callId != summary.callId,
