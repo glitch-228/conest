@@ -58,6 +58,33 @@ pub(crate) fn usable_config(
     default
 }
 
+/// Whether an output device with this ALSA id is offered. With a sound
+/// server (PipeWire or PulseAudio, which ALSA offers as "pipewire" and
+/// "pulse"), a card's own devices (CARD=…) are not: opening one takes the
+/// card from the server, and every other app went silent during the call.
+/// The server's own devices, and "default" through it, are shared.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn offered_output(id: &str, sound_server: bool) -> bool {
+    !(cfg!(target_os = "linux") && sound_server && id.contains("CARD="))
+}
+
+/// The output devices a call may use (see [offered_output]).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn call_outputs(host: &cpal::Host) -> Result<Vec<Device>> {
+    let devices: Vec<Device> = host
+        .output_devices()
+        .context("Could not enumerate audio output devices")?
+        .collect();
+    let id = |device: &Device| device.id().map(|id| id.id().to_owned()).unwrap_or_default();
+    let sound_server = devices
+        .iter()
+        .any(|device| matches!(id(device).as_str(), "pipewire" | "pulse"));
+    Ok(devices
+        .into_iter()
+        .filter(|device| offered_output(&id(device), sound_server))
+        .collect())
+}
+
 #[path = "audio_remote.rs"]
 mod remote;
 use remote::{ReceiveStats, RemoteMixer};
@@ -288,9 +315,8 @@ impl VoiceAudioSession {
             .default_input_device()
             .context("No default microphone device is available")?;
         let output = match output_name {
-            Some(name) => host
-                .output_devices()
-                .context("Could not enumerate audio output devices")?
+            Some(name) => call_outputs(&host)?
+                .into_iter()
                 .find(|device| output_device_name(device).as_deref() == Some(name))
                 .with_context(|| format!("Audio output device '{name}' is unavailable"))?,
             None => host
@@ -324,8 +350,7 @@ impl VoiceAudioSession {
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn output_device_names() -> Vec<String> {
-        cpal::default_host()
-            .output_devices()
+        call_outputs(&cpal::default_host())
             .ok()
             .into_iter()
             .flatten()
@@ -340,9 +365,8 @@ impl VoiceAudioSession {
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn set_output_device(&mut self, name: &str) -> Result<()> {
-        let output = cpal::default_host()
-            .output_devices()
-            .context("Could not enumerate audio output devices")?
+        let output = call_outputs(&cpal::default_host())?
+            .into_iter()
             .find(|device| output_device_name(device).as_deref() == Some(name))
             .with_context(|| format!("Audio output device '{name}' is unavailable"))?;
         let output_stream = open_output_stream(
@@ -1041,7 +1065,23 @@ impl PacketJitterBuffer {
 
 #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
 mod config_tests {
-    use super::usable_config;
+    use super::{offered_output, usable_config};
+
+    #[test]
+    fn with_a_sound_server_a_cards_own_devices_are_not_offered() {
+        for id in ["default", "pipewire", "pulse", "jack"] {
+            assert!(offered_output(id, true), "{id}");
+        }
+        for id in [
+            "front:CARD=Headset,DEV=0",
+            "hdmi:CARD=NVidia,DEV=0",
+            "sysdefault:CARD=Generic",
+        ] {
+            assert_eq!(offered_output(id, true), !cfg!(target_os = "linux"), "{id}");
+            // Without a server, the card is the only way out.
+            assert!(offered_output(id, false), "{id}");
+        }
+    }
     use cpal::{
         SampleFormat, SupportedBufferSize, SupportedStreamConfig, SupportedStreamConfigRange,
     };

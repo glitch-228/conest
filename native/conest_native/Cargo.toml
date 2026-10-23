@@ -57,10 +57,7 @@ opus = "0.4"
 sonora = "0.2"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
-# Through the sound server (PulseAudio, or PipeWire's PulseAudio side) on
-# Linux, falling back to ALSA: raw ALSA devices are taken over by a call,
-# and other apps went silent meanwhile. No effect on Windows.
-cpal = { version = "0.18.2", features = ["pulseaudio"] }
+cpal = "0.18.2"
 nokhwa = { version = "0.10.11", features = ["input-native"] }
 rxing = { version = "0.9.1", default-features = false, features = ["decoders", "encoding_rs", "qrcode"] }
 
