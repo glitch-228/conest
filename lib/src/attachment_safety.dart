@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import 'posix_permissions.dart';
+
 const int maxAttachmentFileNameLength = 120;
 
 final RegExp _mimePattern = RegExp(
@@ -79,7 +81,7 @@ bool isContainedPath(String parentDirectory, String candidate) {
 
 Future<void> restrictFileToOwner(File file) async {
   if (!Platform.isLinux && !Platform.isMacOS) return;
-  final result = await Process.run('chmod', <String>['600', file.path]);
+  final result = await setPosixMode(file.path, ownerReadWrite);
   if (result.exitCode != 0) {
     throw FileSystemException(
       'Could not restrict attachment permissions.',

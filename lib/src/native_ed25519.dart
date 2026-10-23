@@ -1,6 +1,7 @@
 import 'dart:ffi';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:ffi/ffi.dart';
 
 import 'matrix_native.dart' show conestNativeLibraryCandidates;
@@ -109,5 +110,33 @@ class NativeEd25519 {
       calloc.free(messagePointer);
       calloc.free(signaturePointer);
     }
+  }
+}
+
+/// Whether [signature] is [publicKey]'s Ed25519 signature over [message]:
+/// natively where `conest_native` has it (relay answers, group history and
+/// account lists are checked all the time, even with nothing going on; in
+/// Dart each check took milliseconds of the main isolate), in Dart
+/// otherwise. False for malformed input.
+Future<bool> verifyEd25519Signature({
+  required List<int> publicKey,
+  required List<int> message,
+  required List<int> signature,
+}) async {
+  if (publicKey.length != 32 || signature.length != 64) return false;
+  final native = NativeEd25519.instance;
+  if (native != null && message.length <= NativeEd25519.maximumMessageBytes) {
+    return native.verify(publicKey, message, signature);
+  }
+  try {
+    return await Ed25519().verify(
+      message,
+      signature: Signature(
+        signature,
+        publicKey: SimplePublicKey(publicKey, type: KeyPairType.ed25519),
+      ),
+    );
+  } catch (_) {
+    return false;
   }
 }

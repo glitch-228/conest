@@ -11,6 +11,8 @@ import 'dart:convert';
 
 import 'package:cryptography/cryptography.dart';
 
+import '../native_ed25519.dart';
+
 /// Highest device list version accepted (no overflow, no absurd jumps).
 const int maxDeviceListVersion = 1 << 30;
 
@@ -75,17 +77,12 @@ Future<bool> verifyEd25519(
   required String publicKeyBase64,
 }) async {
   try {
-    return await Ed25519().verify(
-      bytes,
-      signature: Signature(
-        base64Decode(signatureBase64),
-        publicKey: SimplePublicKey(
-          base64Decode(publicKeyBase64),
-          type: KeyPairType.ed25519,
-        ),
-      ),
+    return await verifyEd25519Signature(
+      publicKey: base64Decode(publicKeyBase64),
+      message: bytes,
+      signature: base64Decode(signatureBase64),
     );
-  } catch (_) {
+  } on FormatException {
     return false;
   }
 }

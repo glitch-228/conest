@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart' as hashes;
 import 'package:cryptography/cryptography.dart';
 
+import 'native_ed25519.dart';
+
 /// Wire limits also bound journal records and work done by a history worker.
 const groupEventMaxBytes = 128 * 1024;
 const groupEventMaxCounter = 9007199254740991;
@@ -213,17 +215,12 @@ class GroupHistoryEvent {
       return false;
     }
     try {
-      return await Ed25519().verify(
-        signingBytes(),
-        signature: Signature(
-          base64Decode(signatureBase64),
-          publicKey: SimplePublicKey(
-            base64Decode(expectedSigningKeyBase64),
-            type: KeyPairType.ed25519,
-          ),
-        ),
+      return await verifyEd25519Signature(
+        publicKey: base64Decode(expectedSigningKeyBase64),
+        message: signingBytes(),
+        signature: base64Decode(signatureBase64),
       );
-    } catch (_) {
+    } on FormatException {
       return false;
     }
   }

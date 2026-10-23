@@ -3,9 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:cryptography/cryptography.dart';
-
 import 'models.dart';
+import 'native_ed25519.dart';
 
 class RelayHealthInfo {
   const RelayHealthInfo({
@@ -580,15 +579,10 @@ class RelayClient {
     } on FormatException {
       return false;
     }
-    if (sig.length != 64 || pub.length != 32) {
-      return false;
-    }
-    return Ed25519().verify(
-      signingInput,
-      signature: Signature(
-        sig,
-        publicKey: SimplePublicKey(pub, type: KeyPairType.ed25519),
-      ),
+    return verifyEd25519Signature(
+      publicKey: pub,
+      message: signingInput,
+      signature: sig,
     );
   }
 

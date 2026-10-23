@@ -50,4 +50,49 @@ void main() {
     },
     skip: skip,
   );
+
+  test(
+    'signatures are checked natively where possible, in Dart otherwise',
+    () async {
+      // Without conest_native this runs the Dart fallback; with it, native.
+      final ed = Ed25519();
+      final pair = await ed.newKeyPair();
+      final publicKey = (await pair.extractPublicKey()).bytes;
+      final message = utf8.encode('relay answer');
+      final signed = (await ed.sign(message, keyPair: pair)).bytes;
+      expect(
+        await verifyEd25519Signature(
+          publicKey: publicKey,
+          message: message,
+          signature: signed,
+        ),
+        isTrue,
+      );
+      final forged = Uint8List.fromList(signed)..[10] ^= 1;
+      expect(
+        await verifyEd25519Signature(
+          publicKey: publicKey,
+          message: message,
+          signature: forged,
+        ),
+        isFalse,
+      );
+      expect(
+        await verifyEd25519Signature(
+          publicKey: publicKey,
+          message: utf8.encode('another answer'),
+          signature: signed,
+        ),
+        isFalse,
+      );
+      expect(
+        await verifyEd25519Signature(
+          publicKey: publicKey.sublist(1),
+          message: message,
+          signature: signed,
+        ),
+        isFalse,
+      );
+    },
+  );
 }

@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'app_storage.dart';
 import 'models.dart';
 import 'group_history_journal.dart';
+import 'posix_permissions.dart';
 import 'ratchet.dart';
 
 List<int> _secureRandomBytes(int length) {
@@ -58,7 +59,7 @@ Future<void> _restrictOwnerOnly(File file) async {
   if (!Platform.isLinux && !Platform.isMacOS) {
     return;
   }
-  final result = await Process.run('chmod', ['600', file.path]);
+  final result = await setPosixMode(file.path, ownerReadWrite);
   if (result.exitCode != 0) {
     throw FileSystemException(
       'Could not restrict vault key file permissions: ${result.stderr}',
