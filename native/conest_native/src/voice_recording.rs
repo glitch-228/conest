@@ -238,9 +238,15 @@ fn open_input_stream(
     queue: Arc<ArrayQueue<f32>>,
     failed: Arc<AtomicBool>,
 ) -> Result<Stream> {
-    let supported = device
-        .default_input_config()
-        .context("Could not query microphone format")?;
+    let supported = crate::audio::usable_config(
+        device
+            .default_input_config()
+            .context("Could not query microphone format")?,
+        device
+            .supported_input_configs()
+            .map(Iterator::collect)
+            .unwrap_or_default(),
+    );
     let rate = supported.sample_rate();
     let channels = supported.channels() as usize;
     let sample_format = supported.sample_format();

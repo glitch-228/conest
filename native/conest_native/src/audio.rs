@@ -16,11 +16,47 @@ use anyhow::bail;
 use anyhow::{Context, Result};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use cpal::{
-    Device, SampleFormat, Stream, StreamConfig,
+    Device, SampleFormat, Stream, StreamConfig, SupportedStreamConfig, SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crossbeam_queue::ArrayQueue;
 use opus::{Application, Channels, Encoder};
+
+/// A stream format this code takes: the device's own when it is F32, I16
+/// or U16, otherwise F32 (then I16) at the device's rate and channels. A
+/// sound server converts; its devices often say 24 or 32 bits (a
+/// PulseAudio source on S24LE once made every Linux call fail to open).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) fn usable_config(
+    default: SupportedStreamConfig,
+    supported: Vec<SupportedStreamConfigRange>,
+) -> SupportedStreamConfig {
+    if matches!(
+        default.sample_format(),
+        SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+    ) {
+        return default;
+    }
+    for format in [SampleFormat::F32, SampleFormat::I16] {
+        let mut fallback = None;
+        for range in &supported {
+            if range.sample_format() != format {
+                continue;
+            }
+            let Some(config) = range.clone().try_with_sample_rate(default.sample_rate()) else {
+                continue;
+            };
+            if config.channels() == default.channels() {
+                return config;
+            }
+            fallback.get_or_insert(config);
+        }
+        if let Some(config) = fallback {
+            return config;
+        }
+    }
+    default
+}
 
 #[path = "audio_remote.rs"]
 mod remote;
@@ -566,9 +602,15 @@ fn open_input_stream(
     muted: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
 ) -> Result<Stream> {
-    let supported = device
-        .default_input_config()
-        .context("Could not query microphone format")?;
+    let supported = usable_config(
+        device
+            .default_input_config()
+            .context("Could not query microphone format")?,
+        device
+            .supported_input_configs()
+            .map(Iterator::collect)
+            .unwrap_or_default(),
+    );
     let rate = supported.sample_rate();
     let channels = supported.channels() as usize;
     let sample_format = supported.sample_format();
@@ -615,9 +657,15 @@ fn open_output_stream(
     render_reference: Arc<ArrayQueue<f32>>,
     failed: Arc<AtomicBool>,
 ) -> Result<Stream> {
-    let supported = device
-        .default_output_config()
-        .context("Could not query speaker format")?;
+    let supported = usable_config(
+        device
+            .default_output_config()
+            .context("Could not query speaker format")?,
+        device
+            .supported_output_configs()
+            .map(Iterator::collect)
+            .unwrap_or_default(),
+    );
     let rate = supported.sample_rate();
     let channels = supported.channels() as usize;
     let sample_format = supported.sample_format();
@@ -988,6 +1036,60 @@ impl PacketJitterBuffer {
         self.expected = next_sequence;
         self.gap_started = None;
         self.pop_ready(now)
+    }
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
+mod config_tests {
+    use super::usable_config;
+    use cpal::{
+        SampleFormat, SupportedBufferSize, SupportedStreamConfig, SupportedStreamConfigRange,
+    };
+
+    fn range(channels: u16, format: SampleFormat) -> SupportedStreamConfigRange {
+        SupportedStreamConfigRange::new(
+            channels,
+            8_000,
+            192_000,
+            SupportedBufferSize::Unknown,
+            format,
+        )
+    }
+
+    #[test]
+    fn a_24_bit_device_is_opened_as_f32_at_its_own_rate() {
+        let default =
+            SupportedStreamConfig::new(2, 48_000, SupportedBufferSize::Unknown, SampleFormat::I24);
+        let ranges = vec![
+            range(2, SampleFormat::I24),
+            range(1, SampleFormat::F32),
+            range(2, SampleFormat::F32),
+            range(2, SampleFormat::I16),
+        ];
+        let chosen = usable_config(default, ranges);
+        assert_eq!(chosen.sample_format(), SampleFormat::F32);
+        assert_eq!(chosen.sample_rate(), 48_000);
+        assert_eq!(chosen.channels(), 2);
+    }
+
+    #[test]
+    fn a_device_without_f32_is_opened_as_i16() {
+        let default =
+            SupportedStreamConfig::new(1, 44_100, SupportedBufferSize::Unknown, SampleFormat::I32);
+        let chosen = usable_config(
+            default,
+            vec![range(1, SampleFormat::I32), range(1, SampleFormat::I16)],
+        );
+        assert_eq!(chosen.sample_format(), SampleFormat::I16);
+        assert_eq!(chosen.sample_rate(), 44_100);
+    }
+
+    #[test]
+    fn a_format_this_code_takes_is_kept() {
+        let default =
+            SupportedStreamConfig::new(2, 48_000, SupportedBufferSize::Unknown, SampleFormat::I16);
+        let chosen = usable_config(default, vec![range(2, SampleFormat::F32)]);
+        assert_eq!(chosen.sample_format(), SampleFormat::I16);
     }
 }
 
