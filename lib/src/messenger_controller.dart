@@ -652,10 +652,7 @@ class MessengerController extends ChangeNotifier {
       ),
       onError: (Object error, StackTrace stackTrace) {
         appendDebugLog('Voice audio device stopped: $error');
-        unawaited(_groupCallService?.leave());
-        unawaited(
-          _voiceCallService?.end(reason: 'Voice audio device stopped.'),
-        );
+        unawaited(_recoverCallAudio());
       },
     );
     _crypto = CryptoService(identityProvider: _requireIdentity);
@@ -1510,6 +1507,49 @@ class MessengerController extends ChangeNotifier {
     );
     await _saveSnapshotSilently(notify: true);
   }
+
+  bool _recoveringCallAudio = false;
+
+  /// The call's audio device stopped (a headset disconnected, the default
+  /// device changed): the call moves to the current device, and ends only
+  /// when none opens after a few tries.
+  Future<void> _recoverCallAudio() async {
+    if (_recoveringCallAudio) return;
+    _recoveringCallAudio = true;
+    try {
+      for (final wait in callAudioRetryWaits) {
+        await Future<void>.delayed(wait);
+        if (_disposed) return;
+        final group = _groupCallService?.active;
+        final call = _voiceCallService?.active;
+        final inCall = call != null && call.state == VoiceCallState.connected;
+        if ((group == null || !group.joined) && !inCall) return;
+        try {
+          if (group != null && group.joined) {
+            await _groupCallService!.reopenMedia();
+          } else {
+            await _voiceCallService!.reopenMedia();
+          }
+          appendDebugLog('Call audio moved to the current device.');
+          return;
+        } catch (error) {
+          appendDebugLog('Call audio did not reopen: $error');
+        }
+      }
+      unawaited(_groupCallService?.leave());
+      unawaited(_voiceCallService?.end(reason: 'Voice audio device stopped.'));
+    } finally {
+      _recoveringCallAudio = false;
+    }
+  }
+
+  /// How long to wait before each try to reopen a stopped call device.
+  @visibleForTesting
+  static List<Duration> callAudioRetryWaits = const [
+    Duration(milliseconds: 300),
+    Duration(seconds: 1),
+    Duration(seconds: 3),
+  ];
 
   Future<void> _persistVoiceCallSummary(VoiceCallSummary summary) async {
     // Why each call ended, for the debug log (a failed audio device used to

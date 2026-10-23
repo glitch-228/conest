@@ -5176,6 +5176,74 @@ void main() {
     },
   );
 
+  group('a call whose audio device stops', () {
+    Future<(MessengerController, _VoiceRecordingBridge)> connectedCall() async {
+      final waits = MessengerController.callAudioRetryWaits;
+      MessengerController.callAudioRetryWaits = const [
+        Duration(milliseconds: 10),
+        Duration(milliseconds: 10),
+      ];
+      addTearDown(() => MessengerController.callAudioRetryWaits = waits);
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final bridge = _VoiceRecordingBridge();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        platformBridge: bridge,
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        keepErrorHistory: true,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        platformBridge: _VoiceRecordingBridge(),
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      await _waitForIroh(
+        () => alice.contacts.single.featureCapabilities.contains(
+          ApplicationCapability.voiceCallsV1,
+        ),
+      );
+      final call = await alice.voiceCallService!.startOutgoing(
+        bob.identity!.deviceId,
+      );
+      await alice.voiceCallService!.onAccepted(callId: call.callId);
+      expect(alice.voiceCallService!.active?.state, VoiceCallState.connected);
+      return (alice, bridge);
+    }
+
+    test('moves to the current device and keeps going', () async {
+      final (alice, bridge) = await connectedCall();
+      final opened = bridge.opens;
+      bridge.frames.addError(StateError('Audio device stream stopped.'));
+      await _waitForIroh(
+        () => alice.exportErrorHistory().contains('Call audio moved'),
+        reason: 'the call audio was not reopened',
+      );
+      expect(bridge.opens, opened + 1);
+      expect(alice.voiceCallService!.active?.state, VoiceCallState.connected);
+    });
+
+    test('ends when no device opens', () async {
+      final (alice, bridge) = await connectedCall();
+      bridge.openFails = true;
+      bridge.frames.addError(StateError('Audio device stream stopped.'));
+      await _waitForIroh(
+        () => alice.voiceCallService!.active?.state != VoiceCallState.connected,
+        reason: 'the call did not end',
+      );
+      expect(alice.exportErrorHistory(), contains('Call audio did not reopen'));
+    });
+  });
+
   test('a call whose audio cannot open says why in the log', () async {
     final network = _InProcessIrohNetwork();
     final relay = _FakeRelayClient();
@@ -28463,6 +28531,14 @@ class _VoiceRecordingBridge extends _RecordingPlatformBridge {
 
   /// The device's audio cannot be opened (as a 24-bit microphone once).
   bool openFails = false;
+
+  /// How often call audio was opened.
+  int opens = 0;
+
+  /// Captured frames, and the device stopping (an error on them).
+  final frames = StreamController<Uint8List>.broadcast();
+  @override
+  Stream<Uint8List> get voiceCallAudioFrames => frames.stream;
   @override
   bool get supportsVoiceCallMedia => true;
   @override
@@ -28475,6 +28551,7 @@ class _VoiceRecordingBridge extends _RecordingPlatformBridge {
     if (openFails) {
       throw StateError('Unsupported microphone sample format: I24');
     }
+    opens++;
     return true;
   }
   @override

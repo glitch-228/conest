@@ -468,6 +468,20 @@ class GroupCallService {
     return room;
   }
 
+  /// The audio device went away mid-call: opens the current one, keeping
+  /// the call, its mute, noise suppression and who is heard.
+  Future<void> reopenMedia() => _serial(() async {
+    final room = active;
+    if (_disposed || room == null || !room.joined || room.ended) {
+      throw StateError('No joined call to move.');
+    }
+    await media.close();
+    await media.open(room.groupId).timeout(const Duration(seconds: 10));
+    await media.setNoiseSuppression(noiseSuppressionEnabled);
+    await media.setMuted(room.microphoneMuted);
+    _syncMedia(room, const []);
+  });
+
   void _syncMedia(GroupCallRoom room, List<GroupCallParticipant> previous) {
     if (!room.joined) return;
     for (final peer in previous) {

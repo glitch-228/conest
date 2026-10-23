@@ -203,6 +203,19 @@ void main() {
     },
   );
 
+  test('a reopened audio device keeps who is heard and the mute', () async {
+    final net = await network(3);
+    await net.connect(['p0', 'p1', 'p2']);
+    final peer = net.peers['p0']!;
+    await peer.service.setMuted(true);
+    final heard = {...peer.media.participants};
+    expect(heard, hasLength(2));
+    await peer.service.reopenMedia();
+    expect(peer.media.opened, isTrue);
+    expect(peer.media.participants, heard);
+    expect(peer.media.muted, isTrue);
+  });
+
   test('a signal not taken says why', () async {
     final net = await network(2);
     await net.connect(['p0', 'p1']);

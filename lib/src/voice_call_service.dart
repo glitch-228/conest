@@ -417,6 +417,25 @@ class VoiceCallService {
     }
   }
 
+  /// The audio device went away mid-call (a headset disconnected, the
+  /// default output changed): opens the current one, keeping the call,
+  /// its mute and its noise suppression.
+  Future<void> reopenMedia() async {
+    final session = _active;
+    if (session == null ||
+        session.state != VoiceCallState.connected ||
+        _mediaOwnerCallId != session.callId) {
+      throw StateError('No connected call to move.');
+    }
+    await media.close();
+    await media.open(
+      peerDeviceId: session.peerDeviceId,
+      outgoing: session.outgoing,
+    );
+    await media.setNoiseSuppression(noiseSuppressionEnabled);
+    if (session.muted) await media.setMuted(true);
+  }
+
   Future<void> setNoiseSuppression(bool enabled) async {
     if (_active != null &&
         _active!.state != VoiceCallState.ended &&
