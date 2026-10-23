@@ -159,7 +159,9 @@ void main() {
       // Only answers free a slot here (a loaded machine can be slower than
       // a head start).
       headStart: const Duration(minutes: 1),
-      timeout: const Duration(seconds: 5),
+      // Long enough that no probe times out and frees its slot early on a
+      // loaded machine (the full suite): that would count one extra.
+      timeout: const Duration(seconds: 60),
     );
     expect(reachable, hasLength(8));
     // Two servers at a time, both ports each.
