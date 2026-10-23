@@ -43,6 +43,7 @@ import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
 import 'src/ui/file_metadata_consent.dart';
 import 'src/ui/battery_exemption.dart';
+import 'src/desktop_tray.dart';
 import 'src/ui/internet_transports.dart';
 import 'src/network_errors.dart';
 import 'src/matrix_service.dart';
@@ -342,6 +343,8 @@ Future<void> _runConestWithProfile(
   await themeController.initialize();
   final instanceLock = AppInstanceLock(directory: profile.dataRoot);
   if (!await instanceLock.acquire()) {
+    // The running one may be hidden in the tray: it comes forward.
+    await instanceLock.requestShow();
     runApp(ConestAlreadyRunningApp(themeController: themeController));
     return;
   }
@@ -1154,6 +1157,14 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
         return;
       }
       unawaited(widget.updateService.ensureStartupCheck());
+      if (_desktopTraySupported) {
+        // Another start of Conest asks this one to come forward.
+        _showRequests = widget.instanceLock.showRequests().listen(
+          (_) => unawaited(_tray.show()),
+          onError: (Object _) {},
+        );
+        _syncTray();
+      }
       final messenger = _messengerKey.currentState;
       if (messenger != null) {
         showCrashNotice(
@@ -1178,6 +1189,55 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   /// Asked at most once a run (and the controller remembers an answer).
   bool _batteryExemptionChecked = false;
 
+  // Desktops: Conest stays in the tray when its window is closed.
+  final DesktopTray _tray = DesktopTray();
+  bool? _trayWanted;
+  StreamSubscription<void>? _showRequests;
+
+  bool get _desktopTraySupported =>
+      !kIsWeb && (Platform.isLinux || Platform.isWindows);
+
+  /// The tray's labels in the app's language.
+  AppLocalizations _trayLocalizations() {
+    final code =
+        widget.controller.localeCode ??
+        WidgetsBinding.instance.platformDispatcher.locale.languageCode;
+    try {
+      return lookupAppLocalizations(Locale(code));
+    } catch (_) {
+      return lookupAppLocalizations(const Locale('en'));
+    }
+  }
+
+  /// Starts or stops the tray as the setting says.
+  void _syncTray() {
+    if (!_desktopTraySupported) return;
+    final wanted =
+        widget.controller.hasIdentity &&
+        (widget.controller.identity?.desktopCloseToTray ?? false);
+    if (wanted == _trayWanted) return;
+    _trayWanted = wanted;
+    if (!wanted) {
+      unawaited(_tray.stop());
+      return;
+    }
+    final l10n = _trayLocalizations();
+    unawaited(
+      _tray.start((
+        tooltip: 'Conest',
+        show: l10n.trayShow,
+        quit: l10n.trayQuit,
+      ), onQuit: () => unawaited(_quitFromTray())),
+    );
+  }
+
+  /// "Quit" in the tray: saved and stopped as on any clean exit, then gone.
+  Future<void> _quitFromTray() async {
+    widget.controller.savePendingChangesForLifecycle();
+    CrashCatcher.instance.markStopped();
+    await _tray.quit();
+  }
+
   /// Android: once receiving in the background is on, asks to leave Conest
   /// out of battery optimisation, which would otherwise stop it there.
   Future<void> _maybeAskBatteryExemption() async {
@@ -1200,6 +1260,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
 
   void _handleControllerChanged() {
     unawaited(_maybeAskBatteryExemption());
+    _syncTray();
     final ready = widget.controller.isReady;
     final hasIdentity = widget.controller.hasIdentity;
     final matrixOnly = widget.controller.appMode == AppMode.matrixOnly;
@@ -1251,6 +1312,8 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_handleControllerChanged);
     widget.updateService.removeListener(_handleUpdateServiceChanged);
+    unawaited(_showRequests?.cancel());
+    unawaited(_tray.stop());
     _exitListener.dispose();
     CrashCatcher.instance
       ..disconnect()
@@ -15232,6 +15295,21 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               onTap: () =>
                                   unawaited(openUserGuide(widget.controller)),
                             ),
+                            if (!kIsWeb &&
+                                (Platform.isLinux || Platform.isWindows))
+                              SwitchListTile(
+                                key: const ValueKey('settings-close-to-tray'),
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(l10nOf(context).closeToTrayTitle),
+                                subtitle: Text(l10nOf(context).closeToTrayHelp),
+                                value: identity.desktopCloseToTray,
+                                onChanged: _busy
+                                    ? null
+                                    : (value) => _run(
+                                        () => widget.controller
+                                            .updateDesktopCloseToTray(value),
+                                      ),
+                              ),
                             SwitchListTile(
                               key: const ValueKey('settings-enter-sends'),
                               contentPadding: EdgeInsets.zero,

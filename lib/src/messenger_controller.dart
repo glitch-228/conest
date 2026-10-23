@@ -10529,6 +10529,15 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: true);
   }
 
+  /// Desktops: whether closing the window keeps Conest in the tray.
+  Future<void> updateDesktopCloseToTray(bool enabled) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(desktopCloseToTray: enabled),
+    );
+    await _saveSnapshotSilently(notify: true);
+  }
+
   /// The phone's maker, for steps against vendor background limits.
   Future<String?> deviceManufacturer() => _platformBridge.deviceManufacturer();
 

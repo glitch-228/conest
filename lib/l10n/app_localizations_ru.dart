@@ -5680,4 +5680,17 @@ class AppLocalizationsRu extends AppLocalizations {
   String batteryExemptionVendorHint(String maker) {
     return 'На телефонах $maker также включите для Conest автозапуск и установите для него экономию батареи «Нет ограничений» (Настройки → Приложения → Conest).';
   }
+
+  @override
+  String get closeToTrayTitle => 'Оставаться в трее после закрытия';
+
+  @override
+  String get closeToTrayHelp =>
+      'Сообщения продолжают приходить. Откройте Conest снова через значок в трее или закройте его там.';
+
+  @override
+  String get trayShow => 'Показать Conest';
+
+  @override
+  String get trayQuit => 'Выйти';
 }

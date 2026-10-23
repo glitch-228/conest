@@ -1442,5 +1442,9 @@
   "batteryExemptionAllow": "اجازه بده",
   "batteryExemptionPromptTitle": "دریافت پیام‌ها ادامه پیدا کند",
   "batteryExemptionPromptBody": "برای دریافت پیام‌ها وقتی Conest بسته است، Android باید اجازه دهد در پس‌زمینه اجرا شود. در صفحهٔ بعد، اجازه دهید Conest بدون محدودیت باتری اجرا شود.",
-  "batteryExemptionVendorHint": "در گوشی‌های {maker}، «شروع خودکار» را هم برای Conest روشن کنید و صرفه‌جویی باتری آن را روی «بدون محدودیت» بگذارید (تنظیمات ← برنامه‌ها ← Conest)."
+  "batteryExemptionVendorHint": "در گوشی‌های {maker}، «شروع خودکار» را هم برای Conest روشن کنید و صرفه‌جویی باتری آن را روی «بدون محدودیت» بگذارید (تنظیمات ← برنامه‌ها ← Conest).",
+  "closeToTrayTitle": "پس از بستن، در سینی سیستم بماند",
+  "closeToTrayHelp": "پیام‌ها همچنان می‌رسند. Conest را دوباره از نماد سینی باز کنید یا از همان‌جا خارج شوید.",
+  "trayShow": "نمایش Conest",
+  "trayQuit": "خروج"
 }

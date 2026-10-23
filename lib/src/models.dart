@@ -981,6 +981,7 @@ class IdentityRecord {
     this.androidBackgroundCallsEnabled = false,
     this.androidBackgroundDefaultApplied = false,
     this.batteryExemptionAskedAt,
+    this.desktopCloseToTray = true,
     // Calls exist only in builds compiled with call media (nightly/debug);
     // there they are on unless the user opts out.
     this.experimentalVoiceCallsEnabled = true,
@@ -1030,6 +1031,10 @@ class IdentityRecord {
   /// When this device was asked to leave Conest out of battery optimisation
   /// (asked once; Settings can ask again).
   final DateTime? batteryExemptionAskedAt;
+
+  /// Desktops: closing the window keeps Conest running in the tray (where
+  /// there is one).
+  final bool desktopCloseToTray;
   final bool experimentalVoiceCallsEnabled;
   final bool voiceNoiseSuppressionEnabled;
 
@@ -1103,6 +1108,7 @@ class IdentityRecord {
     bool? androidBackgroundCallsEnabled,
     bool? androidBackgroundDefaultApplied,
     DateTime? batteryExemptionAskedAt,
+    bool? desktopCloseToTray,
     bool? experimentalVoiceCallsEnabled,
     bool? voiceNoiseSuppressionEnabled,
     List<String>? advertisedFeatureCapabilities,
@@ -1142,6 +1148,7 @@ class IdentityRecord {
           this.androidBackgroundDefaultApplied,
       batteryExemptionAskedAt:
           batteryExemptionAskedAt ?? this.batteryExemptionAskedAt,
+      desktopCloseToTray: desktopCloseToTray ?? this.desktopCloseToTray,
       experimentalVoiceCallsEnabled:
           experimentalVoiceCallsEnabled ?? this.experimentalVoiceCallsEnabled,
       voiceNoiseSuppressionEnabled:
@@ -1188,6 +1195,7 @@ class IdentityRecord {
       'androidBackgroundRuntimeEnabled': androidBackgroundRuntimeEnabled,
       'androidBackgroundCallsEnabled': androidBackgroundCallsEnabled,
       'androidBackgroundDefaultApplied': androidBackgroundDefaultApplied,
+      'desktopCloseToTray': desktopCloseToTray,
       if (batteryExemptionAskedAt != null)
         'batteryExemptionAskedAt': batteryExemptionAskedAt!
             .toUtc()
@@ -1270,6 +1278,7 @@ class IdentityRecord {
           json['androidBackgroundCallsEnabled'] as bool? ?? false,
       androidBackgroundDefaultApplied:
           json['androidBackgroundDefaultApplied'] as bool? ?? false,
+      desktopCloseToTray: json['desktopCloseToTray'] as bool? ?? true,
       batteryExemptionAskedAt: DateTime.tryParse(
         json['batteryExemptionAskedAt'] as String? ?? '',
       ),

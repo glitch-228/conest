@@ -1483,6 +1483,35 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 void main() {
   deltaContentControllerTests();
   _localizationControllerTests();
+  test('closing to the tray is on by default, and off stays off', () async {
+    final vault = _MemoryVaultStore();
+    final first = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Laptop',
+      vaultStore: vault,
+    );
+    expect(first.identity!.desktopCloseToTray, isTrue);
+    await first.updateDesktopCloseToTray(false);
+    first.dispose();
+    final again = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Laptop',
+      vaultStore: vault,
+      createIdentity: false,
+    );
+    addTearDown(again.dispose);
+    expect(again.identity!.desktopCloseToTray, isFalse);
+    // As stored: kept off, and on for a record from before the setting.
+    final stored = again.identity!.toJson();
+    expect(IdentityRecord.fromJson(stored).desktopCloseToTray, isFalse);
+    expect(
+      IdentityRecord.fromJson(
+        stored..remove('desktopCloseToTray'),
+      ).desktopCloseToTray,
+      isTrue,
+    );
+  });
+
   group('receiving in the background on Android', () {
     test('is on for a new identity on Android, and only there', () async {
       final android = await _createController(
@@ -1536,6 +1565,13 @@ void main() {
       );
       addTearDown(again.dispose);
       expect(again.identity!.androidBackgroundRuntimeEnabled, isFalse);
+      // Stored as applied, so it is not turned on again.
+      expect(
+        IdentityRecord.fromJson(
+          again.identity!.toJson(),
+        ).androidBackgroundDefaultApplied,
+        isTrue,
+      );
     });
 
     test('asks once to leave battery optimisation, then not again', () async {

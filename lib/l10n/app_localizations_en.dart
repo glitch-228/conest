@@ -5555,4 +5555,17 @@ class AppLocalizationsEn extends AppLocalizations {
   String batteryExemptionVendorHint(String maker) {
     return 'On $maker phones, also turn on Autostart for Conest and set its battery saver to \"No restrictions\" (Settings → Apps → Conest).';
   }
+
+  @override
+  String get closeToTrayTitle => 'Keep running in the tray when closed';
+
+  @override
+  String get closeToTrayHelp =>
+      'Messages keep arriving. Open Conest again from its tray icon, or quit it there.';
+
+  @override
+  String get trayShow => 'Show Conest';
+
+  @override
+  String get trayQuit => 'Quit';
 }

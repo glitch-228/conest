@@ -8310,5 +8310,21 @@
         "type": "String"
       }
     }
+  },
+  "closeToTrayTitle": "Keep running in the tray when closed",
+  "@closeToTrayTitle": {
+    "description": "Setting (desktop): closing the window keeps Conest in the tray."
+  },
+  "closeToTrayHelp": "Messages keep arriving. Open Conest again from its tray icon, or quit it there.",
+  "@closeToTrayHelp": {
+    "description": "Explains the close-to-tray setting."
+  },
+  "trayShow": "Show Conest",
+  "@trayShow": {
+    "description": "Tray menu: bring the window back."
+  },
+  "trayQuit": "Quit",
+  "@trayQuit": {
+    "description": "Tray menu: end Conest."
   }
 }

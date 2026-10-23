@@ -1442,5 +1442,9 @@
   "batteryExemptionAllow": "Izinkan",
   "batteryExemptionPromptTitle": "Tetap terima pesan",
   "batteryExemptionPromptBody": "Agar pesan tetap masuk saat Conest ditutup, Android harus mengizinkannya berjalan di latar belakang. Di layar berikutnya, izinkan Conest berjalan tanpa batasan baterai.",
-  "batteryExemptionVendorHint": "Di ponsel {maker}, aktifkan juga Mulai otomatis untuk Conest dan atur penghemat bateranya ke \"Tanpa batasan\" (Setelan → Aplikasi → Conest)."
+  "batteryExemptionVendorHint": "Di ponsel {maker}, aktifkan juga Mulai otomatis untuk Conest dan atur penghemat bateranya ke \"Tanpa batasan\" (Setelan → Aplikasi → Conest).",
+  "closeToTrayTitle": "Tetap berjalan di baki saat ditutup",
+  "closeToTrayHelp": "Pesan tetap masuk. Buka Conest lagi dari ikon baki, atau keluar dari sana.",
+  "trayShow": "Tampilkan Conest",
+  "trayQuit": "Keluar"
 }

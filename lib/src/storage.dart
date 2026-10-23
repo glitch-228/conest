@@ -118,6 +118,49 @@ class AppInstanceLock {
     }
   }
 
+  /// Another start of Conest on this data, which found the lock taken:
+  /// asks the running one to show its window (it may be in the tray).
+  Future<void> requestShow() async {
+    final directory = _directory ?? await getApplicationSupportDirectory();
+    try {
+      await File(
+        '${directory.path}/$showRequestName',
+      ).writeAsString(DateTime.now().toUtc().toIso8601String(), flush: true);
+    } catch (_) {
+      // The running one stays where it is.
+    }
+  }
+
+  /// For the running Conest: each time another start asks to be shown.
+  Stream<void> showRequests() {
+    StreamSubscription<FileSystemEvent>? watching;
+    late final StreamController<void> requests;
+    requests = StreamController<void>(
+      onListen: () async {
+        final directory = _directory ?? await getApplicationSupportDirectory();
+        final request = File('${directory.path}/$showRequestName');
+        watching = directory.watch().listen((event) async {
+          if (event.type == FileSystemEvent.delete ||
+              !event.path.endsWith(showRequestName) ||
+              !await request.exists()) {
+            return;
+          }
+          try {
+            await request.delete();
+          } catch (_) {}
+          if (!requests.isClosed) requests.add(null);
+        }, onError: (Object _) {});
+      },
+      onCancel: () async {
+        await watching?.cancel();
+        await requests.close();
+      },
+    );
+    return requests.stream;
+  }
+
+  static const showRequestName = 'conest.show';
+
   Future<int?> _readRecordedPid(File file) async {
     try {
       final raw = await file.readAsString();

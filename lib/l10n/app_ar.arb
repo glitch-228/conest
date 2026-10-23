@@ -1442,5 +1442,9 @@
   "batteryExemptionAllow": "السماح",
   "batteryExemptionPromptTitle": "استمر في استقبال الرسائل",
   "batteryExemptionPromptBody": "لكي تصلك الرسائل وConest مغلق، يجب أن يسمح له Android بالعمل في الخلفية. في الشاشة التالية، اسمح لـ Conest بالعمل دون قيود البطارية.",
-  "batteryExemptionVendorHint": "على هواتف {maker}، فعّل أيضًا التشغيل التلقائي لـ Conest واضبط موفر البطارية له على «بلا قيود» (الإعدادات ← التطبيقات ← Conest)."
+  "batteryExemptionVendorHint": "على هواتف {maker}، فعّل أيضًا التشغيل التلقائي لـ Conest واضبط موفر البطارية له على «بلا قيود» (الإعدادات ← التطبيقات ← Conest).",
+  "closeToTrayTitle": "البقاء في شريط النظام عند الإغلاق",
+  "closeToTrayHelp": "تستمر الرسائل في الوصول. افتح Conest مجددًا من أيقونته في شريط النظام أو أنهِه من هناك.",
+  "trayShow": "إظهار Conest",
+  "trayQuit": "إنهاء"
 }

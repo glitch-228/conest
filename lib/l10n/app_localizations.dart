@@ -8818,6 +8818,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'On {maker} phones, also turn on Autostart for Conest and set its battery saver to \"No restrictions\" (Settings → Apps → Conest).'**
   String batteryExemptionVendorHint(String maker);
+
+  /// Setting (desktop): closing the window keeps Conest in the tray.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep running in the tray when closed'**
+  String get closeToTrayTitle;
+
+  /// Explains the close-to-tray setting.
+  ///
+  /// In en, this message translates to:
+  /// **'Messages keep arriving. Open Conest again from its tray icon, or quit it there.'**
+  String get closeToTrayHelp;
+
+  /// Tray menu: bring the window back.
+  ///
+  /// In en, this message translates to:
+  /// **'Show Conest'**
+  String get trayShow;
+
+  /// Tray menu: end Conest.
+  ///
+  /// In en, this message translates to:
+  /// **'Quit'**
+  String get trayQuit;
 }
 
 class _AppLocalizationsDelegate

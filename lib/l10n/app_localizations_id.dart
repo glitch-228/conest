@@ -5542,4 +5542,17 @@ class AppLocalizationsId extends AppLocalizations {
   String batteryExemptionVendorHint(String maker) {
     return 'Di ponsel $maker, aktifkan juga Mulai otomatis untuk Conest dan atur penghemat bateranya ke \"Tanpa batasan\" (Setelan → Aplikasi → Conest).';
   }
+
+  @override
+  String get closeToTrayTitle => 'Tetap berjalan di baki saat ditutup';
+
+  @override
+  String get closeToTrayHelp =>
+      'Pesan tetap masuk. Buka Conest lagi dari ikon baki, atau keluar dari sana.';
+
+  @override
+  String get trayShow => 'Tampilkan Conest';
+
+  @override
+  String get trayQuit => 'Keluar';
 }

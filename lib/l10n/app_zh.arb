@@ -1442,5 +1442,9 @@
   "batteryExemptionAllow": "允许",
   "batteryExemptionPromptTitle": "持续接收消息",
   "batteryExemptionPromptBody": "要在 Conest 关闭时收到消息，Android 必须允许它在后台运行。请在下一个界面允许 Conest 不受电池限制地运行。",
-  "batteryExemptionVendorHint": "在 {maker} 手机上，还请为 Conest 开启“自启动”，并将其省电策略设为“无限制”（设置 → 应用 → Conest）。"
+  "batteryExemptionVendorHint": "在 {maker} 手机上，还请为 Conest 开启“自启动”，并将其省电策略设为“无限制”（设置 → 应用 → Conest）。",
+  "closeToTrayTitle": "关闭窗口后保留在托盘中",
+  "closeToTrayHelp": "消息会继续到达。可从托盘图标再次打开 Conest，或在那里退出。",
+  "trayShow": "显示 Conest",
+  "trayQuit": "退出"
 }

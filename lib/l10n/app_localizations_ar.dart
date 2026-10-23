@@ -5686,4 +5686,17 @@ class AppLocalizationsAr extends AppLocalizations {
   String batteryExemptionVendorHint(String maker) {
     return 'على هواتف $maker، فعّل أيضًا التشغيل التلقائي لـ Conest واضبط موفر البطارية له على «بلا قيود» (الإعدادات ← التطبيقات ← Conest).';
   }
+
+  @override
+  String get closeToTrayTitle => 'البقاء في شريط النظام عند الإغلاق';
+
+  @override
+  String get closeToTrayHelp =>
+      'تستمر الرسائل في الوصول. افتح Conest مجددًا من أيقونته في شريط النظام أو أنهِه من هناك.';
+
+  @override
+  String get trayShow => 'إظهار Conest';
+
+  @override
+  String get trayQuit => 'إنهاء';
 }

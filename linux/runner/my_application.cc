@@ -1,6 +1,7 @@
 #include "my_application.h"
 
 #include <clocale>
+#include <cstring>
 
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
@@ -12,6 +13,11 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  GtkWindow* window;
+  FlMethodChannel* window_channel;
+  // Closing the window hides it (Conest keeps receiving, reached from the
+  // tray icon); set from Dart only once a tray icon is up.
+  gboolean close_to_tray;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -19,6 +25,45 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+}
+
+// Closing the window: hidden instead while Conest stays in the tray.
+static gboolean window_delete_cb(GtkWidget* widget, GdkEvent* event,
+                                 gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  if (!self->close_to_tray) return FALSE;
+  gtk_widget_hide(widget);
+  return TRUE;
+}
+
+// dev.conest.conest/window: setCloseToTray(bool), show(), quit().
+static void window_method_cb(FlMethodChannel* channel, FlMethodCall* call,
+                             gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* method = fl_method_call_get_name(call);
+  FlValue* args = fl_method_call_get_args(call);
+  g_autoptr(FlMethodResponse) response = nullptr;
+  if (strcmp(method, "setCloseToTray") == 0) {
+    self->close_to_tray = args != nullptr &&
+                          fl_value_get_type(args) == FL_VALUE_TYPE_BOOL &&
+                          fl_value_get_bool(args);
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  } else if (strcmp(method, "show") == 0) {
+    if (self->window != nullptr) {
+      gtk_widget_show(GTK_WIDGET(self->window));
+      gtk_window_present(self->window);
+    }
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  } else if (strcmp(method, "quit") == 0) {
+    self->close_to_tray = FALSE;
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(call, response, nullptr);
+    g_application_quit(G_APPLICATION(self));
+    return;
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+  fl_method_call_respond(call, response, nullptr);
 }
 
 // Implements GApplication::activate.
@@ -86,6 +131,15 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
+  self->window = window;
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  self->window_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "dev.conest.conest/window", FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(self->window_channel,
+                                            window_method_cb, self, nullptr);
+  g_signal_connect(window, "delete-event", G_CALLBACK(window_delete_cb), self);
+
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
@@ -137,6 +191,7 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_object(&self->window_channel);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 

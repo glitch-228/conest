@@ -5556,4 +5556,17 @@ class AppLocalizationsFa extends AppLocalizations {
   String batteryExemptionVendorHint(String maker) {
     return 'در گوشی‌های $maker، «شروع خودکار» را هم برای Conest روشن کنید و صرفه‌جویی باتری آن را روی «بدون محدودیت» بگذارید (تنظیمات ← برنامه‌ها ← Conest).';
   }
+
+  @override
+  String get closeToTrayTitle => 'پس از بستن، در سینی سیستم بماند';
+
+  @override
+  String get closeToTrayHelp =>
+      'پیام‌ها همچنان می‌رسند. Conest را دوباره از نماد سینی باز کنید یا از همان‌جا خارج شوید.';
+
+  @override
+  String get trayShow => 'نمایش Conest';
+
+  @override
+  String get trayQuit => 'خروج';
 }

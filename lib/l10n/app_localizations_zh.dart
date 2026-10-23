@@ -5312,4 +5312,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String batteryExemptionVendorHint(String maker) {
     return '在 $maker 手机上，还请为 Conest 开启“自启动”，并将其省电策略设为“无限制”（设置 → 应用 → Conest）。';
   }
+
+  @override
+  String get closeToTrayTitle => '关闭窗口后保留在托盘中';
+
+  @override
+  String get closeToTrayHelp => '消息会继续到达。可从托盘图标再次打开 Conest，或在那里退出。';
+
+  @override
+  String get trayShow => '显示 Conest';
+
+  @override
+  String get trayQuit => '退出';
 }

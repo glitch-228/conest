@@ -13,6 +13,8 @@ dependencies:
   flutter:
     sdk: flutter
   cryptography: ^2.7.0
+  # The Linux tray icon (StatusNotifierItem), with no native library.
+  dbus: ^0.7.14
   cupertino_icons: ^1.0.9
   dynamic_color: ^1.7.0
   flutter_secure_storage: ^9.2.4

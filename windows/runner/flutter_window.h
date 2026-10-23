@@ -2,9 +2,13 @@
 #define RUNNER_FLUTTER_WINDOW_H_
 
 #include <flutter/dart_project.h>
+#include <flutter/encodable_value.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
+#include <shellapi.h>
 
 #include <memory>
+#include <string>
 
 #include "win32_window.h"
 
@@ -28,6 +32,20 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // dev.conest.conest/window: closing to the tray (setCloseToTray), show
+  // and quit; "quitRequested" goes to Dart from the tray menu.
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      window_channel_;
+  bool close_to_tray_ = false;
+  bool tray_added_ = false;
+  NOTIFYICONDATAW tray_icon_ = {};
+  std::wstring tray_show_label_ = L"Show Conest";
+  std::wstring tray_quit_label_ = L"Quit";
+
+  void SetTray(bool enabled, const std::wstring& tooltip);
+  void ShowFromTray();
+  void ShowTrayMenu();
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
