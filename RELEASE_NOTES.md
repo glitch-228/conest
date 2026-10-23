@@ -1,150 +1,111 @@
-# Conest v0.4.0
+# Conest v0.4.1
 
-Conest now keeps working on networks that block things, runs on several
-devices under one account, sends each message over several routes at
-once, holds group calls, and talks to Delta Chat, Nostr, Meshtastic,
-MeshCore and bitchat users. It also comes in six languages, with three
-modes from simple to advanced. Everything tested in the v0.3.12 nightlies
-is included.
+Your other devices now get the messages your contacts send, show your
+groups, and catch up on older chats after linking. Calls no longer fall
+behind and stutter after a bad moment on the network. Links are cleaned
+of tracking and can show previews. Everything tested in the 0.4.1
+nightlies is included.
 
 New to Conest, or not sure which routes to turn on? Read the user guide:
 https://github.com/glitch-228/conest/tree/main/docs
 
 ## Before you update
 
-- Update both sides. Most of what is new (several devices, several
-  routes per message, group calls, adding contacts over the Bluetooth
-  mesh) needs this version on both ends. Contacts on v0.3.11 keep
-  working over the routes they had.
-- An existing install stays in Advanced mode and keeps its settings.
-  New routes stay off until you turn them on.
-- Update all of your linked devices together: syncing works only
-  between devices on this version.
-
-## Reaching people on blocked networks
-
-- A setup step checks which ways to reach people work on the network
-  you are on (relays, Iroh, Nostr, email) and offers to turn them on. At
-  least one is needed and three are recommended; until one works, the
-  chat list says that only devices on your network can reach you.
-- Email picks whichever of 20 public chatmail servers answers fastest
-  where you are, also over port 443 when mail ports are blocked.
-- Nostr uses the relays that answer fastest where you are.
-- Tor says when it looks blocked and shows how to get your own bridges
-  from the Tor Project.
-- Contacts can be added over the Bluetooth mesh or Reticulum alone, with
-  no internet at all.
-- When you cannot reach someone but a mutual contact can, that contact
-  can carry your messages (if you both allow it). Group messages reach
-  members through other members the same way.
-- Conest remembers what worked on each network it has been on, and tries
-  routes a network blocks last.
-
-## Delivery
-
-- Messages go over several routes at once: on mains power all of them,
-  on battery one more every few seconds until one is confirmed. Once a
-  message is confirmed, it is not sent again anywhere.
-- Message bubbles show a dot for each route a message took, and message
-  details (also in groups) list every route, member and time.
-- No more lost messages when a secure session has to be renewed, or when
-  a relay connection is slow.
-- Relays: messages held on a relay come back sooner after a lost
-  connection, and slow links get more time.
-- Removing someone from a group no longer leaves your earlier messages
-  waiting for them.
-- Group files reach members that only a relay or Tor reaches, as files
-  in one-to-one chats do.
-- Read marks work again on Windows, Android and Linux.
-- Messages that went only one way (often a firewall) now try another
-  route. On Windows, Settings > Connectivity can let devices on your
-  network reach this PC.
+- Update all of your linked devices together: what is new between your
+  own devices needs this version on each of them.
+- Contacts on v0.4.0 keep working as before.
+- If you run your own relay, update it too (install-relay.sh, or let its
+  supervisor update it). It then shares its space and speed fairly
+  between the people using it.
 
 ## Several devices on one account
 
-- Link a phone and a computer under one account (Settings > Devices).
-  Contacts reach all of your devices.
-- Messages you send, notes in Saved messages and read marks show on all
-  of your devices.
-- A device linked less than a day ago cannot add or remove others; any
-  device can remove a lost one. A device out of touch for a week stops
-  syncing until you confirm it.
+- Messages your contacts send reach all of your devices, even when a
+  contact can only reach one of them: that device passes them on.
+- Your groups show on all of your devices. A device that is not a member
+  itself writes in the group through the one that is.
+- A device linked later catches up on your chats, a few at a time and
+  newest first, as already-read history.
+- The device you created your account on can link and remove others
+  right away, without waiting a day.
+- Settings > Connectivity > "What goes over the internet": everything,
+  messages and files up to 1 MB, or messages only (files then wait for
+  your local network). Advanced mode can choose per transport, and per
+  contact in the contact's connection settings.
 
-## Chats and calls
+## Calls
 
-- Group voice calls, with noise suppression for every call (still
-  experimental, off by default).
-- Saved messages: a chat with yourself for notes, files and forwards.
-- Forward several messages at once, whole albums, and voice messages.
-- Contact requests and removals survive lost messages, and a removed
-  contact can be added again.
-- Add a group member as a contact from the group's member list.
-- Photos, videos, PDFs and office files lose their location, camera,
-  author and date details before sending; file names can be random
-  (Settings > Personal).
-- Android: Conest is in the share menu, and you can paste images.
-- Links in messages are underlined and open in your browser. An address
-  that uses letters from other alphabets (and may imitate a site you
-  know) asks first.
+- After a moment of lost or late sound, a call catches up again instead
+  of falling further behind and stuttering for the rest of the call.
+- Group calls no longer make a phone sluggish for the whole call, which
+  delayed everything else on it too.
+- Linux: a call no longer silences other apps. The call's audio output
+  list now offers only outputs that go through your sound server
+  (PipeWire or PulseAudio), not a sound card's own devices, which a call
+  took over for itself. Choose a specific output in your system's sound
+  settings.
+- Windows: call tones, voice messages and videos play (the player was
+  missing from the Windows download).
 
-## On computers
+## Links
 
-- Enter sends and Shift+Enter starts a new line (Settings > Personal
-  can switch it back; then Ctrl+Enter sends).
-- A click on a message is for selecting its text and opening its links;
-  the message menu opens on a right click, and offers to copy the text
-  you selected.
-- Holding the space beside a message selects it, as before; holding the
-  message itself no longer does.
-- Ctrl+V pastes into the open chat wherever you clicked in it.
-- Windows: pasting a screenshot (Win+Shift+S) or another copied image
-  works again.
-- LAN: when another app (often a second Conest) holds this computer's
-  LAN port, Conest moves to a free one and tells your contacts.
+- When you paste or type a link, Conest removes the parts that tell a
+  site who shared it (such as YouTube's ?si= or utm_) and shows "Link
+  cleaned" with Undo. Links you open are cleaned the same way; messages
+  themselves are not changed.
+- Links to posts on X, Instagram, Reddit, TikTok, Bluesky and similar
+  sites go through a service that lets apps show a preview. If one does
+  not work, "Open original link" in the message menu opens the post on
+  its own site.
+- Link previews: a link shows the site's title, a short description and
+  a small picture. In chats with your contacts and in your groups they
+  come by themselves; elsewhere you tap "Show link preview" first,
+  because fetching one shows the site your IP address.
+- Settings > Privacy > "Link previews": each receiver fetches them (the
+  default), they are sent with the message (people you write to never
+  contact the site), both, or off. With Tor set up, previews are fetched
+  through Tor.
 
-## Other networks in one chat list
+## Fixes
 
-- Delta Chat: chats one to one and in groups through your email account,
-  with files, reactions and edits.
-- Nostr private messages with users of other Nostr apps.
-- Messages with Meshtastic and MeshCore app users through your radio.
-- bitchat: read the mesh chat, and, if you choose, chat with bitchat
-  users nearby.
-- Matrix: verify people in direct chats by emoji.
-
-## Look and feel
-
-- Choose Simple, Standard or Advanced mode (Settings > Personal).
-- Arabic, Persian, Indonesian, Russian and Simplified Chinese, made with
-  AI; help improve them on Weblate.
-- Settings are split into pages: a sidebar on wide windows, a list on
-  phones.
-- Turning a way to reach people off (email, Nostr, Tor, Reticulum, the
-  Bluetooth mesh) pauses it and keeps your address there; "Remove"
-  forgets it. Email shows the account in use and can change it.
-- Bluetooth mesh on Linux and Windows computers.
-- If Conest closes unexpectedly, the next start says so and lets you
-  copy the details for a bug report. Nothing is sent anywhere. An update
-  restart no longer counts as a crash.
-- Run your own relay: install-relay.sh sets one up in a few questions.
+- Email: Conest checks that a mail server really passes messages
+  through before using it. If a server it picked stops doing so, your
+  account moves to one that works, and your contacts learn the new
+  address by themselves.
+- Relays: when many messages go out at once, a relay that starts
+  refusing them is given a moment, and the rest go another way
+  meanwhile, instead of nothing being sent for a while.
+- A contact you removed can be added again when only Iroh connects
+  you; the request used to be dropped.
+- With LAN turned off, files no longer get stuck because parts of them
+  were still sent over the local network.
+- Photos: "Send original as file" in the photo editor sends a photo
+  exactly as it is, without downscaling.
+- Android: a file that cannot be sent no longer disappears when you
+  press Send; it stays above the message box with the reason.
+- A relay that cannot be reached yet no longer says "Relay has no
+  verified identity pin".
 
 ## Not tested on real devices yet
 
-- Group calls with more than three people.
-- Delta Chat, Nostr, Meshtastic, MeshCore and bitchat chats with the
-  other apps.
-- Syncing between linked devices over a day or more.
+- Link previews and clean links on Android and Windows.
+- Groups shown through another of your devices, and catching up on
+  older chats after linking, over a day or more.
+- Calls on Linux systems that use PulseAudio rather than PipeWire, or
+  neither.
 
 Please report problems with your build version and the crash or debug
 details from Settings.
 
 ## Known limits
 
+- Group calls are still experimental (off by default): with three or
+  more people, often only some of them hear each other.
+- Android: on some phones (seen on Xiaomi), Conest loses its connection
+  a few minutes after you leave the app, unless a call is in progress.
+  Keep it open when you expect messages.
 - Email can stall on networks that block or throttle mail servers; other
   routes keep working.
-- Several devices: messages received while only one of your devices
-  could be reached, files, voice messages, groups and settings do not
-  sync between your devices yet.
+- Several devices: files and voice messages do not sync between your
+  devices yet.
 - Radios and the Bluetooth mesh carry messages only, never files.
-- Calls, one to one and in groups, are still experimental: connections
-  and sound quality can be uneven.
