@@ -1516,6 +1516,12 @@ void main() {
     alice.setAppForegroundState(false);
     await bobWrites('while away');
     expect(recorder.shown.map((call) => call.body), contains('while away'));
+    // Open, but behind other windows (desktops call that inactive, which
+    // counts as in front for the rest): notified all the same.
+    alice.setAppForegroundState(true);
+    alice.setWindowFocused(false);
+    await bobWrites('while behind');
+    expect(recorder.shown.map((call) => call.body), contains('while behind'));
   });
 
   test('a notification names a chat that a tap can open', () async {

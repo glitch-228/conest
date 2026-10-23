@@ -959,6 +959,14 @@ class MessengerController extends ChangeNotifier {
   bool _ready = false;
   Completer<void>? _pollCompleter;
   bool _appInForeground = true;
+
+  /// Desktops: whether Conest's window has the focus. A window that is
+  /// open but behind others counts as in front for everything else
+  /// (polling, reading), but its notifications should still show.
+  bool _windowFocused = true;
+
+  /// Desktops: the window gained or lost the focus.
+  void setWindowFocused(bool focused) => _windowFocused = focused;
   DateTime? _appBackgroundedAtUtc;
   NetworkCostClass _networkCostClass = NetworkCostClass.unmetered;
   String? _statusMessage;
@@ -24126,7 +24134,7 @@ class MessengerController extends ChangeNotifier {
   /// A desktop notification while Conest's window is in front only gets
   /// in the way (Android shows its own while the app is open too).
   bool get _notificationWhileInFront =>
-      !_platformBridge.runsOnAndroid && _appInForeground;
+      !_platformBridge.runsOnAndroid && _appInForeground && _windowFocused;
 
   static const int _notificationRecentMessageCap = 5;
 

@@ -1342,6 +1342,8 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
         state == AppLifecycleState.resumed ||
         state == AppLifecycleState.inactive;
     widget.controller.setAppForegroundState(inForeground);
+    // Desktops report a window behind others as inactive: still notified.
+    widget.controller.setWindowFocused(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.detached) {
       CrashCatcher.instance.markStopped();
     } else if (Platform.isAndroid) {
