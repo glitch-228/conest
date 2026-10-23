@@ -1518,6 +1518,43 @@ void main() {
     expect(recorder.shown.map((call) => call.body), contains('while away'));
   });
 
+  test('a notification names a chat that a tap can open', () async {
+    final relay = _FakeRelayClient();
+    final recorder = _RecordingPlatformBridge();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      platformBridge: recorder,
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    alice.setAppForegroundState(false);
+    final group = await bob.createGroup(title: 'Tapped', members: bob.contacts);
+    await bob.sendMessage(contact: bob.contacts.single, body: 'direct');
+    for (var i = 0; i < 5; i++) {
+      await alice.pollNow();
+    }
+    await bob.sendGroupMessage(groupId: group.groupId, body: 'in the group');
+    for (var i = 0; i < 5; i++) {
+      await alice.pollNow();
+    }
+    final direct = recorder.shown.firstWhere((call) => call.body == 'direct');
+    expect(
+      alice.chatForNotification(direct.conversationId)?.contact?.deviceId,
+      bob.identity!.deviceId,
+    );
+    final inGroup = recorder.shown.firstWhere(
+      (call) => call.body.endsWith('in the group'),
+    );
+    expect(
+      alice.chatForNotification(inGroup.conversationId)?.group?.groupId,
+      group.groupId,
+    );
+    expect(alice.chatForNotification('nothing-like-it'), isNull);
+  });
+
   test('closing to the tray is on by default, and off stays off', () async {
     final vault = _MemoryVaultStore();
     final first = await _createController(

@@ -2092,10 +2092,30 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => unawaited(_takeShare()),
     );
+    // A message notification tapped: its chat opens (now, or at a cold
+    // start on Android).
+    _notificationOpenSubscription = widget
+        .controller
+        .platformBridge
+        .notificationOpens
+        .listen(_openNotifiedChat);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final pending = await widget.controller.platformBridge
+          .takePendingConversation();
+      if (pending != null && mounted) _openNotifiedChat(pending);
+    });
   }
 
   StreamSubscription<String>? _userNoticeSubscription;
   StreamSubscription<void>? _shareSubscription;
+  StreamSubscription<String>? _notificationOpenSubscription;
+
+  void _openNotifiedChat(String conversationId) {
+    if (!mounted) return;
+    final chat = widget.controller.chatForNotification(conversationId);
+    if (chat?.contact case final contact?) _selectHomeContact(contact);
+    if (chat?.group case final group?) _selectHomeGroup(group);
+  }
 
   /// Stages [files] in the selected chat: one to one into the composer,
   /// in a group shared at once (asking first if their details stay).
@@ -2310,6 +2330,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     unawaited(_userNoticeSubscription?.cancel());
     unawaited(_shareSubscription?.cancel());
+    unawaited(_notificationOpenSubscription?.cancel());
     unawaited(_matrixVerificationRequests?.cancel());
     _terminalCallTimer?.cancel();
     widget.controller.removeListener(_handleControllerChanged);

@@ -39,6 +39,9 @@ class MainActivity : FlutterActivity() {
 
     /// What another app shared, copied into the cache, until Dart takes it.
     private var pendingShare: Map<String, Any?>? = null
+
+    /// The chat of a tapped message notification, until Dart takes it.
+    private var pendingConversation: String? = null
     private var voiceCallPermissionResult: MethodChannel.Result? = null
 
     override fun provideFlutterEngine(context: Context): FlutterEngine? =
@@ -231,6 +234,10 @@ class MainActivity : FlutterActivity() {
                     result.success(pendingShare)
                     pendingShare = null
                 }
+                "takePendingConversation" -> {
+                    result.success(pendingConversation)
+                    pendingConversation = null
+                }
                 // What needs no screen is answered as without one.
                 else -> if (!ConestSystem.handle(applicationContext, call, result)) {
                     result.notImplemented()
@@ -239,6 +246,7 @@ class MainActivity : FlutterActivity() {
         }
         dispatchTransferControl(intent)
         dispatchShare(intent)
+        dispatchConversation(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -246,6 +254,15 @@ class MainActivity : FlutterActivity() {
         setIntent(intent)
         dispatchTransferControl(intent)
         dispatchShare(intent)
+        dispatchConversation(intent)
+    }
+
+    /// A message notification was tapped: its chat opens.
+    private fun dispatchConversation(intent: Intent?) {
+        val conversationId = intent?.getStringExtra("conversationId") ?: return
+        intent.removeExtra("conversationId")
+        pendingConversation = conversationId
+        systemChannel?.invokeMethod("openConversation", conversationId)
     }
 
     /// Copies what another app shared (files, images, text) into the cache

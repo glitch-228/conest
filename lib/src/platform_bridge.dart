@@ -33,6 +33,9 @@ class PlatformBridge {
           _scheduledMessageWakeups.add(1);
         } else if (call.method == 'shareAvailable') {
           _shareAvailable.add(null);
+        } else if (call.method == 'openConversation' &&
+            call.arguments is String) {
+          _conversationOpens.add(call.arguments as String);
         }
       });
     } on AssertionError {
@@ -47,6 +50,8 @@ class PlatformBridge {
       StreamController<int>.broadcast();
   final StreamController<void> _shareAvailable =
       StreamController<void>.broadcast();
+  final StreamController<String> _conversationOpens =
+      StreamController<String>.broadcast();
 
   /// Another app shared something with Conest (Android): take it with
   /// [takePendingShare].
@@ -157,12 +162,26 @@ class PlatformBridge {
   /// Message notifications on Linux and Windows.
   late final DesktopNotifications? _desktopNotifications =
       !kIsWeb && (Platform.isLinux || Platform.isWindows)
-      ? DesktopNotifications()
+      ? (DesktopNotifications()..opened.listen(_conversationOpens.add))
       : null;
 
-  /// The chat whose notification was clicked (desktops).
-  Stream<String> get notificationOpens =>
-      _desktopNotifications?.opened ?? const Stream<String>.empty();
+  /// The chat (its conversation id) whose notification was clicked.
+  Stream<String> get notificationOpens {
+    _desktopNotifications;
+    return _conversationOpens.stream;
+  }
+
+  /// Android: the chat of the notification that opened the app, if any.
+  Future<String?> takePendingConversation() async {
+    if (!_supportsAndroidSystemCalls) return null;
+    try {
+      return await _channel.invokeMethod<String>('takePendingConversation');
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
 
   /// Windows: the runner reports a click on its tray notification.
   void notificationClicked(String chat) =>

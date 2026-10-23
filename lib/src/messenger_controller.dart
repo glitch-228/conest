@@ -10529,6 +10529,22 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: true);
   }
 
+  /// The chat a notification names (its conversation id): a group, or a
+  /// contact; null when there is none any more.
+  ({ContactRecord? contact, GroupRecord? group})? chatForNotification(
+    String conversationId,
+  ) {
+    final group = _groupById(conversationId);
+    if (group != null) return (contact: null, group: group);
+    if (identity == null) return null;
+    for (final contact in contacts) {
+      if (_crypto.conversationIdFor(contact.deviceId) == conversationId) {
+        return (contact: contact, group: null);
+      }
+    }
+    return null;
+  }
+
   /// Desktops: whether closing the window keeps Conest in the tray.
   Future<void> updateDesktopCloseToTray(bool enabled) async {
     final me = _requireIdentity();
