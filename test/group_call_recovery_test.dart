@@ -54,7 +54,7 @@ void main() {
       );
       await net.advance(const Duration(seconds: 1));
       net.blockedLinks.add(('p0', 'p1'));
-      await net.advance(const Duration(milliseconds: 2200));
+      await net.advance(const Duration(seconds: 7));
       expect(net.peers['p1']!.service.active!.term, greaterThan(0));
       net.blockedLinks.clear();
       await net.advance(const Duration(seconds: 6));
@@ -96,7 +96,7 @@ void main() {
         ('p1', 'p0'),
         ('p2', 'p0'),
       ]);
-      await net.advance(const Duration(seconds: 6));
+      await net.advance(const Duration(seconds: 8));
       expect(net.peers['p0']!.service.active!.participants, hasLength(1));
       net.blockedLinks.clear();
       final replacement = net.signals

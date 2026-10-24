@@ -22,7 +22,8 @@ void main() {
         true,
       );
       net.dropped.add('p0');
-      await net.advance(const Duration(seconds: 2));
+      // A silent coordinator counts as gone after 6 s (slow links).
+      await net.advance(const Duration(seconds: 7));
       expect(survivor.service.active!.coordinator, 'p1');
       expect(survivor.service.active!.connected, true);
       await net.peers['p2']!.service.join('group');

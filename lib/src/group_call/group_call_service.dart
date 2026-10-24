@@ -51,6 +51,11 @@ class GroupCallRoom {
   final Map<String, GroupCallLinkStats> stats = {};
   final Map<String, DateTime> seen = {};
   final Map<String, DateTime> statsIssued = {};
+  // When each peer's newest stats arrived (our clock): echoed back with
+  // its issue time, so the peer measures the control round trip.
+  final Map<String, DateTime> statsReceivedAt = {};
+  // Control-plane round trips (ms, smoothed): how long silence means gone.
+  final Map<String, int> signalRtts = {};
   final Map<String, GroupCallRateLimit> signalRates = {};
   final Map<String, GroupCallRateLimit> frameRates = {};
   final Map<String, int> audioSequences = {};
@@ -78,6 +83,26 @@ class GroupCallRoom {
   DateTime? lastTopologySent;
   DateTime? lastJoinSent;
   DateTime? lastStartSent;
+  // What happened to audio frames, per peer (the lab report reads it):
+  // frames handed to the network, frames heard, and why others were not.
+  final Map<String, int> framesSent = {};
+  final Map<String, int> framesHeard = {};
+  final Map<String, int> frameTrouble = {};
+  int authorityChanges = 0;
+  void noteFrameTrouble(String peer, String why) {
+    final key = '$peer: $why';
+    if (frameTrouble.length >= 64 && !frameTrouble.containsKey(key)) return;
+    frameTrouble[key] = (frameTrouble[key] ?? 0) + 1;
+  }
+
+  static void _count(Map<String, int> counts, String peer) {
+    if (counts.length >= groupCallMaxParticipants &&
+        !counts.containsKey(peer)) {
+      return;
+    }
+    counts[peer] = (counts[peer] ?? 0) + 1;
+  }
+
   bool get connected =>
       joined &&
       !leaving &&
@@ -352,6 +377,7 @@ class GroupCallService {
     room.version = 0;
     room.epoch = 0;
     room.topologyVersion = 0;
+    room.authorityChanges++;
     room.needsAdmission = room.joined && coordinator != localDeviceId;
     room.lastJoinSent = null;
     room.lastTopologySent = null;
@@ -592,9 +618,11 @@ class GroupCallService {
         ? 'this device cannot join'
         : _member(signal.groupId, authenticatedSender)?.canJoin != true
         ? 'sender cannot join'
-        : now().difference(signal.issuedAt).abs() > const Duration(seconds: 15)
+        // Controls can take many seconds on a poor network; replays are
+        // stopped by terms, versions and epochs, not by age.
+        : now().difference(signal.issuedAt) > _signalMaxAge
         ? 'too old (${now().difference(signal.issuedAt).inSeconds} s)'
-        : signal.issuedAt.isAfter(now().add(const Duration(seconds: 2)))
+        : signal.issuedAt.isAfter(now().add(const Duration(seconds: 10)))
         ? 'from the future'
         : _terminal.contains(_callIdentity(signal.groupId, signal.callId))
         ? 'call over'
@@ -830,6 +858,8 @@ class GroupCallService {
           }
           room.stats[authenticatedSender] = stats;
           room.statsIssued[authenticatedSender] = signal.issuedAt;
+          room.statsReceivedAt[authenticatedSender] = now();
+          _noteSignalRtt(room, authenticatedSender, signal.payload['echo']);
           final silent = signal.payload['silentForwarder'];
           if (silent is String && silent == room.forwarder) {
             room.failedForwarders[silent] = now().add(
@@ -942,6 +972,8 @@ class GroupCallService {
     room.seen.removeWhere((id, _) => gone(id));
     room.stats.removeWhere((id, _) => gone(id));
     room.statsIssued.removeWhere((id, _) => gone(id));
+    room.statsReceivedAt.removeWhere((id, _) => gone(id));
+    room.signalRtts.removeWhere((id, _) => gone(id));
     room.signalRates.removeWhere((id, _) => gone(id));
     room.frameRates.removeWhere((id, _) => gone(id));
     bool resetStream(String id) =>
@@ -973,6 +1005,8 @@ class GroupCallService {
     room.seen.remove(sender);
     room.stats.remove(sender);
     room.statsIssued.remove(sender);
+    room.statsReceivedAt.remove(sender);
+    room.signalRtts.remove(sender);
     room.audioSequences.remove(sender);
     room.mediaSeen.remove(sender);
     room.failedForwarders.remove(sender);
@@ -1151,8 +1185,15 @@ class GroupCallService {
         return;
       }
       final overlap = room.overlapUntil?.isAfter(now()) == true;
+      // A forwarder heard from by nobody for a while: frames go to everyone
+      // directly until a new one is chosen (it may also be the coordinator,
+      // which counts as gone only after several seconds).
+      final forwarderSilent =
+          room.failedForwarders[room.forwarder]?.isAfter(now()) == true;
       final recipients =
-          room.forwarder == null || room.forwarder == localDeviceId
+          room.forwarder == null ||
+              room.forwarder == localDeviceId ||
+              forwarderSilent
           ? room.participants.map((p) => p.deviceId).toSet()
           : {
               room.forwarder!,
@@ -1172,13 +1213,17 @@ class GroupCallService {
   ) {
     for (final peer in recipients.take(groupCallMaxParticipants)) {
       if (peer == localDeviceId ||
-          _member(room.groupId, peer)?.directRoute != true ||
           !room.participants.any((p) => p.deviceId == peer)) {
+        continue;
+      }
+      if (_member(room.groupId, peer)?.directRoute != true) {
+        room.noteFrameTrouble(peer, 'no direct route');
         continue;
       }
       final count = _datagramJobs[peer] ?? 0;
       if (count >= 3 ||
           (count == 0 && _datagramJobs.length >= groupCallMaxParticipants)) {
+        room.noteFrameTrouble(peer, 'sends backed up');
         continue;
       }
       _datagramJobs[peer] = count + 1;
@@ -1197,7 +1242,16 @@ class GroupCallService {
         unawaited(
           transport
               .sendDatagram(room.groupId, peer, frame)
-              .then((_) => release(), onError: (Object _) => release()),
+              .then(
+                (_) {
+                  release();
+                  GroupCallRoom._count(room.framesSent, peer);
+                },
+                onError: (Object _) {
+                  release();
+                  room.noteFrameTrouble(peer, 'send failed');
+                },
+              ),
         );
       } catch (_) {
         release();
@@ -1211,14 +1265,20 @@ class GroupCallService {
     Uint8List bytes,
   ) async {
     final room = active;
-    if (_disposed ||
-        room == null ||
-        room.groupId != groupId ||
-        !room.connected ||
-        bytes.length > GroupCallCipher.maxFrameBytes ||
-        _inboundFrames >= 32 ||
-        _member(groupId, localDeviceId)?.canJoin != true ||
-        _member(groupId, authenticatedSender)?.directRoute != true) {
+    if (_disposed || room == null || room.groupId != groupId) return;
+    final refused = !room.connected
+        ? 'heard while not connected'
+        : bytes.length > GroupCallCipher.maxFrameBytes
+        ? 'too large'
+        : _inboundFrames >= 32
+        ? 'too many at once'
+        : _member(groupId, localDeviceId)?.canJoin != true
+        ? 'this device cannot join'
+        : _member(groupId, authenticatedSender)?.directRoute != true
+        ? 'from a member without a direct route'
+        : null;
+    if (refused != null) {
+      room.noteFrameTrouble(authenticatedSender, refused);
       return;
     }
     final claimed = room.cipher.claimedSender(bytes);
@@ -1232,13 +1292,18 @@ class GroupCallService {
         !room.frameRates
             .putIfAbsent(claimed, GroupCallRateLimit.new)
             .accept(now(), 100)) {
+      room.noteFrameTrouble(authenticatedSender, 'not its frame');
       return;
     }
     _inboundFrames++;
     try {
       final frame = await room.cipher.decrypt(bytes);
-      if (frame == null ||
-          room.ended ||
+      if (frame == null) {
+        // Most often another key (epoch) than this device has.
+        room.noteFrameTrouble(authenticatedSender, 'not decrypted');
+        return;
+      }
+      if (room.ended ||
           !room.connected ||
           !identical(active, room) ||
           _member(groupId, localDeviceId)?.canJoin != true ||
@@ -1251,8 +1316,10 @@ class GroupCallService {
             p.index == frame.index &&
             p.version == frame.version,
       )) {
+        room.noteFrameTrouble(frame.sender, 'not in this roster');
         return;
       }
+      GroupCallRoom._count(room.framesHeard, frame.sender);
       room.seen[frame.sender] = now();
       room.mediaSeen[authenticatedSender] = now();
       room.failedForwarders.remove(authenticatedSender);
@@ -1455,13 +1522,7 @@ class GroupCallService {
                       now().difference(
                             room.seen[p.deviceId] ?? room.startedAt,
                           ) >
-                          Duration(
-                            milliseconds:
-                                p.deviceId == room.coordinator ||
-                                    p.deviceId == room.forwarder
-                                ? 1500
-                                : 5000,
-                          ),
+                          _silenceAllowed(room, p.deviceId),
                 )
                 .toList()
           : const <GroupCallParticipant>[];
@@ -1496,6 +1557,7 @@ class GroupCallService {
           if (currentForwarder != null &&
               room.failedForwarders.containsKey(currentForwarder))
             'silentForwarder': currentForwarder,
+          'echo': _statsEcho(room),
         }, true);
         room.lastStatsSent = now();
       }
@@ -1507,6 +1569,56 @@ class GroupCallService {
       }
     }
     _notify();
+  }
+
+  static const _signalMaxAge = Duration(seconds: 60);
+
+  /// How long [peer] may stay silent before it counts as gone: a few
+  /// control round trips, never less than 6 s for the coordinator (5 s for
+  /// others), at most a minute. A coordinator presumed gone too early
+  /// splits the call (its frames may be lost while it still leads).
+  Duration _silenceAllowed(GroupCallRoom room, String peer) {
+    final floor = peer == room.coordinator
+        ? const Duration(seconds: 6)
+        : const Duration(seconds: 5);
+    final rtt = room.signalRtts[peer];
+    if (rtt == null) return floor;
+    final scaled = Duration(milliseconds: rtt * 4);
+    if (scaled <= floor) return floor;
+    return scaled > _signalMaxAge ? _signalMaxAge : scaled;
+  }
+
+  /// Each peer's newest stats issue time (its own clock) and how long
+  /// this device held it: the peer subtracts both from its own receive
+  /// time, so no clocks need to agree.
+  Map<String, List<int>> _statsEcho(GroupCallRoom room) => {
+    for (final entry in room.statsIssued.entries.take(groupCallMaxParticipants))
+      if (room.statsReceivedAt[entry.key] case final received?)
+        entry.key: [
+          entry.value.microsecondsSinceEpoch,
+          now().difference(received).inMilliseconds.clamp(0, 600000),
+        ],
+  };
+
+  void _noteSignalRtt(GroupCallRoom room, String peer, Object? echo) {
+    if (echo is! Map || echo.length > groupCallMaxParticipants) return;
+    final mine = echo[localDeviceId];
+    if (mine is! List || mine.length != 2) return;
+    final issued = mine[0];
+    final held = mine[1];
+    if (issued is! int || held is! int || held < 0 || held > 600000) return;
+    // Only our own stats times count, and only ones we really sent: the
+    // newest is at most a minute old.
+    final sent = room.lastStatsSent;
+    if (sent == null ||
+        issued > sent.microsecondsSinceEpoch ||
+        issued < sent.microsecondsSinceEpoch - _signalMaxAge.inMicroseconds) {
+      return;
+    }
+    final rtt = (now().microsecondsSinceEpoch - issued) ~/ 1000 - held;
+    if (rtt < 0 || rtt > _signalMaxAge.inMilliseconds) return;
+    final previous = room.signalRtts[peer];
+    room.signalRtts[peer] = previous == null ? rtt : (previous * 3 + rtt) ~/ 4;
   }
 
   double level(String deviceId) {
