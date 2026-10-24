@@ -22326,6 +22326,7 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.torOnion => const Color(0xFF7E57C2),
     MessageRoute.viaContact => const Color(0xFFEF6C00),
     MessageRoute.viaOwnDevice => const Color(0xFF8D6E63),
+    MessageRoute.xmppCarrier => const Color(0xFF2E7D32),
   };
 
   String shortLabel(BuildContext context) => switch (this) {
@@ -22347,6 +22348,7 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.torOnion => 'Tor',
     MessageRoute.viaContact => l10nOf(context).routeShortContact,
     MessageRoute.viaOwnDevice => l10nOf(context).routeShortOwnDevice,
+    MessageRoute.xmppCarrier => 'XMPP',
   };
 }
 

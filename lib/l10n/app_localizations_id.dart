@@ -5596,4 +5596,8 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'Tidak ada';
+
+  @override
+  String get routeXmppDescription =>
+      'Dibawa server XMPP, tetap terenkripsi ujung ke ujung oleh Conest; server melihat kedua akun dan waktunya.';
 }

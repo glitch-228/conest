@@ -119,9 +119,13 @@ import 'support/fake_ratchet_engine.dart';
 import 'support/observing_ratchet_store.dart';
 import 'support/fake_rns_bus.dart';
 import 'support/fake_tor.dart';
+import 'support/fake_xmpp_server.dart';
+import 'package:conest/src/xmpp/xmpp_carrier.dart';
+import 'package:conest/src/xmpp/xmpp_xml.dart';
 
 part 'delta_controller_content_tests.dart';
 part 'l10n_controller_cases.dart';
+part 'xmpp_controller_cases.dart';
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -1135,9 +1139,11 @@ Future<MessengerController> _createController({
   TorApi? torApi,
   EnergyPolicy? energyPolicy,
   bool keepErrorHistory = false,
+  XmppNetwork? xmppNetwork,
 }) async {
   final controller = MessengerController(
     keepErrorHistory: keepErrorHistory,
+    xmppNetwork: xmppNetwork,
     energyPolicy: energyPolicy,
     torApi: torApi,
     bitchatConnector: bitchatConnector,
@@ -1483,6 +1489,7 @@ const _irohOnlyConnectivity = GlobalConnectivityPreferences(
 void main() {
   deltaContentControllerTests();
   _localizationControllerTests();
+  _xmppControllerTests();
   test('a desktop notifies only while Conest is not in front', () async {
     final relay = _FakeRelayClient();
     final recorder = _RecordingPlatformBridge();

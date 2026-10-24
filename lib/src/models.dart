@@ -694,6 +694,7 @@ class GlobalConnectivityPreferences {
       TransportKind.meshCore: TransportPolicy.automatic,
       TransportKind.bitchat: TransportPolicy.automatic,
       TransportKind.tor: TransportPolicy.automatic,
+      TransportKind.xmpp: TransportPolicy.automatic,
     },
   });
 
@@ -843,6 +844,7 @@ class ContactRoutingPreferences {
       TransportKind.meshCore: TransportPolicy.automatic,
       TransportKind.bitchat: TransportPolicy.automatic,
       TransportKind.tor: TransportPolicy.automatic,
+      TransportKind.xmpp: TransportPolicy.automatic,
     },
   });
 
@@ -2679,7 +2681,10 @@ enum MessageRoute {
   viaContact,
 
   /// Received by another of this account's devices, which passed it on.
-  viaOwnDevice;
+  viaOwnDevice,
+
+  /// Sealed and carried by an XMPP server.
+  xmppCarrier;
 
   String get label => switch (this) {
     lanDirect => 'LAN direct',
@@ -2700,6 +2705,7 @@ enum MessageRoute {
     torOnion => 'Tor',
     viaContact => 'Via a contact',
     viaOwnDevice => 'Via your other device',
+    xmppCarrier => 'XMPP',
   };
 
   String get description => switch (this) {
@@ -2748,6 +2754,9 @@ enum MessageRoute {
     viaOwnDevice =>
       'Received by another of your devices, which passed it on '
           'to this one, end-to-end encrypted.',
+    xmppCarrier =>
+      'Carried by XMPP servers, still end-to-end encrypted by '
+          'Conest; the servers see both accounts and when.',
   };
 
   /// The carrier this route goes over, if it is one.
@@ -2769,6 +2778,7 @@ enum MessageRoute {
     TransportKind.meshCore => meshCore,
     TransportKind.bitchat => bitchat,
     TransportKind.tor => torOnion,
+    TransportKind.xmpp => xmppCarrier,
     _ => null,
   };
 

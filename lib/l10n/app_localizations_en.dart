@@ -5609,4 +5609,8 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'Nothing';
+
+  @override
+  String get routeXmppDescription =>
+      'Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.';
 }

@@ -1458,5 +1458,6 @@
   "notificationPreviewTitle": "نمایش در اعلان‌ها",
   "notificationPreviewFull": "نام و پیام",
   "notificationPreviewSender": "فقط نام",
-  "notificationPreviewHidden": "هیچ"
+  "notificationPreviewHidden": "هیچ",
+  "routeXmppDescription": "خادم‌های XMPP آن را می‌برند و همچنان با Conest سرتاسری رمزگذاری شده است؛ خادم‌ها هر دو حساب و زمان را می‌بینند."
 }

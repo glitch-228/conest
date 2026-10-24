@@ -5734,4 +5734,8 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'Ничего';
+
+  @override
+  String get routeXmppDescription =>
+      'Передаётся серверами XMPP, по-прежнему со сквозным шифрованием Conest; серверы видят обе учётные записи и время.';
 }

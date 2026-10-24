@@ -5364,4 +5364,8 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => '不显示';
+
+  @override
+  String get routeXmppDescription =>
+      '由 XMPP 服务器传送，仍由 Conest 端到端加密；服务器能看到双方账号和时间。';
 }

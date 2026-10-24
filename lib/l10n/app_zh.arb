@@ -1458,5 +1458,6 @@
   "notificationPreviewTitle": "通知中显示",
   "notificationPreviewFull": "名字和消息",
   "notificationPreviewSender": "仅名字",
-  "notificationPreviewHidden": "不显示"
+  "notificationPreviewHidden": "不显示",
+  "routeXmppDescription": "由 XMPP 服务器传送，仍由 Conest 端到端加密；服务器能看到双方账号和时间。"
 }

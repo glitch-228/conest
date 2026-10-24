@@ -93,6 +93,9 @@ import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
+import 'xmpp/xmpp_carrier.dart';
+import 'xmpp/xmpp_socket.dart' show XmppEndpoint;
+import 'xmpp/xmpp_xml.dart' show isValidBareJid;
 
 export 'staged_attachment.dart' show StagedAttachment;
 export 'beam_protocol.dart'
@@ -578,7 +581,9 @@ class MessengerController extends ChangeNotifier {
     BitchatConnector? bitchatConnector,
     TorApi? torApi,
     EnergyPolicy? energyPolicy,
-  }) : _groupCallMediaOverride = groupCallMedia,
+    XmppNetwork? xmppNetwork,
+  }) : _xmppNetwork = xmppNetwork ?? const XmppNetwork(),
+       _groupCallMediaOverride = groupCallMedia,
        _groupCallLinkPolicy = groupCallLinkPolicy,
        _vaultStore = vaultStore,
        _injectedEnergyPolicy = energyPolicy,
@@ -694,6 +699,7 @@ class MessengerController extends ChangeNotifier {
   final BitchatConnector? _bitchatConnector;
   TorApi? _torApi;
   bool _torApiResolved;
+  final XmppNetwork _xmppNetwork;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -5279,6 +5285,10 @@ class MessengerController extends ChangeNotifier {
         !_carrierTransports.containsKey(TransportKind.tor)) {
       await _startTorCarrier(advertise: false);
     }
+    if (xmppCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.xmpp)) {
+      await _startXmppCarrier(advertise: false);
+    }
   }
 
   /// Tor through Arti in the native library, looked up once.
@@ -5457,6 +5467,130 @@ class MessengerController extends ChangeNotifier {
     );
     unawaited(_saveSnapshotSilently(notify: false));
     _advertiseProfileToContacts();
+  }
+
+  /// The XMPP carrier's saved account, if set up.
+  XmppCarrierConfig? get xmppCarrierConfig => XmppCarrierConfig.fromJson(
+    _snapshot.carrierAccounts[TransportKind.xmpp.name],
+  );
+
+  /// The running XMPP connection, for its state in settings.
+  XmppCarrierChannel? get xmppChannel => _xmppChannel;
+  XmppCarrierChannel? _xmppChannel;
+
+  /// Reaches contacts through an XMPP account: the user's own ([jid] and
+  /// [password]), or one Conest creates on a public server that answers on
+  /// this network. Returns the account's address.
+  Future<String> enableXmppCarrier({
+    String? jid,
+    String? password,
+    List<String> servers = defaultXmppServers,
+  }) async {
+    _requireIdentity();
+    if (!_carrierAllowed(TransportKind.xmpp)) {
+      throw StateError('Turn on Online and XMPP in Connectivity first.');
+    }
+    final resource = newXmppResource();
+    final XmppCarrierConfig config;
+    if (jid != null) {
+      final bare = jid.trim().toLowerCase();
+      if (!isValidBareJid(bare) || password == null || password.isEmpty) {
+        throw ArgumentError(
+          'Enter an XMPP address (name@server) and its '
+          'password.',
+        );
+      }
+      config = XmppCarrierConfig(
+        jid: bare,
+        password: password,
+        resource: resource,
+      );
+      await checkXmppLogin(
+        config,
+        connector: _xmppNetwork.connector,
+        webSocketConnector: _xmppNetwork.webSocketConnector,
+      );
+    } else {
+      final probed = await reachableXmppServers(
+        servers,
+        connector: _xmppNetwork.connector,
+        webSocketConnector: _xmppNetwork.webSocketConnector,
+        webSocketLookup: _xmppNetwork.webSocketLookup,
+        needRegistration: true,
+        log: (line) => appendDebugLog('XMPP setup: $line'),
+      );
+      config = await createXmppCarrierAccount(
+        probed,
+        resource: resource,
+        connector: _xmppNetwork.connector,
+        webSocketConnector: _xmppNetwork.webSocketConnector,
+        log: appendDebugLog,
+      );
+    }
+    await unregisterCarrierTransport(TransportKind.xmpp);
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.xmpp.name: config.toJson(),
+      },
+    );
+    await _persist('XMPP carrier set up as ${config.jid}.');
+    await _startXmppCarrier();
+    return config.jid;
+  }
+
+  /// Stops the XMPP carrier and forgets the account here (an account Conest
+  /// created is left on the server); contacts stop using it.
+  Future<void> disableXmppCarrier() async {
+    await unregisterCarrierTransport(TransportKind.xmpp);
+    _xmppChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.xmpp.name),
+    );
+    await _persist('XMPP carrier removed.');
+  }
+
+  Future<void> _startXmppCarrier({bool advertise = true}) async {
+    final config = xmppCarrierConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.xmpp] ??
+        createXmppCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = XmppCarrierChannel(
+      config: config,
+      onFrame: adapter.receiveFrame,
+      connector: _xmppNetwork.connector,
+      webSocketConnector: _xmppNetwork.webSocketConnector,
+      onStatusChanged: notifyListeners,
+      onEndpoint: _saveXmppEndpoint,
+      log: (line) => appendDebugLog(line),
+      now: _now,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _xmppChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  /// The way in that worked is tried first next time.
+  void _saveXmppEndpoint(XmppEndpoint endpoint) {
+    final config = xmppCarrierConfig;
+    if (config == null || config.endpoints.firstOrNull == endpoint) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.xmpp.name: config
+            .copyWith(
+              endpoints: [
+                endpoint,
+                ...config.endpoints.where((other) => other != endpoint),
+              ].take(4).toList(),
+            )
+            .toJson(),
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
   }
 
   /// Whether this device can join the Bluetooth mesh.
@@ -8084,6 +8218,15 @@ class MessengerController extends ChangeNotifier {
             ?tor.progressDetail,
           ].join(': '),
         ),
+        // XMPP has its address from the start: ready while connected.
+        final XmppCarrierChannel xmpp
+            when xmpp.state != XmppCarrierState.connected =>
+          CarrierStatus(
+            kind: adapter.kind,
+            ready: false,
+            address: adapter.status.address,
+            lastError: xmpp.lastError ?? xmpp.state.name,
+          ),
         // Reticulum has its address from the start: ready only while its
         // link is up, or a node that drops every link looks fine.
         final ReticulumCarrierChannel reticulum
@@ -30377,6 +30520,7 @@ class MessengerController extends ChangeNotifier {
     TransportKind.deltaChat,
     TransportKind.matrix,
     TransportKind.tor,
+    TransportKind.xmpp,
     // Through the target's inbox (bitchatInboxKey): its pair ids need keys
     // it does not have before the request.
     TransportKind.bitchat,
@@ -30437,6 +30581,10 @@ class MessengerController extends ChangeNotifier {
     };
     if (!global.shareIdentifyingCarriersWithGroups) {
       addresses.removeWhere((kind, _) => _identifyingCarriers.contains(kind));
+      // The user's own XMPP account names them; one Conest made does not.
+      if (!(xmppCarrierConfig?.created ?? false)) {
+        addresses.remove(TransportKind.xmpp);
+      }
     }
     return addresses;
   }
@@ -30538,6 +30686,7 @@ class MessengerController extends ChangeNotifier {
   Future<List<InternetTransportCheck>> checkInternetTransports({
     List<String> nostrCandidates = nostrRelayCandidates,
     List<String> chatmailCandidates = defaultChatmailDomains,
+    List<String> xmppCandidates = defaultXmppServers,
     Duration timeout = const Duration(seconds: 10),
   }) async {
     final identity = _requireIdentity();
@@ -30640,6 +30789,22 @@ class MessengerController extends ChangeNotifier {
           headStart: timeout ~/ 5,
           enough: 1,
         ),
+      ),
+      oneTap(
+        TransportKind.xmpp,
+        () async => [
+          for (final server in await reachableXmppServers(
+            xmppCandidates,
+            connector: _xmppNetwork.connector,
+            webSocketConnector: _xmppNetwork.webSocketConnector,
+            webSocketLookup: null,
+            timeout: timeout * 2,
+            headStart: timeout ~/ 3,
+            enough: 1,
+            needRegistration: true,
+          ))
+            server.domain,
+        ],
       ),
       for (final kind in const [
         TransportKind.tor,

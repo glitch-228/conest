@@ -1458,5 +1458,6 @@
   "notificationPreviewTitle": "Показывать в уведомлениях",
   "notificationPreviewFull": "Имя и сообщение",
   "notificationPreviewSender": "Только имя",
-  "notificationPreviewHidden": "Ничего"
+  "notificationPreviewHidden": "Ничего",
+  "routeXmppDescription": "Передаётся серверами XMPP, по-прежнему со сквозным шифрованием Conest; серверы видят обе учётные записи и время."
 }

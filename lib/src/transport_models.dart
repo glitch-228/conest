@@ -17,6 +17,9 @@ enum TransportKind {
   meshCore,
   bitchat,
   tor,
+
+  /// XMPP (Jabber): frames through an XMPP account (M51).
+  xmpp,
 }
 
 enum TransportPolicy { automatic, preferred, disabled, askBeforeUse }
@@ -52,6 +55,7 @@ extension TransportKindLabel on TransportKind {
     TransportKind.meshCore => 'MeshCore',
     TransportKind.bitchat => 'Bluetooth mesh',
     TransportKind.tor => 'Tor',
+    TransportKind.xmpp => 'XMPP',
   };
 }
 
@@ -64,7 +68,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.deltaChat ||
     TransportKind.matrix ||
     TransportKind.nostr ||
-    TransportKind.tor => true,
+    TransportKind.tor ||
+    TransportKind.xmpp => true,
     _ => false,
   };
 
@@ -78,7 +83,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.meshtastic ||
     TransportKind.meshCore ||
     TransportKind.bitchat ||
-    TransportKind.tor => true,
+    TransportKind.tor ||
+    TransportKind.xmpp => true,
     _ => false,
   };
 
@@ -107,7 +113,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.meshtastic ||
     TransportKind.meshCore ||
     TransportKind.bitchat ||
-    TransportKind.tor => true,
+    TransportKind.tor ||
+    TransportKind.xmpp => true,
     _ => false,
   };
 
@@ -121,6 +128,7 @@ extension TransportKindTraits on TransportKind {
     TransportKind.matrix => 30,
     TransportKind.nostr => 31,
     TransportKind.deltaChat => 32,
+    TransportKind.xmpp => 33,
     TransportKind.bitchat => 40,
     TransportKind.reticulum ||
     TransportKind.meshtastic ||

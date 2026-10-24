@@ -5610,4 +5610,8 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'هیچ';
+
+  @override
+  String get routeXmppDescription =>
+      'خادم‌های XMPP آن را می‌برند و همچنان با Conest سرتاسری رمزگذاری شده است؛ خادم‌ها هر دو حساب و زمان را می‌بینند.';
 }

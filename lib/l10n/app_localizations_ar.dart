@@ -5740,4 +5740,8 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'لا شيء';
+
+  @override
+  String get routeXmppDescription =>
+      'تحمله خوادم XMPP، مع بقائه مشفّرًا من طرف إلى طرف بواسطة Conest؛ ترى الخوادم الحسابين والتوقيت.';
 }

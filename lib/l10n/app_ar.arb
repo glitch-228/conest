@@ -1458,5 +1458,6 @@
   "notificationPreviewTitle": "المعروض في الإشعارات",
   "notificationPreviewFull": "الاسم والرسالة",
   "notificationPreviewSender": "الاسم فقط",
-  "notificationPreviewHidden": "لا شيء"
+  "notificationPreviewHidden": "لا شيء",
+  "routeXmppDescription": "تحمله خوادم XMPP، مع بقائه مشفّرًا من طرف إلى طرف بواسطة Conest؛ ترى الخوادم الحسابين والتوقيت."
 }

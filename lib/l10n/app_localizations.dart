@@ -8914,6 +8914,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Nothing'**
   String get notificationPreviewHidden;
+
+  /// Presentation text for message route information: the XMPP carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.'**
+  String get routeXmppDescription;
 }
 
 class _AppLocalizationsDelegate

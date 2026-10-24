@@ -1458,5 +1458,6 @@
   "notificationPreviewTitle": "Tampilkan di notifikasi",
   "notificationPreviewFull": "Nama dan pesan",
   "notificationPreviewSender": "Nama saja",
-  "notificationPreviewHidden": "Tidak ada"
+  "notificationPreviewHidden": "Tidak ada",
+  "routeXmppDescription": "Dibawa server XMPP, tetap terenkripsi ujung ke ujung oleh Conest; server melihat kedua akun dan waktunya."
 }
