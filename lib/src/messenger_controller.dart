@@ -29337,14 +29337,79 @@ class MessengerController extends ChangeNotifier {
     return relayId == null ? null : _snapshot.pinnedRelayIdentityKeys[relayId];
   }
 
+  /// What [relay] said about who may use it (null: not known yet, or an
+  /// older relay).
+  RelayV2Info? relayAccessFor(PeerEndpoint relay) =>
+      RelayClient.sessionInfoFor(relay.host, relay.port);
+
+  /// Until when this device is registered on [relay] (null: it is not).
+  DateTime? relayRegisteredUntil(PeerEndpoint relay) {
+    final key = _pinnedIdentityKeyForRoute(relay);
+    final token = key == null ? null : _snapshot.relayTokens[key];
+    return token == null ? null : RelayClient.tokenExpiry(token);
+  }
+
+  /// Registers this device on [relay] (with [invite] or [password] when
+  /// its policy asks) and keeps the token in the vault.
+  Future<void> registerWithRelay(
+    PeerEndpoint relay, {
+    String? invite,
+    String? password,
+  }) async {
+    final me = _requireIdentity();
+    final key = await _requireOperationalRelayPin(relay);
+    if (key == null) throw StateError('Relay identity is not known yet.');
+    final token = await _relayClient.register(
+      host: relay.host,
+      port: relay.port,
+      expectedIdentityPublicKeyBase64: key,
+      accountSecret: base64Decode(
+        me.signingPrivateKeyBase64 ?? me.privateKeyBase64,
+      ),
+      invite: invite,
+      password: password,
+    );
+    _snapshot = _snapshot.copyWith(
+      relayTokens: {..._snapshot.relayTokens, key: token},
+    );
+    RelayClient.setRelayTokens(_snapshot.relayTokens);
+    await _saveSnapshotSilently();
+  }
+
+  /// Relays whose token was refreshed lately (at most once an hour each).
+  final Map<String, DateTime> _relayTokenRefreshes = {};
+
+  /// Refreshes [route]'s token when it runs out within three days.
+  void _refreshRelayTokenIfDue(PeerEndpoint route) {
+    final key = _pinnedIdentityKeyForRoute(route);
+    final token = key == null ? null : _snapshot.relayTokens[key];
+    final expiry = token == null ? null : RelayClient.tokenExpiry(token);
+    if (key == null || expiry == null) return;
+    final now = DateTime.now().toUtc();
+    if (expiry.difference(now) > const Duration(days: 3)) return;
+    final last = _relayTokenRefreshes[key];
+    if (last != null && now.difference(last) < const Duration(hours: 1)) {
+      return;
+    }
+    _relayTokenRefreshes[key] = now;
+    unawaited(
+      registerWithRelay(route).catchError((Object error) {
+        appendDebugLog('Relay token refresh failed: $error');
+      }),
+    );
+  }
+
   Future<String?> _requireOperationalRelayPin(PeerEndpoint route) async {
     if (route.kind != PeerRouteKind.relay) return null;
-    // Relays that keep mailbox owners get this device's proof (M26).
+    // Relays that keep mailbox owners get this device's proof, and those
+    // that take registered accounts only, its token (M26).
     if (identity case final me?) {
       RelayClient.registerMailboxSecret(
         me.deviceId,
         base64Decode(me.signingPrivateKeyBase64 ?? me.privateKeyBase64),
       );
+      RelayClient.setRelayTokens(_snapshot.relayTokens);
+      _refreshRelayTokenIfDue(route);
     }
     var key = _pinnedIdentityKeyForRoute(route);
     if (key != null) return key;
@@ -37840,6 +37905,25 @@ class _ScoringRelayClient implements RelayClient {
     required this.onAttempt,
     required this.nowProvider,
   });
+
+  @override
+  Future<String> register({
+    required String host,
+    required int port,
+    required String expectedIdentityPublicKeyBase64,
+    required List<int> accountSecret,
+    String? invite,
+    String? password,
+    Duration timeout = const Duration(seconds: 8),
+  }) => inner.register(
+    host: host,
+    port: port,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    accountSecret: accountSecret,
+    invite: invite,
+    password: password,
+    timeout: timeout,
+  );
 
   @override
   bool supportsSubscribe({

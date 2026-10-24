@@ -350,6 +350,10 @@ pub(crate) fn prepare_request(
         .and_then(|value| value.as_str())
         .map(str::to_owned);
     let auth = parsed.get("auth").cloned();
+    let token = parsed
+        .get("token")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
     let mut request: RelayRequest = match serde_json::from_value(parsed) {
         Ok(request) => request,
         Err(error) if datagram => return refuse(format!("invalid request: {error}")),
@@ -392,6 +396,21 @@ pub(crate) fn prepare_request(
         }
         return Prepared::Done(finalize_wire(
             RelayResponse::error("rate limit exceeded"),
+            &action,
+            nonce_bytes.as_deref(),
+            detached,
+            &state.identity,
+        ));
+    }
+    // Tier 1's policy: open, registered accounts only, or off.
+    if matches!(request, RelayRequest::Store { .. })
+        && let Err(message) = state.admit_store(token.as_deref(), stored_bytes)
+    {
+        if datagram {
+            return refuse(message);
+        }
+        return Prepared::Done(finalize_wire(
+            RelayResponse::error(message),
             &action,
             nonce_bytes.as_deref(),
             detached,

@@ -5740,4 +5740,60 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'لا شيء';
+
+  @override
+  String get relayAccessTitle => 'الوصول إلى المرحِّل';
+
+  @override
+  String get relayAccessUnknown =>
+      'لم يذكر هذا المرحِّل من يمكنه استخدامه (مرحِّل أقدم، أو لم يُفحص بعد).';
+
+  @override
+  String get relayAccessSessions =>
+      'اتصال خاص: من تجلب رسائله يبقى مخفيًا عن الشبكة.';
+
+  @override
+  String get relayAccessMessagesOpen => 'يمكن لأي شخص ترك الرسائل هنا.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'يمكن للحسابات المسجلة فقط ترك الرسائل هنا.';
+
+  @override
+  String get relayAccessMessagesOff => 'لا يقبل هذا المرحِّل رسائل جديدة.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'يمكن لأي شخص التسجيل.';
+
+  @override
+  String get relayAccessRegistrationInvite => 'يتطلب التسجيل رمز دعوة.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'يتطلب التسجيل كلمة مرور المرحِّل.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'التسجيل مغلق.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'مسجَّل على هذا المرحِّل حتى $date.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'رمز الدعوة';
+
+  @override
+  String get relayAccessPasswordLabel => 'كلمة المرور';
+
+  @override
+  String get relayAccessRegister => 'تسجيل';
+
+  @override
+  String get relayAccessRegisteredNow => 'تم التسجيل.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'تعذّر التسجيل: $error';
+  }
 }

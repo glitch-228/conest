@@ -79,6 +79,8 @@ class RelayV2Info {
     required this.noiseKey,
     required this.learnedAt,
     this.mailboxAuth = false,
+    this.tier1,
+    this.registration,
   });
 
   final String identityPublicKeyBase64;
@@ -90,6 +92,13 @@ class RelayV2Info {
   /// Whether the relay keeps mailbox owners (fetches need the owner's
   /// proof once claimed).
   final bool mailboxAuth;
+
+  /// Who may leave messages: `open`, `registered` or `off` (null: not
+  /// said).
+  final String? tier1;
+
+  /// How accounts register: `open`, `invite`, `password` or `closed`.
+  final String? registration;
 
   bool get sessions => noiseKey != null;
 }
@@ -213,12 +222,109 @@ class RelayClient {
     session.provedMailboxes.add(mailbox);
   }
 
+  static String? _policyWord(Object? v2, String name, Set<String> allowed) {
+    if (v2 is! Map<String, dynamic>) return null;
+    final policy = v2['policy'];
+    if (policy is! Map<String, dynamic>) return null;
+    final value = policy[name];
+    return value is String && allowed.contains(value) ? value : null;
+  }
+
+  /// Registration tokens, by relay identity (from the vault).
+  static final Map<String, String> _tokens = {};
+
+  /// Sets the tokens stores carry (inside sessions only, never in the
+  /// clear) to relays that take messages from registered accounts only.
+  static void setRelayTokens(Map<String, String> tokens) {
+    _tokens
+      ..clear()
+      ..addAll(tokens);
+  }
+
+  /// When [token] (`v1.account.scope.quota.expiry.mac`) runs out.
+  static DateTime? tokenExpiry(String token) {
+    final parts = token.split('.');
+    if (parts.length != 6) return null;
+    final millis = int.tryParse(parts[4]);
+    return millis == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true);
+  }
+
+  /// Registers this app on the relay at [host]:[port] (pinned to
+  /// [expectedIdentityPublicKeyBase64]) with an account key derived from
+  /// [accountSecret], giving [invite] or [password] when its policy asks.
+  /// Registering again refreshes the token. Returns the token.
+  Future<String> register({
+    required String host,
+    required int port,
+    required String expectedIdentityPublicKeyBase64,
+    required List<int> accountSecret,
+    String? invite,
+    String? password,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    final endpoint = _validateEndpoint(host: host, port: port);
+    var known = _knownSessions(
+      endpoint.host,
+      endpoint.port,
+      expectedIdentityPublicKeyBase64,
+    );
+    if (known == null) {
+      await inspectHealth(
+        host: host,
+        port: port,
+        timeout: timeout,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+      known = _knownSessions(
+        endpoint.host,
+        endpoint.port,
+        expectedIdentityPublicKeyBase64,
+      );
+    }
+    if (known == null) {
+      throw StateError('This relay does not take registrations.');
+    }
+    final session = await _sessionFor(
+      endpoint.host,
+      endpoint.port,
+      known,
+      timeout,
+    );
+    final seed = await Hmac.sha256().calculateMac(
+      utf8.encode('conest-relay-account-v1|$expectedIdentityPublicKeyBase64'),
+      secretKey: SecretKey(accountSecret),
+    );
+    final account = await Ed25519().newKeyPairFromSeed(seed.bytes);
+    final accountPublic = (await account.extractPublicKey()).bytes;
+    final signature = await Ed25519().sign([
+      ...utf8.encode('conest-relay-register-v1'),
+      ...session.handshakeHash,
+      ...accountPublic,
+    ], keyPair: account);
+    final answer = await session.request({
+      'action': 'register',
+      'account_key': base64Encode(accountPublic),
+      'signature': base64Encode(signature.bytes),
+      if (invite != null && invite.trim().isNotEmpty) 'invite': invite.trim(),
+      if (password != null && password.isNotEmpty) 'password': password,
+    }, timeout: timeout);
+    final token = answer['token'];
+    if (answer['ok'] != true || token is! String || token.length > 256) {
+      throw StateError(answer['error'] as String? ?? 'Registration failed.');
+    }
+    _tokens[expectedIdentityPublicKeyBase64] = token;
+    return token;
+  }
+
   /// Forgets what relays said about sessions and closes them (tests).
   static Future<void> resetSessionsForTesting() async {
     _v2Known.clear();
     _v2Learning.clear();
     _mailboxSecrets.clear();
     _authKeys.clear();
+    _tokens.clear();
     await v2Pool.closeAll();
   }
 
@@ -790,10 +896,14 @@ class RelayClient {
         return null;
       }
     }
+    final token = _tokens[expectedIdentityPublicKeyBase64];
+    final outgoing = request['action'] == 'store' && token != null
+        ? {...request, 'token': token}
+        : request;
     final Map<String, dynamic> body;
     try {
       body = await session.request(
-        request,
+        outgoing,
         timeout: timeout,
         maxResponseBytes: maxResponseBytes,
       );
@@ -866,6 +976,13 @@ class RelayClient {
       noiseKey: noiseKey,
       learnedAt: DateTime.now(),
       mailboxAuth: v2 is Map<String, dynamic> && v2['mailbox_auth'] == 1,
+      tier1: _policyWord(v2, 'tier1', const {'open', 'registered', 'off'}),
+      registration: _policyWord(v2, 'registration', const {
+        'open',
+        'invite',
+        'password',
+        'closed',
+      }),
     );
   }
 

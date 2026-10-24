@@ -1458,5 +1458,21 @@
   "notificationPreviewTitle": "通知中显示",
   "notificationPreviewFull": "名字和消息",
   "notificationPreviewSender": "仅名字",
-  "notificationPreviewHidden": "不显示"
+  "notificationPreviewHidden": "不显示",
+  "relayAccessTitle": "中继访问",
+  "relayAccessUnknown": "此中继尚未说明谁可以使用（旧版中继，或尚未检查）。",
+  "relayAccessSessions": "私密连接：网络看不到您在为谁收取消息。",
+  "relayAccessMessagesOpen": "任何人都可以在此留言。",
+  "relayAccessMessagesRegistered": "只有已注册的账户才能在此留言。",
+  "relayAccessMessagesOff": "此中继不接收新消息。",
+  "relayAccessRegistrationOpen": "任何人都可以注册。",
+  "relayAccessRegistrationInvite": "注册需要邀请码。",
+  "relayAccessRegistrationPassword": "注册需要中继的密码。",
+  "relayAccessRegistrationClosed": "注册已关闭。",
+  "relayAccessRegistered": "已在此中继注册，有效期至 {date}。",
+  "relayAccessInviteLabel": "邀请码",
+  "relayAccessPasswordLabel": "密码",
+  "relayAccessRegister": "注册",
+  "relayAccessRegisteredNow": "已注册。",
+  "relayAccessFailed": "无法注册：{error}"
 }

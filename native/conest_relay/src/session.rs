@@ -503,6 +503,22 @@ impl Session {
         if action == "mailbox_auth" {
             return self.prove_mailbox(&payload);
         }
+        if action == "register" {
+            if !self.state.allow_request(&self.peer) {
+                return error_json("rate limit exceeded");
+            }
+            let Ok(request) = serde_json::from_slice::<Value>(&payload) else {
+                return error_json("invalid request");
+            };
+            let hash = self.handshake_hash.clone();
+            let peer = self.peer.clone();
+            return self
+                .state
+                .blocking(move |state| state.register(&request, &hash, &peer))
+                .await
+                .and_then(|result| result)
+                .unwrap_or_else(|error| error_json(error));
+        }
         // Scoped: the check is not Send, and must not live across awaits.
         let prepared = {
             let proved: &dyn Fn(&str) -> bool = &|mailbox: &str| self.has_proved(mailbox);

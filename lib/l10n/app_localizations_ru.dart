@@ -5734,4 +5734,63 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'Ничего';
+
+  @override
+  String get relayAccessTitle => 'Доступ к ретранслятору';
+
+  @override
+  String get relayAccessUnknown =>
+      'Этот ретранслятор не сообщил, кто может им пользоваться (старая версия или ещё не проверен).';
+
+  @override
+  String get relayAccessSessions =>
+      'Защищённое соединение: чьи сообщения вы забираете, скрыто от сети.';
+
+  @override
+  String get relayAccessMessagesOpen =>
+      'Оставлять сообщения здесь может любой.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'Оставлять сообщения здесь могут только зарегистрированные.';
+
+  @override
+  String get relayAccessMessagesOff =>
+      'Этот ретранслятор не принимает новые сообщения.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'Зарегистрироваться может любой.';
+
+  @override
+  String get relayAccessRegistrationInvite =>
+      'Для регистрации нужен код приглашения.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'Для регистрации нужен пароль ретранслятора.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'Регистрация закрыта.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'Зарегистрировано на этом ретрансляторе до $date.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'Код приглашения';
+
+  @override
+  String get relayAccessPasswordLabel => 'Пароль';
+
+  @override
+  String get relayAccessRegister => 'Зарегистрироваться';
+
+  @override
+  String get relayAccessRegisteredNow => 'Зарегистрировано.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'Не удалось зарегистрироваться: $error';
+  }
 }

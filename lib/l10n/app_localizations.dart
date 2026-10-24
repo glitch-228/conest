@@ -8914,6 +8914,102 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Nothing'**
   String get notificationPreviewHidden;
+
+  /// Title of the dialog showing who may use a relay.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay access'**
+  String get relayAccessTitle;
+
+  /// Relay access: the relay did not say how it is run.
+  ///
+  /// In en, this message translates to:
+  /// **'This relay has not said who may use it (an older relay, or not checked yet).'**
+  String get relayAccessUnknown;
+
+  /// Relay access: the relay offers private (v2) connections.
+  ///
+  /// In en, this message translates to:
+  /// **'Private connection: who you fetch messages for stays hidden from the network.'**
+  String get relayAccessSessions;
+
+  /// Relay access: anyone may leave messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Anyone can leave messages here.'**
+  String get relayAccessMessagesOpen;
+
+  /// Relay access: only registered accounts may leave messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Only registered accounts can leave messages here.'**
+  String get relayAccessMessagesRegistered;
+
+  /// Relay access: the relay takes no new messages.
+  ///
+  /// In en, this message translates to:
+  /// **'This relay takes no new messages.'**
+  String get relayAccessMessagesOff;
+
+  /// Relay access: anyone may register.
+  ///
+  /// In en, this message translates to:
+  /// **'Anyone can register.'**
+  String get relayAccessRegistrationOpen;
+
+  /// Relay access: registering needs an invite code.
+  ///
+  /// In en, this message translates to:
+  /// **'Registering needs an invite code.'**
+  String get relayAccessRegistrationInvite;
+
+  /// Relay access: registering needs the relay's password.
+  ///
+  /// In en, this message translates to:
+  /// **'Registering needs the relay\'s password.'**
+  String get relayAccessRegistrationPassword;
+
+  /// Relay access: registration is closed.
+  ///
+  /// In en, this message translates to:
+  /// **'Registration is closed.'**
+  String get relayAccessRegistrationClosed;
+
+  /// Relay access: this device is registered until a date.
+  ///
+  /// In en, this message translates to:
+  /// **'Registered on this relay until {date}.'**
+  String relayAccessRegistered(String date);
+
+  /// Relay access: field for an invite code.
+  ///
+  /// In en, this message translates to:
+  /// **'Invite code'**
+  String get relayAccessInviteLabel;
+
+  /// Relay access: field for the relay's registration password.
+  ///
+  /// In en, this message translates to:
+  /// **'Password'**
+  String get relayAccessPasswordLabel;
+
+  /// Relay access: button to register on the relay.
+  ///
+  /// In en, this message translates to:
+  /// **'Register'**
+  String get relayAccessRegister;
+
+  /// Relay access: registration succeeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Registered.'**
+  String get relayAccessRegisteredNow;
+
+  /// Relay access: registration failed, with the relay's reason.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not register: {error}'**
+  String relayAccessFailed(String error);
 }
 
 class _AppLocalizationsDelegate

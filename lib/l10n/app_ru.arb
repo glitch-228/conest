@@ -1458,5 +1458,21 @@
   "notificationPreviewTitle": "Показывать в уведомлениях",
   "notificationPreviewFull": "Имя и сообщение",
   "notificationPreviewSender": "Только имя",
-  "notificationPreviewHidden": "Ничего"
+  "notificationPreviewHidden": "Ничего",
+  "relayAccessTitle": "Доступ к ретранслятору",
+  "relayAccessUnknown": "Этот ретранслятор не сообщил, кто может им пользоваться (старая версия или ещё не проверен).",
+  "relayAccessSessions": "Защищённое соединение: чьи сообщения вы забираете, скрыто от сети.",
+  "relayAccessMessagesOpen": "Оставлять сообщения здесь может любой.",
+  "relayAccessMessagesRegistered": "Оставлять сообщения здесь могут только зарегистрированные.",
+  "relayAccessMessagesOff": "Этот ретранслятор не принимает новые сообщения.",
+  "relayAccessRegistrationOpen": "Зарегистрироваться может любой.",
+  "relayAccessRegistrationInvite": "Для регистрации нужен код приглашения.",
+  "relayAccessRegistrationPassword": "Для регистрации нужен пароль ретранслятора.",
+  "relayAccessRegistrationClosed": "Регистрация закрыта.",
+  "relayAccessRegistered": "Зарегистрировано на этом ретрансляторе до {date}.",
+  "relayAccessInviteLabel": "Код приглашения",
+  "relayAccessPasswordLabel": "Пароль",
+  "relayAccessRegister": "Зарегистрироваться",
+  "relayAccessRegisteredNow": "Зарегистрировано.",
+  "relayAccessFailed": "Не удалось зарегистрироваться: {error}"
 }

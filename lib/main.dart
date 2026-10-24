@@ -1,3 +1,4 @@
+import 'src/ui/relay_access_dialog.dart';
 import 'src/ui/localized_labels.dart';
 import 'src/ui/localized_ui_text.dart';
 import 'dart:async';
@@ -16296,6 +16297,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                         widget.controller.relayDisplayLabel(
                                           relay,
                                         ),
+                                      ),
+                                      // Who may use it; register (M26).
+                                      onPressed: () => showRelayAccessDialog(
+                                        context,
+                                        widget.controller,
+                                        relay,
                                       ),
                                       onDeleted: _busy
                                           ? null

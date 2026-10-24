@@ -8384,5 +8384,79 @@
   "notificationPreviewHidden": "Nothing",
   "@notificationPreviewHidden": {
     "description": "Notifications show neither sender nor message."
+  },
+  "relayAccessTitle": "Relay access",
+  "@relayAccessTitle": {
+    "description": "Title of the dialog showing who may use a relay."
+  },
+  "relayAccessUnknown": "This relay has not said who may use it (an older relay, or not checked yet).",
+  "@relayAccessUnknown": {
+    "description": "Relay access: the relay did not say how it is run."
+  },
+  "relayAccessSessions": "Private connection: who you fetch messages for stays hidden from the network.",
+  "@relayAccessSessions": {
+    "description": "Relay access: the relay offers private (v2) connections."
+  },
+  "relayAccessMessagesOpen": "Anyone can leave messages here.",
+  "@relayAccessMessagesOpen": {
+    "description": "Relay access: anyone may leave messages."
+  },
+  "relayAccessMessagesRegistered": "Only registered accounts can leave messages here.",
+  "@relayAccessMessagesRegistered": {
+    "description": "Relay access: only registered accounts may leave messages."
+  },
+  "relayAccessMessagesOff": "This relay takes no new messages.",
+  "@relayAccessMessagesOff": {
+    "description": "Relay access: the relay takes no new messages."
+  },
+  "relayAccessRegistrationOpen": "Anyone can register.",
+  "@relayAccessRegistrationOpen": {
+    "description": "Relay access: anyone may register."
+  },
+  "relayAccessRegistrationInvite": "Registering needs an invite code.",
+  "@relayAccessRegistrationInvite": {
+    "description": "Relay access: registering needs an invite code."
+  },
+  "relayAccessRegistrationPassword": "Registering needs the relay's password.",
+  "@relayAccessRegistrationPassword": {
+    "description": "Relay access: registering needs the relay's password."
+  },
+  "relayAccessRegistrationClosed": "Registration is closed.",
+  "@relayAccessRegistrationClosed": {
+    "description": "Relay access: registration is closed."
+  },
+  "relayAccessRegistered": "Registered on this relay until {date}.",
+  "@relayAccessRegistered": {
+    "description": "Relay access: this device is registered until a date.",
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "relayAccessInviteLabel": "Invite code",
+  "@relayAccessInviteLabel": {
+    "description": "Relay access: field for an invite code."
+  },
+  "relayAccessPasswordLabel": "Password",
+  "@relayAccessPasswordLabel": {
+    "description": "Relay access: field for the relay's registration password."
+  },
+  "relayAccessRegister": "Register",
+  "@relayAccessRegister": {
+    "description": "Relay access: button to register on the relay."
+  },
+  "relayAccessRegisteredNow": "Registered.",
+  "@relayAccessRegisteredNow": {
+    "description": "Relay access: registration succeeded."
+  },
+  "relayAccessFailed": "Could not register: {error}",
+  "@relayAccessFailed": {
+    "description": "Relay access: registration failed, with the relay's reason.",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
   }
 }

@@ -33,6 +33,20 @@ fn run() -> Result<(), String> {
     if env::args().nth(1).as_deref() == Some("verify-manifest") {
         return verify_manifest_command(env::args().skip(2));
     }
+    if let Some(command) = env::args().nth(1)
+        && matches!(command.as_str(), "invite" | "account" | "quota")
+    {
+        let (binary, arguments) = admin_invocation(env::args().skip(1).collect());
+        let status = Command::new(&binary)
+            .args(&arguments)
+            .status()
+            .map_err(|error| format!("running {}: {error}", binary.display()))?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(format!("relay admin command failed ({status})"))
+        };
+    }
     let (command, config) = Config::from_args()?;
     match command.as_str() {
         "install" => install_service(&config),
@@ -554,6 +568,44 @@ fn verify_manifest_signature(manifest: &[u8], signature: &str, key: &str) -> Res
         .map_err(|_| "release manifest signature verification failed".to_owned())
 }
 
+/// Removes `name VALUE` from [words], returning the value.
+fn take_option(words: &mut Vec<String>, name: &str) -> Option<String> {
+    let index = words.iter().position(|word| word == name)?;
+    if index + 1 >= words.len() {
+        return None;
+    }
+    let value = words.remove(index + 1);
+    words.remove(index);
+    Some(value)
+}
+
+/// The relay binary and arguments for an operator command (`invite create
+/// [--uses N] [--expires-days D]`, `invite list`, `account list`, `account
+/// remove KEY`, `quota set KEY BYTES`), run against the relay's database.
+fn admin_invocation(mut words: Vec<String>) -> (PathBuf, Vec<String>) {
+    let data_dir = take_option(&mut words, "--data-dir")
+        .or_else(|| env::var("CONEST_RELAY_DATA_DIR").ok())
+        .unwrap_or_else(|| "conest-relay-data".to_owned());
+    let bundle_dir = take_option(&mut words, "--bundle-dir")
+        .or_else(|| env::var("CONEST_RELAY_BUNDLE_DIR").ok())
+        .unwrap_or_else(|| "conest-relay-bundle".to_owned());
+    let binary = PathBuf::from(bundle_dir).join(if cfg!(windows) {
+        "conest_relay.exe"
+    } else {
+        "conest_relay"
+    });
+    let mut arguments = vec![
+        "admin".to_owned(),
+        "--database-path".to_owned(),
+        PathBuf::from(data_dir)
+            .join("relay.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    arguments.extend(words);
+    (binary, arguments)
+}
+
 fn spawn_relay(config: &Config) -> Result<Child, String> {
     prepare_directories(config)?;
     let binary = config.relay_binary();
@@ -1070,12 +1122,44 @@ fn now_millis() -> u64 {
 }
 
 fn usage() -> String {
-    "usage: conest_relay_supervisor <install|uninstall|start|stop|status|update-now|rollback|serve> [--data-dir PATH] [--bundle-dir PATH] [--bind HOST:PORT] [--channel stable|nightly] [--manifest-url HTTPS_URL|github:OWNER/REPO] [--release-public-key BASE64] [--maintenance-hour 0..23] [--service-user NAME]".to_owned()
+    "usage: conest_relay_supervisor <install|uninstall|start|stop|status|update-now|rollback|serve> [--data-dir PATH] [--bundle-dir PATH] [--bind HOST:PORT] [--channel stable|nightly] [--manifest-url HTTPS_URL|github:OWNER/REPO] [--release-public-key BASE64] [--maintenance-hour 0..23] [--service-user NAME]\n       conest_relay_supervisor invite create [--uses N] [--expires-days D] | invite list | account list | account remove KEY | quota set KEY BYTES_PER_MINUTE [--data-dir PATH] [--bundle-dir PATH]".to_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_commands_run_the_relay_admin_on_its_database() {
+        let (binary, arguments) = admin_invocation(
+            ["invite", "create", "--data-dir", "/srv/data", "--uses", "3", "--bundle-dir", "/opt/b"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert_eq!(
+            binary,
+            PathBuf::from("/opt/b").join(if cfg!(windows) {
+                "conest_relay.exe"
+            } else {
+                "conest_relay"
+            })
+        );
+        assert_eq!(
+            arguments,
+            [
+                "admin".to_owned(),
+                "--database-path".to_owned(),
+                PathBuf::from("/srv/data")
+                    .join("relay.sqlite3")
+                    .to_string_lossy()
+                    .into_owned(),
+                "invite".to_owned(),
+                "create".to_owned(),
+                "--uses".to_owned(),
+                "3".to_owned(),
+            ]
+        );
+    }
 
     fn test_config() -> Config {
         Config {

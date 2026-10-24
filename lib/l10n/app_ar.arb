@@ -1458,5 +1458,21 @@
   "notificationPreviewTitle": "المعروض في الإشعارات",
   "notificationPreviewFull": "الاسم والرسالة",
   "notificationPreviewSender": "الاسم فقط",
-  "notificationPreviewHidden": "لا شيء"
+  "notificationPreviewHidden": "لا شيء",
+  "relayAccessTitle": "الوصول إلى المرحِّل",
+  "relayAccessUnknown": "لم يذكر هذا المرحِّل من يمكنه استخدامه (مرحِّل أقدم، أو لم يُفحص بعد).",
+  "relayAccessSessions": "اتصال خاص: من تجلب رسائله يبقى مخفيًا عن الشبكة.",
+  "relayAccessMessagesOpen": "يمكن لأي شخص ترك الرسائل هنا.",
+  "relayAccessMessagesRegistered": "يمكن للحسابات المسجلة فقط ترك الرسائل هنا.",
+  "relayAccessMessagesOff": "لا يقبل هذا المرحِّل رسائل جديدة.",
+  "relayAccessRegistrationOpen": "يمكن لأي شخص التسجيل.",
+  "relayAccessRegistrationInvite": "يتطلب التسجيل رمز دعوة.",
+  "relayAccessRegistrationPassword": "يتطلب التسجيل كلمة مرور المرحِّل.",
+  "relayAccessRegistrationClosed": "التسجيل مغلق.",
+  "relayAccessRegistered": "مسجَّل على هذا المرحِّل حتى {date}.",
+  "relayAccessInviteLabel": "رمز الدعوة",
+  "relayAccessPasswordLabel": "كلمة المرور",
+  "relayAccessRegister": "تسجيل",
+  "relayAccessRegisteredNow": "تم التسجيل.",
+  "relayAccessFailed": "تعذّر التسجيل: {error}"
 }

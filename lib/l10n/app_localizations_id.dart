@@ -5596,4 +5596,62 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'Tidak ada';
+
+  @override
+  String get relayAccessTitle => 'Akses relay';
+
+  @override
+  String get relayAccessUnknown =>
+      'Relay ini belum menyebutkan siapa yang boleh memakainya (relay lama, atau belum diperiksa).';
+
+  @override
+  String get relayAccessSessions =>
+      'Koneksi privat: untuk siapa Anda mengambil pesan tetap tersembunyi dari jaringan.';
+
+  @override
+  String get relayAccessMessagesOpen =>
+      'Siapa pun dapat meninggalkan pesan di sini.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'Hanya akun terdaftar yang dapat meninggalkan pesan di sini.';
+
+  @override
+  String get relayAccessMessagesOff => 'Relay ini tidak menerima pesan baru.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'Siapa pun dapat mendaftar.';
+
+  @override
+  String get relayAccessRegistrationInvite =>
+      'Pendaftaran memerlukan kode undangan.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'Pendaftaran memerlukan kata sandi relay.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'Pendaftaran ditutup.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'Terdaftar di relay ini hingga $date.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'Kode undangan';
+
+  @override
+  String get relayAccessPasswordLabel => 'Kata sandi';
+
+  @override
+  String get relayAccessRegister => 'Daftar';
+
+  @override
+  String get relayAccessRegisteredNow => 'Terdaftar.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'Tidak dapat mendaftar: $error';
+  }
 }

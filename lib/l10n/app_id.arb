@@ -1458,5 +1458,21 @@
   "notificationPreviewTitle": "Tampilkan di notifikasi",
   "notificationPreviewFull": "Nama dan pesan",
   "notificationPreviewSender": "Nama saja",
-  "notificationPreviewHidden": "Tidak ada"
+  "notificationPreviewHidden": "Tidak ada",
+  "relayAccessTitle": "Akses relay",
+  "relayAccessUnknown": "Relay ini belum menyebutkan siapa yang boleh memakainya (relay lama, atau belum diperiksa).",
+  "relayAccessSessions": "Koneksi privat: untuk siapa Anda mengambil pesan tetap tersembunyi dari jaringan.",
+  "relayAccessMessagesOpen": "Siapa pun dapat meninggalkan pesan di sini.",
+  "relayAccessMessagesRegistered": "Hanya akun terdaftar yang dapat meninggalkan pesan di sini.",
+  "relayAccessMessagesOff": "Relay ini tidak menerima pesan baru.",
+  "relayAccessRegistrationOpen": "Siapa pun dapat mendaftar.",
+  "relayAccessRegistrationInvite": "Pendaftaran memerlukan kode undangan.",
+  "relayAccessRegistrationPassword": "Pendaftaran memerlukan kata sandi relay.",
+  "relayAccessRegistrationClosed": "Pendaftaran ditutup.",
+  "relayAccessRegistered": "Terdaftar di relay ini hingga {date}.",
+  "relayAccessInviteLabel": "Kode undangan",
+  "relayAccessPasswordLabel": "Kata sandi",
+  "relayAccessRegister": "Daftar",
+  "relayAccessRegisteredNow": "Terdaftar.",
+  "relayAccessFailed": "Tidak dapat mendaftar: {error}"
 }

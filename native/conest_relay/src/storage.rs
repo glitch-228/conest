@@ -57,6 +57,10 @@ pub(crate) struct RelayState {
     pub(crate) identity: Arc<RelayIdentity>,
     /// Who owns which mailbox (see `owners.rs`).
     pub(crate) owners: Arc<Mutex<crate::owners::Owners>>,
+    /// Registered accounts (see `registration.rs`).
+    pub(crate) accounts: Arc<Mutex<crate::registration::Accounts>>,
+    /// The key tokens are MACed with (kept in the database).
+    pub(crate) token_secret: Arc<Vec<u8>>,
 }
 
 impl RelayState {
@@ -139,6 +143,7 @@ impl RelayState {
                    END;",
             )
             .map_err(|error| format!("initializing relay storage total: {error}"))?;
+        let token_secret = crate::registration::init_tables(&database)?;
         let state = Self {
             config,
             database: Arc::new(Mutex::new(database)),
@@ -153,8 +158,11 @@ impl RelayState {
             banned_peers: Arc::new(Mutex::new(HashMap::new())),
             identity: Arc::new(identity),
             owners: Arc::new(Mutex::new(crate::owners::Owners::default())),
+            accounts: Arc::new(Mutex::new(crate::registration::Accounts::default())),
+            token_secret: Arc::new(token_secret),
         };
         state.load_owners()?;
+        state.load_accounts()?;
         Ok(state)
     }
 
@@ -753,6 +761,7 @@ impl RelayState {
             "noise_key": BASE64_STANDARD.encode(self.identity.noise_public),
             "noise_key_sig": BASE64_STANDARD.encode(self.identity.noise_key_signature),
             "mailbox_auth": 1,
+            "policy": self.policy_info(),
         }))
     }
 

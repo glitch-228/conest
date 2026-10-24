@@ -11,6 +11,7 @@ mod identity;
 mod legacy;
 mod limits;
 mod owners;
+mod registration;
 mod server;
 mod session;
 mod storage;
@@ -58,6 +59,34 @@ use std::sync::Arc;
 use std::time::Duration;
 
 fn main() -> std::io::Result<()> {
+    if env::args().nth(1).as_deref() == Some("admin") {
+        let rest: Vec<String> = env::args().skip(2).collect();
+        let (database, words) = match rest.iter().position(|arg| arg == "--database-path") {
+            Some(index) if index + 1 < rest.len() => {
+                let mut words = rest.clone();
+                let path = words.remove(index + 1);
+                words.remove(index);
+                (std::path::PathBuf::from(path), words)
+            }
+            _ => (
+                std::path::PathBuf::from(
+                    env::var("CONEST_RELAY_DATABASE_PATH")
+                        .unwrap_or_else(|_| DEFAULT_DATABASE_PATH.to_owned()),
+                ),
+                rest,
+            ),
+        };
+        match registration::admin(&database, &words) {
+            Ok(output) => {
+                println!("{output}");
+                return Ok(());
+            }
+            Err(message) => {
+                eprintln!("{message}");
+                std::process::exit(2);
+            }
+        }
+    }
     if env::args().any(|arg| arg == "--help" || arg == "-h") {
         println!("{}", usage());
         return Ok(());

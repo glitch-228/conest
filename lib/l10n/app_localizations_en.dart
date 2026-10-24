@@ -5609,4 +5609,61 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'Nothing';
+
+  @override
+  String get relayAccessTitle => 'Relay access';
+
+  @override
+  String get relayAccessUnknown =>
+      'This relay has not said who may use it (an older relay, or not checked yet).';
+
+  @override
+  String get relayAccessSessions =>
+      'Private connection: who you fetch messages for stays hidden from the network.';
+
+  @override
+  String get relayAccessMessagesOpen => 'Anyone can leave messages here.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'Only registered accounts can leave messages here.';
+
+  @override
+  String get relayAccessMessagesOff => 'This relay takes no new messages.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'Anyone can register.';
+
+  @override
+  String get relayAccessRegistrationInvite =>
+      'Registering needs an invite code.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'Registering needs the relay\'s password.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'Registration is closed.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'Registered on this relay until $date.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'Invite code';
+
+  @override
+  String get relayAccessPasswordLabel => 'Password';
+
+  @override
+  String get relayAccessRegister => 'Register';
+
+  @override
+  String get relayAccessRegisteredNow => 'Registered.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'Could not register: $error';
+  }
 }

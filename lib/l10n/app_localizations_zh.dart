@@ -5364,4 +5364,56 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => '不显示';
+
+  @override
+  String get relayAccessTitle => '中继访问';
+
+  @override
+  String get relayAccessUnknown => '此中继尚未说明谁可以使用（旧版中继，或尚未检查）。';
+
+  @override
+  String get relayAccessSessions => '私密连接：网络看不到您在为谁收取消息。';
+
+  @override
+  String get relayAccessMessagesOpen => '任何人都可以在此留言。';
+
+  @override
+  String get relayAccessMessagesRegistered => '只有已注册的账户才能在此留言。';
+
+  @override
+  String get relayAccessMessagesOff => '此中继不接收新消息。';
+
+  @override
+  String get relayAccessRegistrationOpen => '任何人都可以注册。';
+
+  @override
+  String get relayAccessRegistrationInvite => '注册需要邀请码。';
+
+  @override
+  String get relayAccessRegistrationPassword => '注册需要中继的密码。';
+
+  @override
+  String get relayAccessRegistrationClosed => '注册已关闭。';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return '已在此中继注册，有效期至 $date。';
+  }
+
+  @override
+  String get relayAccessInviteLabel => '邀请码';
+
+  @override
+  String get relayAccessPasswordLabel => '密码';
+
+  @override
+  String get relayAccessRegister => '注册';
+
+  @override
+  String get relayAccessRegisteredNow => '已注册。';
+
+  @override
+  String relayAccessFailed(String error) {
+    return '无法注册：$error';
+  }
 }

@@ -5132,6 +5132,7 @@ class VaultSnapshot {
     this.pendingGroupMembershipDeliveries =
         const <PendingGroupMembershipDelivery>[],
     this.pinnedRelayIdentityKeys = const <String, String>{},
+    this.relayTokens = const <String, String>{},
     this.pendingAckDeliveries = const <PendingAckDelivery>[],
     this.pendingForwards = const <PendingForward>[],
     this.seenMessageDigests = const <String, String>{},
@@ -5198,6 +5199,10 @@ class VaultSnapshot {
   /// don't verify against the pin are flagged as mismatches. The user
   /// (or the operator) decides whether to rotate via an explicit action.
   final Map<String, String> pinnedRelayIdentityKeys;
+
+  /// Registration tokens from relays that ask for one (M26), by the relay's
+  /// pinned identity key.
+  final Map<String, String> relayTokens;
 
   /// Outgoing delivery/read receipts that haven't successfully landed on
   /// their target yet. Drained by the controller's periodic retry loop
@@ -5363,6 +5368,7 @@ class VaultSnapshot {
     int? defaultRelayDefaultsVersion,
     List<PendingGroupMembershipDelivery>? pendingGroupMembershipDeliveries,
     Map<String, String>? pinnedRelayIdentityKeys,
+    Map<String, String>? relayTokens,
     List<PendingAckDelivery>? pendingAckDeliveries,
     List<PendingForward>? pendingForwards,
     Map<String, String>? seenMessageDigests,
@@ -5419,6 +5425,7 @@ class VaultSnapshot {
           this.pendingGroupMembershipDeliveries,
       pinnedRelayIdentityKeys:
           pinnedRelayIdentityKeys ?? this.pinnedRelayIdentityKeys,
+      relayTokens: relayTokens ?? this.relayTokens,
       pendingAckDeliveries: pendingAckDeliveries ?? this.pendingAckDeliveries,
       pendingForwards: pendingForwards ?? this.pendingForwards,
       seenMessageDigests: seenMessageDigests ?? this.seenMessageDigests,
@@ -5522,6 +5529,7 @@ class VaultSnapshot {
           .map((entry) => entry.toJson())
           .toList(),
       'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
+      if (relayTokens.isNotEmpty) 'relayTokens': relayTokens,
       'groupFilePreferences': groupFilePreferences
           .map((entry) => entry.toJson())
           .toList(),
@@ -5678,6 +5686,15 @@ class VaultSnapshot {
                     const <String, dynamic>{})
                 .entries)
           if (entry.value is String) entry.key: entry.value as String,
+      },
+      relayTokens: <String, String>{
+        for (final entry
+            in (json['relayTokens'] as Map<String, dynamic>? ??
+                    const <String, dynamic>{})
+                .entries
+                .take(64))
+          if (entry.value is String && (entry.value as String).length <= 256)
+            entry.key: entry.value as String,
       },
       pendingAckDeliveries:
           (json['pendingAckDeliveries'] as List<dynamic>? ?? const [])

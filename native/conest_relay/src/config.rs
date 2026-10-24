@@ -112,6 +112,16 @@ pub(crate) struct ExtConfig {
     pub(crate) owner_idle_days: u64,
     /// Claimed mailboxes the relay keeps at most.
     pub(crate) max_owners: usize,
+    /// Who may store messages (tier 1): open, registered or off.
+    pub(crate) tier1: crate::registration::Tier1Policy,
+    /// How accounts register: open, invite, password or closed.
+    pub(crate) registration: crate::registration::RegistrationPolicy,
+    /// The password `registration password` asks for.
+    pub(crate) registration_password: Option<String>,
+    /// A new account's store budget, in bytes a minute.
+    pub(crate) account_quota_bytes: u64,
+    /// How long a token lasts (clients refresh before).
+    pub(crate) token_lifetime: Duration,
 }
 
 impl Default for ExtConfig {
@@ -126,6 +136,11 @@ impl Default for ExtConfig {
             mailbox_claims_per_day: DEFAULT_MAILBOX_CLAIMS_PER_DAY,
             owner_idle_days: DEFAULT_OWNER_IDLE_DAYS,
             max_owners: DEFAULT_MAX_OWNERS,
+            tier1: crate::registration::Tier1Policy::Open,
+            registration: crate::registration::RegistrationPolicy::Closed,
+            registration_password: None,
+            account_quota_bytes: DEFAULT_MAX_STORE_BYTES_PER_MINUTE,
+            token_lifetime: DEFAULT_TOKEN_LIFETIME,
         }
     }
 }
@@ -143,6 +158,81 @@ pub(crate) const DEFAULT_SESSION_IDLE: Duration = Duration::from_secs(120);
 pub(crate) const DEFAULT_MAILBOX_CLAIMS_PER_DAY: u32 = 64;
 pub(crate) const DEFAULT_OWNER_IDLE_DAYS: u64 = 60;
 pub(crate) const DEFAULT_MAX_OWNERS: usize = 1_000_000;
+pub(crate) const DEFAULT_TOKEN_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// The configuration file a relay reads when started without `--config`:
+/// next to its database. Each line is `name = value` (or a bare `name`),
+/// the name a flag without its dashes; flags on the command line win.
+pub(crate) const DEFAULT_CONFIG_FILE: &str = "relay.conf";
+
+/// The arguments a configuration file adds (before the command line's).
+pub(crate) fn config_file_args(cli: &[String]) -> Result<Vec<String>, String> {
+    let explicit = cli
+        .iter()
+        .position(|arg| arg == "--config")
+        .map(|index| {
+            cli.get(index + 1)
+                .cloned()
+                .ok_or_else(|| "--config requires a path".to_owned())
+        })
+        .transpose()?;
+    let path = match explicit {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let database = cli
+                .iter()
+                .position(|arg| arg == "--database-path")
+                .and_then(|index| cli.get(index + 1).cloned())
+                .or_else(|| env::var("CONEST_RELAY_DATABASE_PATH").ok())
+                .unwrap_or_else(|| DEFAULT_DATABASE_PATH.to_owned());
+            let candidate = PathBuf::from(database)
+                .parent()
+                .map(|parent| parent.join(DEFAULT_CONFIG_FILE))
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_FILE));
+            if !candidate.is_file() {
+                return Ok(Vec::new());
+            }
+            candidate
+        }
+    };
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| format!("reading {}: {error}", path.display()))?;
+    parse_config_text(&text)
+}
+
+pub(crate) fn parse_config_text(text: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (name, value) = match line.split_once('=') {
+            Some((name, value)) => (name.trim(), Some(value.trim())),
+            None => (line, None),
+        };
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(format!("config line {}: bad name {name:?}", number + 1));
+        }
+        if name == "config" {
+            return Err(format!(
+                "config line {}: config cannot name another",
+                number + 1
+            ));
+        }
+        args.push(format!("--{name}"));
+        if let Some(value) = value {
+            let value = value.trim_matches('"');
+            if !matches!(value, "true" | "yes" | "on") {
+                args.push(value.to_owned());
+            }
+        }
+    }
+    Ok(args)
+}
 
 impl RelayConfig {
     pub(crate) fn from_env_and_args() -> Result<Self, String> {
@@ -215,7 +305,10 @@ impl RelayConfig {
             },
         };
 
-        let mut args = env::args().skip(1).peekable();
+        let cli: Vec<String> = env::args().skip(1).collect();
+        let mut all = config_file_args(&cli)?;
+        all.extend(cli);
+        let mut args = all.into_iter().peekable();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--help" | "-h" => return Err(usage()),
@@ -295,6 +388,34 @@ impl RelayConfig {
                 "--owner-idle-days" => {
                     config.ext.owner_idle_days = parse_next_u64(&mut args, &arg)?;
                 }
+                "--config" => {
+                    // Read already (config_file_args).
+                    let _ = parse_next_string(&mut args, &arg)?;
+                }
+                "--bind" => {
+                    config.bind = parse_next_string(&mut args, &arg)?;
+                }
+                "--tier1" => {
+                    config.ext.tier1 = crate::registration::Tier1Policy::parse(
+                        &parse_next_string(&mut args, &arg)?,
+                    )?;
+                }
+                "--registration" => {
+                    config.ext.registration = crate::registration::RegistrationPolicy::parse(
+                        &parse_next_string(&mut args, &arg)?,
+                    )?;
+                }
+                "--registration-password" => {
+                    config.ext.registration_password = Some(parse_next_string(&mut args, &arg)?);
+                }
+                "--account-quota-bytes" => {
+                    config.ext.account_quota_bytes = parse_next_u64(&mut args, &arg)?;
+                }
+                "--token-days" => {
+                    config.ext.token_lifetime = Duration::from_secs(
+                        parse_next_u64(&mut args, &arg)?.clamp(1, 365) * 86_400,
+                    );
+                }
                 value if value.starts_with('-') => {
                     return Err(format!("unknown option: {value}\n\n{}", usage()));
                 }
@@ -336,6 +457,18 @@ impl RelayConfig {
         }
         if config.max_mailbox_bytes == 0 {
             return Err("max mailbox bytes must be greater than zero".to_owned());
+        }
+        if config.ext.registration == crate::registration::RegistrationPolicy::Password
+            && config
+                .ext
+                .registration_password
+                .as_deref()
+                .is_none_or(|password| password.len() < 8)
+        {
+            return Err(
+                "registration password needs --registration-password (at least 8 characters)"
+                    .to_owned(),
+            );
         }
         Ok(config)
     }
@@ -437,7 +570,16 @@ pub(crate) fn usage() -> String {
            --legacy-threads       run the old one-thread-per-connection server\n\
            --no-sessions          do not serve v2 sessions (CNS2)\n\
            --mailbox-claims-per-day N  mailbox claims per address a day\n\
-           --owner-idle-days N    days unused before a mailbox claim lapses"
+           --owner-idle-days N    days unused before a mailbox claim lapses\n\
+           --config PATH          a file of `name = value` lines (default: relay.conf\n\
+                                  next to the database, if there)\n\
+           --tier1 open|registered|off      who may store messages (default open)\n\
+           --registration open|invite|password|closed  (default closed)\n\
+           --registration-password TEXT     (or CONEST_RELAY_REGISTRATION_PASSWORD)\n\
+           --account-quota-bytes N          an account's bytes a minute\n\
+           --token-days N                   how long a token lasts (default 30)\n\n\
+         Admin: conest_relay admin [--database-path PATH] invite create|invite list|\n\
+                account list|account remove KEY|quota set KEY BYTES"
     )
 }
 

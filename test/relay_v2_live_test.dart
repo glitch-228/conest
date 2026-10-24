@@ -241,4 +241,76 @@ void main() {
     );
     expect(open.single.messageId, 'open-1');
   });
+
+  test('a registered-only relay takes stores from accounts registered with '
+      'an invite', () async {
+    final relay = await _startRelay(
+      extra: ['--tier1', 'registered', '--registration', 'invite'],
+    );
+    final created = await Process.run(_binary!, [
+      'admin',
+      '--database-path',
+      '${relay.directory.path}/relay.sqlite3',
+      'invite',
+      'create',
+      '--uses',
+      '1',
+    ]);
+    expect(created.exitCode, 0, reason: '${created.stderr}');
+    final invite = (created.stdout as String).trim();
+    final identity = await _pin(relay.port);
+    final info = RelayClient.sessionInfoFor('127.0.0.1', relay.port)!;
+    expect(info.tier1, 'registered');
+    expect(info.registration, 'invite');
+    const client = RelayClient();
+    Future<bool> store(String id) => client.storeEnvelope(
+      host: '127.0.0.1',
+      port: relay.port,
+      recipientDeviceId: 'dev-reg',
+      envelope: _envelope(id, 'dev-reg'),
+      expectedIdentityPublicKeyBase64: identity,
+    );
+    await expectLater(store('before'), throwsA(isA<StateError>()));
+    await expectLater(
+      client.register(
+        host: '127.0.0.1',
+        port: relay.port,
+        expectedIdentityPublicKeyBase64: identity,
+        accountSecret: List<int>.filled(32, 1),
+      ),
+      throwsA(isA<StateError>()),
+      reason: 'an invite is needed',
+    );
+    final token = await client.register(
+      host: '127.0.0.1',
+      port: relay.port,
+      expectedIdentityPublicKeyBase64: identity,
+      accountSecret: List<int>.filled(32, 1),
+      invite: invite,
+    );
+    expect(
+      RelayClient.tokenExpiry(token)!.isAfter(DateTime.now().toUtc()),
+      isTrue,
+    );
+    expect(await store('after'), isTrue);
+    // Used up: another account cannot register with it.
+    await expectLater(
+      client.register(
+        host: '127.0.0.1',
+        port: relay.port,
+        expectedIdentityPublicKeyBase64: identity,
+        accountSecret: List<int>.filled(32, 2),
+        invite: invite,
+      ),
+      throwsA(isA<StateError>()),
+    );
+    // The same account refreshes without one.
+    final refreshed = await client.register(
+      host: '127.0.0.1',
+      port: relay.port,
+      expectedIdentityPublicKeyBase64: identity,
+      accountSecret: List<int>.filled(32, 1),
+    );
+    expect(refreshed, isNotEmpty);
+  });
 }
