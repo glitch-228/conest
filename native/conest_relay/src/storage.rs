@@ -55,6 +55,8 @@ pub(crate) struct RelayState {
     pub(crate) mailbox_bytes: Arc<Mutex<HashMap<String, MailboxByteWindow>>>,
     pub(crate) banned_peers: Arc<Mutex<HashMap<String, BanEntry>>>,
     pub(crate) identity: Arc<RelayIdentity>,
+    /// Who owns which mailbox (see `owners.rs`).
+    pub(crate) owners: Arc<Mutex<crate::owners::Owners>>,
 }
 
 impl RelayState {
@@ -137,7 +139,7 @@ impl RelayState {
                    END;",
             )
             .map_err(|error| format!("initializing relay storage total: {error}"))?;
-        Ok(Self {
+        let state = Self {
             config,
             database: Arc::new(Mutex::new(database)),
             notifiers: Arc::new(Mutex::new(HashMap::new())),
@@ -150,7 +152,10 @@ impl RelayState {
             mailbox_bytes: Arc::new(Mutex::new(HashMap::new())),
             banned_peers: Arc::new(Mutex::new(HashMap::new())),
             identity: Arc::new(identity),
-        })
+            owners: Arc::new(Mutex::new(crate::owners::Owners::default())),
+        };
+        state.load_owners()?;
+        Ok(state)
     }
 
     pub(crate) fn notifier_for(&self, mailbox: &str) -> MailboxNotifier {
@@ -747,6 +752,7 @@ impl RelayState {
             "noise": crate::session::NOISE_PARAMS,
             "noise_key": BASE64_STANDARD.encode(self.identity.noise_public),
             "noise_key_sig": BASE64_STANDARD.encode(self.identity.noise_key_signature),
+            "mailbox_auth": 1,
         }))
     }
 

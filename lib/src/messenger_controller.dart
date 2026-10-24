@@ -29339,6 +29339,13 @@ class MessengerController extends ChangeNotifier {
 
   Future<String?> _requireOperationalRelayPin(PeerEndpoint route) async {
     if (route.kind != PeerRouteKind.relay) return null;
+    // Relays that keep mailbox owners get this device's proof (M26).
+    if (identity case final me?) {
+      RelayClient.registerMailboxSecret(
+        me.deviceId,
+        base64Decode(me.signingPrivateKeyBase64 ?? me.privateKeyBase64),
+      );
+    }
     var key = _pinnedIdentityKeyForRoute(route);
     if (key != null) return key;
     final health = await _checkRouteHealth(route);

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:cryptography/cryptography.dart';
+
 import 'models.dart';
 import 'native_ed25519.dart';
 import 'relay_v2/noise_nk.dart';
@@ -76,6 +78,7 @@ class RelayV2Info {
     required this.identityPublicKeyBase64,
     required this.noiseKey,
     required this.learnedAt,
+    this.mailboxAuth = false,
   });
 
   final String identityPublicKeyBase64;
@@ -83,6 +86,10 @@ class RelayV2Info {
   /// The relay's X25519 session key (null: the relay has no sessions).
   final List<int>? noiseKey;
   final DateTime learnedAt;
+
+  /// Whether the relay keeps mailbox owners (fetches need the owner's
+  /// proof once claimed).
+  final bool mailboxAuth;
 
   bool get sessions => noiseKey != null;
 }
@@ -104,10 +111,114 @@ class RelayClient {
   /// How long a relay without sessions is not asked again.
   static const Duration _v2RecheckAfter = Duration(minutes: 30);
 
+  /// The secret each of this app's mailboxes derives its owner keys from
+  /// (by mailbox: several identities can share a process in tests).
+  static final Map<String, List<int>> _mailboxSecrets = {};
+  static final Map<String, SimpleKeyPair> _authKeys = {};
+
+  /// Requests that read or acknowledge a mailbox (its owner's to make).
+  static const Set<String> _ownedActions = {
+    'fetch',
+    'fetch_leased',
+    'ack_lease',
+  };
+
+  /// Lets this app prove it owns [mailbox] (its device id) on relays that
+  /// keep owners: per relay, an Ed25519 key derived from [secret] (the
+  /// device's private signing key), so relays cannot link the keys and no
+  /// new key needs storing.
+  static void registerMailboxSecret(String mailbox, List<int> secret) {
+    final known = _mailboxSecrets[mailbox];
+    if (known != null && _sameBytes(known, secret)) return;
+    if (_mailboxSecrets.length >= 16 && known == null) {
+      _mailboxSecrets.remove(_mailboxSecrets.keys.first);
+    }
+    _mailboxSecrets[mailbox] = List<int>.unmodifiable(secret);
+    _authKeys.removeWhere((key, _) => key.endsWith('|$mailbox'));
+  }
+
+  static bool _sameBytes(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var index = 0; index < a.length; index++) {
+      if (a[index] != b[index]) return false;
+    }
+    return true;
+  }
+
+  /// The owner key for [mailbox] at the relay [relayIdentity], or null when
+  /// this app does not own [mailbox].
+  static Future<SimpleKeyPair?> mailboxAuthKey(
+    String mailbox,
+    String relayIdentity,
+  ) async {
+    final secret = _mailboxSecrets[mailbox];
+    if (secret == null) return null;
+    final cacheKey = '$relayIdentity|$mailbox';
+    final cached = _authKeys[cacheKey];
+    if (cached != null) return cached;
+    final seed = await Hmac.sha256().calculateMac(
+      utf8.encode('conest-relay-mailbox-auth-v1|$relayIdentity|$mailbox'),
+      secretKey: SecretKey(secret),
+    );
+    final pair = await Ed25519().newKeyPairFromSeed(seed.bytes);
+    if (_authKeys.length >= 64) _authKeys.remove(_authKeys.keys.first);
+    return _authKeys[cacheKey] = pair;
+  }
+
+  /// A v1 proof of owning [mailbox] for this request ([nonceBase64] is
+  /// its nonce).
+  static Future<Map<String, dynamic>> _v1MailboxProof(
+    SimpleKeyPair key,
+    String action,
+    String mailbox,
+    String nonceBase64,
+  ) async {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final signature = await Ed25519().sign(
+      utf8.encode('conest-mailbox-auth-v1|$action|$mailbox|$ts|$nonceBase64'),
+      keyPair: key,
+    );
+    return {
+      'key': base64Encode((await key.extractPublicKey()).bytes),
+      'ts': ts,
+      'sig': base64Encode(signature.bytes),
+    };
+  }
+
+  /// Proves on [session] that this app owns [mailbox] (once per session;
+  /// claims it on a relay where nobody has).
+  static Future<void> _proveMailbox(
+    RelayV2Session session,
+    String mailbox,
+    String relayIdentity,
+    Duration timeout,
+  ) async {
+    if (session.provedMailboxes.contains(mailbox)) return;
+    final key = await mailboxAuthKey(mailbox, relayIdentity);
+    if (key == null) return;
+    final signature = await Ed25519().sign([
+      ...utf8.encode('conest-mailbox-auth-v2'),
+      ...session.handshakeHash,
+      ...utf8.encode(mailbox),
+    ], keyPair: key);
+    final answer = await session.request({
+      'action': 'mailbox_auth',
+      'mailbox': mailbox,
+      'auth_key': base64Encode((await key.extractPublicKey()).bytes),
+      'signature': base64Encode(signature.bytes),
+    }, timeout: timeout);
+    if (answer['ok'] != true) {
+      throw StateError(answer['error'] as String? ?? 'Mailbox proof refused.');
+    }
+    session.provedMailboxes.add(mailbox);
+  }
+
   /// Forgets what relays said about sessions and closes them (tests).
   static Future<void> resetSessionsForTesting() async {
     _v2Known.clear();
     _v2Learning.clear();
+    _mailboxSecrets.clear();
+    _authKeys.clear();
     await v2Pool.closeAll();
   }
 
@@ -397,6 +508,23 @@ class RelayClient {
       );
       if (viaSession != null) return viaSession;
     }
+    final mailbox = request['recipient_device_id'];
+    if (_ownedActions.contains(action) &&
+        mailbox is String &&
+        _hasExpectedPin(expectedIdentityPublicKeyBase64)) {
+      final key = await mailboxAuthKey(
+        mailbox,
+        expectedIdentityPublicKeyBase64!,
+      );
+      if (key != null) {
+        signedRequest['auth'] = await _v1MailboxProof(
+          key,
+          action,
+          mailbox,
+          nonceBase64,
+        );
+      }
+    }
     final body = await switch (protocol) {
       PeerRouteProtocol.tcp => _sendTcpRequest(
         host: endpoint.host,
@@ -507,6 +635,14 @@ class RelayClient {
             known,
             timeout,
           );
+          if (known.mailboxAuth) {
+            await _proveMailbox(
+              session,
+              recipientDeviceId,
+              expectedIdentityPublicKeyBase64,
+              timeout,
+            );
+          }
           if (controller.isClosed) return;
           inner = session
               .subscribe({
@@ -611,16 +747,19 @@ class RelayClient {
                 expectedIdentityPublicKeyBase64:
                     expectedIdentityPublicKeyBase64,
               )
-              .then<void>((_) {}, onError: (Object _) {
-                // A relay that cannot answer now is asked again later.
-                _v2Known[hostPort] = RelayV2Info(
-                  identityPublicKeyBase64: expectedIdentityPublicKeyBase64,
-                  noiseKey: null,
-                  learnedAt: DateTime.now().subtract(
-                    _v2RecheckAfter - const Duration(minutes: 1),
-                  ),
-                );
-              })
+              .then<void>(
+                (_) {},
+                onError: (Object _) {
+                  // A relay that cannot answer now is asked again later.
+                  _v2Known[hostPort] = RelayV2Info(
+                    identityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+                    noiseKey: null,
+                    learnedAt: DateTime.now().subtract(
+                      _v2RecheckAfter - const Duration(minutes: 1),
+                    ),
+                  );
+                },
+              )
               .whenComplete(() => _v2Learning.remove(hostPort)),
         );
       }
@@ -633,6 +772,23 @@ class RelayClient {
       session = await _sessionFor(host, port, known, timeout);
     } on Object {
       return null;
+    }
+    final owned = request['recipient_device_id'];
+    if (known.mailboxAuth &&
+        _ownedActions.contains(request['action']) &&
+        owned is String) {
+      try {
+        await _proveMailbox(
+          session,
+          owned,
+          expectedIdentityPublicKeyBase64,
+          timeout,
+        );
+      } on RelayV2Unavailable {
+        return null;
+      } on SocketException {
+        return null;
+      }
     }
     final Map<String, dynamic> body;
     try {
@@ -651,7 +807,8 @@ class RelayClient {
     if (body['ok'] == false) {
       throw StateError(body['error'] as String? ?? 'Relay request failed.');
     }
-    if (request['action'] == 'health' && body['stats'] is Map<String, dynamic>) {
+    if (request['action'] == 'health' &&
+        body['stats'] is Map<String, dynamic>) {
       await _recordSessionInfo(
         host: host,
         port: port,
@@ -708,6 +865,7 @@ class RelayClient {
       identityPublicKeyBase64: identityPublicKeyBase64,
       noiseKey: noiseKey,
       learnedAt: DateTime.now(),
+      mailboxAuth: v2 is Map<String, dynamic> && v2['mailbox_auth'] == 1,
     );
   }
 

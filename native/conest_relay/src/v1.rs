@@ -184,7 +184,7 @@ pub(crate) fn handle_request_from(
     peer: &str,
     cookie_peer: Option<&str>,
 ) -> Value {
-    match prepare_request(bytes, bytes_read, state, peer, cookie_peer) {
+    match prepare_request(bytes, bytes_read, state, peer, cookie_peer, None) {
         Prepared::Done(value) => value,
         Prepared::Run(prepared) => {
             let PreparedRequest {
@@ -216,7 +216,7 @@ pub(crate) async fn handle_request_async(
     state: &RelayState,
     peer: &str,
 ) -> Value {
-    match prepare_request(bytes, bytes_read, state, peer, None) {
+    match prepare_request(bytes, bytes_read, state, peer, None, None) {
         Prepared::Done(value) => value,
         Prepared::Run(prepared) => {
             let PreparedRequest {
@@ -300,6 +300,7 @@ pub(crate) fn prepare_request(
     state: &RelayState,
     peer: &str,
     cookie_peer: Option<&str>,
+    session: Option<&dyn Fn(&str) -> bool>,
 ) -> Prepared {
     let datagram = cookie_peer.is_some();
     // Over UDP nothing goes back for a refusal (a forged source must get
@@ -344,6 +345,11 @@ pub(crate) fn prepare_request(
         .get("cookie")
         .and_then(|value| value.as_str())
         .map(str::to_owned);
+    let nonce_text = parsed
+        .get("nonce")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    let auth = parsed.get("auth").cloned();
     let mut request: RelayRequest = match serde_json::from_value(parsed) {
         Ok(request) => request,
         Err(error) if datagram => return refuse(format!("invalid request: {error}")),
@@ -386,6 +392,23 @@ pub(crate) fn prepare_request(
         }
         return Prepared::Done(finalize_wire(
             RelayResponse::error("rate limit exceeded"),
+            &action,
+            nonce_bytes.as_deref(),
+            detached,
+            &state.identity,
+        ));
+    }
+    // A claimed mailbox needs its owner's proof (owners.rs).
+    if let Err(message) = state.authorize_request(
+        &request,
+        &action,
+        auth.as_ref(),
+        nonce_text.as_deref(),
+        session,
+        peer,
+    ) {
+        return Prepared::Done(finalize_wire(
+            RelayResponse::error(message),
             &action,
             nonce_bytes.as_deref(),
             detached,

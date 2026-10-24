@@ -168,6 +168,9 @@ class RelayV2Session {
 
   /// Requests and subscriptions the relay lets one session have at once.
   final int maxStreams;
+
+  /// Mailboxes whose owner proved itself on this session.
+  final Set<String> provedMailboxes = <String>{};
   final Duration _keepalive;
   final RelayV2FrameDecoder _decoder = RelayV2FrameDecoder(maxFramePayload);
   final Map<int, Completer<Map<String, dynamic>>> _pending = {};

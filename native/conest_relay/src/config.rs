@@ -106,6 +106,12 @@ pub(crate) struct ExtConfig {
     pub(crate) session_max_subscriptions: usize,
     /// A session that sends nothing (not even a ping) for this long ends.
     pub(crate) session_idle: Duration,
+    /// Mailboxes one address (an IPv6 /48) may claim a day.
+    pub(crate) mailbox_claims_per_day: u32,
+    /// A claim unused this many days lapses (the mailbox is open again).
+    pub(crate) owner_idle_days: u64,
+    /// Claimed mailboxes the relay keeps at most.
+    pub(crate) max_owners: usize,
 }
 
 impl Default for ExtConfig {
@@ -117,6 +123,9 @@ impl Default for ExtConfig {
             session_max_streams: DEFAULT_SESSION_MAX_STREAMS,
             session_max_subscriptions: DEFAULT_SESSION_MAX_SUBSCRIPTIONS,
             session_idle: DEFAULT_SESSION_IDLE,
+            mailbox_claims_per_day: DEFAULT_MAILBOX_CLAIMS_PER_DAY,
+            owner_idle_days: DEFAULT_OWNER_IDLE_DAYS,
+            max_owners: DEFAULT_MAX_OWNERS,
         }
     }
 }
@@ -131,6 +140,9 @@ impl ExtConfig {
 pub(crate) const DEFAULT_SESSION_MAX_STREAMS: usize = 32;
 pub(crate) const DEFAULT_SESSION_MAX_SUBSCRIPTIONS: usize = 4;
 pub(crate) const DEFAULT_SESSION_IDLE: Duration = Duration::from_secs(120);
+pub(crate) const DEFAULT_MAILBOX_CLAIMS_PER_DAY: u32 = 64;
+pub(crate) const DEFAULT_OWNER_IDLE_DAYS: u64 = 60;
+pub(crate) const DEFAULT_MAX_OWNERS: usize = 1_000_000;
 
 impl RelayConfig {
     pub(crate) fn from_env_and_args() -> Result<Self, String> {
@@ -277,6 +289,12 @@ impl RelayConfig {
                 "--no-sessions" => {
                     config.ext.sessions = false;
                 }
+                "--mailbox-claims-per-day" => {
+                    config.ext.mailbox_claims_per_day = parse_next_u32(&mut args, &arg)?;
+                }
+                "--owner-idle-days" => {
+                    config.ext.owner_idle_days = parse_next_u64(&mut args, &arg)?;
+                }
                 value if value.starts_with('-') => {
                     return Err(format!("unknown option: {value}\n\n{}", usage()));
                 }
@@ -417,7 +435,9 @@ pub(crate) fn usage() -> String {
                                   for per-IP rate limiting (only safe behind a\n\
                                   trusted proxy or HTTP tunnel)\n\
            --legacy-threads       run the old one-thread-per-connection server\n\
-           --no-sessions          do not serve v2 sessions (CNS2)"
+           --no-sessions          do not serve v2 sessions (CNS2)\n\
+           --mailbox-claims-per-day N  mailbox claims per address a day\n\
+           --owner-idle-days N    days unused before a mailbox claim lapses"
     )
 }
 

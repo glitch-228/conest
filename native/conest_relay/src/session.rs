@@ -29,6 +29,7 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, timeout, timeout_at};
 
 use crate::config::{DEFAULT_LEASE_MILLIS, RESPONSE_WRITE_DEADLINE};
+use crate::owners::{MAX_SESSION_MAILBOXES, ProvedMailboxes};
 use crate::storage::RelayState;
 use crate::v1::{
     Prepared, PreparedRequest, envelope_kind, execute_async, finalize_wire, prepare_request,
@@ -275,11 +276,12 @@ pub(crate) struct Session {
     pub(crate) peer: String,
     /// Unique to this session (the Noise handshake hash): what mailbox
     /// owners sign, so a proof cannot be replayed on another session.
-    #[allow(dead_code)]
     pub(crate) handshake_hash: Vec<u8>,
     out: mpsc::Sender<Frame>,
     streams: Mutex<HashMap<u32, AbortHandle>>,
     subscriptions: AtomicUsize,
+    /// Mailboxes whose owner proved itself on this session.
+    proved: Mutex<ProvedMailboxes>,
 }
 
 async fn run_session<R, W>(
@@ -303,6 +305,7 @@ where
         out,
         streams: Mutex::new(HashMap::new()),
         subscriptions: AtomicUsize::new(0),
+        proved: Mutex::new(ProvedMailboxes::new()),
     });
     let result = read_frames(&mut reader, &transport, &session).await;
     // Every stream ends with the session.
@@ -497,7 +500,22 @@ impl Session {
         if action == "subscribe" {
             return self.run_subscription(stream, &payload).await;
         }
-        match prepare_request(&payload, payload.len(), &self.state, &self.peer, None) {
+        if action == "mailbox_auth" {
+            return self.prove_mailbox(&payload);
+        }
+        // Scoped: the check is not Send, and must not live across awaits.
+        let prepared = {
+            let proved: &dyn Fn(&str) -> bool = &|mailbox: &str| self.has_proved(mailbox);
+            prepare_request(
+                &payload,
+                payload.len(),
+                &self.state,
+                &self.peer,
+                None,
+                Some(proved),
+            )
+        };
+        match prepared {
             Prepared::Done(value) => value,
             Prepared::Run(prepared) => {
                 let PreparedRequest {
@@ -517,6 +535,47 @@ impl Session {
                     &self.state.identity,
                 )
             }
+        }
+    }
+
+    fn has_proved(&self, mailbox: &str) -> bool {
+        self.proved
+            .lock()
+            .expect("proved lock should not poison")
+            .contains(mailbox)
+    }
+
+    /// `{"action":"mailbox_auth","mailbox":…,"auth_key":…,"signature":…}`:
+    /// the owner proves itself for this session (claiming the mailbox when
+    /// nobody has).
+    fn prove_mailbox(&self, payload: &[u8]) -> Value {
+        if !self.state.allow_request(&self.peer) {
+            return error_json("rate limit exceeded");
+        }
+        let Ok(request) = serde_json::from_slice::<Value>(payload) else {
+            return error_json("invalid request");
+        };
+        if self
+            .proved
+            .lock()
+            .expect("proved lock should not poison")
+            .len()
+            >= MAX_SESSION_MAILBOXES
+        {
+            return error_json("too many mailboxes on one session");
+        }
+        match self
+            .state
+            .authorize_session(&request, &self.handshake_hash, &self.peer)
+        {
+            Ok(mailbox) => {
+                self.proved
+                    .lock()
+                    .expect("proved lock should not poison")
+                    .insert(mailbox);
+                json!({"ok": true, "stored": false, "messages": [], "error": null, "stats": null})
+            }
+            Err(error) => error_json(error),
         }
     }
 
@@ -541,6 +600,9 @@ impl Session {
                     };
                     if let Err(error) = validate_mailbox_id(mailbox) {
                         return error_json(error);
+                    }
+                    if self.state.owner_of(mailbox).is_some() && !self.has_proved(mailbox) {
+                        return error_json("this mailbox needs its owner's signature");
                     }
                     if !mailboxes.iter().any(|known| known == mailbox) {
                         mailboxes.push(mailbox.to_owned());
@@ -657,7 +719,7 @@ impl Drop for SubscriptionSlot {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::identity::RelayIdentity;
     use crate::parity_tests::{parity_config, start_tokio};
@@ -951,7 +1013,7 @@ mod tests {
         }
     }
 
-    fn relay_public(state: &RelayState) -> Vec<u8> {
+    pub(crate) fn relay_public(state: &RelayState) -> Vec<u8> {
         state.identity.noise_public.to_vec()
     }
 
