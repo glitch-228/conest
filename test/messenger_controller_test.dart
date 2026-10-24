@@ -7263,6 +7263,93 @@ void main() {
     );
   }
 
+  test('a relay with v2 sessions pushes direct and group messages over '
+      'subscriptions, a member who is not a contact included', () async {
+    await RelayClient.resetSessionsForTesting();
+    addTearDown(RelayClient.resetSessionsForTesting);
+    final reservation = await ServerSocket.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final relayPort = reservation.port;
+    await reservation.close();
+    final relay = LocalRelayNode(
+      maxRequestsPerMinute: 10000,
+      identitySeed: List<int>.generate(32, (index) => 200 - index),
+    );
+    await relay.start(relayPort);
+    addTearDown(relay.stop);
+    final peers = <MessengerController>[];
+    for (final name in ['Alice', 'Bob', 'Carol']) {
+      final peer = await _createController(
+        relayClient: RelayClient(),
+        displayName: name,
+        createIdentity: false,
+        enableLongPoll: true,
+        localRelayNode: _FakeLocalRelayNode(),
+        lanAddresses: [],
+        transportRegistryFactory: (_) async => null,
+      );
+      addTearDown(peer.dispose);
+      await peer.createIdentity(
+        displayName: name,
+        internetRelayHost: 'tcp://127.0.0.1',
+        internetRelayPort: relayPort,
+      );
+      await peer.updateGlobalConnectivity(
+        GlobalConnectivityPreferences(
+          lanEnabled: false,
+          onlineEnabled: true,
+          transportPolicies: {
+            TransportKind.lan: TransportPolicy.disabled,
+            TransportKind.iroh: TransportPolicy.disabled,
+            TransportKind.conestRelay: TransportPolicy.automatic,
+          },
+        ),
+      );
+      peers.add(peer);
+    }
+    final [alice, bob, carol] = peers;
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    // Every device watches its mailbox with a subscription.
+    await _waitForIroh(
+      () => peers.every(
+        (peer) => relay.subscribedMailboxes.contains(peer.identity!.deviceId),
+      ),
+      timeout: const Duration(seconds: 40),
+    );
+    expect(relay.sessionsServed, greaterThan(0));
+    await alice.sendMessage(
+      contact: alice.contactByDeviceId(bob.identity!.deviceId)!,
+      body: 'pushed to Bob',
+    );
+    await _waitForIroh(
+      () => bob
+          .messagesFor(alice.identity!.deviceId)
+          .any((message) => message.body == 'pushed to Bob'),
+      timeout: const Duration(seconds: 20),
+    );
+    final group = await alice.createGroup(
+      title: 'Session group',
+      members: alice.contacts,
+    );
+    await _waitForIroh(
+      () =>
+          bob.groups.any((entry) => entry.groupId == group.groupId) &&
+          carol.groups.any((entry) => entry.groupId == group.groupId),
+      timeout: const Duration(seconds: 20),
+    );
+    expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
+    await bob.sendGroupMessage(groupId: group.groupId, body: 'over sessions');
+    await _waitForIroh(
+      () => carol
+          .messagesForGroup(group.groupId)
+          .any((message) => message.body == 'over sessions'),
+      timeout: const Duration(seconds: 20),
+    );
+  }, timeout: const Timeout(Duration(seconds: 120)));
+
   test(
     'Iroh bootstrap rejects spoofed endpoint bindings, signatures and unknown messages',
     () async {

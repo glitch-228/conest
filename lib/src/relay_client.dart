@@ -5,6 +5,8 @@ import 'dart:math';
 
 import 'models.dart';
 import 'native_ed25519.dart';
+import 'relay_v2/noise_nk.dart';
+import 'relay_v2/session.dart';
 
 class RelayHealthInfo {
   const RelayHealthInfo({
@@ -67,8 +69,51 @@ class _RelayCallResult {
   final bool signatureVerified;
 }
 
+/// What a relay's health said about v2 sessions, checked against the
+/// identity it is pinned to.
+class RelayV2Info {
+  const RelayV2Info({
+    required this.identityPublicKeyBase64,
+    required this.noiseKey,
+    required this.learnedAt,
+  });
+
+  final String identityPublicKeyBase64;
+
+  /// The relay's X25519 session key (null: the relay has no sessions).
+  final List<int>? noiseKey;
+  final DateTime learnedAt;
+
+  bool get sessions => noiseKey != null;
+}
+
+/// What the relay's identity signs to vouch for its session key.
+final List<int> relayV2BindingLabel = utf8.encode('conest-relay-noise-key-v1');
+
 class RelayClient {
   const RelayClient();
+
+  /// Sessions shared by every client (tests may swap it).
+  static RelayV2Pool v2Pool = RelayV2Pool.shared;
+
+  /// What each relay (by host and port) said about sessions, learned from
+  /// its health answers.
+  static final Map<String, RelayV2Info> _v2Known = {};
+  static final Set<String> _v2Learning = {};
+
+  /// How long a relay without sessions is not asked again.
+  static const Duration _v2RecheckAfter = Duration(minutes: 30);
+
+  /// Forgets what relays said about sessions and closes them (tests).
+  static Future<void> resetSessionsForTesting() async {
+    _v2Known.clear();
+    _v2Learning.clear();
+    await v2Pool.closeAll();
+  }
+
+  /// What is known about [host]:[port]'s sessions (tests, diagnostics).
+  static RelayV2Info? sessionInfoFor(String host, int port) =>
+      _v2Known['$host:$port'];
 
   static const int _controlResponseLimit = 1024 * 1024;
   static const int _absoluteFetchResponseLimit = 40 * 1024 * 1024;
@@ -294,6 +339,18 @@ class RelayClient {
     final relayId = stats is Map<String, dynamic>
         ? stats['relay_id'] as String?
         : result.body['relay_id'] as String?;
+    final vouched = result.signatureVerified
+        ? result.announcedIdentityPublicKeyBase64
+        : null;
+    if (stats is Map<String, dynamic> && vouched != null) {
+      final endpoint = _validateEndpoint(host: host, port: port);
+      await _recordSessionInfo(
+        host: endpoint.host,
+        port: endpoint.port,
+        stats: stats,
+        identityPublicKeyBase64: vouched,
+      );
+    }
     return RelayHealthInfo(
       ok: result.body['ok'] == true,
       relayInstanceId: relayId,
@@ -328,6 +385,18 @@ class RelayClient {
       // sending inline-signed responses (legacy path below).
       'sig_mode': 'detached',
     };
+    if (protocol == PeerRouteProtocol.tcp &&
+        _hasExpectedPin(expectedIdentityPublicKeyBase64)) {
+      final viaSession = await _trySession(
+        host: endpoint.host,
+        port: endpoint.port,
+        timeout: timeout,
+        request: request,
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64!,
+        maxResponseBytes: maxResponseBytes,
+      );
+      if (viaSession != null) return viaSession;
+    }
     final body = await switch (protocol) {
       PeerRouteProtocol.tcp => _sendTcpRequest(
         host: endpoint.host,
@@ -365,6 +434,280 @@ class RelayClient {
       action: action,
       nonceBase64: nonceBase64,
       expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+  }
+
+  /// Whether [host]:[port] (over [protocol], pinned to
+  /// [expectedIdentityPublicKeyBase64]) is known to take subscriptions:
+  /// it offered v2 sessions in a health answer signed by that identity.
+  bool supportsSubscribe({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    String? expectedIdentityPublicKeyBase64,
+  }) {
+    if (protocol != PeerRouteProtocol.tcp ||
+        !_hasExpectedPin(expectedIdentityPublicKeyBase64)) {
+      return false;
+    }
+    final _ValidatedRelayEndpoint endpoint;
+    try {
+      endpoint = _validateEndpoint(host: host, port: port);
+    } on ArgumentError {
+      return false;
+    }
+    final known = _knownSessions(
+      endpoint.host,
+      endpoint.port,
+      expectedIdentityPublicKeyBase64!,
+    );
+    return known != null &&
+        !v2Pool.inBackoff(_sessionKey(endpoint.host, endpoint.port, known));
+  }
+
+  /// Envelopes for [recipientDeviceId] as the relay pushes them, over a
+  /// v2 session: a batch per push (acknowledge its lease with
+  /// [acknowledgeLease]), an empty batch once the subscription is in place
+  /// and every [heartbeat] after. Ends (or fails) with the session; the
+  /// caller subscribes again. Only for relays [supportsSubscribe] accepts.
+  Stream<RelayFetchBatch> subscribeEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration leaseFor = const Duration(seconds: 60),
+    Duration timeout = const Duration(seconds: 8),
+    Duration heartbeat = const Duration(seconds: 30),
+    String? expectedIdentityPublicKeyBase64,
+  }) {
+    late final StreamController<RelayFetchBatch> controller;
+    StreamSubscription<Map<String, dynamic>>? inner;
+    Timer? beat;
+    controller = StreamController<RelayFetchBatch>(
+      onListen: () async {
+        try {
+          if (!supportsSubscribe(
+            host: host,
+            port: port,
+            protocol: protocol,
+            expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+          )) {
+            throw StateError('Relay does not take subscriptions.');
+          }
+          final endpoint = _validateEndpoint(host: host, port: port);
+          final known = _knownSessions(
+            endpoint.host,
+            endpoint.port,
+            expectedIdentityPublicKeyBase64!,
+          )!;
+          final session = await _sessionFor(
+            endpoint.host,
+            endpoint.port,
+            known,
+            timeout,
+          );
+          if (controller.isClosed) return;
+          inner = session
+              .subscribe({
+                'action': 'subscribe',
+                'mailboxes': [recipientDeviceId],
+                'limit': limit.clamp(1, 128),
+                'lease_ms': leaseFor.inMilliseconds,
+              })
+              .listen(
+                (event) {
+                  if (event['subscribed'] != null) {
+                    controller.add(const RelayFetchBatch(envelopes: []));
+                    return;
+                  }
+                  controller.add(
+                    RelayFetchBatch(
+                      envelopes: _decodeEnvelopes(event),
+                      leaseId: event['lease_id'] as String?,
+                    ),
+                  );
+                },
+                onError: controller.addError,
+                onDone: () {
+                  beat?.cancel();
+                  unawaited(controller.close());
+                },
+              );
+          beat = Timer.periodic(heartbeat, (_) {
+            if (!controller.isClosed) {
+              controller.add(const RelayFetchBatch(envelopes: []));
+            }
+          });
+        } catch (error) {
+          if (!controller.isClosed) {
+            controller.addError(error);
+            unawaited(controller.close());
+          }
+        }
+      },
+      onCancel: () async {
+        beat?.cancel();
+        await inner?.cancel();
+      },
+    );
+    return controller.stream;
+  }
+
+  RelayV2Info? _knownSessions(String host, int port, String identity) {
+    final known = _v2Known['$host:$port'];
+    if (known == null || known.identityPublicKeyBase64 != identity) {
+      return null;
+    }
+    return known.sessions ? known : null;
+  }
+
+  String _sessionKey(String host, int port, RelayV2Info known) =>
+      'tcp:$host:$port:${base64Encode(known.noiseKey!)}';
+
+  Future<RelayV2Session> _sessionFor(
+    String host,
+    int port,
+    RelayV2Info known,
+    Duration timeout,
+  ) {
+    return v2Pool.session(
+      _sessionKey(host, port, known),
+      () async => RelayV2Session.connect(
+        channel: await SocketRelayChannel.connect(host, port, timeout: timeout),
+        relayNoiseKey: known.noiseKey!,
+        timeout: timeout,
+      ),
+    );
+  }
+
+  /// Sends [request] over the relay's v2 session when it has one; null to
+  /// use v1 instead (no sessions known yet, or none to be had now). Mailbox
+  /// ids then never cross the network in the clear.
+  Future<_RelayCallResult?> _trySession({
+    required String host,
+    required int port,
+    required Duration timeout,
+    required Map<String, dynamic> request,
+    required String expectedIdentityPublicKeyBase64,
+    required int maxResponseBytes,
+  }) async {
+    final hostPort = '$host:$port';
+    final known = _v2Known[hostPort];
+    final stale =
+        known == null ||
+        known.identityPublicKeyBase64 != expectedIdentityPublicKeyBase64 ||
+        (!known.sessions &&
+            DateTime.now().difference(known.learnedAt) > _v2RecheckAfter);
+    if (stale) {
+      // Learned in the background from a health answer; this request goes
+      // over v1.
+      if (request['action'] != 'health' && _v2Learning.add(hostPort)) {
+        unawaited(
+          inspectHealth(
+                host: host,
+                port: port,
+                timeout: timeout,
+                expectedIdentityPublicKeyBase64:
+                    expectedIdentityPublicKeyBase64,
+              )
+              .then<void>((_) {}, onError: (Object _) {
+                // A relay that cannot answer now is asked again later.
+                _v2Known[hostPort] = RelayV2Info(
+                  identityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+                  noiseKey: null,
+                  learnedAt: DateTime.now().subtract(
+                    _v2RecheckAfter - const Duration(minutes: 1),
+                  ),
+                );
+              })
+              .whenComplete(() => _v2Learning.remove(hostPort)),
+        );
+      }
+      return null;
+    }
+    if (!known.sessions) return null;
+    if (v2Pool.inBackoff(_sessionKey(host, port, known))) return null;
+    final RelayV2Session session;
+    try {
+      session = await _sessionFor(host, port, known, timeout);
+    } on Object {
+      return null;
+    }
+    final Map<String, dynamic> body;
+    try {
+      body = await session.request(
+        request,
+        timeout: timeout,
+        maxResponseBytes: maxResponseBytes,
+      );
+    } on RelayV2Unavailable {
+      return null;
+    } on SocketException {
+      // The session broke under this request: once more over v1 (a store
+      // is deduplicated by its message id, a leased fetch replays).
+      return null;
+    }
+    if (body['ok'] == false) {
+      throw StateError(body['error'] as String? ?? 'Relay request failed.');
+    }
+    if (request['action'] == 'health' && body['stats'] is Map<String, dynamic>) {
+      await _recordSessionInfo(
+        host: host,
+        port: port,
+        stats: body['stats'] as Map<String, dynamic>,
+        identityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+    }
+    // The session is authenticated by a key the pinned identity signed:
+    // as good as a verified signature.
+    return _RelayCallResult(
+      body: body,
+      announcedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      signatureVerified: true,
+    );
+  }
+
+  /// Keeps what [stats] (from a health answer vouched for by
+  /// [identityPublicKeyBase64]) says about sessions, once the identity's
+  /// signature over the session key checks out.
+  Future<void> _recordSessionInfo({
+    required String host,
+    required int port,
+    required Map<String, dynamic> stats,
+    required String identityPublicKeyBase64,
+  }) async {
+    final key = '$host:$port';
+    List<int>? noiseKey;
+    final v2 = stats['v2'];
+    if (v2 is Map<String, dynamic> &&
+        v2['sessions'] == 1 &&
+        v2['noise'] == relayV2NoiseProtocol &&
+        v2['noise_key'] is String &&
+        v2['noise_key_sig'] is String) {
+      try {
+        final candidate = base64Decode(v2['noise_key'] as String);
+        final signature = base64Decode(v2['noise_key_sig'] as String);
+        final identity = base64Decode(identityPublicKeyBase64);
+        if (candidate.length == 32 &&
+            await verifyEd25519Signature(
+              publicKey: identity,
+              message: [...relayV2BindingLabel, ...candidate],
+              signature: signature,
+            )) {
+          noiseKey = candidate;
+        }
+      } on FormatException {
+        noiseKey = null;
+      }
+    }
+    if (_v2Known.length >= 256 && !_v2Known.containsKey(key)) {
+      _v2Known.remove(_v2Known.keys.first);
+    }
+    _v2Known[key] = RelayV2Info(
+      identityPublicKeyBase64: identityPublicKeyBase64,
+      noiseKey: noiseKey,
+      learnedAt: DateTime.now(),
     );
   }
 

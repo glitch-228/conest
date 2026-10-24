@@ -18146,6 +18146,16 @@ class MessengerController extends ChangeNotifier {
         await Future<void>.delayed(const Duration(seconds: 5));
         continue;
       }
+      // A relay with v2 sessions pushes instead (M26): one subscription.
+      if (_relayClient.supportsSubscribe(
+        host: route.host,
+        port: route.port,
+        protocol: route.protocol,
+        expectedIdentityPublicKeyBase64: _pinnedIdentityKeyForRoute(route),
+      )) {
+        await _watchRelaySubscription(route, me, slot, generation);
+        continue;
+      }
       final stopwatch = Stopwatch()..start();
       RelayFetchBatch batch = const RelayFetchBatch(envelopes: []);
       try {
@@ -18229,6 +18239,81 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       instantEmpty = 0;
+    }
+  }
+
+  /// Takes what [route] pushes over a subscription (a relay with v2
+  /// sessions), processing and acknowledging each batch as a long poll
+  /// would, until the subscription ends, the loop stops, or another relay
+  /// should be watched in this slot (checked at least every heartbeat).
+  Future<void> _watchRelaySubscription(
+    PeerEndpoint route,
+    IdentityRecord me,
+    int slot,
+    int? generation,
+  ) async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      final expectedRelayKey = await _requireOperationalRelayPin(route);
+      await for (final batch in _relayClient.subscribeEnvelopes(
+        host: route.host,
+        port: route.port,
+        protocol: route.protocol,
+        recipientDeviceId: me.deviceId,
+        leaseFor: _relayLeaseFor(route),
+        expectedIdentityPublicKeyBase64: expectedRelayKey,
+      )) {
+        _routeHealthTracker.recordSuccess(
+          route,
+          fetch: true,
+          latency: stopwatch.elapsed,
+        );
+        stopwatch.reset();
+        final envelopes = batch.envelopes;
+        if (envelopes.isNotEmpty) {
+          try {
+            await _processEnvelopes(
+              envelopes,
+              failOnProcessingError: true,
+              route: _routeForPolled(route),
+            );
+            if (_needsEnvelopeDurability(envelopes)) {
+              await _saveSnapshotSilently(notify: false);
+            }
+            if (batch.leaseId case final leaseId?) {
+              await _relayClient.acknowledgeLease(
+                host: route.host,
+                port: route.port,
+                protocol: route.protocol,
+                recipientDeviceId: me.deviceId,
+                leaseId: leaseId,
+                expectedIdentityPublicKeyBase64: expectedRelayKey,
+              );
+            }
+            if (_needsEnvelopeDurability(envelopes)) {
+              _markRuntimeActivity();
+              notifyListeners();
+            }
+          } catch (error) {
+            // The lease runs out and the relay pushes the batch again.
+            appendDebugLog('Relay lease retained after a pushed batch: $error');
+          }
+        }
+        final current = identity;
+        if (!_longPollRunning ||
+            current == null ||
+            (generation != null && generation != _longPollGeneration) ||
+            _pickPrimaryRelayForLongPoll(current, slot: slot)?.routeKey !=
+                route.routeKey) {
+          break;
+        }
+      }
+    } catch (error) {
+      _routeHealthTracker.recordFailure(route, error: error.toString());
+      if (_debugBuildId != null) {
+        appendDebugLog('Relay subscription to ${route.host} ended: $error');
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
     }
   }
 
@@ -37748,6 +37833,42 @@ class _ScoringRelayClient implements RelayClient {
     required this.onAttempt,
     required this.nowProvider,
   });
+
+  @override
+  bool supportsSubscribe({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.supportsSubscribe(
+    host: host,
+    port: port,
+    protocol: protocol,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
+  @override
+  Stream<RelayFetchBatch> subscribeEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration leaseFor = const Duration(seconds: 60),
+    Duration timeout = const Duration(seconds: 8),
+    Duration heartbeat = const Duration(seconds: 30),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.subscribeEnvelopes(
+    host: host,
+    port: port,
+    protocol: protocol,
+    recipientDeviceId: recipientDeviceId,
+    limit: limit,
+    leaseFor: leaseFor,
+    timeout: timeout,
+    heartbeat: heartbeat,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
 
   final RelayClient inner;
   final _RelayAttemptCallback onAttempt;

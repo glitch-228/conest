@@ -1,0 +1,472 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:conest/src/local_relay_node.dart';
+import 'package:conest/src/models.dart';
+import 'package:conest/src/relay_client.dart';
+import 'package:conest/src/relay_v2/frames.dart';
+import 'package:conest/src/relay_v2/noise_nk.dart';
+import 'package:conest/src/relay_v2/session.dart';
+import 'package:cryptography/cryptography.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+Map<String, dynamic> _fixture() =>
+    jsonDecode(File('test/fixtures/relay_v2/session.json').readAsStringSync())
+        as Map<String, dynamic>;
+
+Uint8List _hex(String text) => Uint8List.fromList([
+  for (var index = 0; index < text.length; index += 2)
+    int.parse(text.substring(index, index + 2), radix: 16),
+]);
+
+String _toHex(List<int> bytes) =>
+    bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+
+Future<int> _freePort() async {
+  final probe = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
+  final port = probe.port;
+  await probe.close();
+  return port;
+}
+
+RelayEnvelope _envelope(String id, {String recipient = 'dev-b'}) =>
+    RelayEnvelope(
+      protocolVersion: 1,
+      kind: 'direct_message',
+      messageId: id,
+      conversationId: 'c1',
+      senderAccountId: 'acc-a',
+      senderDeviceId: 'dev-a',
+      recipientDeviceId: recipient,
+      createdAt: DateTime.utc(2026, 10, 24),
+      payloadBase64: base64Encode(utf8.encode('hello $id')),
+    );
+
+/// A relay with an identity (v2 sessions), started on a free port.
+Future<(LocalRelayNode, int, String)> _startRelay({List<int>? seed}) async {
+  final node = LocalRelayNode(
+    identitySeed: seed ?? List<int>.generate(32, (index) => index + 1),
+  );
+  final port = await _freePort();
+  await node.start(port);
+  addTearDown(node.stop);
+  final health = await const RelayClient().inspectHealth(
+    host: '127.0.0.1',
+    port: port,
+  );
+  return (node, port, health.identityPublicKeyBase64!);
+}
+
+void main() {
+  setUp(RelayClient.resetSessionsForTesting);
+  tearDown(RelayClient.resetSessionsForTesting);
+
+  group('shared fixtures', () {
+    test('the client handshake and records match the fixture', () async {
+      final fixture = _fixture();
+      expect(fixture['protocol'], relayV2NoiseProtocol);
+      expect(_toHex(relayV2Prologue), fixture['prologue']);
+      final initiator = await NoiseNkInitiator.start(
+        relayStaticPublic: _hex(fixture['relay_static_public'] as String),
+        ephemeralSeed: _hex(fixture['client_ephemeral_private'] as String),
+      );
+      final message1 = await initiator.writeMessage1(
+        _hex(fixture['msg1_payload'] as String),
+      );
+      expect(_toHex(message1), fixture['msg1']);
+      final (payload, transport) = await initiator.readMessage2(
+        _hex(fixture['msg2'] as String),
+      );
+      expect(_toHex(payload), fixture['msg2_payload']);
+      expect(_toHex(transport.handshakeHash), fixture['handshake_hash']);
+      for (final record in (fixture['transport'] as List).cast<Map>()) {
+        if (record['from'] != 'client') continue;
+        final sealed = await transport.send.encryptWithAd(
+          const [],
+          _hex(record['plaintext'] as String),
+        );
+        final expected = _hex(record['record'] as String);
+        expect(_toHex(sealed), _toHex(expected.sublist(2)));
+      }
+      for (final record in (fixture['transport'] as List).cast<Map>()) {
+        if (record['from'] != 'relay') continue;
+        final opened = await transport.receive.decryptWithAd(
+          const [],
+          _hex(record['record'] as String).sublist(2),
+        );
+        expect(_toHex(opened), record['plaintext']);
+      }
+    });
+
+    test('the relay side of the handshake matches the fixture', () async {
+      final fixture = _fixture();
+      final relayStatic = await X25519().newKeyPairFromSeed(
+        _hex(fixture['relay_static_private'] as String),
+      );
+      expect(
+        _toHex((await relayStatic.extractPublicKey()).bytes),
+        fixture['relay_static_public'],
+      );
+      final responder = await NoiseNkResponder.start(
+        staticKeyPair: relayStatic,
+        ephemeralSeed: _hex(fixture['relay_ephemeral_private'] as String),
+      );
+      final payload = await responder.readMessage1(
+        _hex(fixture['msg1'] as String),
+      );
+      expect(_toHex(payload), fixture['msg1_payload']);
+      final (message2, transport) = await responder.writeMessage2(
+        _hex(fixture['msg2_payload'] as String),
+      );
+      expect(_toHex(message2), fixture['msg2']);
+      expect(_toHex(transport.handshakeHash), fixture['handshake_hash']);
+    });
+
+    test('a reply made without the relay key is refused', () async {
+      final fixture = _fixture();
+      final initiator = await NoiseNkInitiator.start(
+        relayStaticPublic: _hex(fixture['relay_static_public'] as String),
+        ephemeralSeed: _hex(fixture['client_ephemeral_private'] as String),
+      );
+      await initiator.writeMessage1(_hex(fixture['msg1_payload'] as String));
+      final tampered = _hex(fixture['msg2'] as String);
+      tampered[40] ^= 1;
+      await expectLater(
+        initiator.readMessage2(tampered),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('frames encode as the fixture says and are bounded', () {
+      final fixture = _fixture();
+      for (final sample in (fixture['frames'] as List).cast<Map>()) {
+        final encoded = encodeRelayV2Frame(
+          sample['type'] as int,
+          sample['stream'] as int,
+          utf8.encode(sample['payload'] as String),
+        );
+        expect(_toHex(encoded), sample['hex']);
+        final decoder = RelayV2FrameDecoder(1024);
+        RelayV2Frame? found;
+        for (final byte in encoded) {
+          decoder.add([byte]);
+          found ??= decoder.next();
+        }
+        expect(found?.type, sample['type']);
+        expect(found?.stream, sample['stream']);
+        expect(utf8.decode(found!.payload), sample['payload']);
+      }
+      final decoder = RelayV2FrameDecoder(16);
+      decoder.add(encodeRelayV2Frame(1, 1, List<int>.filled(17, 0)));
+      expect(decoder.next, throwsFormatException);
+    });
+
+    test('an in-app relay derives and signs its session key as the fixture '
+        'says', () async {
+      final fixture = _fixture();
+      final (_, port, identity) = await _startRelay(
+        seed: _hex(fixture['identity_seed'] as String),
+      );
+      expect(_toHex(base64Decode(identity)), fixture['identity_public']);
+      // Learned from the signed health answer, under the identity that
+      // signed it (used only where that identity is pinned).
+      expect(
+        RelayClient.sessionInfoFor('127.0.0.1', port)?.identityPublicKeyBase64,
+        identity,
+      );
+      final learned = RelayClient.sessionInfoFor('127.0.0.1', port)!;
+      expect(learned.sessions, isTrue);
+      expect(_toHex(learned.noiseKey!), fixture['relay_static_public']);
+    });
+  });
+
+  group('sessions against the in-app relay', () {
+    test('a session stores, fetches, and subscribes', () async {
+      final (node, port, identity) = await _startRelay();
+      await const RelayClient().inspectHealth(
+        host: '127.0.0.1',
+        port: port,
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      final noiseKey = RelayClient.sessionInfoFor('127.0.0.1', port)!.noiseKey!;
+      final before = node.sessionsServed;
+      final session = await RelayV2Session.connect(
+        channel: await SocketRelayChannel.connect('127.0.0.1', port),
+        relayNoiseKey: noiseKey,
+      );
+      addTearDown(session.close);
+      expect(session.hello['v'], 1);
+      final events = <Map<String, dynamic>>[];
+      final subscription = session
+          .subscribe({
+            'action': 'subscribe',
+            'mailboxes': ['dev-sub'],
+          })
+          .listen(events.add);
+      addTearDown(subscription.cancel);
+      final stored = await session.request({
+        'action': 'store',
+        'recipient_device_id': 'dev-sub',
+        'envelope': _envelope('s1', recipient: 'dev-sub').toJson(),
+      });
+      expect(stored['stored'], isTrue);
+      for (var tries = 0; tries < 50 && events.length < 2; tries++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(events.first['subscribed'], ['dev-sub']);
+      expect(events[1]['messages'][0]['messageId'], 's1');
+      expect(node.sessionsServed, before + 1);
+      // Requests in flight together on the one session.
+      final answers = await Future.wait([
+        for (var index = 0; index < 5; index++)
+          session.request({
+            'action': 'store',
+            'recipient_device_id': 'dev-many',
+            'envelope': _envelope('m$index', recipient: 'dev-many').toJson(),
+          }),
+      ]);
+      expect(answers.every((answer) => answer['stored'] == true), isTrue);
+      final fetched = await session.request({
+        'action': 'fetch',
+        'recipient_device_id': 'dev-many',
+      });
+      expect((fetched['messages'] as List).length, 5);
+      final refused = await session.request({'action': 'nope'});
+      expect(refused['ok'], isFalse);
+    });
+
+    test('a session against the wrong key fails', () async {
+      final (_, port, _) = await _startRelay();
+      final wrong = await X25519().newKeyPairFromSeed(List<int>.filled(32, 9));
+      await expectLater(
+        RelayV2Session.connect(
+          channel: await SocketRelayChannel.connect('127.0.0.1', port),
+          relayNoiseKey: (await wrong.extractPublicKey()).bytes,
+          timeout: const Duration(seconds: 2),
+        ),
+        throwsA(anything),
+      );
+    });
+
+    test('a pinned relay that offers sessions is used over one, and a '
+        'subscription pushes what arrives', () async {
+      final (node, port, identity) = await _startRelay();
+      const client = RelayClient();
+      // The first request learns (in the background) that it has sessions.
+      await client.storeEnvelope(
+        host: '127.0.0.1',
+        port: port,
+        recipientDeviceId: 'dev-b',
+        envelope: _envelope('v1-first'),
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      for (var tries = 0; tries < 50; tries++) {
+        if (RelayClient.sessionInfoFor('127.0.0.1', port) != null) break;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        client.supportsSubscribe(
+          host: '127.0.0.1',
+          port: port,
+          expectedIdentityPublicKeyBase64: identity,
+        ),
+        isTrue,
+      );
+      expect(
+        client.supportsSubscribe(host: '127.0.0.1', port: port),
+        isFalse,
+        reason: 'only with a pinned identity',
+      );
+      final batches = <RelayFetchBatch>[];
+      final subscription = client
+          .subscribeEnvelopes(
+            host: '127.0.0.1',
+            port: port,
+            recipientDeviceId: 'dev-b',
+            expectedIdentityPublicKeyBase64: identity,
+          )
+          .listen(batches.add);
+      addTearDown(subscription.cancel);
+      for (var tries = 0; tries < 50 && batches.length < 2; tries++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      // In place (an empty batch), then what was queued already.
+      expect(batches.first.envelopes, isEmpty);
+      expect(batches[1].envelopes.single.messageId, 'v1-first');
+      await client.storeEnvelope(
+        host: '127.0.0.1',
+        port: port,
+        recipientDeviceId: 'dev-b',
+        envelope: _envelope('v2-second'),
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      for (var tries = 0; tries < 50 && batches.length < 3; tries++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(batches[2].envelopes.single.messageId, 'v2-second');
+      // The store went over the session (one session for everything).
+      expect(node.sessionsServed, 1);
+    });
+
+    test('a broken session is replaced on the next request', () async {
+      final (node, port, identity) = await _startRelay();
+      const client = RelayClient();
+      await client.inspectHealth(
+        host: '127.0.0.1',
+        port: port,
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      await client.storeEnvelope(
+        host: '127.0.0.1',
+        port: port,
+        recipientDeviceId: 'dev-b',
+        envelope: _envelope('r1'),
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      expect(node.sessionsServed, 1);
+      await RelayClient.v2Pool.closeAll();
+      await client.storeEnvelope(
+        host: '127.0.0.1',
+        port: port,
+        recipientDeviceId: 'dev-b',
+        envelope: _envelope('r2'),
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      expect(node.sessionsServed, 2);
+      final fetched = await client.fetchEnvelopes(
+        host: '127.0.0.1',
+        port: port,
+        recipientDeviceId: 'dev-b',
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      expect(fetched.map((envelope) => envelope.messageId), ['r1', 'r2']);
+    });
+
+    test('a relay without sessions keeps v1', () async {
+      final node = LocalRelayNode();
+      final port = await _freePort();
+      await node.start(port);
+      addTearDown(node.stop);
+      const client = RelayClient();
+      // Unpinned, unsigned: v1 as before.
+      expect(
+        await client.storeEnvelope(
+          host: '127.0.0.1',
+          port: port,
+          recipientDeviceId: 'dev-b',
+          envelope: _envelope('old-1'),
+        ),
+        isTrue,
+      );
+      final fetched = await client.fetchEnvelopes(
+        host: '127.0.0.1',
+        port: port,
+        recipientDeviceId: 'dev-b',
+      );
+      expect(fetched.single.messageId, 'old-1');
+      expect(node.sessionsServed, 0);
+      expect(
+        client.supportsSubscribe(
+          host: '127.0.0.1',
+          port: port,
+          expectedIdentityPublicKeyBase64: 'AAAA',
+        ),
+        isFalse,
+      );
+    });
+
+    test(
+      'a session key the pinned identity did not sign is not used',
+      () async {
+        // A relay whose health offers sessions under a key signed by someone
+        // else: the client stays on v1.
+        final identity = await Ed25519().newKeyPairFromSeed(
+          List<int>.filled(32, 3),
+        );
+        final stranger = await Ed25519().newKeyPairFromSeed(
+          List<int>.filled(32, 4),
+        );
+        final identityKey = base64Encode(
+          (await identity.extractPublicKey()).bytes,
+        );
+        final noiseKey = List<int>.filled(32, 7);
+        final badBinding = await Ed25519().sign([
+          ...relayV2BindingLabel,
+          ...noiseKey,
+        ], keyPair: stranger);
+        final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(server.close);
+        var sessionAttempts = 0;
+        server.listen((socket) {
+          final lines = <int>[];
+          socket.listen((chunk) async {
+            lines.addAll(chunk);
+            if (lines.length >= 4 &&
+                utf8.decode(lines.take(4).toList(), allowMalformed: true) ==
+                    'CNS2') {
+              sessionAttempts++;
+              socket.destroy();
+              return;
+            }
+            if (!lines.contains(10)) return;
+            final request =
+                jsonDecode(utf8.decode(lines.sublist(0, lines.indexOf(10))))
+                    as Map<String, dynamic>;
+            final body = jsonEncode({
+              'ok': true,
+              'stored': request['action'] == 'store',
+              'messages': const [],
+              'error': null,
+              'stats': {
+                'relay_id': 'fake',
+                'identity_public_key': identityKey,
+                'v2': {
+                  'sessions': 1,
+                  'noise': relayV2NoiseProtocol,
+                  'noise_key': base64Encode(noiseKey),
+                  'noise_key_sig': base64Encode(badBinding.bytes),
+                },
+              },
+            });
+            final nonce = base64Decode(request['nonce'] as String);
+            final signature = await Ed25519().sign([
+              ...utf8.encode(request['action'] as String),
+              ...nonce,
+              ...utf8.encode(body),
+            ], keyPair: identity);
+            socket.writeln(
+              jsonEncode({
+                'sig_v': 2,
+                'body': body,
+                'nonce_echo': request['nonce'],
+                'signature': base64Encode(signature.bytes),
+              }),
+            );
+            await socket.flush();
+            await socket.close();
+          });
+        });
+        const client = RelayClient();
+        await client.inspectHealth(
+          host: '127.0.0.1',
+          port: server.port,
+          expectedIdentityPublicKeyBase64: identityKey,
+        );
+        final info = RelayClient.sessionInfoFor('127.0.0.1', server.port)!;
+        expect(info.sessions, isFalse);
+        expect(
+          await client.storeEnvelope(
+            host: '127.0.0.1',
+            port: server.port,
+            recipientDeviceId: 'dev-b',
+            envelope: _envelope('bad-binding'),
+            expectedIdentityPublicKeyBase64: identityKey,
+          ),
+          isTrue,
+        );
+        expect(sessionAttempts, 0);
+      },
+    );
+  });
+}
