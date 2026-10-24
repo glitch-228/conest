@@ -1,98 +1,79 @@
-# Conest v0.4.1
+# Conest v0.4.2
 
-Your other devices now get the messages your contacts send, show your
-groups, and catch up on older chats after linking. Calls no longer fall
-behind and stutter after a bad moment on the network. Links are cleaned
-of tracking and can show previews. Everything tested in the 0.4.1
-nightlies is included.
+Conest now keeps receiving when it is not on your screen: on Android in
+the background, on Linux and Windows from the tray. Notifications open
+their chat, can be answered without opening Conest, and show only what
+you choose.
 
 New to Conest, or not sure which routes to turn on? Read the user guide:
 https://github.com/glitch-228/conest/tree/main/docs
 
 ## Before you update
 
-- Update all of your linked devices together: what is new between your
-  own devices needs this version on each of them.
-- Contacts on v0.4.0 keep working as before.
-- If you run your own relay, update it too (install-relay.sh, or let its
-  supervisor update it). It then shares its space and speed fairly
-  between the people using it.
+- Contacts on v0.4.1 and v0.4.0 keep working as before.
+- Android: Conest now runs in the background by default, with a quiet
+  notification saying it is receiving messages. You can turn this off in
+  Settings. On first start it asks to be left out of battery
+  optimisation; without that, Android may stop it after a while.
+- Linux and Windows: closing the window now keeps Conest running in the
+  tray. Use Quit in the tray icon's menu to end it, or turn this off in
+  Settings.
 
-## Several devices on one account
+## Receiving in the background
 
-- Messages your contacts send reach all of your devices, even when a
-  contact can only reach one of them: that device passes them on.
-- Your groups show on all of your devices. A device that is not a member
-  itself writes in the group through the one that is.
-- A device linked later catches up on your chats, a few at a time and
-  newest first, as already-read history.
-- The device you created your account on can link and remove others
-  right away, without waiting a day.
-- Settings > Connectivity > "What goes over the internet": everything,
-  messages and files up to 1 MB, or messages only (files then wait for
-  your local network). Advanced mode can choose per transport, and per
-  contact in the contact's connection settings.
+- Android: receiving in the background is on by default in every build,
+  and comes back by itself after Conest updates or the phone restarts.
+- Android: Conest asks once to be left out of battery optimisation, and
+  shows steps for phones whose own battery manager stops apps (such as
+  Xiaomi). Settings can ask again.
+- Linux and Windows: Conest has a tray icon. Closing the window keeps it
+  running there; the icon brings the window back, and its menu quits.
+  On Linux this needs a tray (KDE and most desktops; GNOME with the
+  AppIndicator extension); without one, closing quits as before.
+- Linux and Windows: Settings > "Start Conest when you log in" (off by
+  default) starts it hidden in the tray, ready to receive.
+- Linux and Windows: starting Conest again while it runs brings the
+  running one forward.
+
+## Notifications
+
+- Linux and Windows now show message notifications, except while the
+  Conest window has the focus (one open behind other windows still
+  notifies).
+- Tapping or clicking a notification opens its chat, on every platform.
+- Android: Reply and "Mark as read" right in the notification (the
+  phone needs to be unlocked for them).
+- Read a chat on one of your devices and its notification goes away on
+  the others.
+- Settings > "Show in notifications": the name and the message, the name
+  only, or nothing (just "New message"), for shared screens and locked
+  phones.
 
 ## Calls
 
-- After a moment of lost or late sound, a call catches up again instead
-  of falling further behind and stuttering for the rest of the call.
-- Group calls no longer make a phone sluggish for the whole call, which
-  delayed everything else on it too.
-- Linux: a call no longer silences other apps. The call's audio output
-  list now offers only outputs that go through your sound server
-  (PipeWire or PulseAudio), not a sound card's own devices, which a call
-  took over for itself. Choose a specific output in your system's sound
-  settings.
-- Windows: call tones, voice messages and videos play (the player was
-  missing from the Windows download).
-
-## Links
-
-- When you paste or type a link, Conest removes the parts that tell a
-  site who shared it (such as YouTube's ?si= or utm_) and shows "Link
-  cleaned" with Undo. Links you open are cleaned the same way; messages
-  themselves are not changed.
-- Links to posts on X, Instagram, Reddit, TikTok, Bluesky and similar
-  sites go through a service that lets apps show a preview. If one does
-  not work, "Open original link" in the message menu opens the post on
-  its own site.
-- Link previews: a link shows the site's title, a short description and
-  a small picture. In chats with your contacts and in your groups they
-  come by themselves; elsewhere you tap "Show link preview" first,
-  because fetching one shows the site your IP address.
-- Settings > Privacy > "Link previews": each receiver fetches them (the
-  default), they are sent with the message (people you write to never
-  contact the site), both, or off. With Tor set up, previews are fetched
-  through Tor.
+- When the audio device changes during a call (a headset unplugged, or
+  another default chosen), the call moves to the current device instead
+  of ending.
 
 ## Fixes
 
-- Email: Conest checks that a mail server really passes messages
-  through before using it. If a server it picked stops doing so, your
-  account moves to one that works, and your contacts learn the new
-  address by themselves.
-- Relays: when many messages go out at once, a relay that starts
-  refusing them is given a moment, and the rest go another way
-  meanwhile, instead of nothing being sent for a while.
-- A contact you removed can be added again when only Iroh connects
-  you; the request used to be dropped.
-- With LAN turned off, files no longer get stuck because parts of them
-  were still sent over the local network.
-- Photos: "Send original as file" in the photo editor sends a photo
-  exactly as it is, without downscaling.
-- Android: a file that cannot be sent no longer disappears when you
-  press Send; it stays above the message box with the reason.
-- A relay that cannot be reached yet no longer says "Relay has no
-  verified identity pin".
+- A route you switch off for a while (such as Nostr or the Bluetooth
+  mesh) is now paused, not forgotten: your contacts keep its address, so
+  switching it back on reaches them again, even when it is the only
+  route left.
+- A group invitation no longer waits about ten seconds when it was sent
+  right after adding a contact.
+- Opening a Matrix room no longer stops notification taps, transfer
+  controls and scheduled messages from working until Conest restarts.
+- Conest uses less of the computer's processor while nothing is
+  happening (on Linux about a third of what it used).
 
 ## Not tested on real devices yet
 
-- Link previews and clean links on Android and Windows.
-- Groups shown through another of your devices, and catching up on
-  older chats after linking, over a day or more.
-- Calls on Linux systems that use PulseAudio rather than PipeWire, or
-  neither.
+- Coming back by itself after the phone restarts (after an update it was
+  tested).
+- Reply and "Mark as read" from an Android notification.
+- The tray, start at login and notifications on Windows.
 
 Please report problems with your build version and the crash or debug
 details from Settings.
@@ -101,9 +82,11 @@ details from Settings.
 
 - Group calls are still experimental (off by default): with three or
   more people, often only some of them hear each other.
-- Android: on some phones (seen on Xiaomi), Conest loses its connection
-  a few minutes after you leave the app, unless a call is in progress.
-  Keep it open when you expect messages.
+- Xiaomi and some other phones: Conest comes back by itself after an
+  update or a restart only with Autostart allowed for it (Settings > Apps
+  > Conest > Autostart). The battery prompt shows the steps.
+- Some phones turn Wi-Fi off while they sleep; messages then arrive when
+  the phone wakes or reaches a network again.
 - Email can stall on networks that block or throttle mail servers; other
   routes keep working.
 - Several devices: files and voice messages do not sync between your
