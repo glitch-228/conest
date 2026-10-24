@@ -97,6 +97,15 @@ pub(crate) struct ExtConfig {
     pub(crate) legacy_threads: bool,
     /// How long a request may take to arrive (tests shorten it).
     pub(crate) read_deadline: Duration,
+    /// Serve v2 sessions (`CNS2`) on the same port (`--no-sessions` turns
+    /// them off; the threaded server has none).
+    pub(crate) sessions: bool,
+    /// Requests one session may have in flight at once.
+    pub(crate) session_max_streams: usize,
+    /// Subscriptions one session may hold.
+    pub(crate) session_max_subscriptions: usize,
+    /// A session that sends nothing (not even a ping) for this long ends.
+    pub(crate) session_idle: Duration,
 }
 
 impl Default for ExtConfig {
@@ -104,9 +113,24 @@ impl Default for ExtConfig {
         Self {
             legacy_threads: false,
             read_deadline: REQUEST_READ_DEADLINE,
+            sessions: true,
+            session_max_streams: DEFAULT_SESSION_MAX_STREAMS,
+            session_max_subscriptions: DEFAULT_SESSION_MAX_SUBSCRIPTIONS,
+            session_idle: DEFAULT_SESSION_IDLE,
         }
     }
 }
+
+impl ExtConfig {
+    /// Whether this relay serves (and so advertises) v2 sessions.
+    pub(crate) fn sessions_enabled(&self) -> bool {
+        self.sessions && !self.legacy_threads
+    }
+}
+
+pub(crate) const DEFAULT_SESSION_MAX_STREAMS: usize = 32;
+pub(crate) const DEFAULT_SESSION_MAX_SUBSCRIPTIONS: usize = 4;
+pub(crate) const DEFAULT_SESSION_IDLE: Duration = Duration::from_secs(120);
 
 impl RelayConfig {
     pub(crate) fn from_env_and_args() -> Result<Self, String> {
@@ -174,6 +198,7 @@ impl RelayConfig {
             max_mailbox_bytes: env_u64("CONEST_RELAY_MAX_MAILBOX_BYTES", DEFAULT_MAX_MAILBOX_BYTES),
             ext: ExtConfig {
                 legacy_threads: env_bool("CONEST_RELAY_LEGACY_THREADS", false),
+                sessions: !env_bool("CONEST_RELAY_NO_SESSIONS", false),
                 ..ExtConfig::default()
             },
         };
@@ -248,6 +273,9 @@ impl RelayConfig {
                 }
                 "--legacy-threads" => {
                     config.ext.legacy_threads = true;
+                }
+                "--no-sessions" => {
+                    config.ext.sessions = false;
                 }
                 value if value.starts_with('-') => {
                     return Err(format!("unknown option: {value}\n\n{}", usage()));
@@ -388,7 +416,8 @@ pub(crate) fn usage() -> String {
            --trust-forwarded-for  trust the last X-Forwarded-For address\n\
                                   for per-IP rate limiting (only safe behind a\n\
                                   trusted proxy or HTTP tunnel)\n\
-           --legacy-threads       run the old one-thread-per-connection server"
+           --legacy-threads       run the old one-thread-per-connection server\n\
+           --no-sessions          do not serve v2 sessions (CNS2)"
     )
 }
 

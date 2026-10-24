@@ -62,6 +62,10 @@ pub(crate) struct RelayStats {
     pub(crate) max_queue_per_mailbox: usize,
     pub(crate) max_fetch_limit: usize,
     pub(crate) identity_public_key: String,
+    /// What this relay offers beyond v1 (sessions and their key, signed by
+    /// the identity); absent on relays without them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) v2: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]

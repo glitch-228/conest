@@ -141,7 +141,7 @@ where
     let deadline = Instant::now() + state.config.ext.read_deadline;
     let mut buffer = Vec::with_capacity(8 * 1024);
     let detected = loop {
-        if let Some(detected) = detect_protocol(&buffer, false) {
+        if let Some(detected) = detect_protocol(&buffer, state.config.ext.sessions_enabled()) {
             break detected;
         }
         if !read_more(&mut stream, &mut buffer, deadline).await? {
@@ -154,8 +154,7 @@ where
     match detected {
         Detected::V1 => serve_v1_line(stream, state, peer, buffer, deadline).await,
         Detected::Http => serve_http(stream, state, peer, buffer, deadline).await,
-        // Sessions come with phase B.
-        Detected::V2 => serve_v1_line(stream, state, peer, buffer, deadline).await,
+        Detected::V2 => crate::session::serve_session(stream, state, peer, buffer).await,
     }
 }
 

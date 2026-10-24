@@ -732,7 +732,22 @@ impl RelayState {
             max_queue_per_mailbox: self.config.max_queue_per_mailbox,
             max_fetch_limit: self.config.max_fetch_limit,
             identity_public_key: self.identity.public_key_b64.clone(),
+            v2: self.v2_info(),
         }
+    }
+
+    /// What health tells clients about v2: the session protocol and its
+    /// key, which the identity signs.
+    pub(crate) fn v2_info(&self) -> Option<Value> {
+        if !self.config.ext.sessions_enabled() {
+            return None;
+        }
+        Some(serde_json::json!({
+            "sessions": 1,
+            "noise": crate::session::NOISE_PARAMS,
+            "noise_key": BASE64_STANDARD.encode(self.identity.noise_public),
+            "noise_key_sig": BASE64_STANDARD.encode(self.identity.noise_key_signature),
+        }))
     }
 
     /// Runs [work] on a blocking thread (the database is synchronous).
@@ -749,10 +764,16 @@ impl RelayState {
 
     /// Waits, without holding a thread, until [mailbox] may have something
     /// new (a store since [observed]) or [wait] passes. The caller drains
-    /// before and after.
-    async fn wait_for_store(&self, mailbox: &str, observed: u64, wait: Duration) {
-        let notifier = self.notifier_for(mailbox);
-        let notify = notifier
+    /// before and after, and keeps its [Observed] until then.
+    pub(crate) async fn wait_for_store(&self, mailbox: &str, observed: u64, wait: Duration) {
+        let mut guard = WaitGuard {
+            state: self.clone(),
+            mailbox: mailbox.to_owned(),
+            notifier: self.notifier_for(mailbox),
+            counted: false,
+        };
+        let notify = guard
+            .notifier
             .0
             .lock()
             .expect("notifier mutex should not poison")
@@ -761,34 +782,39 @@ impl RelayState {
         let notified = notify.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
-        let waiting = {
-            let mut signal = notifier.0.lock().expect("notifier mutex should not poison");
+        {
+            let mut signal = guard
+                .notifier
+                .0
+                .lock()
+                .expect("notifier mutex should not poison");
             if signal.generation != observed {
-                false
-            } else {
-                signal.waiters += 1;
-                true
+                return;
             }
-        };
-        if waiting {
-            // Counted out again however the wait ends (a dropped
-            // connection cancels it).
-            let _waiter = WaiterGuard(Arc::clone(&notifier));
-            let _ = tokio::time::timeout(wait, notified).await;
+            signal.waiters += 1;
         }
-        self.prune_notifier(mailbox, &notifier);
+        // Counted out again however the wait ends (a dropped connection
+        // cancels it).
+        guard.counted = true;
+        let _ = tokio::time::timeout(wait, notified).await;
     }
 
-    /// The generation [mailbox]'s signal is at (its notifier is kept while
-    /// a caller holds the returned one).
-    fn observe(&self, mailbox: &str) -> (MailboxNotifier, u64) {
+    /// The generation [mailbox]'s signal is at; the signal is kept while
+    /// the returned value lives (so a store in between is not missed) and
+    /// pruned when the last holder lets go.
+    pub(crate) fn observe(&self, mailbox: &str) -> Observed {
         let notifier = self.notifier_for(mailbox);
         let generation = notifier
             .0
             .lock()
             .expect("notifier mutex should not poison")
             .generation;
-        (notifier, generation)
+        Observed {
+            state: self.clone(),
+            mailbox: mailbox.to_owned(),
+            notifier,
+            generation,
+        }
     }
 
     /// [fetch] for the tokio server: a waiting fetch holds no thread.
@@ -806,28 +832,31 @@ impl RelayState {
             Some(value) if value > 0 => value.min(LONG_POLL_MAX_WAIT_MS),
             _ => 0,
         };
-        let (notifier, observed) = self.observe(&recipient_device_id);
+        if wait_ms == 0 {
+            let mailbox = recipient_device_id;
+            return self
+                .blocking(move |state| state.drain_queue_result(&mailbox, limit))
+                .await?;
+        }
+        let observed = self.observe(&recipient_device_id);
         let mailbox = recipient_device_id.clone();
         let first = self
             .blocking(move |state| state.drain_queue_result(&mailbox, limit))
             .await??;
-        if !first.is_empty() || wait_ms == 0 {
-            drop(notifier);
-            self.prune_existing(&recipient_device_id);
+        if !first.is_empty() {
             return Ok(first);
         }
         self.wait_for_store(
             &recipient_device_id,
-            observed,
+            observed.generation,
             Duration::from_millis(wait_ms),
         )
         .await;
-        drop(notifier);
-        let mailbox = recipient_device_id.clone();
+        let mailbox = recipient_device_id;
         let result = self
             .blocking(move |state| state.drain_queue_result(&mailbox, limit))
             .await?;
-        self.prune_existing(&recipient_device_id);
+        drop(observed);
         result
     }
 
@@ -850,45 +879,69 @@ impl RelayState {
             Some(value) if value > 0 => value.min(LONG_POLL_MAX_WAIT_MS),
             _ => 0,
         };
-        let (notifier, observed) = self.observe(&recipient_device_id);
+        if wait_ms == 0 {
+            let mailbox = recipient_device_id;
+            return self
+                .blocking(move |state| state.take_queue(&mailbox, limit, Some(lease_ms)))
+                .await?;
+        }
+        let observed = self.observe(&recipient_device_id);
         let mailbox = recipient_device_id.clone();
         let first = self
             .blocking(move |state| state.take_queue(&mailbox, limit, Some(lease_ms)))
             .await??;
-        if !first.0.is_empty() || wait_ms == 0 {
-            drop(notifier);
-            self.prune_existing(&recipient_device_id);
+        if !first.0.is_empty() {
             return Ok(first);
         }
         self.wait_for_store(
             &recipient_device_id,
-            observed,
+            observed.generation,
             Duration::from_millis(wait_ms),
         )
         .await;
-        drop(notifier);
-        let mailbox = recipient_device_id.clone();
+        let mailbox = recipient_device_id;
         let result = self
             .blocking(move |state| state.take_queue(&mailbox, limit, Some(lease_ms)))
             .await?;
-        self.prune_existing(&recipient_device_id);
+        drop(observed);
         result
-    }
-
-    /// Drops [mailbox]'s notifier when nothing waits on it any more.
-    pub(crate) fn prune_existing(&self, mailbox: &str) {
-        if let Some(notifier) = self.existing_notifier(mailbox) {
-            self.prune_notifier(mailbox, &notifier);
-        }
     }
 }
 
-/// Counts a waiter out of its mailbox signal when its wait ends.
-struct WaiterGuard(MailboxNotifier);
+/// A mailbox signal held while its holder drains and waits; pruned (when
+/// nothing else holds or waits on it) as it goes.
+pub(crate) struct Observed {
+    state: RelayState,
+    mailbox: String,
+    notifier: MailboxNotifier,
+    pub(crate) generation: u64,
+}
 
-impl Drop for WaiterGuard {
+impl Drop for Observed {
     fn drop(&mut self) {
-        let mut signal = self.0.0.lock().expect("notifier mutex should not poison");
-        signal.waiters = signal.waiters.saturating_sub(1);
+        self.state.prune_notifier(&self.mailbox, &self.notifier);
+    }
+}
+
+/// One wait on a mailbox signal: counted out, and the signal pruned, when
+/// it ends (however it ends).
+struct WaitGuard {
+    state: RelayState,
+    mailbox: String,
+    notifier: MailboxNotifier,
+    counted: bool,
+}
+
+impl Drop for WaitGuard {
+    fn drop(&mut self) {
+        if self.counted {
+            let mut signal = self
+                .notifier
+                .0
+                .lock()
+                .expect("notifier mutex should not poison");
+            signal.waiters = signal.waiters.saturating_sub(1);
+        }
+        self.state.prune_notifier(&self.mailbox, &self.notifier);
     }
 }

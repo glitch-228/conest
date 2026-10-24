@@ -11,6 +11,7 @@ mod identity;
 mod legacy;
 mod limits;
 mod server;
+mod session;
 mod storage;
 mod v1;
 
@@ -521,6 +522,7 @@ mod tests {
                 max_queue_per_mailbox: stats.max_queue_per_mailbox,
                 max_fetch_limit: stats.max_fetch_limit,
                 identity_public_key: stats.identity_public_key.clone(),
+                v2: stats.v2.clone(),
             }),
             nonce_echo: None,
             signature: None,
