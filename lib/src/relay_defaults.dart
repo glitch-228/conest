@@ -30,6 +30,7 @@ class DefaultRelayEndpointSpec {
     required this.host,
     required this.port,
     this.protocol,
+    this.path,
   });
 
   final PeerRouteKind kind;
@@ -40,6 +41,9 @@ class DefaultRelayEndpointSpec {
   /// should fan out via auto-detection. A concrete value pins this entry to
   /// a single transport (schema v1/v2 compatibility).
   final PeerRouteProtocol? protocol;
+
+  /// A `wss` entry's secret path (a relay's hidden address, M38-A).
+  final String? path;
 }
 
 /// Parses + verifies a signed default-relay manifest from raw bytes. Returns
@@ -160,12 +164,14 @@ SignedRelayDefaults? _decodeManifestJson(String manifestJson) {
     if (protocolRaw != null && protocolRaw.trim().isNotEmpty) {
       protocol = peerRouteProtocolFromString(protocolRaw);
     }
+    final path = raw['path'];
     endpoints.add(
       DefaultRelayEndpointSpec(
         kind: kind,
         host: host,
         port: port,
         protocol: protocol,
+        path: path is String && isValidRelaySecretPath(path) ? path : null,
       ),
     );
   }

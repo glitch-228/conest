@@ -83,6 +83,7 @@ class RelayV2Info {
     this.mailboxAuth = false,
     this.tier1,
     this.registration,
+    this.hiddenAddress,
   });
 
   final String identityPublicKeyBase64;
@@ -101,6 +102,9 @@ class RelayV2Info {
 
   /// How accounts register: `open`, `invite`, `password` or `closed`.
   final String? registration;
+
+  /// The relay's hidden address (`wss://…`), told inside a session only.
+  final String? hiddenAddress;
 
   bool get sessions => noiseKey != null;
 }
@@ -222,6 +226,20 @@ class RelayClient {
       throw StateError(answer['error'] as String? ?? 'Mailbox proof refused.');
     }
     session.provedMailboxes.add(mailbox);
+  }
+
+  static String? _hiddenAddressIn(Object? v2) {
+    if (v2 is! Map<String, dynamic>) return null;
+    final hidden = v2['hidden'];
+    if (hidden is! String || hidden.length > 300) return null;
+    final uri = Uri.tryParse(hidden);
+    if (uri == null ||
+        uri.scheme != 'wss' ||
+        uri.host.isEmpty ||
+        !isValidRelaySecretPath(uri.path)) {
+      return null;
+    }
+    return hidden;
   }
 
   static String? _policyWord(Object? v2, String name, Set<String> allowed) {
@@ -1056,6 +1074,7 @@ class RelayClient {
       learnedAt: DateTime.now(),
       mailboxAuth: v2 is Map<String, dynamic> && v2['mailbox_auth'] == 1,
       tier1: _policyWord(v2, 'tier1', const {'open', 'registered', 'off'}),
+      hiddenAddress: _hiddenAddressIn(v2),
       registration: _policyWord(v2, 'registration', const {
         'open',
         'invite',

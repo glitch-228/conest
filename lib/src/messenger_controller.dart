@@ -9252,17 +9252,25 @@ class MessengerController extends ChangeNotifier {
     final result = <PeerEndpoint>[];
     for (final spec in specs) {
       if (spec.protocol != null) {
+        // A hidden (wss) address needs its secret path.
+        if (spec.protocol == PeerRouteProtocol.wss &&
+            !isValidRelaySecretPath(spec.path)) {
+          continue;
+        }
         result.add(
           PeerEndpoint(
             kind: spec.kind,
             host: spec.host,
             port: spec.port,
             protocol: spec.protocol!,
+            path: spec.protocol == PeerRouteProtocol.wss ? spec.path : null,
           ),
         );
         continue;
       }
       for (final protocol in PeerRouteProtocol.values) {
+        // Never guessed: a hidden address comes with its path.
+        if (protocol == PeerRouteProtocol.wss) continue;
         result.add(
           PeerEndpoint(
             kind: spec.kind,
@@ -11075,6 +11083,10 @@ class MessengerController extends ChangeNotifier {
       },
     );
     await addRelay(host: link.host, port: link.port);
+    // Its hidden address too, when the link carries one (M38-A).
+    if (link.hiddenAddress case final hidden?) {
+      await addRelay(host: hidden, port: 443);
+    }
   }
 
   Future<List<PeerEndpoint>> _relayRoutesFromInput({
@@ -11088,12 +11100,17 @@ class MessengerController extends ChangeNotifier {
     }
     validatePeerEndpointHostAndPort(parsed.host, parsed.port);
     if (parsed.hasExplicitProtocol) {
+      if (parsed.protocol == PeerRouteProtocol.wss &&
+          !isValidRelaySecretPath(parsed.path)) {
+        throw ArgumentError('A wss relay address needs its secret path.');
+      }
       return <PeerEndpoint>[
         PeerEndpoint(
           kind: PeerRouteKind.relay,
           host: parsed.host,
           port: parsed.port,
           protocol: parsed.protocol,
+          path: parsed.protocol == PeerRouteProtocol.wss ? parsed.path : null,
         ),
       ];
     }
@@ -29258,6 +29275,9 @@ class MessengerController extends ChangeNotifier {
         expectedIdentityPublicKeyBase64: expectedKey,
       );
       stopwatch.stop();
+      if (info.ok && route.kind == PeerRouteKind.relay) {
+        _adoptHiddenRelayAddress(route);
+      }
       if (!info.ok) {
         throw StateError('Route health check failed.');
       }
@@ -29394,6 +29414,44 @@ class MessengerController extends ChangeNotifier {
     );
     RelayClient.setRelayTokens(_snapshot.relayTokens);
     await _saveSnapshotSilently();
+  }
+
+  /// A configured relay that told its hidden (wss) address inside a session
+  /// gets that address too, first in the list (so it is preferred), pinned
+  /// to the same identity (M38-A).
+  void _adoptHiddenRelayAddress(PeerEndpoint route) {
+    final me = identity;
+    final key = _pinnedIdentityKeyForRoute(route);
+    final hidden = RelayClient.sessionInfoFor(
+      route.host,
+      route.port,
+    )?.hiddenAddress;
+    if (me == null || key == null || hidden == null) return;
+    if (!me.configuredRelays.any((relay) => relay.routeKey == route.routeKey)) {
+      return;
+    }
+    final PeerEndpoint wss;
+    try {
+      wss = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: hidden,
+        port: 443,
+      );
+    } on ArgumentError {
+      return;
+    }
+    if (me.configuredRelays.any((relay) => relay.routeKey == wss.routeKey)) {
+      return;
+    }
+    RelayClient.registerWssPath(wss.host, wss.port, wss.path!);
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(configuredRelays: [wss, ...me.configuredRelays]),
+      pinnedRelayIdentityKeys: {
+        ..._snapshot.pinnedRelayIdentityKeys,
+        wss.routeKey: key,
+      },
+    );
+    unawaited(_saveSnapshotSilently(debounce: true));
   }
 
   /// Tells the relay client the secret paths of hidden (wss) relays.

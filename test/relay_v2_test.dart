@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:conest/src/local_relay_node.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/relay_client.dart';
+import 'package:conest/src/relay_defaults.dart';
+import 'package:conest/src/relay_link.dart';
 import 'package:conest/src/relay_v2/frames.dart';
 import 'package:conest/src/relay_v2/noise_nk.dart';
 import 'package:conest/src/relay_v2/session.dart';
@@ -584,6 +586,56 @@ void main() {
         ),
         isTrue,
       );
+    });
+  });
+
+  group('hidden addresses in links and lists', () {
+    test('a relay link may carry the hidden address', () {
+      const key = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+      final link = RelayLink.tryParse(
+        'conest-relay://relay.example.org:7667?id=r1&key=${Uri.encodeQueryComponent(key)}'
+        '&wss=${Uri.encodeQueryComponent('wss://relay.example.org/s3cret-path_1')}',
+      )!;
+      expect(link.hiddenAddress, 'wss://relay.example.org/s3cret-path_1');
+      expect(
+        RelayLink.tryParse(link.toString())?.hiddenAddress,
+        link.hiddenAddress,
+      );
+      expect(
+        RelayLink.tryParse(
+          'conest-relay://relay.example.org?id=r1&key=${Uri.encodeQueryComponent(key)}'
+          '&wss=${Uri.encodeQueryComponent('wss://relay.example.org/')}',
+        ),
+        isNull,
+        reason: 'a hidden address without its secret path is refused',
+      );
+    });
+
+    test('a relay list carries wss entries only with their path', () {
+      final list = parseUnsignedRelayList(
+        jsonEncode({
+          'version': 1,
+          'issuedAt': '2026-10-26T00:00:00Z',
+          'endpoints': [
+            {
+              'kind': 'relay',
+              'host': 'relay.example.org',
+              'port': 443,
+              'protocol': 'wss',
+              'path': '/s3cret-path_1',
+            },
+            {
+              'kind': 'relay',
+              'host': 'relay.example.org',
+              'port': 443,
+              'protocol': 'wss',
+              'path': '/bad path',
+            },
+          ],
+        }),
+      )!;
+      expect(list.endpoints.first.path, '/s3cret-path_1');
+      expect(list.endpoints.last.path, isNull);
     });
   });
 }
