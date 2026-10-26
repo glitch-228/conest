@@ -162,6 +162,9 @@ class _InProcessLanDirectChannel
   /// confirm the fast-path actually carried traffic.
   int acceptedEnvelopes = 0;
 
+  /// File blocks this channel has taken (binary LAN).
+  int acceptedBlocks = 0;
+
   /// nightly.12: per-test knob. When `simulatedReachable == false`, the
   /// `probeReachable` method returns false so the controller's
   /// probe-before-demote gate triggers an actual demotion. Default true
@@ -282,6 +285,7 @@ class _InProcessLanDirectChannel
     final handler = target._blockHandler;
     if (handler == null) return false;
     target.acceptedEnvelopes++;
+    target.acceptedBlocks++;
     await handler(
       LanAttachmentBlock(
         attachmentId: block.attachmentId,
@@ -1307,6 +1311,9 @@ class _InProcessIrohNetwork {
   final envelopes = <RelayEnvelope>[];
   final groupFileHeaders = <GroupFileBinaryHeader>[];
 
+  /// 1:1 file blocks carried (binary Iroh ranges).
+  int attachmentRanges = 0;
+
   /// (sender, recipient) endpoint pairs that cannot reach each other.
   final blockedPairs = <(String, String)>{};
   final blockedEnvelopePairs = <(String, String)>{};
@@ -1423,6 +1430,8 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
     final range = decodeIrohAttachmentRangeFrame(bytes);
     if (range != null && isGroupFileBinary(range.bytes)) {
       network.groupFileHeaders.add(peekGroupFileBinary(range.bytes));
+    } else if (range != null) {
+      network.attachmentRanges++;
     }
     if (range == null) {
       final decoded = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
@@ -3678,6 +3687,55 @@ void main() {
       expect(
         relay.storedEnvelopes.where((e) => e.kind != 'pairing_announcement'),
         isEmpty,
+      );
+    },
+  );
+
+  test(
+    'a file to a peer on both LAN and Iroh goes over both at once',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final aliceLan = _InProcessLanDirectChannel(host: '192.168.61.10');
+      final bobLan = _InProcessLanDirectChannel(host: '192.168.61.11');
+      addTearDown(aliceLan.stop);
+      addTearDown(bobLan.stop);
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.61.10'],
+        lanDirectChannel: aliceLan,
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-striped',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.61.11'],
+        lanDirectChannel: bobLan,
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-striped',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final side in [alice, bob]) {
+        await side.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(
+            irohRelayEnabled: false,
+            lanEnabled: true,
+          ),
+        );
+      }
+      await _pairControllers(alice, bob);
+      final result = await alice
+          .runDebugFileBattleTest(contact: alice.contacts.single, sizeMiB: 15)
+          .timeout(const Duration(seconds: 60));
+      expect(result.success, isTrue, reason: result.detail);
+      expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried some');
+      expect(
+        network.attachmentRanges,
+        greaterThan(0),
+        reason: 'Iroh carried some',
       );
     },
   );

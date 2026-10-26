@@ -117,6 +117,7 @@ import 'storage.dart';
 import 'storage_capacity.dart';
 import 'tor_carrier.dart';
 import 'transport.dart';
+import 'transfer/route_striper.dart';
 import 'content_routing.dart';
 
 part 'delta_attachments_controller.dart';
@@ -21009,6 +21010,92 @@ class MessengerController extends ChangeNotifier {
     return true;
   }
 
+  /// Per peer: how its routes (LAN, Iroh) have been delivering file
+  /// blocks, so the next blocks go where they arrive soonest.
+  final Map<String, RouteStriper<_BlockRoute>> _blockStripers = {};
+
+  RouteStriper<_BlockRoute> _blockStriperFor(String peerDeviceId) {
+    final striper = _blockStripers.remove(peerDeviceId);
+    // The most recently used peers stay (at most 64).
+    while (striper == null && _blockStripers.length >= 64) {
+      _blockStripers.remove(_blockStripers.keys.first);
+    }
+    return _blockStripers[peerDeviceId] =
+        striper ??
+        RouteStriper<_BlockRoute>(
+          priorBytesPerSecond: const {
+            _BlockRoute.lanBinary: 8 * 1024 * 1024,
+            _BlockRoute.iroh: 1024 * 1024,
+          },
+        );
+  }
+
+  /// Sends one file block on the best of [routes] for it; when that is
+  /// late, also on the next (once, within the hedging budget); on a
+  /// failure, on the next. True once any route delivered it.
+  Future<bool> _sendBlockStriped(
+    RouteStriper<_BlockRoute> striper,
+    List<_BlockRoute> routes, {
+    required int bytes,
+    required Future<bool> Function(_BlockRoute route) send,
+    required bool Function() stillActive,
+  }) async {
+    Future<bool> attempt(_BlockRoute route, {bool hedge = false}) {
+      final lease = striper.begin(route, bytes, hedge: hedge);
+      return send(route).then(
+        (ok) {
+          ok ? striper.succeeded(lease) : striper.failed(lease);
+          return ok;
+        },
+        onError: (Object _) {
+          striper.failed(lease);
+          return false;
+        },
+      );
+    }
+
+    final order = striper.order(routes);
+    for (var i = 0; i < order.length; i++) {
+      if (!stillActive()) return false;
+      final route = order[i];
+      final primary = attempt(route);
+      final backup = i + 1 < order.length ? order[i + 1] : null;
+      if (backup == null) return primary;
+      final outcome = await Future.any<int>([
+        primary.then((ok) => ok ? 1 : 0),
+        Future<int>.delayed(striper.hedgeDelay(route), () => 2),
+      ]);
+      if (outcome == 1) return true;
+      if (outcome == 0) continue;
+      if (!stillActive() || !striper.mayHedge(bytes)) {
+        if (await primary) return true;
+        continue;
+      }
+      final hedged = attempt(backup, hedge: true);
+      if (await _firstTrue([primary, hedged])) return true;
+      i++; // Both tried.
+    }
+    return false;
+  }
+
+  /// True as soon as one of [futures] is; false when all are false.
+  static Future<bool> _firstTrue(List<Future<bool>> futures) {
+    final result = Completer<bool>();
+    var left = futures.length;
+    for (final future in futures) {
+      future.then((ok) {
+        left--;
+        if (result.isCompleted) return;
+        if (ok) {
+          result.complete(true);
+        } else if (left == 0) {
+          result.complete(false);
+        }
+      });
+    }
+    return result.future;
+  }
+
   Future<void> _handleAttachmentChunkRequest(
     ContactRecord requester,
     Map<String, dynamic> payload,
@@ -21128,43 +21215,72 @@ class MessengerController extends ChangeNotifier {
         ? lanChannel as BinaryLanDirectChannel
         : null;
     final binaryLanEndpoint = _peerLanDirect[requester.deviceId];
-    if (!irohOnly &&
+    final lanUsable =
+        !irohOnly &&
         _effectiveTransports(requester).lan &&
         binaryLanChannel != null &&
         binaryLanEndpoint != null &&
         binaryLanEndpoint.binaryBlockVersion >= 1 &&
-        _lanDirectEndpointUsable(binaryLanEndpoint)) {
-      var ok = await binaryLanChannel.putAttachmentBlock(
-        host: binaryLanEndpoint.host,
+        _lanDirectEndpointUsable(binaryLanEndpoint);
+    var irohUsable = irohBinarySupported && !state.lanOnly;
+    var irohLimited = false;
+    if (irohUsable) {
+      final peerLimit = payload['maxIrohBytes'];
+      if (!_irohFileAllowed(state.descriptor.sizeBytes) ||
+          (peerLimit is int &&
+              peerLimit >= 0 &&
+              state.descriptor.sizeBytes > peerLimit)) {
+        irohUsable = false;
+        irohLimited = true;
+      }
+    }
+    final allowIrohRelay =
+        (_outboundDebugAttachmentTests[attachmentId]?.allowIrohRelay == true) ||
+        (!irohOnly && (!state.requiresLan || allowLargeIrohRelay));
+    // Both counted once, whichever route delivers first (a late block may
+    // go on a second route too).
+    var delivered = false;
+    void deliveredOn(OutboundDeliveryRoute route, MessageRoute counted) {
+      if (delivered) return;
+      delivered = true;
+      if (!_isActiveOutbound(state.peerDeviceId, attachmentId)) return;
+      if (index > state.highestChunkSent) state.highestChunkSent = index;
+      state.lastChunkAt = DateTime.now().toUtc();
+      state.consecutiveChunkFailures = 0;
+      state.lastDeliveryRoute = route;
+      _countServedBlock(state, index, counted);
+      _armOutboundStallTimer(requester, attachmentId: attachmentId);
+      _notifyTransferProgress();
+    }
+
+    Future<bool> sendOnLan() async {
+      final block = LanAttachmentBlock(
+        attachmentId: attachmentId,
+        index: index,
+        hash: digestBytes,
+        ciphertext: packedChunk,
+      );
+      var ok = await binaryLanChannel!.putAttachmentBlock(
+        host: binaryLanEndpoint!.host,
         port: binaryLanEndpoint.port,
-        block: LanAttachmentBlock(
-          attachmentId: attachmentId,
-          index: index,
-          hash: digestBytes,
-          ciphertext: packedChunk,
-        ),
+        block: block,
         timeout: _binaryLanBlockTimeout,
       );
-      if (!stillActive()) return;
+      if (!stillActive()) return false;
       if (!ok) {
         // The block is immutable, independently authenticated, and
         // idempotent by attachment/index. One quick retry absorbs Wi-Fi
         // handoff/socket churn without forcing the receiver to wait for its
         // conservative 30-second durable-range timer.
         await Future<void>.delayed(const Duration(milliseconds: 250));
-        if (!stillActive()) return;
+        if (!stillActive()) return false;
         ok = await binaryLanChannel.putAttachmentBlock(
           host: binaryLanEndpoint.host,
           port: binaryLanEndpoint.port,
-          block: LanAttachmentBlock(
-            attachmentId: attachmentId,
-            index: index,
-            hash: digestBytes,
-            ciphertext: packedChunk,
-          ),
+          block: block,
           timeout: _binaryLanBlockTimeout,
         );
-        if (!stillActive()) return;
+        if (!stillActive()) return false;
         appendDebugLog(
           'LAN-binary immediate retry chunk[$index] to ${requester.alias} '
           'result=${ok ? "ok" : "fail"}',
@@ -21177,43 +21293,14 @@ class MessengerController extends ChangeNotifier {
       );
       if (ok) {
         _onLanDirectPutSuccess(requester.deviceId);
-        if (_isActiveOutbound(state.peerDeviceId, attachmentId)) {
-          if (index > state.highestChunkSent) state.highestChunkSent = index;
-          state.lastChunkAt = DateTime.now().toUtc();
-          state.consecutiveChunkFailures = 0;
-          state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
-          _countServedBlock(state, index, MessageRoute.lanDirect);
-          _armOutboundStallTimer(requester, attachmentId: attachmentId);
-          _notifyTransferProgress();
-        }
-        return;
+        deliveredOn(OutboundDeliveryRoute.lanDirect, MessageRoute.lanDirect);
+        return true;
       }
       unawaited(_onLanDirectPutFailure(requester.deviceId));
-      if (state.lanOnly && state.descriptor.chunkSize > _attachmentChunkSize) {
-        _setTransferSessionState(
-          attachmentId,
-          TransferState.reconnecting,
-          error: 'Binary LAN block failed; retrying without losing progress.',
-        );
-        // The peer explicitly advertised binary v1. A failed PUT is a
-        // transient path failure, not evidence of protocol incompatibility;
-        // the receiver's durable-range retry will request this same block.
-        return;
-      }
+      return false;
     }
-    if (irohBinarySupported && !state.lanOnly) {
-      final peerLimit = payload['maxIrohBytes'];
-      if (!_irohFileAllowed(state.descriptor.sizeBytes) ||
-          (peerLimit is int &&
-              peerLimit >= 0 &&
-              state.descriptor.sizeBytes > peerLimit)) {
-        _waitForLanBecauseOfIrohLimit(attachmentId);
-        return;
-      }
-      final allowIrohRelay =
-          (_outboundDebugAttachmentTests[attachmentId]?.allowIrohRelay ==
-              true) ||
-          (!irohOnly && (!state.requiresLan || allowLargeIrohRelay));
+
+    Future<bool> sendOnIroh() async {
       try {
         final receipt = await _deliverIrohAttachmentRange(
           contact: requester,
@@ -21230,27 +21317,14 @@ class MessengerController extends ChangeNotifier {
             'Iroh-binary stream chunk[$index] to ${requester.alias} '
             'path=${receipt.route.path.name}',
           );
-          if (_isActiveOutbound(state.peerDeviceId, attachmentId)) {
-            if (index > state.highestChunkSent) {
-              state.highestChunkSent = index;
-            }
-            state.lastChunkAt = DateTime.now().toUtc();
-            state.consecutiveChunkFailures = 0;
-            state.lastDeliveryRoute =
-                receipt.route.path == TransportPathKind.relayed
+          final relayed = receipt.route.path == TransportPathKind.relayed;
+          deliveredOn(
+            relayed
                 ? OutboundDeliveryRoute.irohRelay
-                : OutboundDeliveryRoute.irohDirect;
-            _countServedBlock(
-              state,
-              index,
-              receipt.route.path == TransportPathKind.relayed
-                  ? MessageRoute.irohRelay
-                  : MessageRoute.irohDirect,
-            );
-            _armOutboundStallTimer(requester, attachmentId: attachmentId);
-            _notifyTransferProgress();
-          }
-          return;
+                : OutboundDeliveryRoute.irohDirect,
+            relayed ? MessageRoute.irohRelay : MessageRoute.irohDirect,
+          );
+          return true;
         }
       } catch (error) {
         appendDebugLog(
@@ -21258,19 +21332,56 @@ class MessengerController extends ChangeNotifier {
           '$error',
         );
       }
-      if (!stillActive()) return;
-      if (state.requiresLan || irohOnly) {
+      return false;
+    }
+
+    // M27a: with LAN and Iroh both open to this peer, each block goes on
+    // the one that delivers best given the blocks already on it, so both
+    // carry the file at once (and a late block may go on the other too).
+    final routes = <_BlockRoute>[
+      if (lanUsable) _BlockRoute.lanBinary,
+      if (irohUsable) _BlockRoute.iroh,
+    ];
+    if (routes.isNotEmpty) {
+      final sent = await _sendBlockStriped(
+        _blockStriperFor(requester.deviceId),
+        routes,
+        bytes: packedChunk.length,
+        send: (route) =>
+            route == _BlockRoute.lanBinary ? sendOnLan() : sendOnIroh(),
+        stillActive: stillActive,
+      );
+      if (sent || !stillActive()) return;
+      if (lanUsable &&
+          !irohUsable &&
+          state.lanOnly &&
+          state.descriptor.chunkSize > _attachmentChunkSize) {
         _setTransferSessionState(
           attachmentId,
-          allowIrohRelay
-              ? TransferState.reconnecting
-              : TransferState.waitingForLan,
-          error: allowIrohRelay
-              ? 'Iroh path failed; retrying the verified block.'
-              : 'Direct Iroh is unavailable; waiting without using a relay.',
+          TransferState.reconnecting,
+          error: 'Binary LAN block failed; retrying without losing progress.',
         );
+        // The peer explicitly advertised binary v1. A failed PUT is a
+        // transient path failure, not evidence of protocol incompatibility;
+        // the receiver's durable-range retry will request this same block.
         return;
       }
+    }
+    if (irohLimited) {
+      _waitForLanBecauseOfIrohLimit(attachmentId);
+      return;
+    }
+    if (irohUsable && (state.requiresLan || irohOnly)) {
+      _setTransferSessionState(
+        attachmentId,
+        allowIrohRelay
+            ? TransferState.reconnecting
+            : TransferState.waitingForLan,
+        error: allowIrohRelay
+            ? 'Iroh path failed; retrying the verified block.'
+            : 'Direct Iroh is unavailable; waiting without using a relay.',
+      );
+      return;
     }
     if (state.descriptor.chunkSize > _attachmentChunkSize) {
       _setTransferSessionState(
@@ -37412,6 +37523,9 @@ class _HeartbeatPassResult {
   final int sentCount;
   final bool changed;
 }
+
+/// Routes a file block can take to a peer (see [RouteStriper]).
+enum _BlockRoute { lanBinary, iroh }
 
 class _OutboundAttachmentState {
   /// Bytes sent per route (blocks sent again count again).
