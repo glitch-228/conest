@@ -8388,5 +8388,41 @@
   "routeXmppDescription": "Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.",
   "@routeXmppDescription": {
     "description": "Presentation text for message route information: the XMPP carrier."
+  },
+  "xmppCarrierSubtitle": "Carry messages through an XMPP (Jabber) account",
+  "@xmppCarrierSubtitle": {
+    "description": "Settings: subtitle of the XMPP carrier switch."
+  },
+  "xmppCreatedAccount": "Account made by Conest",
+  "@xmppCreatedAccount": {
+    "description": "Settings: the XMPP account was created by Conest."
+  },
+  "xmppOwnAccount": "Your own account",
+  "@xmppOwnAccount": {
+    "description": "Settings: the XMPP account is the user's own."
+  },
+  "xmppChangeAccount": "Change account",
+  "@xmppChangeAccount": {
+    "description": "Settings: button to change the XMPP carrier account."
+  },
+  "xmppServerField": "XMPP server (empty: the first one that answers here)",
+  "@xmppServerField": {
+    "description": "Settings: field for the XMPP server on which Conest creates an account."
+  },
+  "xmppUseOwnAccount": "Use my own XMPP account",
+  "@xmppUseOwnAccount": {
+    "description": "Settings: checkbox to use the user's own XMPP account."
+  },
+  "xmppOwnAccountNote": "Conest signs in as an extra device; your other XMPP apps do not see its messages.",
+  "@xmppOwnAccountNote": {
+    "description": "Settings: explanation of using one's own XMPP account."
+  },
+  "xmppAddressField": "XMPP address (name@server)",
+  "@xmppAddressField": {
+    "description": "Settings: field for an XMPP address."
+  },
+  "xmppPasswordField": "Password",
+  "@xmppPasswordField": {
+    "description": "Settings: field for the XMPP account password."
   }
 }

@@ -1459,5 +1459,14 @@
   "notificationPreviewFull": "الاسم والرسالة",
   "notificationPreviewSender": "الاسم فقط",
   "notificationPreviewHidden": "لا شيء",
-  "routeXmppDescription": "تحمله خوادم XMPP، مع بقائه مشفّرًا من طرف إلى طرف بواسطة Conest؛ ترى الخوادم الحسابين والتوقيت."
+  "routeXmppDescription": "تحمله خوادم XMPP، مع بقائه مشفّرًا من طرف إلى طرف بواسطة Conest؛ ترى الخوادم الحسابين والتوقيت.",
+  "xmppCarrierSubtitle": "نقل الرسائل عبر حساب XMPP (Jabber)",
+  "xmppCreatedAccount": "حساب أنشأه Conest",
+  "xmppOwnAccount": "حسابك الخاص",
+  "xmppChangeAccount": "تغيير الحساب",
+  "xmppServerField": "خادم XMPP (فارغ: أول خادم يستجيب هنا)",
+  "xmppUseOwnAccount": "استخدام حساب XMPP الخاص بي",
+  "xmppOwnAccountNote": "يسجّل Conest الدخول كجهاز إضافي؛ لا ترى تطبيقات XMPP الأخرى رسائله.",
+  "xmppAddressField": "عنوان XMPP (الاسم@الخادم)",
+  "xmppPasswordField": "كلمة المرور"
 }

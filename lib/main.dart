@@ -106,6 +106,7 @@ import 'src/ui/signature_decoration.dart';
 import 'src/ui/signature_panels.dart';
 import 'src/ui/signature_widgets.dart';
 import 'src/ui/tor_carrier_panel.dart';
+import 'src/ui/xmpp_carrier_panel.dart';
 import 'src/update_service.dart';
 import 'src/ui/linked_text.dart';
 
@@ -16105,6 +16106,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             BitchatCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             TorCarrierPanel(controller: widget.controller),
+                            const SizedBox(height: 12),
+                            XmppCarrierPanel(controller: widget.controller),
                             if (widget
                                 .controller
                                 .userMode

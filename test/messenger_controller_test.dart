@@ -122,10 +122,19 @@ import 'support/fake_tor.dart';
 import 'support/fake_xmpp_server.dart';
 import 'package:conest/src/xmpp/xmpp_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
+import 'package:conest/src/ui/xmpp_carrier_panel.dart';
 
 part 'delta_controller_content_tests.dart';
 part 'l10n_controller_cases.dart';
 part 'xmpp_controller_cases.dart';
+
+final _unreachableXmppNetwork = XmppNetwork(
+  connector: (host, port, {required tls, alpn}) =>
+      Future.error(const SocketException('no XMPP in tests')),
+  webSocketConnector: (url) =>
+      Future.error(const SocketException('no XMPP in tests')),
+  webSocketLookup: null,
+);
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
 
@@ -1143,7 +1152,8 @@ Future<MessengerController> _createController({
 }) async {
   final controller = MessengerController(
     keepErrorHistory: keepErrorHistory,
-    xmppNetwork: xmppNetwork,
+    // No real XMPP server is ever contacted from tests.
+    xmppNetwork: xmppNetwork ?? _unreachableXmppNetwork,
     energyPolicy: energyPolicy,
     torApi: torApi,
     bitchatConnector: bitchatConnector,

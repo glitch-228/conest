@@ -1459,5 +1459,14 @@
   "notificationPreviewFull": "Nama dan pesan",
   "notificationPreviewSender": "Nama saja",
   "notificationPreviewHidden": "Tidak ada",
-  "routeXmppDescription": "Dibawa server XMPP, tetap terenkripsi ujung ke ujung oleh Conest; server melihat kedua akun dan waktunya."
+  "routeXmppDescription": "Dibawa server XMPP, tetap terenkripsi ujung ke ujung oleh Conest; server melihat kedua akun dan waktunya.",
+  "xmppCarrierSubtitle": "Bawa pesan melalui akun XMPP (Jabber)",
+  "xmppCreatedAccount": "Akun dibuat oleh Conest",
+  "xmppOwnAccount": "Akun Anda sendiri",
+  "xmppChangeAccount": "Ganti akun",
+  "xmppServerField": "Server XMPP (kosong: yang pertama menjawab di sini)",
+  "xmppUseOwnAccount": "Gunakan akun XMPP saya sendiri",
+  "xmppOwnAccountNote": "Conest masuk sebagai perangkat tambahan; aplikasi XMPP Anda yang lain tidak melihat pesannya.",
+  "xmppAddressField": "Alamat XMPP (nama@server)",
+  "xmppPasswordField": "Kata sandi"
 }

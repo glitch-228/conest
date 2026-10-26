@@ -102,6 +102,8 @@ class _TransportsStepState extends State<TransportsStep> {
             await widget.controller.enableNostrCarrier();
           case TransportKind.deltaChat:
             await widget.controller.enableChatmailCarrier();
+          case TransportKind.xmpp:
+            await widget.controller.enableXmppCarrier();
           default:
             break;
         }

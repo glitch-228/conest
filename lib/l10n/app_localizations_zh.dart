@@ -5368,4 +5368,31 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get routeXmppDescription =>
       '由 XMPP 服务器传送，仍由 Conest 端到端加密；服务器能看到双方账号和时间。';
+
+  @override
+  String get xmppCarrierSubtitle => '通过 XMPP（Jabber）账号传送消息';
+
+  @override
+  String get xmppCreatedAccount => '由 Conest 创建的账号';
+
+  @override
+  String get xmppOwnAccount => '你自己的账号';
+
+  @override
+  String get xmppChangeAccount => '更换账号';
+
+  @override
+  String get xmppServerField => 'XMPP 服务器（留空：此处第一个响应的服务器）';
+
+  @override
+  String get xmppUseOwnAccount => '使用我自己的 XMPP 账号';
+
+  @override
+  String get xmppOwnAccountNote => 'Conest 以额外设备身份登录；你的其他 XMPP 应用看不到它的消息。';
+
+  @override
+  String get xmppAddressField => 'XMPP 地址（名称@服务器）';
+
+  @override
+  String get xmppPasswordField => '密码';
 }

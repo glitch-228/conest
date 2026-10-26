@@ -40,6 +40,9 @@ enum ApplicationCapability {
   /// Takes group file frames over relays and Tor too (group_file_part),
   /// not only LAN and Iroh.
   groupFileRelayV1,
+
+  /// Understands XMPP carrier addresses (`jid|resource`) and frames (M51).
+  xmppCarrierV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

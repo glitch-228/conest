@@ -1459,5 +1459,14 @@
   "notificationPreviewFull": "名字和消息",
   "notificationPreviewSender": "仅名字",
   "notificationPreviewHidden": "不显示",
-  "routeXmppDescription": "由 XMPP 服务器传送，仍由 Conest 端到端加密；服务器能看到双方账号和时间。"
+  "routeXmppDescription": "由 XMPP 服务器传送，仍由 Conest 端到端加密；服务器能看到双方账号和时间。",
+  "xmppCarrierSubtitle": "通过 XMPP（Jabber）账号传送消息",
+  "xmppCreatedAccount": "由 Conest 创建的账号",
+  "xmppOwnAccount": "你自己的账号",
+  "xmppChangeAccount": "更换账号",
+  "xmppServerField": "XMPP 服务器（留空：此处第一个响应的服务器）",
+  "xmppUseOwnAccount": "使用我自己的 XMPP 账号",
+  "xmppOwnAccountNote": "Conest 以额外设备身份登录；你的其他 XMPP 应用看不到它的消息。",
+  "xmppAddressField": "XMPP 地址（名称@服务器）",
+  "xmppPasswordField": "密码"
 }

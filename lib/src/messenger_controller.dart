@@ -35689,6 +35689,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.multiRouteMessagesV1,
       ApplicationCapability.routeProbeV1,
       ApplicationCapability.groupFileRelayV1,
+      ApplicationCapability.xmppCarrierV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,

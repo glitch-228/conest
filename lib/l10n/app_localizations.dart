@@ -8920,6 +8920,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.'**
   String get routeXmppDescription;
+
+  /// Settings: subtitle of the XMPP carrier switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Carry messages through an XMPP (Jabber) account'**
+  String get xmppCarrierSubtitle;
+
+  /// Settings: the XMPP account was created by Conest.
+  ///
+  /// In en, this message translates to:
+  /// **'Account made by Conest'**
+  String get xmppCreatedAccount;
+
+  /// Settings: the XMPP account is the user's own.
+  ///
+  /// In en, this message translates to:
+  /// **'Your own account'**
+  String get xmppOwnAccount;
+
+  /// Settings: button to change the XMPP carrier account.
+  ///
+  /// In en, this message translates to:
+  /// **'Change account'**
+  String get xmppChangeAccount;
+
+  /// Settings: field for the XMPP server on which Conest creates an account.
+  ///
+  /// In en, this message translates to:
+  /// **'XMPP server (empty: the first one that answers here)'**
+  String get xmppServerField;
+
+  /// Settings: checkbox to use the user's own XMPP account.
+  ///
+  /// In en, this message translates to:
+  /// **'Use my own XMPP account'**
+  String get xmppUseOwnAccount;
+
+  /// Settings: explanation of using one's own XMPP account.
+  ///
+  /// In en, this message translates to:
+  /// **'Conest signs in as an extra device; your other XMPP apps do not see its messages.'**
+  String get xmppOwnAccountNote;
+
+  /// Settings: field for an XMPP address.
+  ///
+  /// In en, this message translates to:
+  /// **'XMPP address (name@server)'**
+  String get xmppAddressField;
+
+  /// Settings: field for the XMPP account password.
+  ///
+  /// In en, this message translates to:
+  /// **'Password'**
+  String get xmppPasswordField;
 }
 
 class _AppLocalizationsDelegate

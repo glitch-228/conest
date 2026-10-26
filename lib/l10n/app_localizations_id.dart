@@ -5600,4 +5600,33 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get routeXmppDescription =>
       'Dibawa server XMPP, tetap terenkripsi ujung ke ujung oleh Conest; server melihat kedua akun dan waktunya.';
+
+  @override
+  String get xmppCarrierSubtitle => 'Bawa pesan melalui akun XMPP (Jabber)';
+
+  @override
+  String get xmppCreatedAccount => 'Akun dibuat oleh Conest';
+
+  @override
+  String get xmppOwnAccount => 'Akun Anda sendiri';
+
+  @override
+  String get xmppChangeAccount => 'Ganti akun';
+
+  @override
+  String get xmppServerField =>
+      'Server XMPP (kosong: yang pertama menjawab di sini)';
+
+  @override
+  String get xmppUseOwnAccount => 'Gunakan akun XMPP saya sendiri';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'Conest masuk sebagai perangkat tambahan; aplikasi XMPP Anda yang lain tidak melihat pesannya.';
+
+  @override
+  String get xmppAddressField => 'Alamat XMPP (nama@server)';
+
+  @override
+  String get xmppPasswordField => 'Kata sandi';
 }

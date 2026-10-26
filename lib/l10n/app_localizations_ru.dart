@@ -5738,4 +5738,34 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get routeXmppDescription =>
       'Передаётся серверами XMPP, по-прежнему со сквозным шифрованием Conest; серверы видят обе учётные записи и время.';
+
+  @override
+  String get xmppCarrierSubtitle =>
+      'Передавать сообщения через учётную запись XMPP (Jabber)';
+
+  @override
+  String get xmppCreatedAccount => 'Учётная запись создана Conest';
+
+  @override
+  String get xmppOwnAccount => 'Ваша учётная запись';
+
+  @override
+  String get xmppChangeAccount => 'Сменить учётную запись';
+
+  @override
+  String get xmppServerField =>
+      'Сервер XMPP (пусто: первый, что отвечает здесь)';
+
+  @override
+  String get xmppUseOwnAccount => 'Использовать свою учётную запись XMPP';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'Conest входит как ещё одно устройство; другие ваши приложения XMPP не видят его сообщений.';
+
+  @override
+  String get xmppAddressField => 'Адрес XMPP (имя@сервер)';
+
+  @override
+  String get xmppPasswordField => 'Пароль';
 }

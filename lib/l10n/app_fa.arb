@@ -1459,5 +1459,14 @@
   "notificationPreviewFull": "نام و پیام",
   "notificationPreviewSender": "فقط نام",
   "notificationPreviewHidden": "هیچ",
-  "routeXmppDescription": "خادم‌های XMPP آن را می‌برند و همچنان با Conest سرتاسری رمزگذاری شده است؛ خادم‌ها هر دو حساب و زمان را می‌بینند."
+  "routeXmppDescription": "خادم‌های XMPP آن را می‌برند و همچنان با Conest سرتاسری رمزگذاری شده است؛ خادم‌ها هر دو حساب و زمان را می‌بینند.",
+  "xmppCarrierSubtitle": "انتقال پیام‌ها از طریق یک حساب XMPP (Jabber)",
+  "xmppCreatedAccount": "حسابی که Conest ساخته است",
+  "xmppOwnAccount": "حساب خودتان",
+  "xmppChangeAccount": "تغییر حساب",
+  "xmppServerField": "خادم XMPP (خالی: نخستین خادمی که اینجا پاسخ می‌دهد)",
+  "xmppUseOwnAccount": "استفاده از حساب XMPP خودم",
+  "xmppOwnAccountNote": "Conest به‌عنوان یک دستگاه اضافه وارد می‌شود؛ برنامه‌های دیگر XMPP شما پیام‌های آن را نمی‌بینند.",
+  "xmppAddressField": "نشانی XMPP (نام@خادم)",
+  "xmppPasswordField": "گذرواژه"
 }

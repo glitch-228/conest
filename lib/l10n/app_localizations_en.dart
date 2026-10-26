@@ -5613,4 +5613,34 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get routeXmppDescription =>
       'Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.';
+
+  @override
+  String get xmppCarrierSubtitle =>
+      'Carry messages through an XMPP (Jabber) account';
+
+  @override
+  String get xmppCreatedAccount => 'Account made by Conest';
+
+  @override
+  String get xmppOwnAccount => 'Your own account';
+
+  @override
+  String get xmppChangeAccount => 'Change account';
+
+  @override
+  String get xmppServerField =>
+      'XMPP server (empty: the first one that answers here)';
+
+  @override
+  String get xmppUseOwnAccount => 'Use my own XMPP account';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'Conest signs in as an extra device; your other XMPP apps do not see its messages.';
+
+  @override
+  String get xmppAddressField => 'XMPP address (name@server)';
+
+  @override
+  String get xmppPasswordField => 'Password';
 }

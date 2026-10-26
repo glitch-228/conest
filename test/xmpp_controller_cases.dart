@@ -201,5 +201,36 @@ void _xmppControllerTests() {
       );
       expect(alice.xmppCarrierConfig, isNull);
     });
+    testWidgets('Settings shows the XMPP account and its state', (
+      tester,
+    ) async {
+      final server = FakeXmppServer()..addAccount('alice', 'pa');
+      late MessengerController alice;
+      await tester.runAsync(() async {
+        alice = await person(server, _FakeRelayClient(), 'Alice');
+        await alice.enableXmppCarrier(jid: 'alice@xmpp.test', password: 'pa');
+        await connected(alice);
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: XmppCarrierPanel(controller: alice),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('alice@xmpp.test'), findsOneWidget);
+      expect(find.textContaining('Your own account'), findsOneWidget);
+      // Changing the account offers the user's own account, filled in.
+      await tester.tap(find.byKey(const ValueKey('xmpp-change-account')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('xmpp-jid-field')), findsOneWidget);
+      expect(find.byKey(const ValueKey('xmpp-server-field')), findsNothing);
+      await tester.runAsync(alice.disableXmppCarrier);
+    });
   });
 }

@@ -1459,5 +1459,14 @@
   "notificationPreviewFull": "Имя и сообщение",
   "notificationPreviewSender": "Только имя",
   "notificationPreviewHidden": "Ничего",
-  "routeXmppDescription": "Передаётся серверами XMPP, по-прежнему со сквозным шифрованием Conest; серверы видят обе учётные записи и время."
+  "routeXmppDescription": "Передаётся серверами XMPP, по-прежнему со сквозным шифрованием Conest; серверы видят обе учётные записи и время.",
+  "xmppCarrierSubtitle": "Передавать сообщения через учётную запись XMPP (Jabber)",
+  "xmppCreatedAccount": "Учётная запись создана Conest",
+  "xmppOwnAccount": "Ваша учётная запись",
+  "xmppChangeAccount": "Сменить учётную запись",
+  "xmppServerField": "Сервер XMPP (пусто: первый, что отвечает здесь)",
+  "xmppUseOwnAccount": "Использовать свою учётную запись XMPP",
+  "xmppOwnAccountNote": "Conest входит как ещё одно устройство; другие ваши приложения XMPP не видят его сообщений.",
+  "xmppAddressField": "Адрес XMPP (имя@сервер)",
+  "xmppPasswordField": "Пароль"
 }

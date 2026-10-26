@@ -5614,4 +5614,34 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get routeXmppDescription =>
       'خادم‌های XMPP آن را می‌برند و همچنان با Conest سرتاسری رمزگذاری شده است؛ خادم‌ها هر دو حساب و زمان را می‌بینند.';
+
+  @override
+  String get xmppCarrierSubtitle =>
+      'انتقال پیام‌ها از طریق یک حساب XMPP (Jabber)';
+
+  @override
+  String get xmppCreatedAccount => 'حسابی که Conest ساخته است';
+
+  @override
+  String get xmppOwnAccount => 'حساب خودتان';
+
+  @override
+  String get xmppChangeAccount => 'تغییر حساب';
+
+  @override
+  String get xmppServerField =>
+      'خادم XMPP (خالی: نخستین خادمی که اینجا پاسخ می‌دهد)';
+
+  @override
+  String get xmppUseOwnAccount => 'استفاده از حساب XMPP خودم';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'Conest به‌عنوان یک دستگاه اضافه وارد می‌شود؛ برنامه‌های دیگر XMPP شما پیام‌های آن را نمی‌بینند.';
+
+  @override
+  String get xmppAddressField => 'نشانی XMPP (نام@خادم)';
+
+  @override
+  String get xmppPasswordField => 'گذرواژه';
 }
