@@ -10,6 +10,7 @@ mod http;
 mod identity;
 mod legacy;
 mod limits;
+mod outer;
 mod owners;
 mod registration;
 mod server;
@@ -140,13 +141,51 @@ fn main() -> std::io::Result<()> {
     }
 
     if config.ext.legacy_threads {
+        if config.ext.tls_bind.is_some() {
+            eprintln!("TLS needs the tokio server: drop --legacy-threads");
+            std::process::exit(2);
+        }
         return legacy::run(listener, state);
     }
+    let tls = match &config.ext.tls_bind {
+        Some(bind) => {
+            let layer = match outer::tls_layer(&state) {
+                Ok(Some(layer)) => layer,
+                Ok(None) => {
+                    eprintln!("--tls-bind needs --tls-cert and --tls-key");
+                    std::process::exit(2);
+                }
+                Err(message) => {
+                    eprintln!("TLS setup failed: {message}");
+                    std::process::exit(2);
+                }
+            };
+            let tls_listener = std::net::TcpListener::bind(bind)?;
+            tls_listener.set_nonblocking(true)?;
+            println!(
+                "conest relay TLS on {bind}, WebSocket path {}",
+                state.ws_path().unwrap_or_default()
+            );
+            Some((tls_listener, layer))
+        }
+        None => None,
+    };
     listener.set_nonblocking(true)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async move {
+        if let Some((tls_listener, layer)) = tls {
+            let tls_listener = tokio::net::TcpListener::from_std(tls_listener)?;
+            let state = state.clone();
+            tokio::spawn(async move {
+                if let Err(error) =
+                    outer::serve_outer(tls_listener, std::sync::Arc::new(layer), state).await
+                {
+                    eprintln!("relay TLS listener stopped: {error}");
+                }
+            });
+        }
         let listener = tokio::net::TcpListener::from_std(listener)?;
         server::serve(listener, state).await
     })

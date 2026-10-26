@@ -122,6 +122,17 @@ pub(crate) struct ExtConfig {
     pub(crate) account_quota_bytes: u64,
     /// How long a token lasts (clients refresh before).
     pub(crate) token_lifetime: Duration,
+    /// Where TLS (the outer layer) listens, e.g. 0.0.0.0:443 (off: none).
+    pub(crate) tls_bind: Option<String>,
+    /// The certificate chain and private key (PEM) TLS serves.
+    pub(crate) tls_cert: Option<PathBuf>,
+    pub(crate) tls_key: Option<PathBuf>,
+    /// The secret WebSocket path (default: made once, kept).
+    pub(crate) ws_path: Option<String>,
+    /// What everything else on the TLS port gets: files from a directory,
+    /// or a reverse proxy to `host:port` (default: a plain welcome page).
+    pub(crate) decoy_dir: Option<PathBuf>,
+    pub(crate) decoy_proxy: Option<String>,
 }
 
 impl Default for ExtConfig {
@@ -141,6 +152,12 @@ impl Default for ExtConfig {
             registration_password: None,
             account_quota_bytes: DEFAULT_MAX_STORE_BYTES_PER_MINUTE,
             token_lifetime: DEFAULT_TOKEN_LIFETIME,
+            tls_bind: None,
+            tls_cert: None,
+            tls_key: None,
+            ws_path: None,
+            decoy_dir: None,
+            decoy_proxy: None,
         }
     }
 }
@@ -408,6 +425,24 @@ impl RelayConfig {
                 "--registration-password" => {
                     config.ext.registration_password = Some(parse_next_string(&mut args, &arg)?);
                 }
+                "--tls-bind" => {
+                    config.ext.tls_bind = Some(parse_next_string(&mut args, &arg)?);
+                }
+                "--tls-cert" => {
+                    config.ext.tls_cert = Some(PathBuf::from(parse_next_string(&mut args, &arg)?));
+                }
+                "--tls-key" => {
+                    config.ext.tls_key = Some(PathBuf::from(parse_next_string(&mut args, &arg)?));
+                }
+                "--ws-path" => {
+                    config.ext.ws_path = Some(parse_next_string(&mut args, &arg)?);
+                }
+                "--decoy-dir" => {
+                    config.ext.decoy_dir = Some(PathBuf::from(parse_next_string(&mut args, &arg)?));
+                }
+                "--decoy-proxy" => {
+                    config.ext.decoy_proxy = Some(parse_next_string(&mut args, &arg)?);
+                }
                 "--account-quota-bytes" => {
                     config.ext.account_quota_bytes = parse_next_u64(&mut args, &arg)?;
                 }
@@ -457,6 +492,24 @@ impl RelayConfig {
         }
         if config.max_mailbox_bytes == 0 {
             return Err("max mailbox bytes must be greater than zero".to_owned());
+        }
+        if config.ext.tls_bind.is_some()
+            && (config.ext.tls_cert.is_none() || config.ext.tls_key.is_none())
+        {
+            return Err("--tls-bind needs --tls-cert and --tls-key".to_owned());
+        }
+        if let Some(path) = &config.ext.ws_path {
+            let path = path.trim_start_matches('/');
+            if path.len() < 8
+                || path.len() > 64
+                || !path
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+            {
+                return Err(
+                    "--ws-path must be 8..64 letters, digits, - or _ (it is a secret)".to_owned(),
+                );
+            }
         }
         if config.ext.registration == crate::registration::RegistrationPolicy::Password
             && config
@@ -577,7 +630,11 @@ pub(crate) fn usage() -> String {
            --registration open|invite|password|closed  (default closed)\n\
            --registration-password TEXT     (or CONEST_RELAY_REGISTRATION_PASSWORD)\n\
            --account-quota-bytes N          an account's bytes a minute\n\
-           --token-days N                   how long a token lasts (default 30)\n\n\
+           --token-days N                   how long a token lasts (default 30)\n\
+           --tls-bind ADDR --tls-cert PEM --tls-key PEM  TLS (e.g. on 443) with a\n\
+                                  WebSocket on a secret path and a decoy site\n\
+           --ws-path SECRET       the WebSocket path (default: made once, kept)\n\
+           --decoy-dir DIR | --decoy-proxy HOST:PORT  what everyone else sees\n\n\
          Admin: conest_relay admin [--database-path PATH] invite create|invite list|\n\
                 account list|account remove KEY|quota set KEY BYTES"
     )
