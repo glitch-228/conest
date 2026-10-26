@@ -13,7 +13,7 @@ use crate::http::{
 };
 use crate::limits::peer_key;
 use crate::storage::RelayState;
-use crate::v1::{handle_request_bytes, handle_udp_datagram};
+use crate::v1::handle_request_bytes;
 
 /// Writes to a stream that must take the whole response by a deadline from
 /// its first byte: a client reading a byte at a time cannot hold a worker.
@@ -183,17 +183,12 @@ pub(crate) fn serve_udp(socket: UdpSocket, state: RelayState, config: RelayConfi
     loop {
         match socket.recv_from(&mut buffer) {
             Ok((bytes_read, peer)) => {
-                let response = handle_udp_datagram(&buffer[..bytes_read], bytes_read, &state, peer);
-                // Nothing goes back for what is refused or invalid.
-                if response.is_null() {
+                // Sealed or cleartext, as the datagram came. Nothing goes
+                // back for what is refused or invalid.
+                let Some(response_bytes) =
+                    crate::udp_sealed::answer_datagram(&buffer[..bytes_read], &state, peer)
+                else {
                     continue;
-                }
-                let response_bytes = match serde_json::to_vec(&response) {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        eprintln!("relay udp encode error: {error}");
-                        continue;
-                    }
                 };
                 if let Err(error) = socket.send_to(&response_bytes, peer) {
                     eprintln!("relay udp send error: {error}");

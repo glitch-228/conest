@@ -3,13 +3,16 @@ import 'circumvention/circumvention.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'models.dart';
 import 'native_ed25519.dart';
 import 'relay_v2/noise_nk.dart';
 import 'relay_v2/session.dart';
+import 'relay_v2/udp_seal.dart';
 import 'relay_v2/websocket_channel.dart';
 
 class RelayHealthInfo {
@@ -84,6 +87,7 @@ class RelayV2Info {
     this.tier1,
     this.registration,
     this.hiddenAddress,
+    this.udpSealed = false,
   });
 
   final String identityPublicKeyBase64;
@@ -105,6 +109,9 @@ class RelayV2Info {
 
   /// The relay's hidden address (`wss://…`), told inside a session only.
   final String? hiddenAddress;
+
+  /// Whether the relay opens UDP datagrams sealed under its session key.
+  final bool udpSealed;
 
   bool get sessions => noiseKey != null;
 }
@@ -623,6 +630,30 @@ class RelayClient {
       // sending inline-signed responses (legacy path below).
       'sig_mode': 'detached',
     };
+    if (protocol == PeerRouteProtocol.udp &&
+        action != 'health' &&
+        _hasExpectedPin(expectedIdentityPublicKeyBase64)) {
+      // Whether this relay seals UDP is learned from a health answer over
+      // TCP, in the background (this datagram goes in the old form).
+      final hostPort = '${endpoint.host}:${endpoint.port}';
+      final known = _v2Known[hostPort];
+      if ((known == null ||
+              known.identityPublicKeyBase64 !=
+                  expectedIdentityPublicKeyBase64) &&
+          _v2Learning.add(hostPort)) {
+        unawaited(
+          inspectHealth(
+                host: endpoint.host,
+                port: endpoint.port,
+                timeout: timeout,
+                expectedIdentityPublicKeyBase64:
+                    expectedIdentityPublicKeyBase64,
+              )
+              .then<void>((_) {}, onError: (Object _) {})
+              .whenComplete(() => _v2Learning.remove(hostPort)),
+        );
+      }
+    }
     if ((protocol == PeerRouteProtocol.tcp ||
             protocol == PeerRouteProtocol.wss) &&
         _hasExpectedPin(expectedIdentityPublicKeyBase64)) {
@@ -667,6 +698,11 @@ class RelayClient {
         timeout: timeout,
         request: signedRequest,
         maxResponseBytes: maxResponseBytes,
+        sealTo: _udpSealKey(
+          endpoint.host,
+          endpoint.port,
+          expectedIdentityPublicKeyBase64,
+        ),
       ),
       PeerRouteProtocol.http => _sendHttpRequest(
         scheme: 'http',
@@ -1073,6 +1109,10 @@ class RelayClient {
       noiseKey: noiseKey,
       learnedAt: DateTime.now(),
       mailboxAuth: v2 is Map<String, dynamic> && v2['mailbox_auth'] == 1,
+      udpSealed:
+          noiseKey != null &&
+          v2 is Map<String, dynamic> &&
+          v2['udp_sealed'] == 1,
       tier1: _policyWord(v2, 'tier1', const {'open', 'registered', 'off'}),
       hiddenAddress: _hiddenAddressIn(v2),
       registration: _policyWord(v2, 'registration', const {
@@ -1382,12 +1422,27 @@ class RelayClient {
   /// so a forged source cannot aim its answers at someone.
   static final Map<String, String> _udpCookies = <String, String>{};
 
+  /// The session key to seal UDP datagrams to [host]:[port] under (M38-C):
+  /// known only for a relay whose pinned identity signed it and that said
+  /// it opens sealed datagrams. Null: send the cleartext form.
+  List<int>? _udpSealKey(String host, int port, String? pinnedIdentity) {
+    if (pinnedIdentity == null || pinnedIdentity.isEmpty) return null;
+    final known = _v2Known['$host:$port'];
+    if (known == null ||
+        known.identityPublicKeyBase64 != pinnedIdentity ||
+        !known.udpSealed) {
+      return null;
+    }
+    return known.noiseKey;
+  }
+
   Future<Map<String, dynamic>> _sendUdpRequest({
     required String host,
     required int port,
     required Duration timeout,
     required Map<String, dynamic> request,
     required int maxResponseBytes,
+    List<int>? sealTo,
   }) async {
     final key = '$host:$port';
     Future<Map<String, dynamic>> send(String? cookie) => _sendUdpOnce(
@@ -1398,10 +1453,12 @@ class RelayClient {
         ...request,
         'cookie': ?cookie,
         // Without a cookie the relay answers (with one) only a request at
-        // least as long as its answer.
-        if (cookie == null) 'pad': ''.padRight(128, 'x'),
+        // least as long as its answer (sealed ones are padded inside).
+        if (cookie == null && sealTo == null) 'pad': ''.padRight(128, 'x'),
       },
       maxResponseBytes: maxResponseBytes,
+      sealTo: sealTo,
+      cookieRequest: cookie == null,
     );
     try {
       return await send(_udpCookies[key]);
@@ -1418,10 +1475,25 @@ class RelayClient {
     required Duration timeout,
     required Map<String, dynamic> request,
     required int maxResponseBytes,
+    List<int>? sealTo,
+    bool cookieRequest = false,
   }) async {
-    final requestBytes = utf8.encode(jsonEncode(request));
+    var requestBytes = utf8.encode(jsonEncode(request));
     if (requestBytes.length > 60 * 1024) {
       throw StateError('UDP relay request is too large for a single datagram.');
+    }
+    UdpSeal? sealedReply;
+    if (sealTo != null) {
+      final (datagram, reply) = await UdpSeal.seal(
+        relayPublic: sealTo,
+        request: requestBytes,
+        padding: UdpSeal.paddingFor(
+          requestBytes.length,
+          cookieRequest: cookieRequest,
+        ),
+      );
+      requestBytes = datagram;
+      sealedReply = reply;
     }
     final addresses = await InternetAddress.lookup(host).timeout(timeout);
     if (addresses.isEmpty) {
@@ -1484,7 +1556,16 @@ class RelayClient {
             if (datagram.data.length > maxResponseBytes) {
               throw StateError('Relay response exceeded the allowed size.');
             }
-            final text = utf8.decode(datagram.data);
+            var answer = datagram.data;
+            if (sealedReply != null) {
+              // Only an answer sealed for this very exchange counts.
+              final opened = await sealedReply.open(answer);
+              if (opened == null) {
+                throw StateError('UDP relay answer did not open.');
+              }
+              answer = Uint8List.fromList(opened);
+            }
+            final text = utf8.decode(answer);
             if (_udpCookieAsked(text) case final cookie?) {
               throw _UdpCookieRequired(cookie);
             }
@@ -1545,9 +1626,7 @@ class RelayClient {
           'Accept: application/json\r\n'
           'Content-Length: ${requestBody.length}\r\n'
           'Connection: close\r\n'
-          // Harmless on normal relays; useful with some public HTTP tunnels.
-          'bypass-tunnel-reminder: true\r\n'
-          'ngrok-skip-browser-warning: true\r\n'
+          '${_tunnelHeaders(host)}'
           '\r\n';
       socket.add(utf8.encode(requestHead));
       socket.add(requestBody);
@@ -1570,6 +1649,26 @@ class RelayClient {
       await socket.close();
     }
   }
+
+  /// The headers some public HTTP tunnels need to skip their warning page,
+  /// sent only to a tunnel (they are a telltale on any other relay; M38-C).
+  @visibleForTesting
+  static String tunnelHeadersFor(String host) {
+    final lower = host.toLowerCase();
+    const tunnels = <String>[
+      '.ngrok.io',
+      '.ngrok-free.app',
+      '.ngrok.app',
+      '.ngrok.dev',
+      '.loca.lt',
+      '.localtunnel.me',
+    ];
+    if (!tunnels.any(lower.endsWith)) return '';
+    return 'bypass-tunnel-reminder: true\r\n'
+        'ngrok-skip-browser-warning: true\r\n';
+  }
+
+  String _tunnelHeaders(String host) => tunnelHeadersFor(host);
 
   String _httpHostHeader(String host, int port) {
     final escapedHost = host.contains(':') && !host.startsWith('[')

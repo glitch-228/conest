@@ -16,6 +16,7 @@ mod registration;
 mod server;
 mod session;
 mod storage;
+mod udp_sealed;
 mod v1;
 
 #[cfg(test)]
@@ -1472,5 +1473,102 @@ mod tests {
         // this one has its slot again.
         assert!(state.long_poll_slot("198.51.100.12").is_some());
         assert!(state.long_polls.lock().expect("lock").is_empty());
+    }
+
+    // --- Sealed UDP (M38-C) ---
+
+    fn sealed_exchange(
+        state: &RelayState,
+        peer: SocketAddr,
+        request: &Value,
+        pad: usize,
+    ) -> Option<Value> {
+        use crate::udp_sealed::client_for_tests::{open_response, seal_request};
+        let (datagram, keys) = seal_request(&state.identity.noise_public, request.to_string().as_bytes(), pad);
+        let answer = crate::udp_sealed::answer_datagram(&datagram, state, peer)?;
+        assert!(answer[0] != b'{', "a sealed request gets no cleartext answer");
+        let plain = open_response(&keys, &answer).expect("answer opens under the exchange keys");
+        Some(serde_json::from_slice(&plain).expect("json"))
+    }
+
+    #[test]
+    fn a_sealed_udp_request_is_answered_sealed_under_the_cookie_rules() {
+        let state = test_state();
+        let peer: SocketAddr = "198.51.100.40:5000".parse().unwrap();
+        // Without a cookie, a sealed request long enough gets the cookie.
+        let health = json!({"action": "health"});
+        let first = sealed_exchange(&state, peer, &health, 80).expect("cookie answer");
+        assert_eq!(first["error"], "udp cookie required", "{first}");
+        let cookie = first["cookie"].as_str().expect("cookie").to_owned();
+        let mut with_cookie = health.clone();
+        with_cookie["cookie"] = json!(cookie);
+        let answer = sealed_exchange(&state, peer, &with_cookie, 7).expect("health");
+        assert_eq!(answer["ok"], true, "{answer}");
+        // A store goes through and can be fetched, all sealed.
+        let mut store = json!({
+            "action": "store",
+            "recipient_device_id": "dev-b",
+            "envelope": envelope("direct_message", "msg-sealed", "dev-a"),
+        });
+        store["cookie"] = json!(cookie);
+        let stored = sealed_exchange(&state, peer, &store, 0).expect("stored");
+        assert_eq!(stored["ok"], true, "{stored}");
+        let mut fetch = json!({"action": "fetch", "recipient_device_id": "dev-b", "limit": 2});
+        fetch["cookie"] = json!(cookie);
+        let fetched = sealed_exchange(&state, peer, &fetch, 33).expect("fetched");
+        assert_eq!(fetched["messages"][0]["messageId"], "msg-sealed", "{fetched}");
+    }
+
+    #[test]
+    fn a_short_sealed_request_gets_nothing_not_even_a_cookie() {
+        // The cookie goes only to a datagram as long as its answer: the
+        // wire length counts, not the hidden request's.
+        let state = test_state();
+        let peer: SocketAddr = "198.51.100.41:5000".parse().unwrap();
+        let tiny = json!({"a": 1});
+        assert!(sealed_exchange(&state, peer, &tiny, 0).is_none());
+    }
+
+    #[test]
+    fn sealed_udp_answers_vary_in_length_and_wrong_keys_get_nothing() {
+        use crate::udp_sealed::client_for_tests::seal_request;
+        let state = test_state();
+        let peer: SocketAddr = "198.51.100.42:5000".parse().unwrap();
+        let health = json!({"action": "health", "pad": "x".repeat(10)});
+        let mut lengths = std::collections::HashSet::new();
+        let (datagram, _) = seal_request(&state.identity.noise_public, health.to_string().as_bytes(), 90);
+        for _ in 0..20 {
+            if let Some(answer) = crate::udp_sealed::answer_datagram(&datagram, &state, peer) {
+                lengths.insert(answer.len());
+            }
+        }
+        assert!(lengths.len() > 3, "answers differ in length: {lengths:?}");
+        // Sealed to another relay's key: not ours to open, nothing back.
+        let other = RelayIdentity::from_seed_bytes([9_u8; 32]);
+        let (wrong, _) = seal_request(&other.noise_public, health.to_string().as_bytes(), 90);
+        assert!(crate::udp_sealed::answer_datagram(&wrong, &state, peer).is_none());
+        // Damaged in flight.
+        let mut damaged = datagram.clone();
+        let last = damaged.len() - 1;
+        damaged[last] ^= 1;
+        assert!(crate::udp_sealed::answer_datagram(&damaged, &state, peer).is_none());
+        // An all-zero (low order) ephemeral key.
+        let zero = vec![0_u8; 200];
+        assert!(crate::udp_sealed::answer_datagram(&zero, &state, peer).is_none());
+    }
+
+    #[test]
+    fn cleartext_udp_still_works_and_health_offers_sealing() {
+        let state = test_state();
+        let peer: SocketAddr = "198.51.100.43:5000".parse().unwrap();
+        let answer = udp_with_cookie(&state, peer, json!({"action": "health"}));
+        assert_eq!(answer["ok"], true, "{answer}");
+        let line = json!({"action": "health"}).to_string();
+        let health = handle_request_bytes(line.as_bytes(), line.len(), &state, "198.51.100.43");
+        // Session-only health may be hidden without sessions in this
+        // config; when it shows v2, it offers sealed UDP.
+        if health["stats"]["v2"].is_object() {
+            assert_eq!(health["stats"]["v2"]["udp_sealed"], 1, "{health}");
+        }
     }
 }

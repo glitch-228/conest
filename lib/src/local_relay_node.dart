@@ -476,7 +476,7 @@ class LocalRelayNode {
         'Content-Length: ${body.length}\r\n'
         'Cache-Control: no-store\r\n'
         'Access-Control-Allow-Origin: *\r\n'
-        'Access-Control-Allow-Headers: content-type, bypass-tunnel-reminder, ngrok-skip-browser-warning\r\n'
+        'Access-Control-Allow-Headers: content-type\r\n'
         'Connection: close\r\n'
         '\r\n',
       ),

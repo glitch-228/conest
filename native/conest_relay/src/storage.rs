@@ -761,6 +761,8 @@ impl RelayState {
             "noise_key": BASE64_STANDARD.encode(self.identity.noise_public),
             "noise_key_sig": BASE64_STANDARD.encode(self.identity.noise_key_signature),
             "mailbox_auth": 1,
+            // UDP datagrams may be sealed under the session key (M38-C).
+            "udp_sealed": 1,
             "policy": self.policy_info(),
         }))
     }

@@ -139,6 +139,47 @@ void main() {
     expect(health.ok, isTrue);
   });
 
+  test('UDP is sealed once the relay says it opens sealed datagrams', () async {
+    final relay = await _startRelay();
+    final identity = await _pin(relay.port);
+    expect(
+      RelayClient.sessionInfoFor('127.0.0.1', relay.port)?.udpSealed,
+      isTrue,
+    );
+    const client = RelayClient();
+    await client.storeEnvelope(
+      host: '127.0.0.1',
+      port: relay.port,
+      protocol: PeerRouteProtocol.udp,
+      recipientDeviceId: 'dev-sealed',
+      envelope: _envelope('sealed-1', 'dev-sealed'),
+      expectedIdentityPublicKeyBase64: identity,
+    );
+    final batch = await client.fetchLeasedEnvelopes(
+      host: '127.0.0.1',
+      port: relay.port,
+      protocol: PeerRouteProtocol.udp,
+      recipientDeviceId: 'dev-sealed',
+      expectedIdentityPublicKeyBase64: identity,
+    );
+    expect(batch.envelopes.single.messageId, 'sealed-1');
+    // The old cleartext form still works (an unpinned client).
+    await client.storeEnvelope(
+      host: '127.0.0.1',
+      port: relay.port,
+      protocol: PeerRouteProtocol.udp,
+      recipientDeviceId: 'dev-plain',
+      envelope: _envelope('plain-1', 'dev-plain'),
+    );
+    final plain = await client.fetchLeasedEnvelopes(
+      host: '127.0.0.1',
+      port: relay.port,
+      protocol: PeerRouteProtocol.udp,
+      recipientDeviceId: 'dev-plain',
+    );
+    expect(plain.envelopes.single.messageId, 'plain-1');
+  });
+
   test('an owned mailbox takes only its owner\'s fetches, over a session, '
       'UDP and HTTP alike', () async {
     final relay = await _startRelay();

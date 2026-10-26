@@ -18,6 +18,8 @@ rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
 # Relay v2 sessions: Noise_NK_25519_ChaChaPoly_SHA256 (notes in RELAY.md).
 snow = { version = "0.9", default-features = false, features = ["default-resolver"] }
+# Sealed UDP (M38-C): already in the tree through snow.
+chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 sha2 = "0.10"
 hmac = "0.12"
