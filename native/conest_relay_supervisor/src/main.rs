@@ -798,7 +798,9 @@ fn systemd_unit(config: &Config, exec_start: &str) -> String {
             .relay_bind
             .rsplit_once(':')
             .and_then(|(_, port)| port.parse::<u16>().ok());
-        if port.is_some_and(|port| port < 1024) {
+        if port.is_some_and(|port| port < 1024)
+            || tls_port_in_config(config).is_some_and(|port| port < 1024)
+        {
             service.push("AmbientCapabilities=CAP_NET_BIND_SERVICE".to_owned());
         }
     }
@@ -806,6 +808,21 @@ fn systemd_unit(config: &Config, exec_start: &str) -> String {
         "[Unit]\nDescription=Conest Relay Supervisor\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\n{}\n\n[Install]\nWantedBy=multi-user.target\n",
         service.join("\n")
     )
+}
+
+/// The port of `tls-bind` in the relay's `relay.conf` (M38-A): a relay
+/// that serves TLS on 443 needs the right to bind it.
+#[cfg(target_os = "linux")]
+fn tls_port_in_config(config: &Config) -> Option<u16> {
+    let text = fs::read_to_string(config.data_dir.join("relay.conf")).ok()?;
+    text.lines().find_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        if name.trim() != "tls-bind" {
+            return None;
+        }
+        let value = value.trim().trim_matches('"');
+        value.rsplit_once(':')?.1.parse().ok()
+    })
 }
 
 fn serve_arguments(config: &Config) -> Vec<String> {
@@ -1187,6 +1204,25 @@ mod tests {
         assert!(!unit.contains("CAP_NET_BIND_SERVICE"));
         config.relay_bind = "0.0.0.0:443".to_owned();
         assert!(systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tls_on_443_in_the_relay_conf_gets_the_bind_right_too() {
+        let mut config = test_config();
+        config.service_user = Some("conest-relay".to_owned());
+        config.data_dir = env::temp_dir().join(format!("conest-relay-tls-{}", std::process::id()));
+        fs::create_dir_all(&config.data_dir).unwrap();
+        assert!(!systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+        fs::write(
+            config.data_dir.join("relay.conf"),
+            "# c\ntls-bind = 0.0.0.0:443\n",
+        )
+        .unwrap();
+        assert!(systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+        fs::write(config.data_dir.join("relay.conf"), "tls-bind = 0.0.0.0:8443\n").unwrap();
+        assert!(!systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+        let _ = fs::remove_dir_all(&config.data_dir);
     }
 
     #[test]

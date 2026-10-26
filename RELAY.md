@@ -110,6 +110,16 @@ decoy-proxy = 127.0.0.1:8080
   after the relay is known by its 7667 address or a relay link, so its
   identity is pinned).
 
+The installer does this for you when it is given a domain with a
+certificate (`install_relay.sh --domain relay.example.org`, or it asks): it
+copies the certificate where the relay may read it (and refreshes it on
+Let's Encrypt renewals), writes the settings above into `relay.conf` with a
+made-up secret path and `public-host`, opens 443, and prints a relay link
+that carries the hidden address (`&wss=`). Relays that learn their own
+hidden address (`public-host`) tell it to clients inside encrypted sessions,
+and the app then prefers it; old clients can use it too, since the same
+channel also carries the original protocol.
+
 The relay must be able to bind 443: run it as root through the supervisor's
 service, or give the binary the capability
 (`setcap cap_net_bind_service=+ep conest_relay`).
