@@ -3727,10 +3727,45 @@ void main() {
         );
       }
       await _pairControllers(alice, bob);
-      final result = await alice
-          .runDebugFileBattleTest(contact: alice.contacts.single, sizeMiB: 15)
-          .timeout(const Duration(seconds: 60));
-      expect(result.success, isTrue, reason: result.detail);
+      // The ordinary send path (the debug battle test pins LAN only).
+      final bytes = Uint8List(24 * 1024 * 1024);
+      for (var i = 0; i < bytes.length; i += 4099) {
+        bytes[i] = i & 0xff;
+      }
+      final sourceRoot = await Directory.systemTemp.createTemp(
+        'conest-striped-',
+      );
+      addTearDown(() => sourceRoot.delete(recursive: true));
+      final sourceFile = File('${sourceRoot.path}/striped.bin');
+      await sourceFile.writeAsBytes(bytes);
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'striped-source',
+          fileName: 'striped.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: bytes.length,
+          filePath: sourceFile.path,
+        ),
+      );
+      ChatMessage? received;
+      for (var step = 0; step < 3000; step++) {
+        received = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment?.fileName == 'striped.bin')
+            .firstOrNull;
+        if (received != null) {
+          if (bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+            await bob.acceptIncomingAttachment(received.attachment!.id);
+          }
+          if (bob.attachmentAvailableLocally(received.attachment!.id)) break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(received, isNotNull);
+      final cache = await bob.attachmentCachePathFor(received!.attachment!.id);
+      expect(cache, isNotNull);
+      expect(await File(cache!).readAsBytes(), bytes);
       expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried some');
       expect(
         network.attachmentRanges,
