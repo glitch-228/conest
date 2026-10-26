@@ -137,6 +137,12 @@ pub(crate) struct ExtConfig {
     /// it, the relay tells clients in a session its hidden address,
     /// `wss://<public-host>[:port]/<path>` (never over v1).
     pub(crate) public_host: Option<String>,
+    /// Where the borrowed-handshake layer listens (M38-D), the real site
+    /// it plays (`host:port`), and the name clients put in their SNI
+    /// (default: the site's host).
+    pub(crate) borrow_bind: Option<String>,
+    pub(crate) borrow_site: Option<String>,
+    pub(crate) borrow_sni: Option<String>,
 }
 
 impl Default for ExtConfig {
@@ -163,6 +169,9 @@ impl Default for ExtConfig {
             decoy_dir: None,
             decoy_proxy: None,
             public_host: None,
+            borrow_bind: None,
+            borrow_site: None,
+            borrow_sni: None,
         }
     }
 }
@@ -448,6 +457,15 @@ impl RelayConfig {
                 "--public-host" => {
                     config.ext.public_host = Some(parse_next_string(&mut args, &arg)?);
                 }
+                "--borrow-bind" => {
+                    config.ext.borrow_bind = Some(parse_next_string(&mut args, &arg)?);
+                }
+                "--borrow-site" => {
+                    config.ext.borrow_site = Some(parse_next_string(&mut args, &arg)?);
+                }
+                "--borrow-sni" => {
+                    config.ext.borrow_sni = Some(parse_next_string(&mut args, &arg)?);
+                }
                 "--decoy-proxy" => {
                     config.ext.decoy_proxy = Some(parse_next_string(&mut args, &arg)?);
                 }
@@ -505,6 +523,9 @@ impl RelayConfig {
             && (config.ext.tls_cert.is_none() || config.ext.tls_key.is_none())
         {
             return Err("--tls-bind needs --tls-cert and --tls-key".to_owned());
+        }
+        if config.ext.borrow_bind.is_some() && config.ext.borrow_site.is_none() {
+            return Err("--borrow-bind needs --borrow-site (the real site to play)".to_owned());
         }
         if let Some(path) = &config.ext.ws_path {
             let path = path.trim_start_matches('/');
@@ -643,6 +664,10 @@ pub(crate) fn usage() -> String {
                                   WebSocket on a secret path and a decoy site\n\
            --ws-path SECRET       the WebSocket path (default: made once, kept)\n\
            --decoy-dir DIR | --decoy-proxy HOST:PORT  what everyone else sees\n\
+           --borrow-bind ADDR --borrow-site HOST:PORT [--borrow-sni NAME]\n\
+                                  play a real site's TLS handshake on ADDR\n\
+                                  (forwarded to it); Conest clients prove\n\
+                                  themselves right after it\n\
            --public-host NAME     the TLS port's name; clients in a session learn\n\
                                   the hidden address wss://NAME/<path>\n\n\
          Admin: conest_relay admin [--database-path PATH] invite create|invite list|\n\

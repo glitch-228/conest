@@ -560,6 +560,16 @@ impl Session {
                 {
                     v2.insert("hidden".to_owned(), Value::String(hidden));
                 }
+                // And the borrowed-handshake address (M38-D).
+                if action == "health"
+                    && let Some(borrowed) = self.state.borrowed_info()
+                    && let Some(v2) = answer
+                        .get_mut("stats")
+                        .and_then(|stats| stats.get_mut("v2"))
+                        .and_then(Value::as_object_mut)
+                {
+                    v2.insert("borrowed".to_owned(), borrowed);
+                }
                 answer
             }
         }

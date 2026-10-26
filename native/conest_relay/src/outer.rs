@@ -620,6 +620,20 @@ pub(crate) fn tls_layer(state: &RelayState) -> Result<Option<TlsLayer>, String> 
 }
 
 impl RelayState {
+    /// Where and how to reach the borrowed-handshake layer, when it is on
+    /// and a public host is set: told to clients inside sessions only.
+    pub(crate) fn borrowed_info(&self) -> Option<serde_json::Value> {
+        let ext = &self.config.ext;
+        let host = ext.public_host.as_deref()?;
+        let port = ext.borrow_bind.as_deref()?.rsplit(':').next()?.parse::<u16>().ok()?;
+        let site = ext.borrow_site.as_deref()?;
+        let sni = ext
+            .borrow_sni
+            .clone()
+            .unwrap_or_else(|| site.rsplit_once(':').map_or(site, |(host, _)| host).to_owned());
+        Some(serde_json::json!({"host": host, "port": port, "sni": sni}))
+    }
+
     /// The relay's hidden address, when TLS and a public host are set:
     /// told to clients inside sessions only.
     pub(crate) fn hidden_address(&self) -> Option<String> {

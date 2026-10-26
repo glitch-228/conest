@@ -5,6 +5,7 @@
 //! HTTP form), `server` (the tokio server) and `legacy` (the old threaded
 //! server, kept behind `--legacy-threads`).
 
+mod borrowed;
 mod config;
 mod http;
 mod identity;
@@ -142,7 +143,7 @@ fn main() -> std::io::Result<()> {
     }
 
     if config.ext.legacy_threads {
-        if config.ext.tls_bind.is_some() {
+        if config.ext.tls_bind.is_some() || config.ext.borrow_bind.is_some() {
             eprintln!("TLS needs the tokio server: drop --legacy-threads");
             std::process::exit(2);
         }
@@ -171,11 +172,36 @@ fn main() -> std::io::Result<()> {
         }
         None => None,
     };
+    let borrowed = match (&config.ext.borrow_bind, &config.ext.borrow_site) {
+        (Some(bind), Some(site)) => {
+            let listener = std::net::TcpListener::bind(bind)?;
+            listener.set_nonblocking(true)?;
+            println!("conest relay borrowing the handshake of {site} on {bind}");
+            let layer = borrowed::BorrowedLayer::new(
+                site.clone(),
+                state.identity.noise_private,
+                state.identity.noise_public,
+            );
+            Some((listener, layer))
+        }
+        _ => None,
+    };
     listener.set_nonblocking(true)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async move {
+        if let Some((borrowed_listener, layer)) = borrowed {
+            let borrowed_listener = tokio::net::TcpListener::from_std(borrowed_listener)?;
+            let state = state.clone();
+            tokio::spawn(async move {
+                if let Err(error) =
+                    outer::serve_outer(borrowed_listener, std::sync::Arc::new(layer), state).await
+                {
+                    eprintln!("relay borrowed-handshake listener stopped: {error}");
+                }
+            });
+        }
         if let Some((tls_listener, layer)) = tls {
             let tls_listener = tokio::net::TcpListener::from_std(tls_listener)?;
             let state = state.clone();
