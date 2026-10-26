@@ -22,6 +22,7 @@ class CircumventionPreferences {
   const CircumventionPreferences({
     this.privateDns = CircumventionPolicy.automatic,
     this.splitGreeting = CircumventionPolicy.automatic,
+    this.quietLan = CircumventionPolicy.automatic,
   });
 
   /// Names looked up over DNS over HTTPS.
@@ -30,21 +31,29 @@ class CircumventionPreferences {
   /// TLS ClientHellos sent in pieces that cut through the server name.
   final CircumventionPolicy splitGreeting;
 
+  /// LAN discovery beacons sent only in their sealed form (when not in
+  /// use, the old cleartext form goes along for older versions).
+  final CircumventionPolicy quietLan;
+
   bool get isDefault =>
       privateDns == CircumventionPolicy.automatic &&
-      splitGreeting == CircumventionPolicy.automatic;
+      splitGreeting == CircumventionPolicy.automatic &&
+      quietLan == CircumventionPolicy.automatic;
 
   CircumventionPreferences copyWith({
     CircumventionPolicy? privateDns,
     CircumventionPolicy? splitGreeting,
+    CircumventionPolicy? quietLan,
   }) => CircumventionPreferences(
     privateDns: privateDns ?? this.privateDns,
     splitGreeting: splitGreeting ?? this.splitGreeting,
+    quietLan: quietLan ?? this.quietLan,
   );
 
   Map<String, dynamic> toJson() => {
     'privateDns': privateDns.name,
     'splitGreeting': splitGreeting.name,
+    'quietLan': quietLan.name,
   };
 
   static CircumventionPolicy _policy(Object? value) =>
@@ -58,6 +67,7 @@ class CircumventionPreferences {
     return CircumventionPreferences(
       privateDns: _policy(json['privateDns']),
       splitGreeting: _policy(json['splitGreeting']),
+      quietLan: _policy(json['quietLan']),
     );
   }
 
@@ -65,10 +75,11 @@ class CircumventionPreferences {
   bool operator ==(Object other) =>
       other is CircumventionPreferences &&
       other.privateDns == privateDns &&
-      other.splitGreeting == splitGreeting;
+      other.splitGreeting == splitGreeting &&
+      other.quietLan == quietLan;
 
   @override
-  int get hashCode => Object.hash(privateDns, splitGreeting);
+  int get hashCode => Object.hash(privateDns, splitGreeting, quietLan);
 }
 
 /// The app's way out to TLS servers when a network is in the way: one
@@ -98,6 +109,7 @@ class Circumvention {
 
   bool get privateDnsActive => _active(preferences.privateDns);
   bool get splitGreetingActive => _active(preferences.splitGreeting);
+  bool get quietLanActive => _active(preferences.quietLan);
   bool get anyActive => privateDnsActive || splitGreetingActive;
 
   /// Updates what is in use (the controller calls it as preferences and

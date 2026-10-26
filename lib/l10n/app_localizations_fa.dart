@@ -5685,6 +5685,13 @@ class AppLocalizationsFa extends AppLocalizations {
       'از فیلترهای ساده پنهان می‌کند به کدام سرور وصل می‌شوید.';
 
   @override
+  String get circumventionQuietLan => 'یافتن بی‌صدای دستگاه‌های نزدیک';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'دستگاه‌های نزدیک یکدیگر را با سیگنالی درهم‌ریخته می‌یابند، نه سیگنالی که شناخته شود.';
+
+  @override
   String get circumventionAutomatic => 'خودکار';
 
   @override

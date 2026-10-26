@@ -5674,6 +5674,13 @@ class AppLocalizationsId extends AppLocalizations {
       'Menyembunyikan server yang Anda hubungi dari penyaring sederhana.';
 
   @override
+  String get circumventionQuietLan => 'Penemuan perangkat terdekat yang senyap';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'Perangkat terdekat saling menemukan dengan sinyal yang diacak, bukan sinyal yang mudah dikenali.';
+
+  @override
   String get circumventionAutomatic => 'Otomatis';
 
   @override

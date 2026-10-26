@@ -5813,6 +5813,13 @@ class AppLocalizationsRu extends AppLocalizations {
       'Скрывает от простых фильтров, к какому серверу вы подключаетесь.';
 
   @override
+  String get circumventionQuietLan => 'Скрытый поиск устройств рядом';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'Устройства рядом находят друг друга по зашифрованному сигналу, а не по узнаваемому.';
+
+  @override
   String get circumventionAutomatic => 'Автоматически';
 
   @override

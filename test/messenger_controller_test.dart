@@ -71,6 +71,7 @@ import 'package:conest/src/meshtastic/radio.dart';
 import 'package:conest/src/radio_chats.dart';
 import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/matrix_service.dart';
+import 'package:conest/src/circumvention/lan_beacon_codec.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/delta_chats.dart';
 import 'package:conest/src/email/delta_mail.dart';
@@ -7829,6 +7830,98 @@ void main() {
         receiver.recentPairingBeaconRoutes.map((route) => route.host),
         contains('192.168.50.22'),
       );
+    },
+  );
+
+  test(
+    'a sealed LAN beacon is accepted as the cleartext one was, and junk is not',
+    () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      addTearDown(controller.dispose);
+      final beacon = {
+        'app': 'conest',
+        'kind': 'pairing_route',
+        'version': 2,
+        'deviceId': 'dev-neighbour',
+        'relayPort': 7667,
+      };
+      // Sealed: no cleartext tell, and the route still gets noted.
+      final sealed = await LanBeaconCodec.seal(beacon);
+      expect(
+        utf8.decode(sealed, allowMalformed: true),
+        isNot(contains('conest')),
+      );
+      controller.receivePairingBeaconForTesting(
+        Datagram(sealed, InternetAddress('192.168.50.77'), 7668),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(
+        controller.recentPairingBeaconRoutes.map((route) => route.host),
+        contains('192.168.50.77'),
+      );
+      // The old cleartext form still works.
+      controller.receivePairingBeaconForTesting(
+        Datagram(
+          utf8.encode(jsonEncode({...beacon, 'relayPort': 7700})),
+          InternetAddress('192.168.50.78'),
+          7668,
+        ),
+      );
+      expect(
+        controller.recentPairingBeaconRoutes.map((route) => route.host),
+        contains('192.168.50.78'),
+      );
+      // Damaged or random datagrams note nothing.
+      final damaged = Uint8List.fromList(
+        await LanBeaconCodec.seal({...beacon, 'relayPort': 7701}),
+      )..[20] ^= 1;
+      controller.receivePairingBeaconForTesting(
+        Datagram(damaged, InternetAddress('192.168.50.79'), 7668),
+      );
+      controller.receivePairingBeaconForTesting(
+        Datagram(
+          Uint8List.fromList(List<int>.generate(90, (i) => i * 3 + 1)),
+          InternetAddress('192.168.50.80'),
+          7668,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final hosts = controller.recentPairingBeaconRoutes
+          .map((route) => route.host)
+          .toSet();
+      expect(hosts, isNot(contains('192.168.50.79')));
+      expect(hosts, isNot(contains('192.168.50.80')));
+    },
+  );
+
+  test(
+    'a flood of sealed LAN beacons is opened only up to a cap a second',
+    () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      addTearDown(controller.dispose);
+      final sealed = await LanBeaconCodec.seal({
+        'app': 'conest',
+        'kind': 'pairing_route',
+        'deviceId': 'dev-flood',
+        'relayPort': 7667,
+      });
+      for (var i = 1; i <= 120; i++) {
+        controller.receivePairingBeaconForTesting(
+          Datagram(sealed, InternetAddress('192.168.61.$i'), 7668),
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final hosts = controller.recentPairingBeaconRoutes
+          .map((route) => route.host)
+          .toSet();
+      expect(hosts, isNotEmpty);
+      expect(hosts.length, lessThan(120));
     },
   );
 

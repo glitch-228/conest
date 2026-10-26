@@ -1480,6 +1480,8 @@
   "circumventionPrivateDns": "Частный поиск имён (DNS через HTTPS)",
   "circumventionSplitGreeting": "Разделять приветствие защищённого соединения",
   "circumventionSplitGreetingHint": "Скрывает от простых фильтров, к какому серверу вы подключаетесь.",
+  "circumventionQuietLan": "Скрытый поиск устройств рядом",
+  "circumventionQuietLanHint": "Устройства рядом находят друг друга по зашифрованному сигналу, а не по узнаваемому.",
   "circumventionAutomatic": "Автоматически",
   "circumventionAlways": "Всегда",
   "circumventionNever": "Выкл.",

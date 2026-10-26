@@ -45,6 +45,7 @@ import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
 import 'circumvention/circumvention.dart';
+import 'circumvention/lan_beacon_codec.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
 import 'media_sanitizer.dart';
@@ -1323,6 +1324,10 @@ class MessengerController extends ChangeNotifier {
       _reachability.recordByDeviceId(deviceId);
   ContactReachabilityState reachabilityStateFor(String deviceId) =>
       _reachability.stateFor(deviceId);
+  @visibleForTesting
+  void receivePairingBeaconForTesting(Datagram datagram) =>
+      _onPairingBeaconDatagram(datagram);
+
   @visibleForTesting
   void rememberPairingBeaconRouteForTesting(PeerEndpoint route) {
     _pairingBeaconRoutes[route.routeKey] = _PairingBeaconRoute(
@@ -4582,9 +4587,11 @@ class MessengerController extends ChangeNotifier {
   );
 
   /// Whether private DNS or split TLS greetings are in use now.
-  ({bool privateDns, bool splitGreeting}) get circumventionInUse => (
+  ({bool privateDns, bool splitGreeting, bool quietLan})
+  get circumventionInUse => (
     privateDns: Circumvention.instance.privateDnsActive,
     splitGreeting: Circumvention.instance.splitGreetingActive,
+    quietLan: Circumvention.instance.quietLanActive,
   );
 
   /// The network now in use ([label]: connectivity_plus's names, such as
@@ -19346,7 +19353,7 @@ class MessengerController extends ChangeNotifier {
           }
           Datagram? datagram;
           while ((datagram = socket.receive()) != null) {
-            _handlePairingBeaconDatagram(datagram!);
+            _onPairingBeaconDatagram(datagram!);
           }
         },
         onError: (_) {
@@ -19376,6 +19383,46 @@ class MessengerController extends ChangeNotifier {
     _pairingBeaconSocket?.close();
     _pairingBeaconSocket = null;
     _pairingBeaconRoutes.clear();
+  }
+
+  int _beaconOpenWindow = 0;
+  int _beaconOpensInWindow = 0;
+
+  /// A beacon datagram: the old cleartext form is handled as before; a
+  /// sealed one (M38-C) is opened first, at most 50 a second.
+  void _onPairingBeaconDatagram(Datagram datagram) {
+    final data = datagram.data;
+    if (data.isEmpty || data.length > LanBeaconCodec.maxDatagramBytes) return;
+    if (data[0] == 0x7b) {
+      _handlePairingBeaconDatagram(datagram);
+      return;
+    }
+    final window = _now().millisecondsSinceEpoch ~/ 1000;
+    if (window != _beaconOpenWindow) {
+      _beaconOpenWindow = window;
+      _beaconOpensInWindow = 0;
+    }
+    if (++_beaconOpensInWindow > 50) return;
+    unawaited(
+      LanBeaconCodec.open(data).then((message) {
+        if (message == null) return;
+        _handlePairingBeaconDatagram(
+          Datagram(
+            utf8.encode(jsonEncode(message)),
+            datagram.address,
+            datagram.port,
+          ),
+        );
+      }),
+    );
+  }
+
+  /// What goes on the wire for a beacon: the sealed form, and the old
+  /// cleartext form too unless the quiet LAN setting is in use.
+  Future<List<Uint8List>> _beaconPayloads(Map<String, dynamic> message) async {
+    final sealed = await LanBeaconCodec.seal(message);
+    if (Circumvention.instance.quietLanActive) return [sealed];
+    return [sealed, Uint8List.fromList(utf8.encode(jsonEncode(message)))];
   }
 
   void _handlePairingBeaconDatagram(Datagram datagram) {
@@ -19478,19 +19525,19 @@ class MessengerController extends ChangeNotifier {
     if (me == null || socket == null || !_localRelayNode.isRunning) {
       return;
     }
-    final bytes = utf8.encode(
-      jsonEncode({
-        'app': 'conest',
-        'kind': 'pairing_route',
-        'version': 2,
-        'deviceId': me.deviceId,
-        'relayPort': me.localRelayPort,
-        'protocols': ['tcp', 'udp'],
-      }),
-    );
+    final payloads = await _beaconPayloads({
+      'app': 'conest',
+      'kind': 'pairing_route',
+      'version': 2,
+      'deviceId': me.deviceId,
+      'relayPort': me.localRelayPort,
+      'protocols': ['tcp', 'udp'],
+    });
     if (targetAddress != null) {
       try {
-        socket.send(bytes, targetAddress, targetPort ?? _pairingBeaconPort);
+        for (final bytes in payloads) {
+          socket.send(bytes, targetAddress, targetPort ?? _pairingBeaconPort);
+        }
         _lastPairingBeaconSentAt = _now();
       } catch (_) {
         // Best-effort only.
@@ -19503,7 +19550,9 @@ class MessengerController extends ChangeNotifier {
     var sent = false;
     for (final target in _pairingBroadcastTargets(me)) {
       try {
-        socket.send(bytes, target, _pairingBeaconPort);
+        for (final bytes in payloads) {
+          socket.send(bytes, target, _pairingBeaconPort);
+        }
         sent = true;
       } catch (_) {
         // Best-effort only.
@@ -19521,18 +19570,18 @@ class MessengerController extends ChangeNotifier {
     if (me == null || socket == null) {
       return false;
     }
-    final bytes = utf8.encode(
-      jsonEncode({
-        'app': 'conest',
-        'kind': 'pairing_ping',
-        'version': 1,
-        'deviceId': me.deviceId,
-      }),
-    );
+    final payloads = await _beaconPayloads({
+      'app': 'conest',
+      'kind': 'pairing_ping',
+      'version': 1,
+      'deviceId': me.deviceId,
+    });
     var sent = false;
     for (final target in _pairingBroadcastTargets(me)) {
       try {
-        socket.send(bytes, target, _pairingBeaconPort);
+        for (final bytes in payloads) {
+          socket.send(bytes, target, _pairingBeaconPort);
+        }
         sent = true;
       } catch (_) {
         // Best-effort only.

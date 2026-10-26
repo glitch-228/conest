@@ -9041,6 +9041,18 @@ abstract class AppLocalizations {
   /// **'Hides which server you connect to from simple filters.'**
   String get circumventionSplitGreetingHint;
 
+  /// Censorship circumvention: sealed LAN beacons.
+  ///
+  /// In en, this message translates to:
+  /// **'Quiet nearby-device discovery'**
+  String get circumventionQuietLan;
+
+  /// Censorship circumvention: what quiet discovery does.
+  ///
+  /// In en, this message translates to:
+  /// **'Nearby devices find each other with a scrambled signal instead of a recognisable one.'**
+  String get circumventionQuietLanHint;
+
   /// Censorship circumvention choice: automatic.
   ///
   /// In en, this message translates to:

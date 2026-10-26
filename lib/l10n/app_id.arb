@@ -1480,6 +1480,8 @@
   "circumventionPrivateDns": "Pencarian nama privat (DNS lewat HTTPS)",
   "circumventionSplitGreeting": "Pecah salam koneksi aman",
   "circumventionSplitGreetingHint": "Menyembunyikan server yang Anda hubungi dari penyaring sederhana.",
+  "circumventionQuietLan": "Penemuan perangkat terdekat yang senyap",
+  "circumventionQuietLanHint": "Perangkat terdekat saling menemukan dengan sinyal yang diacak, bukan sinyal yang mudah dikenali.",
   "circumventionAutomatic": "Otomatis",
   "circumventionAlways": "Selalu",
   "circumventionNever": "Mati",

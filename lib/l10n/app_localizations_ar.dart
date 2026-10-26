@@ -5815,6 +5815,13 @@ class AppLocalizationsAr extends AppLocalizations {
       'يخفي عن المرشِّحات البسيطة الخادم الذي تتصل به.';
 
   @override
+  String get circumventionQuietLan => 'اكتشاف هادئ للأجهزة القريبة';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'تكتشف الأجهزة القريبة بعضها بإشارة مُشفَّرة بدل إشارة يسهل التعرف عليها.';
+
+  @override
   String get circumventionAutomatic => 'تلقائي';
 
   @override

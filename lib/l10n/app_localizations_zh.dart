@@ -5433,6 +5433,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get circumventionSplitGreetingHint => '让简单的过滤器看不出您连接的是哪台服务器。';
 
   @override
+  String get circumventionQuietLan => '隐蔽的附近设备发现';
+
+  @override
+  String get circumventionQuietLanHint => '附近设备用加扰信号而不是可识别的信号互相发现。';
+
+  @override
   String get circumventionAutomatic => '自动';
 
   @override

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:conest/src/circumvention/circumvention.dart';
 import 'package:conest/src/circumvention/doh_resolver.dart';
 import 'package:conest/src/circumvention/fragmenting_proxy.dart';
+import 'package:conest/src/circumvention/lan_beacon_codec.dart';
 import 'package:conest/src/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -337,6 +338,71 @@ void main() {
       expect(looksPoisoned(InternetAddress('0.0.0.0')), isTrue);
       expect(looksPoisoned(InternetAddress('127.0.0.1')), isTrue);
       expect(looksPoisoned(good), isFalse);
+    });
+  });
+
+  group('sealed LAN beacons', () {
+    final beacon = {
+      'app': 'conest',
+      'kind': 'pairing_route',
+      'deviceId': 'dev-a',
+      'relayPort': 7667,
+    };
+
+    test('they carry no tell, vary in size, and open to the message', () async {
+      final sizes = <int>{};
+      for (var i = 0; i < 20; i++) {
+        final sealed = await LanBeaconCodec.seal(beacon);
+        sizes.add(sealed.length);
+        final text = latin1.decode(sealed);
+        expect(text.contains('conest'), isFalse);
+        expect(text.contains('deviceId'), isFalse);
+        expect(sealed[0], isNot(0x7b));
+        expect(await LanBeaconCodec.open(sealed), beacon);
+      }
+      expect(sizes.length, greaterThan(5));
+    });
+
+    test('damaged, foreign and oversized datagrams do not open', () async {
+      final sealed = await LanBeaconCodec.seal(beacon);
+      final damaged = Uint8List.fromList(sealed)..[sealed.length - 1] ^= 1;
+      expect(await LanBeaconCodec.open(damaged), isNull);
+      expect(
+        await LanBeaconCodec.open(utf8.encode('{"app":"conest"}')),
+        isNull,
+      );
+      expect(await LanBeaconCodec.open(const []), isNull);
+      expect(
+        await LanBeaconCodec.open(
+          Uint8List(LanBeaconCodec.maxDatagramBytes + 1),
+        ),
+        isNull,
+      );
+    });
+
+    test('quiet discovery follows the network like the other measures', () {
+      final circumvention = Circumvention(
+        resolver: DohResolver(endpoints: const []),
+      );
+      expect(circumvention.quietLanActive, isFalse);
+      circumvention.update(blockedHere: true);
+      expect(circumvention.quietLanActive, isTrue);
+      circumvention.update(
+        preferences: const CircumventionPreferences(
+          quietLan: CircumventionPolicy.never,
+        ),
+      );
+      expect(circumvention.quietLanActive, isFalse);
+      final back = CircumventionPreferences.fromJson(
+        jsonDecode(
+          jsonEncode(
+            const CircumventionPreferences(
+              quietLan: CircumventionPolicy.always,
+            ).toJson(),
+          ),
+        ),
+      );
+      expect(back.quietLan, CircumventionPolicy.always);
     });
   });
 

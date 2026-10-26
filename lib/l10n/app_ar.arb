@@ -1480,6 +1480,8 @@
   "circumventionPrivateDns": "بحث خاص عن الأسماء (DNS عبر HTTPS)",
   "circumventionSplitGreeting": "تقسيم تحية الاتصال الآمن",
   "circumventionSplitGreetingHint": "يخفي عن المرشِّحات البسيطة الخادم الذي تتصل به.",
+  "circumventionQuietLan": "اكتشاف هادئ للأجهزة القريبة",
+  "circumventionQuietLanHint": "تكتشف الأجهزة القريبة بعضها بإشارة مُشفَّرة بدل إشارة يسهل التعرف عليها.",
   "circumventionAutomatic": "تلقائي",
   "circumventionAlways": "دائمًا",
   "circumventionNever": "متوقف",

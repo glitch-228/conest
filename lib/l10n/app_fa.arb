@@ -1480,6 +1480,8 @@
   "circumventionPrivateDns": "جست‌وجوی خصوصی نام‌ها (DNS روی HTTPS)",
   "circumventionSplitGreeting": "تکه‌تکه کردن سلامِ اتصال امن",
   "circumventionSplitGreetingHint": "از فیلترهای ساده پنهان می‌کند به کدام سرور وصل می‌شوید.",
+  "circumventionQuietLan": "یافتن بی‌صدای دستگاه‌های نزدیک",
+  "circumventionQuietLanHint": "دستگاه‌های نزدیک یکدیگر را با سیگنالی درهم‌ریخته می‌یابند، نه سیگنالی که شناخته شود.",
   "circumventionAutomatic": "خودکار",
   "circumventionAlways": "همیشه",
   "circumventionNever": "خاموش",

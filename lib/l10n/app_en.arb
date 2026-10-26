@@ -8479,6 +8479,14 @@
   "@circumventionSplitGreetingHint": {
     "description": "Censorship circumvention: what splitting does."
   },
+  "circumventionQuietLan": "Quiet nearby-device discovery",
+  "@circumventionQuietLan": {
+    "description": "Censorship circumvention: sealed LAN beacons."
+  },
+  "circumventionQuietLanHint": "Nearby devices find each other with a scrambled signal instead of a recognisable one.",
+  "@circumventionQuietLanHint": {
+    "description": "Censorship circumvention: what quiet discovery does."
+  },
   "circumventionAutomatic": "Automatic",
   "@circumventionAutomatic": {
     "description": "Censorship circumvention choice: automatic."

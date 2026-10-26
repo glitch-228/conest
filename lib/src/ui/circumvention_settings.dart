@@ -99,6 +99,14 @@ class CircumventionSettingsSection extends StatelessWidget {
           active: inUse.splitGreeting,
           apply: (policy) => preferences.copyWith(splitGreeting: policy),
         ),
+        choice(
+          key: const ValueKey('circumvention-quiet-lan'),
+          title: l10n.circumventionQuietLan,
+          subtitle: l10n.circumventionQuietLanHint,
+          value: preferences.quietLan,
+          active: inUse.quietLan,
+          apply: (policy) => preferences.copyWith(quietLan: policy),
+        ),
       ],
     );
   }

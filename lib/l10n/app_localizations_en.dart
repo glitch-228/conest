@@ -5685,6 +5685,13 @@ class AppLocalizationsEn extends AppLocalizations {
       'Hides which server you connect to from simple filters.';
 
   @override
+  String get circumventionQuietLan => 'Quiet nearby-device discovery';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'Nearby devices find each other with a scrambled signal instead of a recognisable one.';
+
+  @override
   String get circumventionAutomatic => 'Automatic';
 
   @override

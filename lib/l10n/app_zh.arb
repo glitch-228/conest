@@ -1480,6 +1480,8 @@
   "circumventionPrivateDns": "私密域名解析（DNS over HTTPS）",
   "circumventionSplitGreeting": "拆分安全连接的握手问候",
   "circumventionSplitGreetingHint": "让简单的过滤器看不出您连接的是哪台服务器。",
+  "circumventionQuietLan": "隐蔽的附近设备发现",
+  "circumventionQuietLanHint": "附近设备用加扰信号而不是可识别的信号互相发现。",
   "circumventionAutomatic": "自动",
   "circumventionAlways": "始终",
   "circumventionNever": "关闭",
