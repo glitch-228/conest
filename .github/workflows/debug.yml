@@ -113,7 +113,7 @@ jobs:
           flutter test test/messenger_controller_test.dart --plain-name "Delta"
       - name: Verify the XMPP client and carrier
         run: |
-          flutter test test/xmpp_test.dart
+          flutter test test/xmpp_test.dart test/xmpp_chats_test.dart
           flutter test test/messenger_controller_test.dart --plain-name "XMPP"
 
   matrix:
