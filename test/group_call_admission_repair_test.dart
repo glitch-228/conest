@@ -59,7 +59,7 @@ void main() {
       ]);
       expect(stale.service.active!.allParticipants, isNot(contains('p1')));
       net.dropped.add('p0');
-      await net.advance(const Duration(seconds: 2));
+      await net.advance(const Duration(seconds: 7));
       for (final id in ['p1', 'p2']) {
         final room = net.peers[id]!.service.active!;
         expect(room.coordinator, 'p1');

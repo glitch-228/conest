@@ -1457,6 +1457,15 @@ Future<void> _callEveryone(
       'participants': room?.participants.length,
       'mostParticipants': most,
       'stats': stats,
+      if (room != null)
+        'frames': {
+          'sent': room.framesSent,
+          'heard': room.framesHeard,
+          'trouble': room.frameTrouble,
+          'authorityChanges': room.authorityChanges,
+          'term': room.term,
+          'coordinator': room.coordinator,
+        },
     });
     return room?.participants.length;
   });

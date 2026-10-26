@@ -97,7 +97,11 @@ class FakeCallNetwork {
   DateTime time = DateTime.utc(2026, 10, 13);
   Duration latency = Duration.zero;
   double loss = 0;
-  final _random = Random(36);
+
+  /// Per-link delay, overriding [latency] (seeded through [random]).
+  Duration Function(String from, String to, {required bool datagram})?
+  linkDelay;
+  Random random = Random(36);
   final peers = <String, FakeCallPeer>{};
   final currentMembers = <String>{};
   final unsupported = <String>{};
@@ -179,9 +183,17 @@ class FakeCallNetwork {
       !dropped.contains(a) &&
       !dropped.contains(b) &&
       !blockedLinks.contains((a, b));
-  void enqueue(Future<void> Function() work, {bool datagram = false}) {
-    if (datagram && _random.nextDouble() < loss) return;
-    _pending.add(_Delivery(time.add(latency), work));
+  void enqueue(
+    Future<void> Function() work, {
+    bool datagram = false,
+    String? from,
+    String? to,
+  }) {
+    if (datagram && random.nextDouble() < loss) return;
+    final delay = linkDelay != null && from != null && to != null
+        ? linkDelay!(from, to, datagram: datagram)
+        : latency;
+    _pending.add(_Delivery(time.add(delay), work));
   }
 
   Future<void> flush() async {
@@ -240,19 +252,23 @@ class _Transport implements GroupCallTransport {
   ) async {
     network.signals.add((sender, recipientDeviceId, signal));
     await network.signalGates[(sender, recipientDeviceId, signal.action)];
-    network.enqueue(() async {
-      if (network._reachable(sender, recipientDeviceId) &&
-          !network.droppedSignals.contains((
-            sender,
-            recipientDeviceId,
-            signal.action,
-          ))) {
-        await network.peers[recipientDeviceId]?.service.receiveSignal(
-          signal,
-          authenticatedSender: sender,
-        );
-      }
-    });
+    network.enqueue(
+      () async {
+        if (network._reachable(sender, recipientDeviceId) &&
+            !network.droppedSignals.contains((
+              sender,
+              recipientDeviceId,
+              signal.action,
+            ))) {
+          await network.peers[recipientDeviceId]?.service.receiveSignal(
+            signal,
+            authenticatedSender: sender,
+          );
+        }
+      },
+      from: sender,
+      to: recipientDeviceId,
+    );
   }
 
   @override
@@ -263,14 +279,19 @@ class _Transport implements GroupCallTransport {
   ) async {
     final copied = Uint8List.fromList(bytes);
     network.datagrams.add(FakeCallDatagram(sender, recipientDeviceId, copied));
-    network.enqueue(() async {
-      if (network._reachable(sender, recipientDeviceId)) {
-        await network.peers[recipientDeviceId]?.service.receiveDatagram(
-          groupId,
-          sender,
-          copied,
-        );
-      }
-    }, datagram: true);
+    network.enqueue(
+      () async {
+        if (network._reachable(sender, recipientDeviceId)) {
+          await network.peers[recipientDeviceId]?.service.receiveDatagram(
+            groupId,
+            sender,
+            copied,
+          );
+        }
+      },
+      datagram: true,
+      from: sender,
+      to: recipientDeviceId,
+    );
   }
 }

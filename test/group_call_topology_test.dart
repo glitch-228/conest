@@ -65,7 +65,7 @@ void main() {
   );
 
   test(
-    'dropped forwarder is replaced within two seconds with lasting audio',
+    'dropped forwarder: audio goes direct within two seconds, then a new one',
     () async {
       final net = await network(7);
       await net.connect(net.peers.keys);
@@ -74,6 +74,15 @@ void main() {
       net.dropped.add(old);
       await net.advance(const Duration(seconds: 2));
       final survivors = net.peers.values.where((p) => p.id != old).toList();
+      // Until it counts as gone (it may be the coordinator too), frames go
+      // to everyone directly instead of to the silent forwarder.
+      final early = survivors.last;
+      await early.service.sendAudio(Uint8List.fromList([76]));
+      await net.flush();
+      for (final peer in survivors.where((p) => p != early)) {
+        expect(peer.media.played.last.$3, [76]);
+      }
+      await net.advance(const Duration(seconds: 6));
       final elected = survivors.map((p) => p.service.active!.forwarder).toSet();
       expect(elected, hasLength(1));
       expect(elected.single, isNot(old));

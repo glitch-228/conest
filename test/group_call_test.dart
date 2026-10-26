@@ -231,15 +231,15 @@ void main() {
     );
     expect(
       await p0.receiveSignal(
-        signal(net.time.subtract(const Duration(seconds: 20))),
+        signal(net.time.subtract(const Duration(seconds: 70))),
         authenticatedSender: 'p1',
       ),
       isFalse,
     );
-    expect(p0.lastRefusal, 'too old (20 s)');
+    expect(p0.lastRefusal, 'too old (70 s)');
     expect(
       await p0.receiveSignal(
-        signal(net.time.add(const Duration(seconds: 5))),
+        signal(net.time.add(const Duration(seconds: 15))),
         authenticatedSender: 'p1',
       ),
       isFalse,
@@ -348,5 +348,17 @@ void main() {
       ]),
       throwsFormatException,
     );
+  });
+
+  test('frames sent, heard and not delivered are counted per member', () async {
+    final net = await network(3);
+    await net.connect(net.peers.keys);
+    net.noRoute.add('p2');
+    await net.peers['p0']!.service.sendAudio(Uint8List.fromList([1]));
+    await net.flush();
+    final sender = net.peers['p0']!.service.active!;
+    expect(sender.framesSent['p1'], 1);
+    expect(sender.frameTrouble['p2: no direct route'], 1);
+    expect(net.peers['p1']!.service.active!.framesHeard['p0'], 1);
   });
 }
