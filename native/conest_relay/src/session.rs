@@ -543,13 +543,24 @@ impl Session {
                 } = prepared;
                 let response = execute_async(request, &self.state, &self.peer).await;
                 drop(long_poll);
-                finalize_wire(
+                let mut answer = finalize_wire(
                     response,
                     &action,
                     nonce.as_deref(),
                     detached,
                     &self.state.identity,
-                )
+                );
+                // Inside a session only: the relay's hidden address.
+                if action == "health"
+                    && let Some(hidden) = self.state.hidden_address()
+                    && let Some(v2) = answer
+                        .get_mut("stats")
+                        .and_then(|stats| stats.get_mut("v2"))
+                        .and_then(Value::as_object_mut)
+                {
+                    v2.insert("hidden".to_owned(), Value::String(hidden));
+                }
+                answer
             }
         }
     }

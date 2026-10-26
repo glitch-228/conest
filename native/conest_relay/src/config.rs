@@ -133,6 +133,10 @@ pub(crate) struct ExtConfig {
     /// or a reverse proxy to `host:port` (default: a plain welcome page).
     pub(crate) decoy_dir: Option<PathBuf>,
     pub(crate) decoy_proxy: Option<String>,
+    /// The name clients reach the TLS port by (its certificate's): with
+    /// it, the relay tells clients in a session its hidden address,
+    /// `wss://<public-host>[:port]/<path>` (never over v1).
+    pub(crate) public_host: Option<String>,
 }
 
 impl Default for ExtConfig {
@@ -158,6 +162,7 @@ impl Default for ExtConfig {
             ws_path: None,
             decoy_dir: None,
             decoy_proxy: None,
+            public_host: None,
         }
     }
 }
@@ -440,6 +445,9 @@ impl RelayConfig {
                 "--decoy-dir" => {
                     config.ext.decoy_dir = Some(PathBuf::from(parse_next_string(&mut args, &arg)?));
                 }
+                "--public-host" => {
+                    config.ext.public_host = Some(parse_next_string(&mut args, &arg)?);
+                }
                 "--decoy-proxy" => {
                     config.ext.decoy_proxy = Some(parse_next_string(&mut args, &arg)?);
                 }
@@ -634,7 +642,9 @@ pub(crate) fn usage() -> String {
            --tls-bind ADDR --tls-cert PEM --tls-key PEM  TLS (e.g. on 443) with a\n\
                                   WebSocket on a secret path and a decoy site\n\
            --ws-path SECRET       the WebSocket path (default: made once, kept)\n\
-           --decoy-dir DIR | --decoy-proxy HOST:PORT  what everyone else sees\n\n\
+           --decoy-dir DIR | --decoy-proxy HOST:PORT  what everyone else sees\n\
+           --public-host NAME     the TLS port's name; clients in a session learn\n\
+                                  the hidden address wss://NAME/<path>\n\n\
          Admin: conest_relay admin [--database-path PATH] invite create|invite list|\n\
                 account list|account remove KEY|quota set KEY BYTES"
     )

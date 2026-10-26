@@ -620,6 +620,21 @@ pub(crate) fn tls_layer(state: &RelayState) -> Result<Option<TlsLayer>, String> 
 }
 
 impl RelayState {
+    /// The relay's hidden address, when TLS and a public host are set:
+    /// told to clients inside sessions only.
+    pub(crate) fn hidden_address(&self) -> Option<String> {
+        let ext = &self.config.ext;
+        let host = ext.public_host.as_deref()?;
+        let bind = ext.tls_bind.as_deref()?;
+        let port = bind.rsplit(':').next()?.parse::<u16>().ok()?;
+        let path = self.ws_path().ok()?;
+        Some(if port == 443 {
+            format!("wss://{host}{path}")
+        } else {
+            format!("wss://{host}:{port}{path}")
+        })
+    }
+
     /// The secret WebSocket path: the configured one, or one made once and
     /// kept in the database.
     pub(crate) fn ws_path(&self) -> Result<String, String> {
@@ -871,6 +886,35 @@ mod tests {
             assert_eq!(answer(hidden).0, 404, "{hidden}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_hidden_address_is_told_inside_sessions_only() {
+        let mut config = parity_config();
+        config.ext.tls_bind = Some("127.0.0.1:8443".to_owned());
+        config.ext.tls_cert = Some(fixture("cert.pem"));
+        config.ext.tls_key = Some(fixture("key.pem"));
+        config.ext.ws_path = Some("hidden-path-123".to_owned());
+        config.ext.public_host = Some("relay.test".to_owned());
+        let relay = crate::parity_tests::start_tokio(config);
+        assert_eq!(
+            relay.state.hidden_address().as_deref(),
+            Some("wss://relay.test:8443/hidden-path-123")
+        );
+        let mut client = crate::session::tests::TestClient::connect(
+            relay.tcp,
+            &crate::session::tests::relay_public(&relay.state),
+        );
+        client.request(1, &serde_json::json!({"action": "health"}));
+        let (_, health) = client.next_json();
+        assert_eq!(
+            health["stats"]["v2"]["hidden"],
+            "wss://relay.test:8443/hidden-path-123"
+        );
+        let line = r#"{"action":"health"}"#;
+        let v1 =
+            crate::v1::handle_request_bytes(line.as_bytes(), line.len(), &relay.state, "127.0.0.1");
+        assert!(v1["stats"]["v2"].get("hidden").is_none(), "{v1}");
     }
 
     #[test]
