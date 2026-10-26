@@ -94,6 +94,9 @@ import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
 import 'xmpp/xmpp_carrier.dart';
+import 'xmpp/xmpp_chat_client.dart';
+import 'xmpp/xmpp_chats.dart';
+import 'xmpp/xmpp_session.dart' show XmppSession;
 import 'xmpp/xmpp_socket.dart' show XmppEndpoint;
 import 'xmpp/xmpp_xml.dart' show isValidBareJid;
 
@@ -729,26 +732,27 @@ class MessengerController extends ChangeNotifier {
   /// Conest stays dormant instead of silently starting.
   AppMode get appMode {
     final stored = _snapshot.appMode;
-    if (stored == AppMode.matrixOnly) return AppMode.matrixOnly;
+    if (stored != null && stored.clientOnly) return stored;
     if (_matrixClient == null) return AppMode.conest;
     return stored ?? AppMode.both;
   }
 
   /// Whether Conest itself runs: in Matrix-only mode an existing identity
   /// stays dormant (no LAN, relay node, Iroh or polling).
-  bool get conestActive => appMode != AppMode.matrixOnly;
+  bool get conestActive => !appMode.clientOnly;
 
   /// Stores the mode and starts or stops Conest's own networking to match:
   /// entering Matrix-only mode stops it (an identity stays, dormant), and
   /// leaving it starts it again. Refused during a call.
   Future<void> setAppMode(AppMode mode) async {
-    if (mode == AppMode.matrixOnly) unawaited(_groupCallService?.leave());
-    if (mode == AppMode.matrixOnly && _voiceCallService?.active != null) {
+    if (mode.clientOnly) unawaited(_groupCallService?.leave());
+    if (mode.clientOnly && _voiceCallService?.active != null) {
       throw StateError('End the call before switching to Matrix only.');
     }
     final wasActive = conestActive;
     _snapshot = _snapshot.copyWith(appMode: mode);
     await _persist('App mode: ${mode.name}.');
+    _syncXmppChats();
     if (_snapshot.identity == null || wasActive == conestActive) return;
     if (conestActive) {
       await _startConestRuntime();
@@ -4633,6 +4637,7 @@ class MessengerController extends ChangeNotifier {
       await _openRatchetSessions();
       _createMatrixTransport();
       unawaited(_restoreMatrixClient());
+      _startXmppChats();
       await VoiceMessageService.cleanupAbandonedRecordings();
       await _recoverScheduledMessageTransitions();
       await _retireBundledRelayRoutes();
@@ -5591,6 +5596,151 @@ class MessengerController extends ChangeNotifier {
       },
     );
     unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
+  // XMPP chats (M51 B1): the account's chats beside Conest's, or alone in
+  // XMPP-only mode. Its own connection and resource, so pausing the
+  // carrier never stops the chats (and the reverse).
+
+  /// The XMPP chats account, if set up.
+  XmppClientConfig? get xmppClientConfig =>
+      XmppClientConfig.fromJson(_snapshot.carrierAccounts['xmppChats']);
+
+  /// The running XMPP chats client.
+  XmppChatClient? get xmppChatClient => _xmppChatClient;
+  XmppChatClient? _xmppChatClient;
+  (Object?, XmppChats)? _xmppChatsCache;
+
+  XmppChats get xmppChats {
+    final json = _snapshot.networkChats['xmpp'];
+    final cached = _xmppChatsCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final chats = XmppChats.fromJson(json);
+    _xmppChatsCache = (json, chats);
+    return chats;
+  }
+
+  /// Whether XMPP chats may connect: in XMPP-only mode, or beside Conest
+  /// while Online is on.
+  bool get _xmppChatsAllowed {
+    if (_disposed) return false;
+    if (!conestActive) return appMode == AppMode.xmppOnly;
+    return _snapshot.identity?.connectivity.onlineEnabled ?? true;
+  }
+
+  /// Turns XMPP chats on with [jid] and [password], or with the carrier's
+  /// account when [jid] is null.
+  Future<void> enableXmppChats({String? jid, String? password}) async {
+    final XmppClientConfig config;
+    if (jid == null) {
+      final carrier = xmppCarrierConfig;
+      if (carrier == null) throw StateError('Set up XMPP first.');
+      config = XmppClientConfig(
+        jid: carrier.jid,
+        password: carrier.password,
+        resource: newXmppResource(),
+        endpoints: carrier.endpoints,
+      );
+    } else {
+      final bare = jid.trim().toLowerCase();
+      if (!isValidBareJid(bare) || password == null || password.isEmpty) {
+        throw ArgumentError(
+          'Enter an XMPP address (name@server) and its password.',
+        );
+      }
+      final login = XmppCarrierConfig(
+        jid: bare,
+        password: password,
+        resource: newXmppResource(),
+      );
+      await checkXmppLogin(
+        login,
+        connector: _xmppNetwork.connector,
+        webSocketConnector: _xmppNetwork.webSocketConnector,
+      );
+      config = XmppClientConfig(
+        jid: bare,
+        password: password,
+        resource: login.resource,
+      );
+    }
+    await _stopXmppChats();
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        'xmppChats': config.toJson(),
+      },
+    );
+    await _persist('XMPP chats on as ${config.jid}.');
+    _startXmppChats();
+  }
+
+  /// Turns XMPP chats off; [forget] also drops the chats kept here.
+  Future<void> disableXmppChats({bool forget = false}) async {
+    await _stopXmppChats();
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}..remove('xmppChats'),
+      networkChats: forget
+          ? ({..._snapshot.networkChats}..remove('xmpp'))
+          : _snapshot.networkChats,
+    );
+    await _persist('XMPP chats off.');
+  }
+
+  void _startXmppChats() {
+    final config = xmppClientConfig;
+    if (config == null || _xmppChatClient != null || !_xmppChatsAllowed) {
+      return;
+    }
+    final session = XmppSession(
+      jid: config.jid,
+      password: config.password,
+      resource: config.resource,
+      endpoints: [
+        ...config.endpoints,
+        ...xmppEndpointCandidates(
+          config.domain,
+        ).where((endpoint) => !config.endpoints.contains(endpoint)),
+      ],
+      connector: _xmppNetwork.connector,
+      webSocketConnector: _xmppNetwork.webSocketConnector,
+      onStateChanged: notifyListeners,
+      log: appendDebugLog,
+    );
+    _xmppChatClient = XmppChatClient(
+      session: session,
+      ownsSession: true,
+      chats: () => xmppChats,
+      save: _saveXmppChats,
+      sendReadMarkers: () => !(identity?.suppressReadReceipts ?? false),
+      log: appendDebugLog,
+      now: _now,
+    )..start();
+    notifyListeners();
+  }
+
+  Future<void> _stopXmppChats() async {
+    final client = _xmppChatClient;
+    _xmppChatClient = null;
+    await client?.stop();
+  }
+
+  /// Starts or stops XMPP chats to match the mode and Online switch.
+  void _syncXmppChats() {
+    if (_xmppChatsAllowed) {
+      _startXmppChats();
+    } else if (_xmppChatClient != null) {
+      unawaited(_stopXmppChats());
+    }
+  }
+
+  void _saveXmppChats(XmppChats chats) {
+    final json = chats.toJson();
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'xmpp': json},
+    );
+    _xmppChatsCache = (json, chats);
+    unawaited(_saveSnapshotSilently(notify: true, debounce: true));
   }
 
   /// Whether this device can join the Bluetooth mesh.
@@ -10929,6 +11079,7 @@ class MessengerController extends ChangeNotifier {
       await _stopTransportRegistry();
     }
     await _applyGlobalConnectivityState();
+    _syncXmppChats();
     if ((matrixPolicyChanged && _snapshot.matrixSession != null) ||
         carrierPolicyChanged) {
       // Contacts learn whether to address this device over each carrier.
@@ -37322,6 +37473,7 @@ class MessengerController extends ChangeNotifier {
     _groupProfileRefreshTimers.clear();
     unawaited(_closeBitchatIdentity());
     unawaited(_stopNostrDirect());
+    unawaited(_stopXmppChats());
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());

@@ -52,6 +52,22 @@ class FakeXmppServer {
   /// When false, acknowledgement requests get no answer.
   bool answerAcks = true;
 
+  /// Group chats on `conference.<domain>`, by room JID.
+  final Map<String, FakeRoom> rooms = {};
+
+  /// Message archives (MAM), by account.
+  final Map<String, List<FakeArchived>> archives = {};
+
+  /// Blocked addresses, by account.
+  final Map<String, Set<String>> blocklists = {};
+
+  /// Upload slots handed out: the get URL and the file name.
+  final List<(String, String)> uploads = [];
+  int _nextArchiveId = 0;
+
+  String get mucDomain => 'conference.$domain';
+  String get uploadDomain => 'upload.$domain';
+
   final List<_FakeConnection> _connections = [];
   final Map<String, _SmSession> _smSessions = {};
   int _nextSm = 0;
@@ -124,6 +140,39 @@ class FakeXmppServer {
     if (stanza.name == 'message') {
       final sender = bareJid(stanza.attr('from'));
       if (sender != null && droppedSenders.contains(sender)) return;
+      if (sender != null && (blocklists[bare]?.contains(sender) ?? false)) {
+        return;
+      }
+      final type = stanza.attr('type') ?? 'normal';
+      final archived =
+          (type == 'chat' || type == 'normal') &&
+          stanza.child('body') != null &&
+          stanza.child('result', XmppNs.mam) == null;
+      if (archived) {
+        final id = 'a${_nextArchiveId++}';
+        stanza.add(
+          XmppElement(
+            'stanza-id',
+            xmlns: XmppNs.stanzaId,
+            attributes: {'by': bare, 'id': id},
+          ),
+        );
+        for (final account in {?sender, bare}) {
+          (archives[account] ??= []).add(
+            FakeArchived(id, stanza, DateTime.now().toUtc()),
+          );
+        }
+        // The sender's other clients get a copy.
+        if (sender != null && stanza.child('private', XmppNs.carbons) == null) {
+          for (final connection in _connections) {
+            if (connection.carbons &&
+                connection.fullJid != stanza.attr('from') &&
+                bareJid(connection.fullJid) == sender) {
+              connection.deliver(_carbon('sent', connection.fullJid!, stanza));
+            }
+          }
+        }
+      }
       var list = targets.toList();
       if (list.isEmpty && resource != null) {
         // A full JID that is offline: treated as the bare JID.
@@ -146,6 +195,18 @@ class FakeXmppServer {
       for (final connection in list) {
         connection.deliver(stanza);
       }
+      // A message to one resource: the account's other clients get a copy.
+      if (archived && resource != null) {
+        for (final connection in _connections) {
+          if (connection.carbons &&
+              bareJid(connection.fullJid) == bare &&
+              !list.contains(connection)) {
+            connection.deliver(
+              _carbon('received', connection.fullJid!, stanza),
+            );
+          }
+        }
+      }
       return;
     }
     for (final connection in targets) {
@@ -154,6 +215,63 @@ class FakeXmppServer {
   }
 
   void _remove(_FakeConnection connection) => _connections.remove(connection);
+
+  XmppElement _carbon(String kind, String to, XmppElement message) =>
+      XmppElement(
+        'message',
+        attributes: {'from': bareJid(to)!, 'to': to, 'type': 'chat'},
+        children: [
+          XmppElement(
+            kind,
+            xmlns: XmppNs.carbons,
+            children: [
+              XmppElement(
+                'forwarded',
+                xmlns: XmppNs.forward,
+                children: [message],
+              ),
+            ],
+          ),
+        ],
+      );
+
+  /// Sends what a room says to every occupant.
+  void _roomBroadcast(FakeRoom room, XmppElement stanza) {
+    for (final full in room.occupants.values) {
+      for (final connection in _connections) {
+        if (connection.fullJid == full) {
+          connection.deliver(
+            XmppElement(
+              stanza.name,
+              xmlns: stanza.xmlns,
+              attributes: {...stanza.attributes, 'to': full},
+              children: stanza.children,
+              text: stanza.text,
+            ),
+          );
+        }
+      }
+    }
+  }
+}
+
+/// A message kept in an archive.
+class FakeArchived {
+  FakeArchived(this.id, this.message, this.at);
+  final String id;
+  final XmppElement message;
+  final DateTime at;
+}
+
+/// A group chat (MUC) on the fake server.
+class FakeRoom {
+  FakeRoom(this.jid);
+  final String jid;
+  String subject = '';
+
+  /// Nickname to the occupant's full JID.
+  final Map<String, String> occupants = {};
+  final List<FakeArchived> archive = [];
 }
 
 class _SmSession {
@@ -305,6 +423,7 @@ class _FakeConnection {
   String? _user;
   String? fullJid;
   int priority = 0;
+  bool carbons = false;
   bool _available = false;
   _SmSession? _sm;
   _ScramServer? _scram;
@@ -440,6 +559,11 @@ class _FakeConnection {
       case (XmppNs.client, 'message'):
         _countIn();
         if (fullJid == null) return;
+        final to = bareJid(element.attr('to'));
+        if (to != null && to.endsWith('@${server.mucDomain}')) {
+          _roomMessage(to, element);
+          return;
+        }
         element.attributes['from'] = fullJid!;
         server._route(element);
     }
@@ -555,12 +679,17 @@ class _FakeConnection {
     final type = iq.attr('type');
     XmppElement result([List<XmppElement> children = const []]) => XmppElement(
       'iq',
-      attributes: {'type': 'result', 'id': ?id, 'to': ?fullJid},
+      attributes: {
+        'type': 'result',
+        'id': ?id,
+        'to': ?fullJid,
+        'from': ?iq.attr('to'),
+      },
       children: children,
     );
     XmppElement error(String condition) => XmppElement(
       'iq',
-      attributes: {'type': 'error', 'id': ?id},
+      attributes: {'type': 'error', 'id': ?id, 'from': ?iq.attr('to')},
       children: [
         XmppElement(
           'error',
@@ -570,6 +699,114 @@ class _FakeConnection {
       ],
     );
     final to = iq.attr('to');
+    final ownBare = '$_user@${server.domain}';
+    if (fullJid != null) {
+      if (iq.child('query', XmppNs.mam) case final query?) {
+        _mamQuery(iq, query, to == null ? null : bareJid(to), result);
+        return;
+      }
+      if (iq.child('query', XmppNs.discoItems) != null && to == server.domain) {
+        _send(
+          result([
+            XmppElement(
+              'query',
+              xmlns: XmppNs.discoItems,
+              children: [
+                XmppElement('item', attributes: {'jid': server.uploadDomain}),
+                XmppElement('item', attributes: {'jid': server.mucDomain}),
+              ],
+            ),
+          ]),
+        );
+        return;
+      }
+      if (iq.child('query', XmppNs.discoInfo) != null &&
+          (to == server.domain ||
+              to == server.uploadDomain ||
+              to == server.mucDomain)) {
+        _send(
+          result([
+            XmppElement(
+              'query',
+              xmlns: XmppNs.discoInfo,
+              children: [
+                if (to == server.uploadDomain)
+                  XmppElement(
+                    'feature',
+                    attributes: {'var': XmppNs.httpUpload},
+                  ),
+                if (to == server.mucDomain)
+                  XmppElement('feature', attributes: {'var': XmppNs.muc}),
+              ],
+            ),
+          ]),
+        );
+        return;
+      }
+      if (iq.child('request', XmppNs.httpUpload) case final request?
+          when to == server.uploadDomain) {
+        final n = server.uploads.length;
+        final get =
+            'https://${server.uploadDomain}/get/$n/${request.attr('filename')}';
+        server.uploads.add((get, request.attr('filename') ?? ''));
+        _send(
+          result([
+            XmppElement(
+              'slot',
+              xmlns: XmppNs.httpUpload,
+              children: [
+                XmppElement(
+                  'put',
+                  attributes: {'url': 'https://${server.uploadDomain}/put/$n'},
+                  children: [
+                    XmppElement(
+                      'header',
+                      attributes: {'name': 'Authorization'},
+                      text: 'Basic token$n',
+                    ),
+                    XmppElement(
+                      'header',
+                      attributes: {'name': 'X-Evil'},
+                      text: 'nope',
+                    ),
+                  ],
+                ),
+                XmppElement('get', attributes: {'url': get}),
+              ],
+            ),
+          ]),
+        );
+        return;
+      }
+      if (iq.child('enable', XmppNs.carbons) != null) {
+        carbons = true;
+        _send(result());
+        return;
+      }
+      if (iq.child('blocklist', XmppNs.blocking) != null) {
+        _send(
+          result([
+            XmppElement(
+              'blocklist',
+              xmlns: XmppNs.blocking,
+              children: [
+                for (final jid
+                    in server.blocklists[ownBare] ?? const <String>{})
+                  XmppElement('item', attributes: {'jid': jid}),
+              ],
+            ),
+          ]),
+        );
+        return;
+      }
+      if (iq.child('block', XmppNs.blocking) case final block?) {
+        for (final item in block.all('item')) {
+          (server.blocklists[ownBare] ??= {}).add(item.attr('jid')!);
+        }
+        _send(result());
+        return;
+      }
+    }
     if (to != null &&
         to != server.domain &&
         bareJid(to) != '$_user@${server.domain}' &&
@@ -657,8 +894,7 @@ class _FakeConnection {
       );
       return;
     }
-    if (iq.child('ping', XmppNs.ping) != null ||
-        iq.child('enable', XmppNs.carbons) != null) {
+    if (iq.child('ping', XmppNs.ping) != null) {
       _send(result());
       return;
     }
@@ -687,6 +923,10 @@ class _FakeConnection {
       }
       return;
     }
+    if (to.endsWith('@${server.mucDomain}')) {
+      _roomPresence(to, presence);
+      return;
+    }
     final mine = server.rosters[own] ??= {};
     final theirs = server.rosters[to] ??= {};
     switch (type) {
@@ -698,6 +938,162 @@ class _FakeConnection {
     }
     presence.attributes['from'] = own;
     server._route(presence);
+  }
+
+  void _roomPresence(String roomJid, XmppElement presence) {
+    final nick = jidResource(presence.attr('to')!) ?? '';
+    final room = server.rooms[roomJid] ??= FakeRoom(roomJid);
+    if (presence.attr('type') == 'unavailable') {
+      room.occupants.removeWhere((_, full) => full == fullJid);
+      return;
+    }
+    room.occupants[nick] = fullJid!;
+    for (final MapEntry(key: other, value: _) in room.occupants.entries) {
+      _send(
+        XmppElement(
+          'presence',
+          attributes: {'from': '$roomJid/$other', 'to': fullJid!},
+          children: [
+            XmppElement(
+              'x',
+              xmlns: XmppNs.mucUser,
+              children: [
+                if (other == nick)
+                  XmppElement('status', attributes: {'code': '110'}),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+    _send(
+      XmppElement(
+        'message',
+        attributes: {
+          'from': roomJid,
+          'to': fullJid!,
+          'type': 'groupchat',
+          'id': 'subj',
+        },
+        children: [XmppElement('subject', text: room.subject)],
+      ),
+    );
+  }
+
+  void _roomMessage(String roomJid, XmppElement message) {
+    final room = server.rooms[roomJid];
+    final nick = room?.occupants.entries
+        .where((entry) => entry.value == fullJid)
+        .firstOrNull
+        ?.key;
+    if (room == null || nick == null || message.attr('type') != 'groupchat') {
+      return;
+    }
+    final id = 'r${server._nextArchiveId++}';
+    final stamped = XmppElement(
+      'message',
+      attributes: {
+        ...message.attributes,
+        'from': '$roomJid/$nick',
+        'type': 'groupchat',
+      },
+      children: [
+        ...message.children,
+        XmppElement(
+          'stanza-id',
+          xmlns: XmppNs.stanzaId,
+          attributes: {'by': roomJid, 'id': id},
+        ),
+      ],
+      text: message.text,
+    );
+    if (message.child('body') != null) {
+      room.archive.add(FakeArchived(id, stamped, DateTime.now().toUtc()));
+    }
+    server._roomBroadcast(room, stamped);
+  }
+
+  void _mamQuery(
+    XmppElement iq,
+    XmppElement query,
+    String? room,
+    XmppElement Function([List<XmppElement>]) result,
+  ) {
+    final own = '$_user@${server.domain}';
+    final archive = room == null
+        ? server.archives[own] ?? const <FakeArchived>[]
+        : server.rooms[room]?.archive ?? const <FakeArchived>[];
+    final set = query.child('set', XmppNs.rsm);
+    final max = int.tryParse(set?.childText('max') ?? '') ?? 50;
+    final after = set?.childText('after');
+    final before = set?.child('before');
+    List<FakeArchived> page;
+    var complete = true;
+    if (after != null) {
+      final index = archive.indexWhere((entry) => entry.id == after);
+      final rest = archive.sublist(index + 1);
+      page = rest.take(max).toList();
+      complete = rest.length <= max;
+    } else if (before != null) {
+      page = archive.length <= max
+          ? List.of(archive)
+          : archive.sublist(archive.length - max);
+      complete = archive.length <= max;
+    } else {
+      page = archive.take(max).toList();
+      complete = archive.length <= max;
+    }
+    for (final entry in page) {
+      _send(
+        XmppElement(
+          'message',
+          attributes: {'to': fullJid!, 'from': room ?? own},
+          children: [
+            XmppElement(
+              'result',
+              xmlns: XmppNs.mam,
+              attributes: {
+                'queryid': query.attr('queryid') ?? '',
+                'id': entry.id,
+              },
+              children: [
+                XmppElement(
+                  'forwarded',
+                  xmlns: XmppNs.forward,
+                  children: [
+                    XmppElement(
+                      'delay',
+                      xmlns: XmppNs.delay,
+                      attributes: {'stamp': entry.at.toIso8601String()},
+                    ),
+                    entry.message,
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+    final answer = result([
+      XmppElement(
+        'fin',
+        xmlns: XmppNs.mam,
+        attributes: {if (complete) 'complete': 'true'},
+        children: [
+          XmppElement(
+            'set',
+            xmlns: XmppNs.rsm,
+            children: [
+              if (page.isNotEmpty) XmppElement('first', text: page.first.id),
+              if (page.isNotEmpty) XmppElement('last', text: page.last.id),
+            ],
+          ),
+        ],
+      ),
+    ]);
+    if (room != null) answer.attributes['from'] = room;
+    _send(answer);
   }
 
   void drop() {

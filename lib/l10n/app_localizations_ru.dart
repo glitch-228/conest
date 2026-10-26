@@ -5768,4 +5768,116 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get xmppPasswordField => 'Пароль';
+
+  @override
+  String get xmppRetracted => 'Сообщение отозвано';
+
+  @override
+  String get xmppFile => 'Файл';
+
+  @override
+  String get xmppNewChat => 'Новый чат XMPP';
+
+  @override
+  String get xmppNewChatAddress => 'Адрес или ссылка xmpp:';
+
+  @override
+  String get xmppGroupChat => 'Групповой чат';
+
+  @override
+  String get xmppNickname => 'Ваш ник';
+
+  @override
+  String get xmppOpenChat => 'Открыть';
+
+  @override
+  String get xmppMetadataTitle => 'Часть сведений останется в файле';
+
+  @override
+  String get xmppMetadataBody =>
+      'Conest не смог удалить из файла все скрытые сведения (например, место или устройство). Всё равно отправить?';
+
+  @override
+  String get xmppSendAnyway => 'Всё равно отправить';
+
+  @override
+  String get xmppReply => 'Ответить';
+
+  @override
+  String get xmppCopy => 'Копировать';
+
+  @override
+  String get xmppEdit => 'Изменить';
+
+  @override
+  String get xmppRetract => 'Отозвать';
+
+  @override
+  String get xmppChatGone => 'Этого чата больше нет.';
+
+  @override
+  String get xmppNotEncrypted => 'без шифрования';
+
+  @override
+  String get xmppLeaveRoom => 'Покинуть групповой чат';
+
+  @override
+  String get xmppDeleteChat => 'Удалить чат';
+
+  @override
+  String get xmppBlock => 'Заблокировать';
+
+  @override
+  String get xmppAccept => 'Принять';
+
+  @override
+  String get xmppRequest =>
+      'Вам написал человек не из ваших контактов. Ответы и отметки о прочтении уйдут только после того, как вы примете.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'Вас пригласили в этот групповой чат. Войти?';
+
+  @override
+  String get xmppAttach => 'Прикрепить файл';
+
+  @override
+  String get xmppMessageHint => 'Сообщение';
+
+  @override
+  String get xmppEdited => 'изменено';
+
+  @override
+  String get xmppChats => 'Чаты XMPP';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'Общайтесь с кем угодно в XMPP (Jabber) рядом с чатами Conest';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'Использовать другую учётную запись, не ту, через которую Conest передаёт сообщения';
+
+  @override
+  String get xmppConnected => 'подключено';
+
+  @override
+  String get xmppConnecting => 'подключение';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'Использовать Conest как клиент $network?';
+  }
+
+  @override
+  String get onbXmppInstead => 'Использовать как клиент XMPP';
+
+  @override
+  String get xmppSignIn => 'Войдите в учётную запись XMPP';
+
+  @override
+  String get xmppNoChats => 'Чатов XMPP пока нет';
+
+  @override
+  String get xmppRequestShort => 'Запрос на чат';
 }

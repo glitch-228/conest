@@ -12,6 +12,7 @@ import 'delta_chats_screen.dart';
 import 'matrix_room_screen.dart';
 import 'nostr_chats_screen.dart';
 import 'radio_chats_screen.dart';
+import 'xmpp_chats_screen.dart';
 import '../radio_chats.dart';
 
 /// A chat on another network, as the chat list shows it.
@@ -76,6 +77,7 @@ List<NetworkChatSource> networkChatSources(
   MatrixChatSource(controller, palette),
   NostrChatSource(controller),
   DeltaChatSource(controller),
+  XmppChatSource(controller),
   BitchatChatSource(controller),
   RadioChatSource(
     'meshcore',
@@ -198,6 +200,40 @@ class DeltaChatSource extends NetworkChatSource {
           searchText: () =>
               chat.messages.map((message) => message.text).join('\n'),
           open: (context) => openDeltaChat(context, controller, chat.key),
+        ),
+  ];
+}
+
+/// XMPP chats: people, requests and group chats (M51).
+class XmppChatSource extends NetworkChatSource {
+  const XmppChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'xmpp';
+
+  @override
+  String get label => 'XMPP';
+
+  @override
+  bool get active => controller.xmppChatClient != null;
+
+  @override
+  List<NetworkChat> chats([BuildContext? context]) => [
+    if (active)
+      for (final chat in controller.xmppChats.chats.values)
+        NetworkChat(
+          network: id,
+          id: chat.jid,
+          title: xmppChatTitle(controller, chat),
+          preview: xmppPreview(context, chat.messages.lastOrNull),
+          at: chat.messages.lastOrNull?.at.toLocal(),
+          unread: chat.unread,
+          isGroup: chat.room,
+          searchText: () =>
+              chat.messages.map((message) => message.text).join('\n'),
+          open: (context) => openXmppChat(context, controller, chat.jid),
         ),
   ];
 }

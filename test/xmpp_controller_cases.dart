@@ -232,5 +232,146 @@ void _xmppControllerTests() {
       expect(find.byKey(const ValueKey('xmpp-server-field')), findsNothing);
       await tester.runAsync(alice.disableXmppCarrier);
     });
+    test('XMPP chats run beside Conest and alone in XMPP-only mode', () async {
+      final server = FakeXmppServer()
+        ..addAccount('alice', 'pa')
+        ..addAccount('bob', 'pb');
+      final alice = await person(server, _FakeRelayClient(), 'Alice');
+      await alice.enableXmppChats(jid: 'alice@xmpp.test', password: 'pa');
+      expect(alice.xmppClientConfig!.jid, 'alice@xmpp.test');
+      for (
+        var i = 0;
+        i < 200 && !(alice.xmppChatClient?.connected ?? false);
+        i++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(alice.xmppChatClient!.connected, isTrue);
+      // Bob writes from another client.
+      server.inject(
+        XmppElement(
+          'message',
+          attributes: {
+            'from': 'bob@xmpp.test/x',
+            'to': 'alice@xmpp.test/${alice.xmppClientConfig!.resource}',
+            'type': 'chat',
+            'id': 'b1',
+          },
+          children: [XmppElement('body', text: 'hi Alice')],
+        ),
+      );
+      for (
+        var i = 0;
+        i < 100 && alice.xmppChats.chats['bob@xmpp.test'] == null;
+        i++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(alice.xmppChats.chats['bob@xmpp.test']!.request, isTrue);
+      expect(
+        networkChatSources(
+          alice,
+          ConestPalette(brightness: Brightness.dark),
+        ).singleWhere((source) => source.id == 'xmpp').chats().single.title,
+        'bob@xmpp.test',
+      );
+
+      // XMPP only: Conest sleeps, the chats go on.
+      await alice.setAppMode(AppMode.xmppOnly);
+      expect(alice.conestActive, isFalse);
+      expect(alice.xmppChatClient, isNotNull);
+      await alice.setAppMode(AppMode.conest);
+      expect(alice.conestActive, isTrue);
+
+      // Online off: the chats disconnect.
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(onlineEnabled: false),
+      );
+      expect(alice.xmppChatClient, isNull);
+      for (var i = 0; i < 50 && server.online.isNotEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(server.online, isEmpty);
+      // The chats are kept.
+      expect(alice.xmppChats.chats, contains('bob@xmpp.test'));
+    });
+
+    testWidgets('an XMPP chat sends, and a request waits for accepting', (
+      tester,
+    ) async {
+      final server = FakeXmppServer()
+        ..addAccount('alice', 'pa')
+        ..addAccount('bob', 'pb');
+      late MessengerController alice;
+      await tester.runAsync(() async {
+        alice = await person(server, _FakeRelayClient(), 'Alice');
+        await alice.enableXmppChats(jid: 'alice@xmpp.test', password: 'pa');
+        for (
+          var i = 0;
+          i < 200 && !(alice.xmppChatClient?.connected ?? false);
+          i++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        server.inject(
+          XmppElement(
+            'message',
+            attributes: {
+              'from': 'bob@xmpp.test/x',
+              'to': 'alice@xmpp.test/${alice.xmppClientConfig!.resource}',
+              'type': 'chat',
+              'id': 'b1',
+            },
+            children: [XmppElement('body', text: 'hi Alice')],
+          ),
+        );
+        for (
+          var i = 0;
+          i < 100 && alice.xmppChats.chats['bob@xmpp.test'] == null;
+          i++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: XmppChatScreen(controller: alice, jid: 'bob@xmpp.test'),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('hi Alice'), findsOneWidget);
+      expect(find.byKey(const ValueKey('xmpp-request-banner')), findsOneWidget);
+      // No composer before accepting.
+      expect(find.byKey(const ValueKey('xmpp-composer')), findsNothing);
+      expect(find.textContaining('not encrypted'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('xmpp-request-accept')));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const ValueKey('xmpp-composer')),
+        'hey',
+      );
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const ValueKey('xmpp-send')));
+        for (
+          var i = 0;
+          i < 100 && !server.received.any((e) => e.childText('body') == 'hey');
+          i++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump();
+      expect(server.received.any((e) => e.childText('body') == 'hey'), isTrue);
+      expect(
+        find.descendant(
+          of: find.byType(ListView),
+          matching: find.text('hey'),
+        ),
+        findsOneWidget,
+      );
+      await tester.runAsync(alice.disableXmppChats);
+    });
   });
 }

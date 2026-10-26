@@ -5629,4 +5629,116 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get xmppPasswordField => 'Kata sandi';
+
+  @override
+  String get xmppRetracted => 'Pesan ditarik';
+
+  @override
+  String get xmppFile => 'Berkas';
+
+  @override
+  String get xmppNewChat => 'Obrolan XMPP baru';
+
+  @override
+  String get xmppNewChatAddress => 'Alamat atau tautan xmpp:';
+
+  @override
+  String get xmppGroupChat => 'Obrolan grup';
+
+  @override
+  String get xmppNickname => 'Nama panggilan Anda';
+
+  @override
+  String get xmppOpenChat => 'Buka';
+
+  @override
+  String get xmppMetadataTitle => 'Beberapa detail tetap ada di berkas ini';
+
+  @override
+  String get xmppMetadataBody =>
+      'Conest tidak dapat menghapus semua detail tersembunyi (seperti lokasi atau perangkat) dari berkas ini. Tetap kirim?';
+
+  @override
+  String get xmppSendAnyway => 'Tetap kirim';
+
+  @override
+  String get xmppReply => 'Balas';
+
+  @override
+  String get xmppCopy => 'Salin';
+
+  @override
+  String get xmppEdit => 'Sunting';
+
+  @override
+  String get xmppRetract => 'Tarik';
+
+  @override
+  String get xmppChatGone => 'Obrolan ini sudah tidak ada.';
+
+  @override
+  String get xmppNotEncrypted => 'tidak terenkripsi';
+
+  @override
+  String get xmppLeaveRoom => 'Keluar dari obrolan grup';
+
+  @override
+  String get xmppDeleteChat => 'Hapus obrolan';
+
+  @override
+  String get xmppBlock => 'Blokir';
+
+  @override
+  String get xmppAccept => 'Terima';
+
+  @override
+  String get xmppRequest =>
+      'Seseorang yang bukan kontak Anda menulis kepada Anda. Balasan dan tanda baca dikirim hanya setelah Anda menerima.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'Anda diundang ke obrolan grup ini. Bergabung?';
+
+  @override
+  String get xmppAttach => 'Lampirkan berkas';
+
+  @override
+  String get xmppMessageHint => 'Pesan';
+
+  @override
+  String get xmppEdited => 'disunting';
+
+  @override
+  String get xmppChats => 'Obrolan XMPP';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'Mengobrol dengan siapa pun di XMPP (Jabber), di samping obrolan Conest';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'Gunakan akun lain selain yang dipakai Conest membawa pesan';
+
+  @override
+  String get xmppConnected => 'terhubung';
+
+  @override
+  String get xmppConnecting => 'menghubungkan';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'Gunakan Conest sebagai klien $network?';
+  }
+
+  @override
+  String get onbXmppInstead => 'Gunakan sebagai klien XMPP saja';
+
+  @override
+  String get xmppSignIn => 'Masuk ke akun XMPP Anda';
+
+  @override
+  String get xmppNoChats => 'Belum ada obrolan XMPP';
+
+  @override
+  String get xmppRequestShort => 'Permintaan obrolan';
 }

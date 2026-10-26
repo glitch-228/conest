@@ -91,7 +91,6 @@ import 'src/ui/link_preview_composer.dart';
 import 'src/links/link_cleaner.dart';
 import 'src/windows_firewall.dart';
 import 'src/ui/reticulum_carrier_panel.dart';
-import 'src/ui/matrix_home_screen.dart';
 import 'src/ui/matrix_room_screen.dart';
 import 'src/ui/network_chat_sources.dart';
 import 'src/ui/matrix_verification_dialog.dart';
@@ -107,6 +106,8 @@ import 'src/ui/signature_panels.dart';
 import 'src/ui/signature_widgets.dart';
 import 'src/ui/tor_carrier_panel.dart';
 import 'src/ui/xmpp_carrier_panel.dart';
+import 'src/ui/xmpp_chats_screen.dart';
+import 'src/ui/client_only_home.dart';
 import 'src/update_service.dart';
 import 'src/ui/linked_text.dart';
 
@@ -1144,6 +1145,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
   late bool _controllerReady;
   late bool _controllerHasIdentity;
   late bool _controllerMatrixOnly;
+  AppMode? _controllerAppMode;
   late bool _controllerNeedsMode;
   late UserMode _controllerUserMode;
   String? _controllerLocale;
@@ -1155,7 +1157,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addTimingsCallback(_recordFrameTimings);
     _controllerReady = widget.controller.isReady;
     _controllerHasIdentity = widget.controller.hasIdentity;
-    _controllerMatrixOnly = widget.controller.appMode == AppMode.matrixOnly;
+    _controllerMatrixOnly = widget.controller.appMode.clientOnly;
     _controllerNeedsMode = widget.controller.needsUserModeChoice;
     _controllerUserMode = widget.controller.userMode;
     _controllerLocale = widget.controller.localeCode;
@@ -1311,7 +1313,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     _syncTray();
     final ready = widget.controller.isReady;
     final hasIdentity = widget.controller.hasIdentity;
-    final matrixOnly = widget.controller.appMode == AppMode.matrixOnly;
+    final matrixOnly = widget.controller.appMode.clientOnly;
     final needsMode = widget.controller.needsUserModeChoice;
     final userMode = widget.controller.userMode;
     final locale = widget.controller.localeCode;
@@ -1322,6 +1324,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     if (ready == _controllerReady &&
         hasIdentity == _controllerHasIdentity &&
         matrixOnly == _controllerMatrixOnly &&
+        widget.controller.appMode == _controllerAppMode &&
         needsMode == _controllerNeedsMode &&
         userMode == _controllerUserMode) {
       return;
@@ -1329,6 +1332,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     _controllerReady = ready;
     _controllerHasIdentity = hasIdentity;
     _controllerMatrixOnly = matrixOnly;
+    _controllerAppMode = widget.controller.appMode;
     _controllerNeedsMode = needsMode;
     _controllerUserMode = userMode;
     if (mounted) setState(() {});
@@ -1487,10 +1491,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
               },
               home: _controllerReady
                   ? _controllerMatrixOnly
-                        ? MatrixHomeScreen(
-                            controller: widget.controller,
-                            palette: palette,
-                          )
+                        ? clientOnlyHome(widget.controller, palette)!
                         : _controllerHasIdentity && _controllerNeedsMode
                         ? UserModeScreen(controller: widget.controller)
                         : _controllerHasIdentity
@@ -1915,6 +1916,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                           ?.copyWith(color: palette.inkSoft),
                                     ),
                                   ],
+                                  ClientOnlyChoices(
+                                    controller: widget.controller,
+                                  ),
                                   if (widget.controller.statusMessage !=
                                       null) ...[
                                     const SizedBox(height: 14),
@@ -16108,6 +16112,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             TorCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             XmppCarrierPanel(controller: widget.controller),
+                            XmppChatsPanel(controller: widget.controller),
                             if (widget
                                 .controller
                                 .userMode

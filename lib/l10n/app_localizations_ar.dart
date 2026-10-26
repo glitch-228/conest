@@ -5772,4 +5772,116 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get xmppPasswordField => 'كلمة المرور';
+
+  @override
+  String get xmppRetracted => 'سُحبت الرسالة';
+
+  @override
+  String get xmppFile => 'ملف';
+
+  @override
+  String get xmppNewChat => 'محادثة XMPP جديدة';
+
+  @override
+  String get xmppNewChatAddress => 'العنوان أو رابط xmpp:';
+
+  @override
+  String get xmppGroupChat => 'محادثة جماعية';
+
+  @override
+  String get xmppNickname => 'اسمك المستعار';
+
+  @override
+  String get xmppOpenChat => 'فتح';
+
+  @override
+  String get xmppMetadataTitle => 'تبقى بعض التفاصيل في هذا الملف';
+
+  @override
+  String get xmppMetadataBody =>
+      'تعذّر على Conest إزالة كل التفاصيل المخفية (مثل الموقع أو الجهاز) من هذا الملف. أترسله رغم ذلك؟';
+
+  @override
+  String get xmppSendAnyway => 'أرسل على أي حال';
+
+  @override
+  String get xmppReply => 'رد';
+
+  @override
+  String get xmppCopy => 'نسخ';
+
+  @override
+  String get xmppEdit => 'تعديل';
+
+  @override
+  String get xmppRetract => 'سحب';
+
+  @override
+  String get xmppChatGone => 'لم تعد هذه المحادثة موجودة.';
+
+  @override
+  String get xmppNotEncrypted => 'غير مشفّرة';
+
+  @override
+  String get xmppLeaveRoom => 'مغادرة المحادثة الجماعية';
+
+  @override
+  String get xmppDeleteChat => 'حذف المحادثة';
+
+  @override
+  String get xmppBlock => 'حظر';
+
+  @override
+  String get xmppAccept => 'قبول';
+
+  @override
+  String get xmppRequest =>
+      'راسلك شخص ليس من جهات اتصالك. لا تُرسل الردود وعلامات القراءة إلا بعد قبولك.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'تمت دعوتك إلى هذه المحادثة الجماعية. هل تنضم؟';
+
+  @override
+  String get xmppAttach => 'إرفاق ملف';
+
+  @override
+  String get xmppMessageHint => 'رسالة';
+
+  @override
+  String get xmppEdited => 'معدّلة';
+
+  @override
+  String get xmppChats => 'محادثات XMPP';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'تحدث مع أي شخص على XMPP (Jabber) بجانب محادثات Conest';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'استخدام حساب غير الذي ينقل به Conest الرسائل';
+
+  @override
+  String get xmppConnected => 'متصل';
+
+  @override
+  String get xmppConnecting => 'جارٍ الاتصال';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'هل تستخدم Conest كعميل $network؟';
+  }
+
+  @override
+  String get onbXmppInstead => 'استخدمه كعميل XMPP بدلًا من ذلك';
+
+  @override
+  String get xmppSignIn => 'سجّل الدخول إلى حساب XMPP';
+
+  @override
+  String get xmppNoChats => 'لا توجد محادثات XMPP بعد';
+
+  @override
+  String get xmppRequestShort => 'طلب محادثة';
 }

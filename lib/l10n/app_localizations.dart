@@ -8974,6 +8974,216 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Password'**
   String get xmppPasswordField;
+
+  /// XMPP chat: a message its sender took back.
+  ///
+  /// In en, this message translates to:
+  /// **'Message retracted'**
+  String get xmppRetracted;
+
+  /// XMPP chat: a shared file.
+  ///
+  /// In en, this message translates to:
+  /// **'File'**
+  String get xmppFile;
+
+  /// XMPP: start a new chat.
+  ///
+  /// In en, this message translates to:
+  /// **'New XMPP chat'**
+  String get xmppNewChat;
+
+  /// XMPP: address field of a new chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Address or xmpp: link'**
+  String get xmppNewChatAddress;
+
+  /// XMPP: a group chat (MUC).
+  ///
+  /// In en, this message translates to:
+  /// **'Group chat'**
+  String get xmppGroupChat;
+
+  /// XMPP: nickname in a group chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Your nickname'**
+  String get xmppNickname;
+
+  /// XMPP: open the chat button.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get xmppOpenChat;
+
+  /// XMPP: the file's metadata could not all be removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Some details stay in this file'**
+  String get xmppMetadataTitle;
+
+  /// XMPP: explanation of remaining metadata.
+  ///
+  /// In en, this message translates to:
+  /// **'Conest could not remove all hidden details (such as location or device) from this file. Send it anyway?'**
+  String get xmppMetadataBody;
+
+  /// XMPP: send despite metadata.
+  ///
+  /// In en, this message translates to:
+  /// **'Send anyway'**
+  String get xmppSendAnyway;
+
+  /// XMPP: reply to a message.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply'**
+  String get xmppReply;
+
+  /// XMPP: copy a message.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy'**
+  String get xmppCopy;
+
+  /// XMPP: correct own message.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get xmppEdit;
+
+  /// XMPP: retract own message.
+  ///
+  /// In en, this message translates to:
+  /// **'Retract'**
+  String get xmppRetract;
+
+  /// XMPP: the chat no longer exists.
+  ///
+  /// In en, this message translates to:
+  /// **'This chat is gone.'**
+  String get xmppChatGone;
+
+  /// XMPP: the chat is not end-to-end encrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'not encrypted'**
+  String get xmppNotEncrypted;
+
+  /// XMPP: leave a group chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave group chat'**
+  String get xmppLeaveRoom;
+
+  /// XMPP: delete a chat here.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete chat'**
+  String get xmppDeleteChat;
+
+  /// XMPP: block someone.
+  ///
+  /// In en, this message translates to:
+  /// **'Block'**
+  String get xmppBlock;
+
+  /// XMPP: accept a chat request.
+  ///
+  /// In en, this message translates to:
+  /// **'Accept'**
+  String get xmppAccept;
+
+  /// XMPP: banner for a stranger's chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Someone not in your contacts wrote to you. Replies and read markers go out only once you accept.'**
+  String get xmppRequest;
+
+  /// XMPP: banner for a group chat invitation.
+  ///
+  /// In en, this message translates to:
+  /// **'You were invited to this group chat. Join it?'**
+  String get xmppRoomInvitation;
+
+  /// XMPP: attach a file.
+  ///
+  /// In en, this message translates to:
+  /// **'Attach a file'**
+  String get xmppAttach;
+
+  /// XMPP: composer hint.
+  ///
+  /// In en, this message translates to:
+  /// **'Message'**
+  String get xmppMessageHint;
+
+  /// XMPP: message was corrected.
+  ///
+  /// In en, this message translates to:
+  /// **'edited'**
+  String get xmppEdited;
+
+  /// Settings: XMPP chats switch.
+  ///
+  /// In en, this message translates to:
+  /// **'XMPP chats'**
+  String get xmppChats;
+
+  /// Settings: XMPP chats switch subtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat with anyone on XMPP (Jabber), beside your Conest chats'**
+  String get xmppChatsSubtitle;
+
+  /// Settings: use another XMPP account for chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Use another account than the one Conest carries messages through'**
+  String get xmppChatsOtherAccount;
+
+  /// XMPP: connected.
+  ///
+  /// In en, this message translates to:
+  /// **'connected'**
+  String get xmppConnected;
+
+  /// XMPP: connecting.
+  ///
+  /// In en, this message translates to:
+  /// **'connecting'**
+  String get xmppConnecting;
+
+  /// App mode: confirm switching to a client-only mode for a network.
+  ///
+  /// In en, this message translates to:
+  /// **'Use Conest as a {network} client?'**
+  String appModeClientOnlyTitle(String network);
+
+  /// Onboarding: use the app as an XMPP client.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as an XMPP client instead'**
+  String get onbXmppInstead;
+
+  /// XMPP-only mode: sign in heading.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in to your XMPP account'**
+  String get xmppSignIn;
+
+  /// XMPP-only mode: no chats yet.
+  ///
+  /// In en, this message translates to:
+  /// **'No XMPP chats yet'**
+  String get xmppNoChats;
+
+  /// XMPP: chat list label for a request.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat request'**
+  String get xmppRequestShort;
 }
 
 class _AppLocalizationsDelegate

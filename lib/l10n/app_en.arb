@@ -8424,5 +8424,150 @@
   "xmppPasswordField": "Password",
   "@xmppPasswordField": {
     "description": "Settings: field for the XMPP account password."
+  },
+  "xmppRetracted": "Message retracted",
+  "@xmppRetracted": {
+    "description": "XMPP chat: a message its sender took back."
+  },
+  "xmppFile": "File",
+  "@xmppFile": {
+    "description": "XMPP chat: a shared file."
+  },
+  "xmppNewChat": "New XMPP chat",
+  "@xmppNewChat": {
+    "description": "XMPP: start a new chat."
+  },
+  "xmppNewChatAddress": "Address or xmpp: link",
+  "@xmppNewChatAddress": {
+    "description": "XMPP: address field of a new chat."
+  },
+  "xmppGroupChat": "Group chat",
+  "@xmppGroupChat": {
+    "description": "XMPP: a group chat (MUC)."
+  },
+  "xmppNickname": "Your nickname",
+  "@xmppNickname": {
+    "description": "XMPP: nickname in a group chat."
+  },
+  "xmppOpenChat": "Open",
+  "@xmppOpenChat": {
+    "description": "XMPP: open the chat button."
+  },
+  "xmppMetadataTitle": "Some details stay in this file",
+  "@xmppMetadataTitle": {
+    "description": "XMPP: the file's metadata could not all be removed."
+  },
+  "xmppMetadataBody": "Conest could not remove all hidden details (such as location or device) from this file. Send it anyway?",
+  "@xmppMetadataBody": {
+    "description": "XMPP: explanation of remaining metadata."
+  },
+  "xmppSendAnyway": "Send anyway",
+  "@xmppSendAnyway": {
+    "description": "XMPP: send despite metadata."
+  },
+  "xmppReply": "Reply",
+  "@xmppReply": {
+    "description": "XMPP: reply to a message."
+  },
+  "xmppCopy": "Copy",
+  "@xmppCopy": {
+    "description": "XMPP: copy a message."
+  },
+  "xmppEdit": "Edit",
+  "@xmppEdit": {
+    "description": "XMPP: correct own message."
+  },
+  "xmppRetract": "Retract",
+  "@xmppRetract": {
+    "description": "XMPP: retract own message."
+  },
+  "xmppChatGone": "This chat is gone.",
+  "@xmppChatGone": {
+    "description": "XMPP: the chat no longer exists."
+  },
+  "xmppNotEncrypted": "not encrypted",
+  "@xmppNotEncrypted": {
+    "description": "XMPP: the chat is not end-to-end encrypted."
+  },
+  "xmppLeaveRoom": "Leave group chat",
+  "@xmppLeaveRoom": {
+    "description": "XMPP: leave a group chat."
+  },
+  "xmppDeleteChat": "Delete chat",
+  "@xmppDeleteChat": {
+    "description": "XMPP: delete a chat here."
+  },
+  "xmppBlock": "Block",
+  "@xmppBlock": {
+    "description": "XMPP: block someone."
+  },
+  "xmppAccept": "Accept",
+  "@xmppAccept": {
+    "description": "XMPP: accept a chat request."
+  },
+  "xmppRequest": "Someone not in your contacts wrote to you. Replies and read markers go out only once you accept.",
+  "@xmppRequest": {
+    "description": "XMPP: banner for a stranger's chat."
+  },
+  "xmppRoomInvitation": "You were invited to this group chat. Join it?",
+  "@xmppRoomInvitation": {
+    "description": "XMPP: banner for a group chat invitation."
+  },
+  "xmppAttach": "Attach a file",
+  "@xmppAttach": {
+    "description": "XMPP: attach a file."
+  },
+  "xmppMessageHint": "Message",
+  "@xmppMessageHint": {
+    "description": "XMPP: composer hint."
+  },
+  "xmppEdited": "edited",
+  "@xmppEdited": {
+    "description": "XMPP: message was corrected."
+  },
+  "xmppChats": "XMPP chats",
+  "@xmppChats": {
+    "description": "Settings: XMPP chats switch."
+  },
+  "xmppChatsSubtitle": "Chat with anyone on XMPP (Jabber), beside your Conest chats",
+  "@xmppChatsSubtitle": {
+    "description": "Settings: XMPP chats switch subtitle."
+  },
+  "xmppChatsOtherAccount": "Use another account than the one Conest carries messages through",
+  "@xmppChatsOtherAccount": {
+    "description": "Settings: use another XMPP account for chats."
+  },
+  "xmppConnected": "connected",
+  "@xmppConnected": {
+    "description": "XMPP: connected."
+  },
+  "xmppConnecting": "connecting",
+  "@xmppConnecting": {
+    "description": "XMPP: connecting."
+  },
+  "appModeClientOnlyTitle": "Use Conest as a {network} client?",
+  "@appModeClientOnlyTitle": {
+    "description": "App mode: confirm switching to a client-only mode for a network.",
+    "placeholders": {
+      "network": {
+        "type": "String"
+      }
+    }
+  },
+  "onbXmppInstead": "Use as an XMPP client instead",
+  "@onbXmppInstead": {
+    "description": "Onboarding: use the app as an XMPP client."
+  },
+  "xmppSignIn": "Sign in to your XMPP account",
+  "@xmppSignIn": {
+    "description": "XMPP-only mode: sign in heading."
+  },
+  "xmppNoChats": "No XMPP chats yet",
+  "@xmppNoChats": {
+    "description": "XMPP-only mode: no chats yet."
+  },
+  "xmppRequestShort": "Chat request",
+  "@xmppRequestShort": {
+    "description": "XMPP: chat list label for a request."
   }
 }

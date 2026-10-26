@@ -123,6 +123,9 @@ import 'support/fake_xmpp_server.dart';
 import 'package:conest/src/xmpp/xmpp_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
 import 'package:conest/src/ui/xmpp_carrier_panel.dart';
+import 'package:conest/src/ui/xmpp_chats_screen.dart';
+import 'package:conest/src/ui/network_chat_sources.dart';
+import 'package:conest/src/conest_theme.dart';
 
 part 'delta_controller_content_tests.dart';
 part 'l10n_controller_cases.dart';

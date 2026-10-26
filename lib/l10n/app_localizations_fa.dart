@@ -5644,4 +5644,116 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get xmppPasswordField => 'گذرواژه';
+
+  @override
+  String get xmppRetracted => 'پیام پس گرفته شد';
+
+  @override
+  String get xmppFile => 'فایل';
+
+  @override
+  String get xmppNewChat => 'گفتگوی XMPP تازه';
+
+  @override
+  String get xmppNewChatAddress => 'نشانی یا پیوند xmpp:';
+
+  @override
+  String get xmppGroupChat => 'گفتگوی گروهی';
+
+  @override
+  String get xmppNickname => 'نام مستعار شما';
+
+  @override
+  String get xmppOpenChat => 'باز کردن';
+
+  @override
+  String get xmppMetadataTitle => 'برخی جزئیات در این فایل می‌ماند';
+
+  @override
+  String get xmppMetadataBody =>
+      'Conest نتوانست همه جزئیات پنهان (مانند مکان یا دستگاه) را از این فایل پاک کند. با این حال بفرستید؟';
+
+  @override
+  String get xmppSendAnyway => 'به هر حال بفرست';
+
+  @override
+  String get xmppReply => 'پاسخ';
+
+  @override
+  String get xmppCopy => 'رونوشت';
+
+  @override
+  String get xmppEdit => 'ویرایش';
+
+  @override
+  String get xmppRetract => 'پس گرفتن';
+
+  @override
+  String get xmppChatGone => 'این گفتگو دیگر وجود ندارد.';
+
+  @override
+  String get xmppNotEncrypted => 'رمزگذاری نشده';
+
+  @override
+  String get xmppLeaveRoom => 'ترک گفتگوی گروهی';
+
+  @override
+  String get xmppDeleteChat => 'حذف گفتگو';
+
+  @override
+  String get xmppBlock => 'مسدود کردن';
+
+  @override
+  String get xmppAccept => 'پذیرفتن';
+
+  @override
+  String get xmppRequest =>
+      'کسی که در مخاطبان شما نیست پیام داده است. پاسخ و نشانگر خوانده‌شدن فقط پس از پذیرش فرستاده می‌شود.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'به این گفتگوی گروهی دعوت شده‌اید. می‌پیوندید؟';
+
+  @override
+  String get xmppAttach => 'پیوست فایل';
+
+  @override
+  String get xmppMessageHint => 'پیام';
+
+  @override
+  String get xmppEdited => 'ویرایش‌شده';
+
+  @override
+  String get xmppChats => 'گفتگوهای XMPP';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'با هر کسی در XMPP (Jabber) گفتگو کنید، کنار گفتگوهای Conest';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'استفاده از حسابی جز حسابی که Conest پیام‌ها را با آن می‌برد';
+
+  @override
+  String get xmppConnected => 'متصل';
+
+  @override
+  String get xmppConnecting => 'در حال اتصال';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'از Conest به‌عنوان کارخواه $network استفاده شود؟';
+  }
+
+  @override
+  String get onbXmppInstead => 'به‌جای آن به‌عنوان کارخواه XMPP استفاده کن';
+
+  @override
+  String get xmppSignIn => 'به حساب XMPP خود وارد شوید';
+
+  @override
+  String get xmppNoChats => 'هنوز گفتگوی XMPP نیست';
+
+  @override
+  String get xmppRequestShort => 'درخواست گفتگو';
 }

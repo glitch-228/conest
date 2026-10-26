@@ -5099,6 +5099,14 @@ enum AppMode {
   /// A standalone Matrix client: Conest stays dormant and needs no
   /// identity.
   matrixOnly,
+
+  /// A standalone XMPP client (M51): Conest stays dormant.
+  xmppOnly,
+}
+
+extension AppModeTraits on AppMode {
+  /// A standalone client of another network: Conest stays dormant.
+  bool get clientOnly => this != AppMode.conest && this != AppMode.both;
 }
 
 /// How much of Conest a user sees. Append only.

@@ -472,7 +472,7 @@ class XmppSession {
     required List<XmppEndpoint> endpoints,
     this.connector = connectXmppSocket,
     this.webSocketConnector = connectXmppWebSocket,
-    this.priority = 0,
+    int priority = 0,
     this.carbons = false,
     this.onStanza,
     this.onStateChanged,
@@ -483,7 +483,8 @@ class XmppSession {
     this.maxQueued = 512,
     this.retryDelay = const Duration(seconds: 2),
     DateTime Function()? now,
-  }) : _endpoints = List.of(endpoints),
+  }) : _priority = priority,
+       _endpoints = List.of(endpoints),
        _now = now ?? DateTime.now;
 
   /// The account, `local@domain`.
@@ -495,7 +496,51 @@ class XmppSession {
 
   /// Presence priority: negative keeps the account's ordinary chats away
   /// from this resource (the user's own account).
-  final int priority;
+  int get priority => _priority;
+  int _priority;
+
+  /// Changes the presence priority (chats turned on for the account
+  /// Conest also carries through), telling the server at once.
+  void setPriority(int priority) {
+    if (_priority == priority) return;
+    _priority = priority;
+    if (_state == XmppSessionState.connected) {
+      _writeNow(
+        XmppElement(
+          'presence',
+          children: [XmppElement('priority', text: '$_priority')],
+        ),
+      );
+    }
+  }
+
+  final List<void Function(XmppElement stanza)> _stanzaListeners = [];
+  final List<void Function(bool resumed)> _connectedListeners = [];
+
+  /// Another user of this connection (the chats sharing the carrier's
+  /// account) hears every stanza and every (re)connection too.
+  void addListener({
+    void Function(XmppElement stanza)? onStanza,
+    void Function(bool resumed)? onConnected,
+  }) {
+    if (onStanza != null) _stanzaListeners.add(onStanza);
+    if (onConnected != null) _connectedListeners.add(onConnected);
+  }
+
+  void removeListener({
+    void Function(XmppElement stanza)? onStanza,
+    void Function(bool resumed)? onConnected,
+  }) {
+    _stanzaListeners.remove(onStanza);
+    _connectedListeners.remove(onConnected);
+  }
+
+  void _emitStanza(XmppElement stanza) {
+    onStanza?.call(stanza);
+    for (final listener in List.of(_stanzaListeners)) {
+      listener(stanza);
+    }
+  }
 
   /// Asks for copies of this account's messages on other clients (XEP-0280).
   final bool carbons;
@@ -892,7 +937,7 @@ class XmppSession {
       _writeNow(
         XmppElement(
           'presence',
-          children: [XmppElement('priority', text: '$priority')],
+          children: [XmppElement('priority', text: '$_priority')],
         ),
       );
     }
@@ -902,6 +947,9 @@ class XmppSession {
     }
     _startKeepAlive(generation);
     onConnected?.call(resumed);
+    for (final listener in List.of(_connectedListeners)) {
+      listener(resumed);
+    }
   }
 
   /// Sends a stanza that needs no completion (counted for acknowledgement
@@ -1043,7 +1091,7 @@ class XmppSession {
       _handleIq(element);
       return;
     }
-    onStanza?.call(element);
+    _emitStanza(element);
   }
 
   void _handleIq(XmppElement iq) {
@@ -1070,7 +1118,7 @@ class XmppSession {
       // Roster pushes come from this account only.
       final bare = bareJid(from);
       if (from == null || bare == jid.toLowerCase()) {
-        onStanza?.call(iq);
+        _emitStanza(iq);
         _reply(iq, XmppElement('iq', attributes: {'type': 'result'}));
         return;
       }

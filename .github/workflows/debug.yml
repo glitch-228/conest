@@ -339,8 +339,10 @@ jobs:
       - run: flutter pub get
       - name: Start Prosody with in-band registration
         run: |
-          mkdir -p prosody-config
-          cat > prosody-config/prosody.cfg.lua <<'EOF'
+          # Ubuntu's Prosody 0.12 (the Docker Hub image stopped at 0.11).
+          sudo apt-get update
+          sudo apt-get install -y prosody
+          sudo tee /etc/prosody/prosody.cfg.lua > /dev/null <<'EOF'
           admins = { }
           modules_enabled = {
             "roster"; "saslauth"; "tls"; "disco"; "ping"; "register";
@@ -357,21 +359,24 @@ jobs:
           storage = "internal"
           http_ports = { 5280 }
           http_interfaces = { "*" }
+          https_ports = { }
           consider_websocket_secure = true
           cross_domain_websocket = true
-          log = { { levels = { min = "info" }, to = "console" } }
-          pidfile = "/var/run/prosody/prosody.pid"
+          log = { info = "/var/log/prosody/prosody.log" }
+          pidfile = "/run/prosody/prosody.pid"
           VirtualHost "localhost"
           Component "conference.localhost" "muc"
           EOF
-          docker run -d --name prosody -p 5222:5222 -p 5280:5280 \
-            -v "$PWD/prosody-config/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro" \
-            prosody/prosody:0.12
+          sudo prosodyctl check config || true
+          sudo systemctl restart prosody
           for attempt in $(seq 1 60); do
-            if (exec 3<>/dev/tcp/localhost/5222) 2>/dev/null; then exit 0; fi
+            if (exec 3<>/dev/tcp/localhost/5222) 2>/dev/null; then
+              prosodyctl about | head -5 || true
+              exit 0
+            fi
             sleep 2
           done
-          docker logs prosody | tail -50
+          sudo tail -50 /var/log/prosody/prosody.log
           exit 1
       - name: Run the XMPP client and carrier against Prosody
         env:
@@ -380,7 +385,7 @@ jobs:
         run: flutter test test/xmpp_live_test.dart
       - name: Prosody logs on failure
         if: failure()
-        run: docker logs prosody | tail -200
+        run: sudo tail -200 /var/log/prosody/prosody.log
 
   reticulum:
     if: ${{ !inputs.quick_build }}
