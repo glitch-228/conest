@@ -5740,4 +5740,141 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'لا شيء';
+
+  @override
+  String get voiceSettingsTitle => 'الصوت';
+
+  @override
+  String get voiceInputDevice => 'الميكروفون';
+
+  @override
+  String get voiceOutputDevice => 'السماعة أو سماعات الرأس';
+
+  @override
+  String get voiceSystemDefault => 'افتراضي النظام';
+
+  @override
+  String get voiceInputVolume => 'مستوى الميكروفون';
+
+  @override
+  String get voiceOutputVolume => 'مستوى الصوت';
+
+  @override
+  String get voiceMicTest => 'اختبار الميكروفون';
+
+  @override
+  String get voiceMicTestStart => 'لنختبر';
+
+  @override
+  String get voiceMicTestStop => 'إيقاف';
+
+  @override
+  String get voiceMicTestLoopback => 'اسمع صوتك';
+
+  @override
+  String get voiceMicTestUnavailable =>
+      'اختبار الميكروفون غير متاح الآن (أثناء مكالمة، أو لا يدعم هذا الإصدار المكالمات).';
+
+  @override
+  String get voiceInputMode => 'إرسال صوتي';
+
+  @override
+  String get voiceInputModeAlways => 'دائمًا';
+
+  @override
+  String get voiceInputModeActivity => 'عندما أتكلم';
+
+  @override
+  String get voiceInputModePushToTalk => 'اضغط للتحدث';
+
+  @override
+  String get voiceSensitivityAutomatic => 'ضبط الحساسية تلقائيًا';
+
+  @override
+  String get voiceSensitivity => 'الحساسية';
+
+  @override
+  String get voicePushToTalkKey => 'مفتاح الضغط للتحدث';
+
+  @override
+  String get voicePushToTalkKeyNone => 'زر المكالمة فقط';
+
+  @override
+  String get voicePushToTalkKeyPress => 'اضغط مفتاحًا…';
+
+  @override
+  String get voicePushToTalkKeyHint => 'يعمل عندما يكون Conest في المقدمة';
+
+  @override
+  String get voiceClear => 'مسح';
+
+  @override
+  String get voiceProcessing => 'المعالجة';
+
+  @override
+  String get voiceNoiseSuppression => 'كتم الضوضاء';
+
+  @override
+  String get voiceEchoCancellation => 'إلغاء الصدى';
+
+  @override
+  String get voiceAutoGain => 'مستوى صوت تلقائي';
+
+  @override
+  String get voiceCallSounds => 'أصوات المكالمة';
+
+  @override
+  String get voiceCallSoundsHint => 'تظل المكالمة الواردة ترن.';
+
+  @override
+  String get voiceDevicesOnPhone =>
+      'على أندرويد يختار الهاتف الميكروفون والسماعة للمكالمات.';
+
+  @override
+  String get voiceSettingsButton => 'إعدادات الصوت';
+
+  @override
+  String voiceParticipantVolume(String name) {
+    return 'مستوى صوت $name';
+  }
+
+  @override
+  String get voiceHoldToTalk => 'اضغط مطولًا للتحدث';
+
+  @override
+  String get quietHoursTitle => 'ساعات الهدوء';
+
+  @override
+  String get quietHoursHint => 'تظهر الإشعارات دون صوت أو اهتزاز.';
+
+  @override
+  String quietHoursFrom(String time) {
+    return 'من $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'حتى $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'تظل المكالمات ترن';
+
+  @override
+  String get muteForHour => 'لمدة ساعة';
+
+  @override
+  String get muteForEightHours => 'لمدة 8 ساعات';
+
+  @override
+  String get muteForDay => 'لمدة يوم';
+
+  @override
+  String get muteUntilUnmuted => 'حتى ألغي الكتم';
+
+  @override
+  String get notifyMentionsOnly => 'الإشعار عند الإشارة إليّ فقط';
+
+  @override
+  String get notifyAllMessages => 'الإشعار لكل الرسائل';
 }

@@ -5734,4 +5734,142 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'Ничего';
+
+  @override
+  String get voiceSettingsTitle => 'Голос';
+
+  @override
+  String get voiceInputDevice => 'Микрофон';
+
+  @override
+  String get voiceOutputDevice => 'Динамик или наушники';
+
+  @override
+  String get voiceSystemDefault => 'Как в системе';
+
+  @override
+  String get voiceInputVolume => 'Громкость микрофона';
+
+  @override
+  String get voiceOutputVolume => 'Громкость звука';
+
+  @override
+  String get voiceMicTest => 'Проверка микрофона';
+
+  @override
+  String get voiceMicTestStart => 'Проверить';
+
+  @override
+  String get voiceMicTestStop => 'Остановить';
+
+  @override
+  String get voiceMicTestLoopback => 'Слышать себя';
+
+  @override
+  String get voiceMicTestUnavailable =>
+      'Проверка микрофона сейчас недоступна (идёт звонок или в этой сборке нет звонков).';
+
+  @override
+  String get voiceInputMode => 'Передавать мой голос';
+
+  @override
+  String get voiceInputModeAlways => 'Всегда';
+
+  @override
+  String get voiceInputModeActivity => 'Когда я говорю';
+
+  @override
+  String get voiceInputModePushToTalk => 'Рация (по нажатию)';
+
+  @override
+  String get voiceSensitivityAutomatic =>
+      'Подбирать чувствительность автоматически';
+
+  @override
+  String get voiceSensitivity => 'Чувствительность';
+
+  @override
+  String get voicePushToTalkKey => 'Клавиша рации';
+
+  @override
+  String get voicePushToTalkKeyNone => 'Только кнопка в звонке';
+
+  @override
+  String get voicePushToTalkKeyPress => 'Нажмите клавишу…';
+
+  @override
+  String get voicePushToTalkKeyHint => 'работает, пока Conest на экране';
+
+  @override
+  String get voiceClear => 'Сбросить';
+
+  @override
+  String get voiceProcessing => 'Обработка';
+
+  @override
+  String get voiceNoiseSuppression => 'Шумоподавление';
+
+  @override
+  String get voiceEchoCancellation => 'Подавление эха';
+
+  @override
+  String get voiceAutoGain => 'Автоматическая громкость';
+
+  @override
+  String get voiceCallSounds => 'Звуки звонка';
+
+  @override
+  String get voiceCallSoundsHint => 'Входящий звонок всё равно звонит.';
+
+  @override
+  String get voiceDevicesOnPhone =>
+      'На Android микрофон и динамик для звонков выбирает телефон.';
+
+  @override
+  String get voiceSettingsButton => 'Настройки голоса';
+
+  @override
+  String voiceParticipantVolume(String name) {
+    return 'Громкость: $name';
+  }
+
+  @override
+  String get voiceHoldToTalk => 'Удерживайте, чтобы говорить';
+
+  @override
+  String get quietHoursTitle => 'Тихие часы';
+
+  @override
+  String get quietHoursHint => 'Уведомления приходят без звука и вибрации.';
+
+  @override
+  String quietHoursFrom(String time) {
+    return 'С $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'До $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'Звонки всё равно звонят';
+
+  @override
+  String get muteForHour => 'На 1 час';
+
+  @override
+  String get muteForEightHours => 'На 8 часов';
+
+  @override
+  String get muteForDay => 'На 1 день';
+
+  @override
+  String get muteUntilUnmuted => 'Пока не включу';
+
+  @override
+  String get notifyMentionsOnly => 'Уведомлять только об упоминаниях';
+
+  @override
+  String get notifyAllMessages => 'Уведомлять обо всех сообщениях';
 }

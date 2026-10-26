@@ -5610,4 +5610,141 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get notificationPreviewHidden => 'هیچ';
+
+  @override
+  String get voiceSettingsTitle => 'صدا';
+
+  @override
+  String get voiceInputDevice => 'میکروفون';
+
+  @override
+  String get voiceOutputDevice => 'بلندگو یا هدفون';
+
+  @override
+  String get voiceSystemDefault => 'پیش‌فرض سیستم';
+
+  @override
+  String get voiceInputVolume => 'بلندی میکروفون';
+
+  @override
+  String get voiceOutputVolume => 'بلندی صدا';
+
+  @override
+  String get voiceMicTest => 'بررسی میکروفون';
+
+  @override
+  String get voiceMicTestStart => 'بررسی کن';
+
+  @override
+  String get voiceMicTestStop => 'توقف';
+
+  @override
+  String get voiceMicTestLoopback => 'شنیدن صدای خود';
+
+  @override
+  String get voiceMicTestUnavailable =>
+      'بررسی میکروفون الان در دسترس نیست (هنگام تماس، یا این نسخه تماس صوتی ندارد).';
+
+  @override
+  String get voiceInputMode => 'ارسال صدای من';
+
+  @override
+  String get voiceInputModeAlways => 'همیشه';
+
+  @override
+  String get voiceInputModeActivity => 'وقتی حرف می‌زنم';
+
+  @override
+  String get voiceInputModePushToTalk => 'فشار برای صحبت';
+
+  @override
+  String get voiceSensitivityAutomatic => 'تنظیم خودکار حساسیت';
+
+  @override
+  String get voiceSensitivity => 'حساسیت';
+
+  @override
+  String get voicePushToTalkKey => 'کلید فشار برای صحبت';
+
+  @override
+  String get voicePushToTalkKeyNone => 'فقط دکمهٔ تماس';
+
+  @override
+  String get voicePushToTalkKeyPress => 'یک کلید را فشار دهید…';
+
+  @override
+  String get voicePushToTalkKeyHint => 'وقتی Conest جلو است کار می‌کند';
+
+  @override
+  String get voiceClear => 'پاک کردن';
+
+  @override
+  String get voiceProcessing => 'پردازش';
+
+  @override
+  String get voiceNoiseSuppression => 'حذف نویز';
+
+  @override
+  String get voiceEchoCancellation => 'حذف پژواک';
+
+  @override
+  String get voiceAutoGain => 'تنظیم خودکار بلندی';
+
+  @override
+  String get voiceCallSounds => 'صداهای تماس';
+
+  @override
+  String get voiceCallSoundsHint => 'تماس ورودی همچنان زنگ می‌زند.';
+
+  @override
+  String get voiceDevicesOnPhone =>
+      'در اندروید، گوشی میکروفون و بلندگوی تماس را انتخاب می‌کند.';
+
+  @override
+  String get voiceSettingsButton => 'تنظیمات صدا';
+
+  @override
+  String voiceParticipantVolume(String name) {
+    return 'بلندی صدای $name';
+  }
+
+  @override
+  String get voiceHoldToTalk => 'برای صحبت نگه دارید';
+
+  @override
+  String get quietHoursTitle => 'ساعات سکوت';
+
+  @override
+  String get quietHoursHint => 'اعلان‌ها بدون صدا و لرزش نمایش داده می‌شوند.';
+
+  @override
+  String quietHoursFrom(String time) {
+    return 'از $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'تا $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'تماس‌ها همچنان زنگ می‌زنند';
+
+  @override
+  String get muteForHour => 'برای ۱ ساعت';
+
+  @override
+  String get muteForEightHours => 'برای ۸ ساعت';
+
+  @override
+  String get muteForDay => 'برای ۱ روز';
+
+  @override
+  String get muteUntilUnmuted => 'تا وقتی که خودم روشن کنم';
+
+  @override
+  String get notifyMentionsOnly => 'فقط هنگام اشاره به من اعلان بده';
+
+  @override
+  String get notifyAllMessages => 'برای همهٔ پیام‌ها اعلان بده';
 }

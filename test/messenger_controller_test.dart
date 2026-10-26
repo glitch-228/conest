@@ -105,6 +105,9 @@ import 'package:conest/src/ui/app_mode_selector.dart';
 import 'package:conest/src/ui/matrix_home_screen.dart';
 import 'package:conest/src/update_service.dart';
 import 'package:conest/src/voice_call_service.dart';
+import 'package:conest/src/voice_settings.dart';
+import 'package:conest/src/notification_rules.dart';
+import 'package:conest/src/ui/voice_settings_panel.dart';
 import 'package:conest/src/group_file_manifest.dart';
 
 import 'support/fake_homeserver.dart';
@@ -1523,6 +1526,110 @@ void main() {
     await bobWrites('while behind');
     expect(recorder.shown.map((call) => call.body), contains('while behind'));
   });
+
+  test(
+    'voice settings reach the audio engine at start and on change',
+    () async {
+      final recorder = _RecordingPlatformBridge();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        platformBridge: recorder,
+      );
+      addTearDown(alice.dispose);
+      expect(recorder.appliedVoice, isNotEmpty);
+      final next = alice.voiceSettings.copyWith(
+        inputMode: VoiceInputMode.voiceActivity,
+        outputVolume: 0.5,
+      );
+      await alice.updateVoiceSettings(next);
+      expect(
+        recorder.appliedVoice.last.inputMode,
+        VoiceInputMode.voiceActivity,
+      );
+      expect(recorder.appliedVoice.last.outputVolume, 0.5);
+      expect(alice.identity!.voiceSettings.outputVolume, 0.5);
+      await alice.setCallParticipantVolume('someone', 1.5);
+      expect(alice.voiceSettings.volumeFor('someone'), 1.5);
+      // Nothing in a call: push-to-talk keys mean nothing.
+      expect(alice.callUsesMicrophone, isFalse);
+    },
+  );
+
+  test(
+    'quiet hours, a mute for a while and mentions-only decide notifications',
+    () async {
+      final relay = _FakeRelayClient();
+      final recorder = _RecordingPlatformBridge();
+      var clock = DateTime(2026, 10, 26, 23, 30);
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        platformBridge: recorder,
+        nowProvider: () => clock,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      alice.setAppForegroundState(false);
+      final group = await bob.createGroup(title: 'G', members: bob.contacts);
+      Future<void> settle() async {
+        for (var i = 0; i < 5; i++) {
+          await alice.pollNow();
+        }
+      }
+
+      _ShowCall? shownFor(String text) =>
+          recorder.shown.where((c) => c.body.endsWith(text)).firstOrNull;
+
+      // Quiet hours (22:00 to 07:00): shown, without sound.
+      await alice.updateQuietHours(const QuietHours(enabled: true));
+      await bob.sendMessage(contact: bob.contacts.single, body: 'at night');
+      await settle();
+      expect(shownFor('at night')?.silent, isTrue);
+      clock = DateTime(2026, 10, 27, 12);
+      await bob.sendMessage(contact: bob.contacts.single, body: 'at noon');
+      await settle();
+      expect(shownFor('at noon')?.silent, isFalse);
+
+      // Muted for an hour: nothing until it is over.
+      final bobId = bob.identity!.deviceId;
+      await alice.updateConversationPreferences(
+        ConversationKind.direct,
+        bobId,
+        muted: true,
+        mutedFor: const Duration(hours: 1),
+      );
+      await bob.sendMessage(contact: bob.contacts.single, body: 'while muted');
+      await settle();
+      expect(shownFor('while muted'), isNull);
+      clock = clock.add(const Duration(hours: 2));
+      await bob.sendMessage(contact: bob.contacts.single, body: 'mute over');
+      await settle();
+      expect(shownFor('mute over'), isNotNull);
+
+      // A group set to mentions only.
+      await settle();
+      await alice.updateConversationPreferences(
+        ConversationKind.group,
+        group.groupId,
+        mentionsOnly: true,
+      );
+      await bob.sendGroupMessage(groupId: group.groupId, body: 'hello all');
+      await settle();
+      expect(shownFor('hello all'), isNull);
+      await bob.sendGroupMessage(
+        groupId: group.groupId,
+        body: 'over to @alice',
+      );
+      await settle();
+      expect(shownFor('over to @alice')?.group, isTrue);
+    },
+  );
 
   test('a notification names a chat that a tap can open', () async {
     final relay = _FakeRelayClient();
@@ -2950,6 +3057,56 @@ void main() {
       findsOneWidget,
     );
     expect(find.byTooltip('Route inspector'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('the Voice page saves the input mode and processing', (
+    tester,
+  ) async {
+    late MessengerController alice;
+    await tester.runAsync(() async {
+      alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+    });
+    addTearDown(alice.dispose);
+    tester.view.physicalSize = const Size(1200, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ListenableBuilder(
+              listenable: alice,
+              builder: (context, _) => VoiceSettingsPanel(controller: alice),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('voice-sensitivity-automatic')),
+      findsNothing,
+    );
+    await tester.runAsync(() async {
+      await tester.tap(find.text('When I speak'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pump();
+    expect(alice.voiceSettings.inputMode, VoiceInputMode.voiceActivity);
+    expect(
+      find.byKey(const ValueKey('voice-sensitivity-automatic')),
+      findsOneWidget,
+    );
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('voice-echo-cancellation')));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pump();
+    expect(alice.voiceSettings.echoCancellation, isFalse);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -29221,6 +29378,14 @@ class _AndroidBridge extends _RecordingPlatformBridge {
 
 class _RecordingPlatformBridge extends PlatformBridge {
   final List<String> dismissed = <String>[];
+  final List<VoiceSettings> appliedVoice = <VoiceSettings>[];
+
+  @override
+  void applyVoiceSettings(VoiceSettings settings) {
+    appliedVoice.add(settings);
+    super.applyVoiceSettings(settings);
+  }
+
   final List<_ShowCall> shown = <_ShowCall>[];
   final List<Uri> opened = <Uri>[];
 
@@ -29246,9 +29411,13 @@ class _RecordingPlatformBridge extends PlatformBridge {
     String? replyLabel,
     String? markReadLabel,
     String? throughMessageId,
+    bool silent = false,
+    bool group = false,
   }) async {
     shown.add(
       _ShowCall(
+        silent: silent,
+        group: group,
         title: title,
         body: body,
         conversationId: conversationId,
@@ -29297,7 +29466,11 @@ class _ShowCall {
     this.replyLabel,
     this.markReadLabel,
     this.throughMessageId,
+    this.silent = false,
+    this.group = false,
   });
+  final bool silent;
+  final bool group;
   final String title;
   final String body;
   final String conversationId;

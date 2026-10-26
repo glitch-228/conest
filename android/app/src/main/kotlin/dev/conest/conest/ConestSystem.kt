@@ -27,6 +27,9 @@ object ConestSystem {
     const val CHANNEL = "dev.conest.conest/system"
     const val MESSAGES_CHANNEL_ID = "conest_messages"
     const val BACKGROUND_CHANNEL_ID = "conest_background"
+    const val GROUPS_CHANNEL_ID = "conest_groups"
+    /// Messages during quiet hours: shown without sound or vibration.
+    const val QUIET_CHANNEL_ID = "conest_quiet"
     private const val SCHEDULED_MESSAGE_WAKEUP_REQUEST = 6019
     private const val GROUP_KEY_MESSAGES = "dev.conest.conest.messages"
     private const val SUMMARY_NOTIFICATION_ID = 0x100b1ade
@@ -83,6 +86,8 @@ object ConestSystem {
                     replyLabel = call.argument<String>("replyLabel"),
                     markReadLabel = call.argument<String>("markReadLabel"),
                     throughMessageId = call.argument<String>("throughMessageId"),
+                    silent = call.argument<Boolean>("silent") == true,
+                    group = call.argument<Boolean>("group") == true,
                 )
                 result.success(null)
             }
@@ -257,6 +262,8 @@ object ConestSystem {
         replyLabel: String? = null,
         markReadLabel: String? = null,
         throughMessageId: String? = null,
+        silent: Boolean = false,
+        group: Boolean = false,
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
@@ -277,7 +284,12 @@ object ConestSystem {
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val builder = notificationBuilder(context, MESSAGES_CHANNEL_ID)
+        val channel = when {
+            silent -> QUIET_CHANNEL_ID
+            group -> GROUPS_CHANNEL_ID
+            else -> MESSAGES_CHANNEL_ID
+        }
+        val builder = notificationBuilder(context, channel)
             .setContentTitle(title)
             .setContentText(body)
             .setContentIntent(pendingIntent)
@@ -466,6 +478,29 @@ object ConestSystem {
                     "Background runtime",
                     NotificationManager.IMPORTANCE_LOW
                 )
+            )
+        }
+        // Each kind its own channel, so Android's settings can give groups
+        // another sound (or none) than chats.
+        if (manager.getNotificationChannel(GROUPS_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    GROUPS_CHANNEL_ID,
+                    "Group messages",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+        if (manager.getNotificationChannel(QUIET_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    QUIET_CHANNEL_ID,
+                    "Messages during quiet hours",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                }
             )
         }
     }

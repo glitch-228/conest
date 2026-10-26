@@ -8384,5 +8384,192 @@
   "notificationPreviewHidden": "Nothing",
   "@notificationPreviewHidden": {
     "description": "Notifications show neither sender nor message."
+  },
+  "voiceSettingsTitle": "Voice",
+  "@voiceSettingsTitle": {
+    "description": "Settings category: calls and microphone."
+  },
+  "voiceInputDevice": "Microphone",
+  "@voiceInputDevice": {
+    "description": "Settings → Voice: microphone picker."
+  },
+  "voiceOutputDevice": "Speaker or headphones",
+  "@voiceOutputDevice": {
+    "description": "Settings → Voice: output picker."
+  },
+  "voiceSystemDefault": "System default",
+  "@voiceSystemDefault": {
+    "description": "Device picker: follow the system's choice."
+  },
+  "voiceInputVolume": "Microphone volume",
+  "@voiceInputVolume": {
+    "description": "Settings → Voice slider."
+  },
+  "voiceOutputVolume": "Output volume",
+  "@voiceOutputVolume": {
+    "description": "Settings → Voice slider."
+  },
+  "voiceMicTest": "Check your microphone",
+  "@voiceMicTest": {
+    "description": "Settings → Voice: microphone test heading."
+  },
+  "voiceMicTestStart": "Let's check",
+  "@voiceMicTestStart": {
+    "description": "Starts the microphone test."
+  },
+  "voiceMicTestStop": "Stop",
+  "@voiceMicTestStop": {
+    "description": "Stops the microphone test."
+  },
+  "voiceMicTestLoopback": "Hear yourself",
+  "@voiceMicTestLoopback": {
+    "description": "Microphone test: play your voice back."
+  },
+  "voiceMicTestUnavailable": "The microphone test is not available now (during a call, or without call audio in this build).",
+  "@voiceMicTestUnavailable": {
+    "description": "Shown when the test cannot start."
+  },
+  "voiceInputMode": "Send my voice",
+  "@voiceInputMode": {
+    "description": "Settings → Voice: input mode heading."
+  },
+  "voiceInputModeAlways": "Always",
+  "@voiceInputModeAlways": {
+    "description": "Input mode."
+  },
+  "voiceInputModeActivity": "When I speak",
+  "@voiceInputModeActivity": {
+    "description": "Input mode: voice activity."
+  },
+  "voiceInputModePushToTalk": "Push to talk",
+  "@voiceInputModePushToTalk": {
+    "description": "Input mode."
+  },
+  "voiceSensitivityAutomatic": "Set sensitivity automatically",
+  "@voiceSensitivityAutomatic": {
+    "description": "Voice activity switch."
+  },
+  "voiceSensitivity": "Sensitivity",
+  "@voiceSensitivity": {
+    "description": "Voice activity threshold slider."
+  },
+  "voicePushToTalkKey": "Push-to-talk key",
+  "@voicePushToTalkKey": {
+    "description": "Settings → Voice."
+  },
+  "voicePushToTalkKeyNone": "The call's button only",
+  "@voicePushToTalkKeyNone": {
+    "description": "No key chosen."
+  },
+  "voicePushToTalkKeyPress": "Press a key…",
+  "@voicePushToTalkKeyPress": {
+    "description": "Waiting for the key."
+  },
+  "voicePushToTalkKeyHint": "works while Conest is in front",
+  "@voicePushToTalkKeyHint": {
+    "description": "Where the key works."
+  },
+  "voiceClear": "Clear",
+  "@voiceClear": {
+    "description": "Removes the chosen key."
+  },
+  "voiceProcessing": "Processing",
+  "@voiceProcessing": {
+    "description": "Settings → Voice heading."
+  },
+  "voiceNoiseSuppression": "Noise suppression",
+  "@voiceNoiseSuppression": {
+    "description": "Switch."
+  },
+  "voiceEchoCancellation": "Echo cancellation",
+  "@voiceEchoCancellation": {
+    "description": "Switch."
+  },
+  "voiceAutoGain": "Automatic volume",
+  "@voiceAutoGain": {
+    "description": "Switch: automatic gain control."
+  },
+  "voiceCallSounds": "Call sounds",
+  "@voiceCallSounds": {
+    "description": "Switch: tones when calls connect, end, mute."
+  },
+  "voiceCallSoundsHint": "An incoming call still rings.",
+  "@voiceCallSoundsHint": {
+    "description": "Under the call sounds switch."
+  },
+  "voiceDevicesOnPhone": "On Android the phone picks the microphone and speaker for calls.",
+  "@voiceDevicesOnPhone": {
+    "description": "Settings → Voice on phones."
+  },
+  "voiceSettingsButton": "Voice settings",
+  "@voiceSettingsButton": {
+    "description": "Button in a call screen."
+  },
+  "voiceParticipantVolume": "Volume for {name}",
+  "@voiceParticipantVolume": {
+    "description": "Group call: one member's volume on this device.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "voiceHoldToTalk": "Hold to talk",
+  "@voiceHoldToTalk": {
+    "description": "Push-to-talk button in a 1:1 call."
+  },
+  "quietHoursTitle": "Quiet hours",
+  "@quietHoursTitle": {
+    "description": "Settings: notifications without sound."
+  },
+  "quietHoursHint": "Notifications still appear, without sound or vibration.",
+  "@quietHoursHint": {
+    "description": "Under the quiet hours switch."
+  },
+  "quietHoursFrom": "From {time}",
+  "@quietHoursFrom": {
+    "description": "Quiet hours start.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "quietHoursUntil": "Until {time}",
+  "@quietHoursUntil": {
+    "description": "Quiet hours end.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "quietHoursCallsRing": "Calls still ring",
+  "@quietHoursCallsRing": {
+    "description": "Quiet hours: incoming calls."
+  },
+  "muteForHour": "For 1 hour",
+  "@muteForHour": {
+    "description": "Mute a chat."
+  },
+  "muteForEightHours": "For 8 hours",
+  "@muteForEightHours": {
+    "description": "Mute a chat."
+  },
+  "muteForDay": "For 1 day",
+  "@muteForDay": {
+    "description": "Mute a chat."
+  },
+  "muteUntilUnmuted": "Until I unmute",
+  "@muteUntilUnmuted": {
+    "description": "Mute a chat."
+  },
+  "notifyMentionsOnly": "Notify only for mentions",
+  "@notifyMentionsOnly": {
+    "description": "Group menu: notify only when mentioned or replied to."
+  },
+  "notifyAllMessages": "Notify for all messages",
+  "@notifyAllMessages": {
+    "description": "Group menu: back to every message."
   }
 }
