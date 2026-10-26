@@ -29221,6 +29221,9 @@ class MessengerController extends ChangeNotifier {
     Duration? relayTimeout,
   }) async {
     _healthCallCount++;
+    if (route.protocol == PeerRouteProtocol.wss && route.path != null) {
+      RelayClient.registerWssPath(route.host, route.port, route.path!);
+    }
     final timeout = switch (route.kind) {
       PeerRouteKind.lan => lanTimeout ?? const Duration(milliseconds: 800),
       PeerRouteKind.directInternet =>
@@ -29376,6 +29379,15 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently();
   }
 
+  /// Tells the relay client the secret paths of hidden (wss) relays.
+  void _registerHiddenRelayPaths(IdentityRecord me) {
+    for (final relay in me.configuredRelays) {
+      if (relay.protocol == PeerRouteProtocol.wss && relay.path != null) {
+        RelayClient.registerWssPath(relay.host, relay.port, relay.path!);
+      }
+    }
+  }
+
   /// Relays whose token was refreshed lately (at most once an hour each).
   final Map<String, DateTime> _relayTokenRefreshes = {};
 
@@ -29410,6 +29422,7 @@ class MessengerController extends ChangeNotifier {
       );
       RelayClient.setRelayTokens(_snapshot.relayTokens);
       _refreshRelayTokenIfDue(route);
+      _registerHiddenRelayPaths(me);
     }
     var key = _pinnedIdentityKeyForRoute(route);
     if (key != null) return key;
@@ -30936,7 +30949,10 @@ class MessengerController extends ChangeNotifier {
   }
 
   List<PeerEndpoint> _rankInviteRoutes(Iterable<PeerEndpoint> routes) {
-    final ranked = dedupePeerEndpoints(routes);
+    // A relay's hidden (wss) address is a secret: not handed around.
+    final ranked = dedupePeerEndpoints(
+      routes.where((route) => route.protocol != PeerRouteProtocol.wss),
+    );
     ranked.sort((left, right) {
       final leftHealth = _routeHealthTracker.healthMap[left.routeKey];
       final rightHealth = _routeHealthTracker.healthMap[right.routeKey];
@@ -30967,6 +30983,7 @@ class MessengerController extends ChangeNotifier {
       PeerRouteProtocol.udp => 1,
       PeerRouteProtocol.https => 2,
       PeerRouteProtocol.http => 3,
+      PeerRouteProtocol.wss => 4,
     };
   }
 

@@ -313,4 +313,95 @@ void main() {
     );
     expect(refreshed, isNotEmpty);
   });
+
+  test(
+    'the relay\'s hidden address carries sessions inside TLS on a high '
+    'port with a self-signed certificate, and probes see a web server',
+    () async {
+      final reservation = await ServerSocket.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      final tlsPort = reservation.port;
+      await reservation.close();
+      final relay = await _startRelay(
+        extra: [
+          '--tls-bind',
+          '127.0.0.1:$tlsPort',
+          '--tls-cert',
+          'test/fixtures/relay_v2/tls/cert.pem',
+          '--tls-key',
+          'test/fixtures/relay_v2/tls/key.pem',
+          '--ws-path',
+          's3cret-live-path',
+        ],
+      );
+      final identity = await _pin(relay.port);
+      RelayClient.registerWssPath('127.0.0.1', tlsPort, '/s3cret-live-path');
+      const client = RelayClient();
+      final health = await client.inspectHealth(
+        host: '127.0.0.1',
+        port: tlsPort,
+        protocol: PeerRouteProtocol.wss,
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      expect(health.signatureVerified, isTrue);
+      final batches = <RelayFetchBatch>[];
+      final subscription = client
+          .subscribeEnvelopes(
+            host: '127.0.0.1',
+            port: tlsPort,
+            protocol: PeerRouteProtocol.wss,
+            recipientDeviceId: 'dev-tls',
+            expectedIdentityPublicKeyBase64: identity,
+          )
+          .listen(batches.add);
+      addTearDown(subscription.cancel);
+      expect(
+        await client.storeEnvelope(
+          host: '127.0.0.1',
+          port: tlsPort,
+          protocol: PeerRouteProtocol.wss,
+          recipientDeviceId: 'dev-tls',
+          envelope: _envelope('tls-1', 'dev-tls'),
+          expectedIdentityPublicKeyBase64: identity,
+        ),
+        isTrue,
+      );
+      for (var tries = 0; tries < 100; tries++) {
+        if (batches.any((batch) => batch.envelopes.isNotEmpty)) break;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(
+        batches
+            .firstWhere((batch) => batch.envelopes.isNotEmpty)
+            .envelopes
+            .single
+            .messageId,
+        'tls-1',
+      );
+      // A browser (or a probe) sees a web server, on the secret path too.
+      final http = HttpClient()..badCertificateCallback = (_, _, _) => true;
+      addTearDown(http.close);
+      Future<(int, String)> get(String path) async {
+        final request = await http.getUrl(
+          Uri.parse('https://127.0.0.1:$tlsPort$path'),
+        );
+        final response = await request.close();
+        return (
+          response.statusCode,
+          await response.transform(utf8.decoder).join(),
+        );
+      }
+
+      final (frontStatus, front) = await get('/');
+      expect(frontStatus, 200);
+      expect(front, contains('Welcome to nginx!'));
+      final (secretStatus, secret) = await get('/s3cret-live-path');
+      final (unknownStatus, unknown) = await get('/nope');
+      expect(secretStatus, 404);
+      expect(unknownStatus, 404);
+      expect(secret, unknown);
+    },
+  );
 }

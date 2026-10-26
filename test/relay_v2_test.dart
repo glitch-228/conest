@@ -469,4 +469,121 @@ void main() {
       },
     );
   });
+
+  group('hidden (wss) relay addresses', () {
+    test('a wss address parses with its secret path, which stays out of '
+        'labels and invites', () {
+      final route = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: 'wss://relay.test/s3cret-path_1',
+        port: 7667,
+      );
+      expect(route.protocol, PeerRouteProtocol.wss);
+      expect(route.port, 443);
+      expect(route.path, '/s3cret-path_1');
+      expect(route.label, isNot(contains('s3cret')));
+      expect(route.routeKey, isNot(contains('s3cret')));
+      final back = PeerEndpoint.fromJson(route.toJson());
+      expect(back.path, '/s3cret-path_1');
+      expect(
+        () => PeerEndpoint.normalized(
+          kind: PeerRouteKind.relay,
+          host: 'wss://relay.test',
+          port: 443,
+        ),
+        throwsArgumentError,
+        reason: 'no path, no hidden address',
+      );
+    });
+
+    test('the client reaches a relay through TLS and a WebSocket, and '
+        'trusts a self-signed certificate only for a pinned relay', () async {
+      final (node, relayPort, identity) = await _startRelay();
+      // A front like the relay's: TLS, the secret path upgrades, its bytes
+      // go to the relay.
+      final front = await HttpServer.bindSecure(
+        InternetAddress.loopbackIPv4,
+        0,
+        SecurityContext()
+          ..useCertificateChain('test/fixtures/relay_v2/tls/cert.pem')
+          ..usePrivateKey('test/fixtures/relay_v2/tls/key.pem'),
+      );
+      addTearDown(() => front.close(force: true));
+      front.listen((request) async {
+        if (request.uri.path != '/s3cret-path_1' ||
+            !WebSocketTransformer.isUpgradeRequest(request)) {
+          request.response.statusCode = 404;
+          await request.response.close();
+          return;
+        }
+        final socket = await WebSocketTransformer.upgrade(request);
+        final upstream = await Socket.connect('127.0.0.1', relayPort);
+        upstream.listen(
+          socket.add,
+          onDone: () => socket.close(),
+          onError: (_) => socket.close(),
+        );
+        socket.listen(
+          (data) => upstream.add(
+            data is String ? utf8.encode(data) : data as List<int>,
+          ),
+          onDone: upstream.destroy,
+          onError: (_) => upstream.destroy(),
+        );
+      });
+      RelayClient.registerWssPath('127.0.0.1', front.port, '/s3cret-path_1');
+      const client = RelayClient();
+      // Unpinned: the certificate must be a WebPKI one, and is not.
+      await expectLater(
+        client.inspectHealth(
+          host: '127.0.0.1',
+          port: front.port,
+          protocol: PeerRouteProtocol.wss,
+        ),
+        throwsA(anything),
+      );
+      // Pinned: answers are checked against the identity instead.
+      final health = await client.inspectHealth(
+        host: '127.0.0.1',
+        port: front.port,
+        protocol: PeerRouteProtocol.wss,
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      expect(health.signatureVerified, isTrue);
+      expect(
+        RelayClient.sessionInfoFor('127.0.0.1', front.port)?.sessions,
+        isTrue,
+      );
+      final before = node.sessionsServed;
+      expect(
+        await client.storeEnvelope(
+          host: '127.0.0.1',
+          port: front.port,
+          protocol: PeerRouteProtocol.wss,
+          recipientDeviceId: 'dev-hidden',
+          envelope: _envelope('hidden-1', recipient: 'dev-hidden'),
+          expectedIdentityPublicKeyBase64: identity,
+        ),
+        isTrue,
+      );
+      expect(node.sessionsServed, before + 1, reason: 'a session inside');
+      final fetched = await client.fetchEnvelopes(
+        host: '127.0.0.1',
+        port: front.port,
+        protocol: PeerRouteProtocol.wss,
+        recipientDeviceId: 'dev-hidden',
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      expect(fetched.single.messageId, 'hidden-1');
+      expect(
+        client.supportsSubscribe(
+          host: '127.0.0.1',
+          port: front.port,
+          protocol: PeerRouteProtocol.wss,
+          expectedIdentityPublicKeyBase64: identity,
+        ),
+        isTrue,
+      );
+    });
+  });
 }

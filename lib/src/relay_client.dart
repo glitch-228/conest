@@ -9,6 +9,7 @@ import 'models.dart';
 import 'native_ed25519.dart';
 import 'relay_v2/noise_nk.dart';
 import 'relay_v2/session.dart';
+import 'relay_v2/websocket_channel.dart';
 
 class RelayHealthInfo {
   const RelayHealthInfo({
@@ -325,6 +326,7 @@ class RelayClient {
     _mailboxSecrets.clear();
     _authKeys.clear();
     _tokens.clear();
+    _wssPaths.clear();
     await v2Pool.closeAll();
   }
 
@@ -602,7 +604,8 @@ class RelayClient {
       // sending inline-signed responses (legacy path below).
       'sig_mode': 'detached',
     };
-    if (protocol == PeerRouteProtocol.tcp &&
+    if ((protocol == PeerRouteProtocol.tcp ||
+            protocol == PeerRouteProtocol.wss) &&
         _hasExpectedPin(expectedIdentityPublicKeyBase64)) {
       final viaSession = await _trySession(
         host: endpoint.host,
@@ -662,6 +665,14 @@ class RelayClient {
         request: signedRequest,
         maxResponseBytes: maxResponseBytes,
       ),
+      PeerRouteProtocol.wss => _sendWssLine(
+        host: endpoint.host,
+        port: endpoint.port,
+        timeout: timeout,
+        request: signedRequest,
+        maxResponseBytes: maxResponseBytes,
+        pinned: _hasExpectedPin(expectedIdentityPublicKeyBase64),
+      ),
     };
     return _verifyResponseSignature(
       body: body,
@@ -680,7 +691,8 @@ class RelayClient {
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     String? expectedIdentityPublicKeyBase64,
   }) {
-    if (protocol != PeerRouteProtocol.tcp ||
+    if ((protocol != PeerRouteProtocol.tcp &&
+            protocol != PeerRouteProtocol.wss) ||
         !_hasExpectedPin(expectedIdentityPublicKeyBase64)) {
       return false;
     }
@@ -805,7 +817,45 @@ class RelayClient {
   }
 
   String _sessionKey(String host, int port, RelayV2Info known) =>
-      'tcp:$host:$port:${base64Encode(known.noiseKey!)}';
+      '${_wssPaths.containsKey('$host:$port') ? 'wss' : 'tcp'}:$host:$port:'
+      '${base64Encode(known.noiseKey!)}';
+
+  /// Hidden (wss) relay addresses: their secret paths, by host and port.
+  static final Map<String, String> _wssPaths = {};
+
+  /// Tells the client the secret path of the wss relay at [host]:[port]
+  /// (the controller does, from its configured routes).
+  static void registerWssPath(String host, int port, String path) {
+    final key = '$host:$port';
+    if (_wssPaths[key] == path) return;
+    if (_wssPaths.length >= 64 && !_wssPaths.containsKey(key)) {
+      _wssPaths.remove(_wssPaths.keys.first);
+    }
+    _wssPaths[key] = path;
+  }
+
+  /// The byte channel to [host]:[port]: TLS and a WebSocket for a hidden
+  /// address, otherwise plain TCP. [pinned]: the relay's identity is
+  /// pinned, so its certificate need not be a WebPKI one (every answer is
+  /// checked against the identity; see [WebSocketRelayChannel.connect]).
+  Future<RelayByteChannel> _channelTo(
+    String host,
+    int port,
+    Duration timeout, {
+    required bool pinned,
+  }) async {
+    final path = _wssPaths['$host:$port'];
+    if (path == null) {
+      return SocketRelayChannel.connect(host, port, timeout: timeout);
+    }
+    return WebSocketRelayChannel.connect(
+      host: host,
+      port: port,
+      path: path,
+      allowUntrustedCertificate: pinned,
+      timeout: timeout,
+    );
+  }
 
   Future<RelayV2Session> _sessionFor(
     String host,
@@ -816,11 +866,39 @@ class RelayClient {
     return v2Pool.session(
       _sessionKey(host, port, known),
       () async => RelayV2Session.connect(
-        channel: await SocketRelayChannel.connect(host, port, timeout: timeout),
+        // Sessions are only used with a pinned identity.
+        channel: await _channelTo(host, port, timeout, pinned: true),
         relayNoiseKey: known.noiseKey!,
         timeout: timeout,
       ),
     );
+  }
+
+  /// A v1 request over a hidden address: one line in, one line out, as
+  /// over TCP.
+  Future<Map<String, dynamic>> _sendWssLine({
+    required String host,
+    required int port,
+    required Duration timeout,
+    required Map<String, dynamic> request,
+    required int maxResponseBytes,
+    required bool pinned,
+  }) async {
+    if (!_wssPaths.containsKey('$host:$port')) {
+      throw StateError('The hidden relay address has no path.');
+    }
+    final channel = await _channelTo(host, port, timeout, pinned: pinned);
+    try {
+      channel.add(utf8.encode('${jsonEncode(request)}\n'));
+      await channel.flush();
+      final line = await _readLineBounded(
+        channel.input,
+        maxResponseBytes,
+      ).timeout(timeout);
+      return _decodeResponse(line);
+    } finally {
+      channel.destroy();
+    }
   }
 
   /// Sends [request] over the relay's v2 session when it has one; null to
