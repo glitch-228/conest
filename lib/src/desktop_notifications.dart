@@ -4,6 +4,14 @@ import 'dart:io';
 import 'package:dbus/dbus.dart';
 import 'package:flutter/services.dart';
 
+/// An action taken on a desktop message notification.
+typedef DesktopNotificationAction = ({
+  String chat,
+  String action,
+  String? text,
+  String? throughMessageId,
+});
+
 /// Message notifications on desktops: Linux through the desktop's
 /// notification service (org.freedesktop.Notifications, over D-Bus with no
 /// native library), Windows from Conest's tray icon. One notification per
@@ -19,13 +27,24 @@ class DesktopNotifications {
   final MethodChannel _window;
   final Future<DBusClient?> Function() _sessionBus;
   final _opened = StreamController<String>.broadcast();
+  final _taken = StreamController<DesktopNotificationAction>.broadcast();
 
   /// The chat whose notification was clicked.
   Stream<String> get opened => _opened.stream;
 
+  /// "Mark as read" or a reply typed into a notification (Linux; a reply
+  /// where the desktop offers inline replies, such as KDE Plasma).
+  Stream<DesktopNotificationAction> get actions => _taken.stream;
+
   DBusClient? _bus;
   Future<DBusClient?>? _connecting;
   StreamSubscription<DBusSignal>? _actions;
+  StreamSubscription<DBusSignal>? _replies;
+  Set<String>? _capabilities;
+
+  /// The newest message each chat's notification showed (what "read"
+  /// covers).
+  final Map<String, String?> _through = {};
 
   /// Notification ids by chat (Linux), and chats by id.
   final Map<String, int> _ids = {};
@@ -56,8 +75,52 @@ class DesktopNotifications {
           signature: DBusSignature('us'),
         ).listen((signal) {
           final chat = _chats[signal.values.first.asUint32()];
-          if (chat != null) _opened.add(chat);
+          if (chat == null) return;
+          switch (signal.values[1].asString()) {
+            case 'default':
+              _opened.add(chat);
+            case 'mark-read':
+              _taken.add((
+                chat: chat,
+                action: 'markRead',
+                text: null,
+                throughMessageId: _through[chat],
+              ));
+          }
         });
+    _replies =
+        DBusSignalStream(
+          bus,
+          sender: _name,
+          interface: _name,
+          name: 'NotificationReplied',
+          path: _path,
+          signature: DBusSignature('us'),
+        ).listen((signal) {
+          final chat = _chats[signal.values.first.asUint32()];
+          final text = signal.values[1].asString();
+          if (chat == null || text.trim().isEmpty || text.length > 4096) {
+            return;
+          }
+          _taken.add((
+            chat: chat,
+            action: 'reply',
+            text: text,
+            throughMessageId: _through[chat],
+          ));
+        });
+    try {
+      final reply = await bus.callMethod(
+        destination: _name,
+        path: _path,
+        interface: _name,
+        name: 'GetCapabilities',
+        replySignature: DBusSignature('as'),
+      );
+      _capabilities = reply.values.first.asStringArray().toSet();
+    } catch (_) {
+      _capabilities = const {};
+    }
     return bus;
   }();
 
@@ -66,13 +129,19 @@ class DesktopNotifications {
     required String chat,
     required String title,
     required String body,
+    bool silent = false,
+    String? replyLabel,
+    String? markReadLabel,
+    String? throughMessageId,
   }) async {
+    _through[chat] = throughMessageId;
     if (Platform.isWindows) {
       try {
         await _window.invokeMethod<void>('notify', {
           'chat': chat,
           'title': title,
           'body': body,
+          'silent': silent,
         });
       } on MissingPluginException {
         // An older runner: no notification.
@@ -96,10 +165,22 @@ class DesktopNotifications {
           const DBusString('conest'),
           DBusString(title),
           DBusString(body),
-          DBusArray.string(const ['default', 'Open']),
+          DBusArray.string([
+            'default',
+            'Open',
+            if (markReadLabel != null) ...['mark-read', markReadLabel],
+            if (replyLabel != null &&
+                _capabilities?.contains('inline-reply') == true) ...[
+              'inline-reply',
+              replyLabel,
+            ],
+          ]),
           DBusDict.stringVariant({
             'category': const DBusString('im.received'),
             'desktop-entry': const DBusString('conest'),
+            // Quiet hours: shown, not heard.
+            if (silent) 'suppress-sound': const DBusBoolean(true),
+            if (silent) 'urgency': const DBusByte(0),
           }),
           const DBusInt32(-1),
         ],
@@ -127,6 +208,7 @@ class DesktopNotifications {
       }
       return;
     }
+    _through.remove(chat);
     final id = _ids.remove(chat);
     if (id == null) return;
     _chats.remove(id);
@@ -149,6 +231,8 @@ class DesktopNotifications {
 
   Future<void> close() async {
     await _actions?.cancel();
+    await _replies?.cancel();
+    await _taken.close();
     await _bus?.close();
     await _opened.close();
   }

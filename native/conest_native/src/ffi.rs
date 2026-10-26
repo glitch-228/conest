@@ -32,7 +32,7 @@ use crate::api::{NativeInboundDatagram, NativeInboundEnvelope, NativeTransport};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::ble::{Session as BleSession, Shared as BleShared, core::Core as BleCore};
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
-use crate::audio::VoiceAudioSession;
+use crate::audio::{VoiceAudioSession, VoiceTuningUpdate};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::desktop_camera::DesktopBeamCamera;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -251,6 +251,157 @@ pub extern "C" fn conest_voice_audio_open() -> u64 {
             0
         }
     }
+}
+
+/// A C string argument that may be null (null: None).
+///
+/// # Safety
+/// [value] is null or a NUL-terminated string valid for this call.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+unsafe fn optional_str<'a>(value: *const c_char) -> Option<&'a str> {
+    if value.is_null() {
+        return None;
+    }
+    // SAFETY: the caller passes a NUL-terminated string for this call.
+    unsafe { CStr::from_ptr(value) }.to_str().ok()
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn register_voice_session(session: VoiceAudioSession) -> u64 {
+    let handle = match NEXT_HANDLE.lock() {
+        Ok(mut next) => {
+            let value = *next;
+            *next = next.saturating_add(1).max(1);
+            value
+        }
+        Err(error) => {
+            record_error(error);
+            return 0;
+        }
+    };
+    match VOICE_AUDIO_SESSIONS.lock() {
+        Ok(mut sessions) => {
+            sessions.insert(handle, session);
+            handle
+        }
+        Err(error) => {
+            record_error(error);
+            0
+        }
+    }
+}
+
+/// Opens call audio on the named microphone and output (null: the
+/// system default; a named device that is gone falls back to it).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_audio_open_with(
+    input: *const c_char,
+    output: *const c_char,
+) -> u64 {
+    // SAFETY: Dart passes null or NUL-terminated strings for this call.
+    let (input, output) = unsafe { (optional_str(input), optional_str(output)) };
+    match VoiceAudioSession::open_with_devices(input, output) {
+        Ok(session) => register_voice_session(session),
+        Err(error) => {
+            record_error(error);
+            0
+        }
+    }
+}
+
+/// JSON-encoded microphone names (empty on Android, which picks its own).
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_input_devices() -> *mut c_char {
+    json_string(&VoiceAudioSession::input_device_names())
+}
+
+/// Switches a live session to a named microphone.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_audio_set_input_device(
+    handle: u64,
+    name: *const c_char,
+) -> bool {
+    // SAFETY: Dart passes a NUL-terminated string for this call.
+    let Some(name) = (unsafe { optional_str(name) }) else {
+        record_error("missing microphone name");
+        return false;
+    };
+    let Ok(mut sessions) = VOICE_AUDIO_SESSIONS.lock() else {
+        record_error("voice audio session registry lock poisoned");
+        return false;
+    };
+    let Some(session) = sessions.get_mut(&handle) else {
+        record_error("unknown voice audio session handle");
+        return false;
+    };
+    match session.set_input_device(name) {
+        Ok(()) => true,
+        Err(error) => {
+            record_error(error);
+            false
+        }
+    }
+}
+
+/// Settings → Voice for a live session, as JSON (VoiceTuningUpdate; at
+/// most 1 KiB, absent fields unchanged).
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn conest_voice_audio_tune(handle: u64, json: *const c_char) -> bool {
+    // SAFETY: Dart passes a NUL-terminated string for this call.
+    let Some(json) = (unsafe { optional_str(json) }) else {
+        record_error("missing voice settings");
+        return false;
+    };
+    if json.len() > 1024 {
+        record_error("voice settings too long");
+        return false;
+    }
+    let update: VoiceTuningUpdate = match serde_json::from_str(json) {
+        Ok(update) => update,
+        Err(error) => {
+            record_error(error);
+            return false;
+        }
+    };
+    VOICE_AUDIO_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(&handle).map(|session| session.tune(&update)))
+        .is_some()
+}
+
+/// The microphone level now (0 to 1), for meters and the microphone test.
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_input_level(handle: u64) -> f32 {
+    VOICE_AUDIO_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(&handle).map(VoiceAudioSession::input_level))
+        .unwrap_or(0.0)
+}
+
+/// One group-call participant's volume on this device (0 to 2).
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_voice_audio_set_participant_volume(
+    handle: u64,
+    participant: u16,
+    gain: f32,
+) -> bool {
+    VOICE_AUDIO_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|sessions| {
+            sessions
+                .get(&handle)
+                .map(|session| session.set_participant_volume(participant, gain))
+        })
+        .unwrap_or(false)
 }
 
 /// JSON-encoded audio output device names. The returned string is freed with
@@ -652,6 +803,17 @@ pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoic
     let enabled = VOICE_AUDIO_SESSIONS.lock().ok()
         .and_then(|sessions| sessions.get(&(handle as u64))
             .map(VoiceAudioSession::noise_suppression_enabled)).unwrap_or(false);
+    if enabled { JNI_TRUE } else { JNI_FALSE }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_conest_conest_ConestBackgroundService_nativeVoiceAudioEchoEnabled(
+    _env: EnvUnowned<'_>, _this: JObject<'_>, handle: jlong,
+) -> jboolean {
+    let enabled = VOICE_AUDIO_SESSIONS.lock().ok()
+        .and_then(|sessions| sessions.get(&(handle as u64))
+            .map(VoiceAudioSession::echo_cancellation_enabled)).unwrap_or(true);
     if enabled { JNI_TRUE } else { JNI_FALSE }
 }
 

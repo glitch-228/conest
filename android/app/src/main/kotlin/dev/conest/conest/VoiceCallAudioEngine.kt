@@ -28,6 +28,7 @@ internal class VoiceCallAudioEngine(
     private val readPlayback: (Long, ShortArray, Int) -> Int,
     private val noiseEnabled: (Long) -> Boolean,
     private val platformNoise: (Long, Boolean) -> Unit,
+    private val echoEnabled: (Long) -> Boolean,
     private val markFailed: (Long) -> Unit,
     private val onFailure: (String) -> Unit,
 ) {
@@ -59,6 +60,7 @@ internal class VoiceCallAudioEngine(
     private var noiseSuppressor: NoiseSuppressor? = null
     private var echoCanceler: AcousticEchoCanceler? = null
     private var requestedNoise: Boolean? = null
+    private var requestedEcho: Boolean? = null
     private var recorder: AudioRecord? = null
     private var track: AudioTrack? = null
     private var captureThread: Thread? = null
@@ -113,7 +115,7 @@ internal class VoiceCallAudioEngine(
             echoCanceler = try {
                 if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(input.audioSessionId) else null
             } catch (_: RuntimeException) { null }
-            try { echoCanceler?.enabled = true } catch (_: RuntimeException) {}
+            updateEchoCancellation()
             updateNoiseSuppression()
             recorder = input
             track = output
@@ -244,11 +246,21 @@ internal class VoiceCallAudioEngine(
         platformNoise(handle, applied)
     }
 
+    /** Settings > Voice > echo cancellation: the platform effect, when the
+     * phone has one. */
+    private fun updateEchoCancellation() {
+        val enabled = echoEnabled(handle)
+        if (requestedEcho == enabled) return
+        requestedEcho = enabled
+        try { echoCanceler?.enabled = enabled } catch (_: RuntimeException) {}
+    }
+
     private fun captureLoop() {
         val input = recorder ?: return
         val pcm = ShortArray(FRAME_SAMPLES)
         while (running.get()) {
             updateNoiseSuppression()
+            updateEchoCancellation()
             val count = input.read(pcm, 0, pcm.size)
             if (count > 0) {
                 if (focusHeld.get() && !pushCapture(handle, pcm, count)) {

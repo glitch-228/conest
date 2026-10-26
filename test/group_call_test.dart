@@ -192,13 +192,13 @@ void main() {
       await receiver.service.receiveDatagram('group', 'p0', old!);
       await receiver.service.receiveDatagram('group', 'p0', Uint8List(1201));
       expect(receiver.media.played, hasLength(1));
-      for (var i = 0; i < 120; i++) {
+      for (var i = 0; i < 200; i++) {
         final frame = await sender.service.active!.cipher.encrypt(
-          Uint8List.fromList([0, 0, 0, 0, i + 3, 3]),
+          Uint8List.fromList([0, 0, 0, i ~/ 256, i % 256 + 3, 3]),
         );
         await receiver.service.receiveDatagram('group', 'p0', frame!);
       }
-      expect(receiver.media.played.length, lessThanOrEqualTo(101));
+      expect(receiver.media.played.length, lessThanOrEqualTo(161));
       expect(receiver.media.played.length, greaterThan(1));
     },
   );

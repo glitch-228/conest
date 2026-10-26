@@ -5366,6 +5366,141 @@ class AppLocalizationsZh extends AppLocalizations {
   String get notificationPreviewHidden => '不显示';
 
   @override
+  String get voiceSettingsTitle => '语音';
+
+  @override
+  String get voiceInputDevice => '麦克风';
+
+  @override
+  String get voiceOutputDevice => '扬声器或耳机';
+
+  @override
+  String get voiceSystemDefault => '系统默认';
+
+  @override
+  String get voiceInputVolume => '麦克风音量';
+
+  @override
+  String get voiceOutputVolume => '输出音量';
+
+  @override
+  String get voiceMicTest => '检查麦克风';
+
+  @override
+  String get voiceMicTestStart => '开始检查';
+
+  @override
+  String get voiceMicTestStop => '停止';
+
+  @override
+  String get voiceMicTestLoopback => '听到自己';
+
+  @override
+  String get voiceMicTestUnavailable => '现在无法测试麦克风（通话中，或此版本没有通话音频）。';
+
+  @override
+  String get voiceInputMode => '发送我的声音';
+
+  @override
+  String get voiceInputModeAlways => '始终';
+
+  @override
+  String get voiceInputModeActivity => '说话时';
+
+  @override
+  String get voiceInputModePushToTalk => '按键说话';
+
+  @override
+  String get voiceSensitivityAutomatic => '自动设置灵敏度';
+
+  @override
+  String get voiceSensitivity => '灵敏度';
+
+  @override
+  String get voicePushToTalkKey => '按键说话的按键';
+
+  @override
+  String get voicePushToTalkKeyNone => '仅通话中的按钮';
+
+  @override
+  String get voicePushToTalkKeyPress => '请按一个键…';
+
+  @override
+  String get voicePushToTalkKeyHint => '在 Conest 位于前台时有效';
+
+  @override
+  String get voiceClear => '清除';
+
+  @override
+  String get voiceProcessing => '处理';
+
+  @override
+  String get voiceNoiseSuppression => '降噪';
+
+  @override
+  String get voiceEchoCancellation => '回声消除';
+
+  @override
+  String get voiceAutoGain => '自动音量';
+
+  @override
+  String get voiceCallSounds => '通话提示音';
+
+  @override
+  String get voiceCallSoundsHint => '来电仍会响铃。';
+
+  @override
+  String get voiceDevicesOnPhone => '在 Android 上，由手机选择通话的麦克风和扬声器。';
+
+  @override
+  String get voiceSettingsButton => '语音设置';
+
+  @override
+  String voiceParticipantVolume(String name) {
+    return '$name 的音量';
+  }
+
+  @override
+  String get voiceHoldToTalk => '按住说话';
+
+  @override
+  String get quietHoursTitle => '免打扰时段';
+
+  @override
+  String get quietHoursHint => '通知仍会显示，但没有声音或振动。';
+
+  @override
+  String quietHoursFrom(String time) {
+    return '从 $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return '到 $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => '来电仍会响铃';
+
+  @override
+  String get muteForHour => '1 小时';
+
+  @override
+  String get muteForEightHours => '8 小时';
+
+  @override
+  String get muteForDay => '1 天';
+
+  @override
+  String get muteUntilUnmuted => '直到我取消静音';
+
+  @override
+  String get notifyMentionsOnly => '仅在提及我时通知';
+
+  @override
+  String get notifyAllMessages => '所有消息都通知';
+
+  @override
   String get relayAccessTitle => '中继访问';
 
   @override

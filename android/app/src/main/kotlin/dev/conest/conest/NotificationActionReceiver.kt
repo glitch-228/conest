@@ -23,7 +23,9 @@ class NotificationActionReceiver : BroadcastReceiver() {
             ?.toString()
         // Handled (or nothing to send): the notification goes, so a reply
         // does not keep spinning. Dart shows it again if a reply fails.
-        ConestSystem.dismissMessageNotification(context, conversationId)
+        if (conversationId != CALL_CONVERSATION) {
+            ConestSystem.dismissMessageNotification(context, conversationId)
+        }
         if (action == ACTION_REPLY && text.isNullOrBlank()) return
         val event = mapOf(
             "conversationId" to conversationId,
@@ -62,6 +64,10 @@ class NotificationActionReceiver : BroadcastReceiver() {
         const val KEY_REPLY = "conest_reply"
         const val ACTION_REPLY = "reply"
         const val ACTION_MARK_READ = "markRead"
+        const val ACTION_CALL_ANSWER = "callAnswer"
+        const val ACTION_CALL_DECLINE = "callDecline"
+        /// The incoming call's actions name no chat.
+        const val CALL_CONVERSATION = "conest-call"
         private const val EXTRA_CONVERSATION = "conversationId"
         private const val EXTRA_ACTION = "action"
         private const val EXTRA_THROUGH = "throughMessageId"

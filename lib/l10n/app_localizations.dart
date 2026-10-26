@@ -8915,6 +8915,264 @@ abstract class AppLocalizations {
   /// **'Nothing'**
   String get notificationPreviewHidden;
 
+  /// Settings category: calls and microphone.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice'**
+  String get voiceSettingsTitle;
+
+  /// Settings → Voice: microphone picker.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone'**
+  String get voiceInputDevice;
+
+  /// Settings → Voice: output picker.
+  ///
+  /// In en, this message translates to:
+  /// **'Speaker or headphones'**
+  String get voiceOutputDevice;
+
+  /// Device picker: follow the system's choice.
+  ///
+  /// In en, this message translates to:
+  /// **'System default'**
+  String get voiceSystemDefault;
+
+  /// Settings → Voice slider.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone volume'**
+  String get voiceInputVolume;
+
+  /// Settings → Voice slider.
+  ///
+  /// In en, this message translates to:
+  /// **'Output volume'**
+  String get voiceOutputVolume;
+
+  /// Settings → Voice: microphone test heading.
+  ///
+  /// In en, this message translates to:
+  /// **'Check your microphone'**
+  String get voiceMicTest;
+
+  /// Starts the microphone test.
+  ///
+  /// In en, this message translates to:
+  /// **'Let\'s check'**
+  String get voiceMicTestStart;
+
+  /// Stops the microphone test.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop'**
+  String get voiceMicTestStop;
+
+  /// Microphone test: play your voice back.
+  ///
+  /// In en, this message translates to:
+  /// **'Hear yourself'**
+  String get voiceMicTestLoopback;
+
+  /// Shown when the test cannot start.
+  ///
+  /// In en, this message translates to:
+  /// **'The microphone test is not available now (during a call, or without call audio in this build).'**
+  String get voiceMicTestUnavailable;
+
+  /// Settings → Voice: input mode heading.
+  ///
+  /// In en, this message translates to:
+  /// **'Send my voice'**
+  String get voiceInputMode;
+
+  /// Input mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Always'**
+  String get voiceInputModeAlways;
+
+  /// Input mode: voice activity.
+  ///
+  /// In en, this message translates to:
+  /// **'When I speak'**
+  String get voiceInputModeActivity;
+
+  /// Input mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Push to talk'**
+  String get voiceInputModePushToTalk;
+
+  /// Voice activity switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Set sensitivity automatically'**
+  String get voiceSensitivityAutomatic;
+
+  /// Voice activity threshold slider.
+  ///
+  /// In en, this message translates to:
+  /// **'Sensitivity'**
+  String get voiceSensitivity;
+
+  /// Settings → Voice.
+  ///
+  /// In en, this message translates to:
+  /// **'Push-to-talk key'**
+  String get voicePushToTalkKey;
+
+  /// No key chosen.
+  ///
+  /// In en, this message translates to:
+  /// **'The call\'s button only'**
+  String get voicePushToTalkKeyNone;
+
+  /// Waiting for the key.
+  ///
+  /// In en, this message translates to:
+  /// **'Press a key…'**
+  String get voicePushToTalkKeyPress;
+
+  /// Where the key works.
+  ///
+  /// In en, this message translates to:
+  /// **'works while Conest is in front'**
+  String get voicePushToTalkKeyHint;
+
+  /// Removes the chosen key.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear'**
+  String get voiceClear;
+
+  /// Settings → Voice heading.
+  ///
+  /// In en, this message translates to:
+  /// **'Processing'**
+  String get voiceProcessing;
+
+  /// Switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Noise suppression'**
+  String get voiceNoiseSuppression;
+
+  /// Switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Echo cancellation'**
+  String get voiceEchoCancellation;
+
+  /// Switch: automatic gain control.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic volume'**
+  String get voiceAutoGain;
+
+  /// Switch: tones when calls connect, end, mute.
+  ///
+  /// In en, this message translates to:
+  /// **'Call sounds'**
+  String get voiceCallSounds;
+
+  /// Under the call sounds switch.
+  ///
+  /// In en, this message translates to:
+  /// **'An incoming call still rings.'**
+  String get voiceCallSoundsHint;
+
+  /// Settings → Voice on phones.
+  ///
+  /// In en, this message translates to:
+  /// **'On Android the phone picks the microphone and speaker for calls.'**
+  String get voiceDevicesOnPhone;
+
+  /// Button in a call screen.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice settings'**
+  String get voiceSettingsButton;
+
+  /// Group call: one member's volume on this device.
+  ///
+  /// In en, this message translates to:
+  /// **'Volume for {name}'**
+  String voiceParticipantVolume(String name);
+
+  /// Push-to-talk button in a 1:1 call.
+  ///
+  /// In en, this message translates to:
+  /// **'Hold to talk'**
+  String get voiceHoldToTalk;
+
+  /// Settings: notifications without sound.
+  ///
+  /// In en, this message translates to:
+  /// **'Quiet hours'**
+  String get quietHoursTitle;
+
+  /// Under the quiet hours switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications still appear, without sound or vibration.'**
+  String get quietHoursHint;
+
+  /// Quiet hours start.
+  ///
+  /// In en, this message translates to:
+  /// **'From {time}'**
+  String quietHoursFrom(String time);
+
+  /// Quiet hours end.
+  ///
+  /// In en, this message translates to:
+  /// **'Until {time}'**
+  String quietHoursUntil(String time);
+
+  /// Quiet hours: incoming calls.
+  ///
+  /// In en, this message translates to:
+  /// **'Calls still ring'**
+  String get quietHoursCallsRing;
+
+  /// Mute a chat.
+  ///
+  /// In en, this message translates to:
+  /// **'For 1 hour'**
+  String get muteForHour;
+
+  /// Mute a chat.
+  ///
+  /// In en, this message translates to:
+  /// **'For 8 hours'**
+  String get muteForEightHours;
+
+  /// Mute a chat.
+  ///
+  /// In en, this message translates to:
+  /// **'For 1 day'**
+  String get muteForDay;
+
+  /// Mute a chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Until I unmute'**
+  String get muteUntilUnmuted;
+
+  /// Group menu: notify only when mentioned or replied to.
+  ///
+  /// In en, this message translates to:
+  /// **'Notify only for mentions'**
+  String get notifyMentionsOnly;
+
+  /// Group menu: back to every message.
+  ///
+  /// In en, this message translates to:
+  /// **'Notify for all messages'**
+  String get notifyAllMessages;
+
   /// Title of the dialog showing who may use a relay.
   ///
   /// In en, this message translates to:

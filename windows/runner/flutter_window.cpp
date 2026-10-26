@@ -94,9 +94,14 @@ bool FlutterWindow::OnCreate() {
             result->Error("bad_arguments", "A map is required.");
             return;
           }
+          const auto silent_value = map->find(flutter::EncodableValue("silent"));
+          const bool silent =
+              silent_value != map->end() &&
+              std::holds_alternative<bool>(silent_value->second) &&
+              std::get<bool>(silent_value->second);
           if (!Notify(StringArgument(*map, "chat"),
                       Widen(StringArgument(*map, "title")),
-                      Widen(StringArgument(*map, "body")))) {
+                      Widen(StringArgument(*map, "body")), silent)) {
             result->Error("no_tray", "No tray icon to notify from.");
             return;
           }
@@ -155,10 +160,12 @@ void FlutterWindow::SetTray(bool enabled, const std::wstring& tooltip) {
 }
 
 bool FlutterWindow::Notify(const std::string& chat, const std::wstring& title,
-                           const std::wstring& body) {
+                           const std::wstring& body, bool silent) {
   if (!tray_added_) return false;
   tray_icon_.uFlags = NIF_INFO;
-  tray_icon_.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
+  // Quiet hours: shown without the notification sound.
+  tray_icon_.dwInfoFlags =
+      NIIF_USER | NIIF_LARGE_ICON | (silent ? NIIF_NOSOUND : 0);
   tray_icon_.hBalloonIcon =
       LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
   wcsncpy_s(tray_icon_.szInfoTitle, title.c_str(), _TRUNCATE);

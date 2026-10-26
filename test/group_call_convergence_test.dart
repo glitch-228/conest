@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'package:conest/src/group_call/group_call_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'support/fake_call_network.dart';
 
@@ -178,6 +179,126 @@ void main() {
         expect(room.connected, true);
         expect(room.participants.map((p) => p.deviceId).toSet(), {'p1', 'p2'});
       }
+    },
+  );
+
+  test(
+    'a member\'s claim of a silent forwarder does not make others send direct',
+    () async {
+      final net = await network(7);
+      await net.connect(net.peers.keys);
+      await net.advance(const Duration(seconds: 1));
+      final room = net.peers['p2']!.service.active!;
+      final forwarder = room.forwarder!;
+      final ids = net.peers.keys.where((id) => id != forwarder).toList();
+      final claimant = ids.last;
+      final listener = ids.firstWhere(
+        (id) => id != claimant && id != room.coordinator,
+      );
+      final listenerRoom = net.peers[listener]!.service.active!;
+      // The claimant says it does not hear the forwarder; the listener does.
+      expect(
+        await net.peers[listener]!.service.receiveSignal(
+          GroupCallSignal(
+            groupId: 'group',
+            callId: listenerRoom.callId,
+            senderDeviceId: claimant,
+            action: 'stats',
+            issuedAt: net.time,
+            payload: {
+              'term': listenerRoom.term,
+              'desktop': true,
+              'mains': true,
+              'metered': false,
+              'rttMs': 0,
+              'loss': 0.0,
+              'silentForwarder': forwarder,
+            },
+          ),
+          authenticatedSender: claimant,
+        ),
+        isTrue,
+      );
+      net.datagrams.clear();
+      await net.peers[listener]!.service.sendAudio(Uint8List.fromList([1]));
+      await net.flush();
+      expect(
+        net.datagrams
+            .where((d) => d.sender == listener)
+            .map((d) => d.recipient)
+            .toSet(),
+        {forwarder},
+      );
+    },
+  );
+
+  test('a member that does not hear the forwarder is still heard', () async {
+    final net = await network(7);
+    await net.connect(net.peers.keys);
+    await net.advance(const Duration(seconds: 1));
+    final forwarder = net.peers['p1']!.service.active!.forwarder!;
+    final deaf = net.peers.keys.lastWhere((id) => id != forwarder);
+    net.linkDelay = (from, to, {required datagram}) =>
+        datagram && from == forwarder && to == deaf ? never : Duration.zero;
+    await net.advance(const Duration(seconds: 3));
+    await net.peers[deaf]!.service.sendAudio(Uint8List.fromList([2]));
+    await net.flush();
+    // Through a forwarder it hears, or directly while it hears none.
+    for (final peer in net.peers.values.where((p) => p.id != deaf)) {
+      expect(
+        peer.media.played.map((p) => p.$3.toList()),
+        anyElement(equals([2])),
+        reason: '${peer.id} hears the deaf member',
+      );
+    }
+  });
+
+  test(
+    'a join delayed past its sender\'s leave does not bring it back',
+    () async {
+      final net = await network(3);
+      await net.connect(net.peers.keys);
+      await net.advance(const Duration(seconds: 3));
+      final staleJoin = net.signals
+          .lastWhere(
+            (s) => s.$1 == 'p2' && s.$2 == 'p0' && s.$3.action == 'join',
+          )
+          .$3;
+      await net.peers['p2']!.service.leave();
+      await net.flush();
+      await net.advance(const Duration(seconds: 20));
+      await net.peers['p0']!.service.receiveSignal(
+        staleJoin,
+        authenticatedSender: 'p2',
+      );
+      await net.flush();
+      expect(
+        net.peers['p0']!.service.active!.participants.map((p) => p.deviceId),
+        isNot(contains('p2')),
+      );
+    },
+  );
+
+  test(
+    'a delayed beacon of an unknown call shows it without ringing',
+    () async {
+      final net = await network(3);
+      net.droppedSignals.add(('p0', 'p2', 'start'));
+      await net.connect(['p0']);
+      final beacon = net.signals
+          .firstWhere(
+            (s) => s.$1 == 'p0' && s.$2 == 'p2' && s.$3.action == 'start',
+          )
+          .$3;
+      net.droppedSignals.clear();
+      net.time = net.time.add(const Duration(seconds: 20));
+      final taken = await net.peers['p2']!.service.receiveSignal(
+        beacon,
+        authenticatedSender: 'p0',
+      );
+      expect(taken, isTrue);
+      expect(net.peers['p2']!.service.roomFor('group'), isNotNull);
+      expect(net.incoming.where((i) => i.$1 == 'p2'), isEmpty);
     },
   );
 }

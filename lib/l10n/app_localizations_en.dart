@@ -5611,6 +5611,144 @@ class AppLocalizationsEn extends AppLocalizations {
   String get notificationPreviewHidden => 'Nothing';
 
   @override
+  String get voiceSettingsTitle => 'Voice';
+
+  @override
+  String get voiceInputDevice => 'Microphone';
+
+  @override
+  String get voiceOutputDevice => 'Speaker or headphones';
+
+  @override
+  String get voiceSystemDefault => 'System default';
+
+  @override
+  String get voiceInputVolume => 'Microphone volume';
+
+  @override
+  String get voiceOutputVolume => 'Output volume';
+
+  @override
+  String get voiceMicTest => 'Check your microphone';
+
+  @override
+  String get voiceMicTestStart => 'Let\'s check';
+
+  @override
+  String get voiceMicTestStop => 'Stop';
+
+  @override
+  String get voiceMicTestLoopback => 'Hear yourself';
+
+  @override
+  String get voiceMicTestUnavailable =>
+      'The microphone test is not available now (during a call, or without call audio in this build).';
+
+  @override
+  String get voiceInputMode => 'Send my voice';
+
+  @override
+  String get voiceInputModeAlways => 'Always';
+
+  @override
+  String get voiceInputModeActivity => 'When I speak';
+
+  @override
+  String get voiceInputModePushToTalk => 'Push to talk';
+
+  @override
+  String get voiceSensitivityAutomatic => 'Set sensitivity automatically';
+
+  @override
+  String get voiceSensitivity => 'Sensitivity';
+
+  @override
+  String get voicePushToTalkKey => 'Push-to-talk key';
+
+  @override
+  String get voicePushToTalkKeyNone => 'The call\'s button only';
+
+  @override
+  String get voicePushToTalkKeyPress => 'Press a key…';
+
+  @override
+  String get voicePushToTalkKeyHint => 'works while Conest is in front';
+
+  @override
+  String get voiceClear => 'Clear';
+
+  @override
+  String get voiceProcessing => 'Processing';
+
+  @override
+  String get voiceNoiseSuppression => 'Noise suppression';
+
+  @override
+  String get voiceEchoCancellation => 'Echo cancellation';
+
+  @override
+  String get voiceAutoGain => 'Automatic volume';
+
+  @override
+  String get voiceCallSounds => 'Call sounds';
+
+  @override
+  String get voiceCallSoundsHint => 'An incoming call still rings.';
+
+  @override
+  String get voiceDevicesOnPhone =>
+      'On Android the phone picks the microphone and speaker for calls.';
+
+  @override
+  String get voiceSettingsButton => 'Voice settings';
+
+  @override
+  String voiceParticipantVolume(String name) {
+    return 'Volume for $name';
+  }
+
+  @override
+  String get voiceHoldToTalk => 'Hold to talk';
+
+  @override
+  String get quietHoursTitle => 'Quiet hours';
+
+  @override
+  String get quietHoursHint =>
+      'Notifications still appear, without sound or vibration.';
+
+  @override
+  String quietHoursFrom(String time) {
+    return 'From $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'Until $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'Calls still ring';
+
+  @override
+  String get muteForHour => 'For 1 hour';
+
+  @override
+  String get muteForEightHours => 'For 8 hours';
+
+  @override
+  String get muteForDay => 'For 1 day';
+
+  @override
+  String get muteUntilUnmuted => 'Until I unmute';
+
+  @override
+  String get notifyMentionsOnly => 'Notify only for mentions';
+
+  @override
+  String get notifyAllMessages => 'Notify for all messages';
+
+  @override
   String get relayAccessTitle => 'Relay access';
 
   @override

@@ -79,6 +79,10 @@ class GroupCallRoom {
   int? pendingPing;
   final Map<String, DateTime> mediaSeen = {};
   final Map<String, DateTime> failedForwarders = {};
+  // The forwarder this device itself has not heard from: only its own
+  // observation sends frames to everyone directly (a member's claim only
+  // feeds the coordinator's next choice).
+  DateTime? forwarderSilentUntil;
   final Map<String, int> rtts = {};
   DateTime? lastTopologySent;
   DateTime? lastJoinSent;
@@ -561,7 +565,12 @@ class GroupCallService {
   void _sendKey(GroupCallRoom room, String recipient) {
     final key = room.distributionKey;
     final admission =
-        room.admissions[recipient] ?? room.joinIntents[recipient]?.$1;
+        room.admissions[recipient] ??
+        switch (room.joinIntents[recipient]?.$1) {
+          // A leave's record holds no admission.
+          '' => null,
+          final intent => intent,
+        };
     if (key == null ||
         admission == null ||
         !room.participants.any((p) => p.deviceId == recipient)) {
@@ -645,7 +654,7 @@ class GroupCallService {
         final term = signal.payload['term'] ?? 0;
         if (started == null ||
             now().difference(started) > const Duration(hours: 24) ||
-            started.isAfter(now().add(const Duration(seconds: 2))) ||
+            started.isAfter(now().add(const Duration(seconds: 10))) ||
             !validGroupCallId(startedBy) ||
             signature is! String ||
             signature.length != 88 ||
@@ -692,14 +701,18 @@ class GroupCallService {
           _reserveRoom(room);
           room.seen[authenticatedSender] = now();
           _notify();
-          await onIncoming?.call(room);
+          // Only a fresh beacon rings: a delayed one may belong to a call
+          // that ended meanwhile (it still shows, and can be joined).
+          if (now().difference(signal.issuedAt) <= _discoveryMaxAge) {
+            await onIncoming?.call(room);
+          }
           return true;
         }
         if (!_considerAuthority(room, signal) ||
             !_applyRoster(room, signal.payload, allowSame: true)) {
           return _refuse('L648');
         }
-        room.seen[authenticatedSender] = now();
+        if (_fresh(signal)) room.seen[authenticatedSender] = now();
         if (room.joined && !room.connected) room.lastJoinSent = null;
         _notify();
         return true;
@@ -716,7 +729,8 @@ class GroupCallService {
           (signal.payload['term'] ?? 0) != room.term) {
         return _refuse('L665');
       }
-      if (room.participants.any((p) => p.deviceId == authenticatedSender)) {
+      if (_fresh(signal) &&
+          room.participants.any((p) => p.deviceId == authenticatedSender)) {
         room.seen[authenticatedSender] = now();
       }
       switch (signal.action) {
@@ -731,18 +745,20 @@ class GroupCallService {
             return _refuse('L679');
           }
           final intent = room.joinIntents[authenticatedSender];
+          // A join as old as a leave (the same instant) is a rejoin.
           if (intent != null &&
               (signal.issuedAt.isBefore(intent.$2) ||
-                  (signal.issuedAt == intent.$2 && admission != intent.$1))) {
+                  (signal.issuedAt == intent.$2 &&
+                      intent.$1.isNotEmpty &&
+                      admission != intent.$1))) {
             return _refuse('L685');
           }
-          if (intent == null && room.joinIntents.length >= 128) {
-            final oldest = room.joinIntents.entries.reduce(
-              (a, b) => a.value.$2.isBefore(b.value.$2) ? a : b,
-            );
-            room.joinIntents.remove(oldest.key);
-          }
-          room.joinIntents[authenticatedSender] = (admission, signal.issuedAt);
+          _noteJoinIntent(
+            room,
+            authenticatedSender,
+            admission,
+            signal.issuedAt,
+          );
           final existing = room.participants
               .where((p) => p.deviceId == authenticatedSender)
               .firstOrNull;
@@ -797,6 +813,9 @@ class GroupCallService {
             return _refuse('L745');
           }
           if (signal.payload['epoch'] != room.epoch) return _refuse('L755');
+          // Its joins sent before this leave (delayed on a slow route)
+          // must not bring it back.
+          _noteJoinIntent(room, authenticatedSender, '', signal.issuedAt);
           await _remove(room, authenticatedSender);
         case 'roster':
         case 'key':
@@ -852,8 +871,9 @@ class GroupCallService {
             return _refuse('L800');
           }
           final stats = GroupCallLinkStats.fromJson(signal.payload);
-          if (room.statsIssued[authenticatedSender]?.isAfter(signal.issuedAt) ==
-              true) {
+          final previousStats = room.statsIssued[authenticatedSender];
+          if (previousStats != null &&
+              !signal.issuedAt.isAfter(previousStats)) {
             return _refuse('L805');
           }
           room.stats[authenticatedSender] = stats;
@@ -1188,8 +1208,7 @@ class GroupCallService {
       // A forwarder heard from by nobody for a while: frames go to everyone
       // directly until a new one is chosen (it may also be the coordinator,
       // which counts as gone only after several seconds).
-      final forwarderSilent =
-          room.failedForwarders[room.forwarder]?.isAfter(now()) == true;
+      final forwarderSilent = room.forwarderSilentUntil?.isAfter(now()) == true;
       final recipients =
           room.forwarder == null ||
               room.forwarder == localDeviceId ||
@@ -1291,7 +1310,9 @@ class GroupCallService {
         _member(groupId, claimed)?.canJoin != true ||
         !room.frameRates
             .putIfAbsent(claimed, GroupCallRateLimit.new)
-            .accept(now(), 100)) {
+            // 50 audio frames and a ping a second, twice while frames go
+            // direct beside a forwarder.
+            .accept(now(), 160)) {
       room.noteFrameTrouble(authenticatedSender, 'not its frame');
       return;
     }
@@ -1323,6 +1344,9 @@ class GroupCallService {
       room.seen[frame.sender] = now();
       room.mediaSeen[authenticatedSender] = now();
       room.failedForwarders.remove(authenticatedSender);
+      if (authenticatedSender == room.forwarder) {
+        room.forwarderSilentUntil = null;
+      }
       final forwarding =
           room.forwarder == localDeviceId ||
           (room.previousForwarder == localDeviceId &&
@@ -1402,6 +1426,7 @@ class GroupCallService {
     if (room.forwarder == forwarder) return;
     room.previousForwarder = room.forwarder;
     room.forwarder = forwarder;
+    room.forwarderSilentUntil = null;
     room.overlapUntil = now().add(const Duration(milliseconds: 600));
     if (forwarder != null) room.mediaSeen.putIfAbsent(forwarder, now);
   }
@@ -1512,6 +1537,7 @@ class GroupCallService {
         room.failedForwarders[currentForwarder] = now().add(
           const Duration(seconds: 5),
         );
+        room.forwarderSilentUntil = now().add(const Duration(seconds: 5));
         room.lastStatsSent = null;
       }
       final silent = admitted
@@ -1572,6 +1598,30 @@ class GroupCallService {
   }
 
   static const _signalMaxAge = Duration(seconds: 60);
+  static const _discoveryMaxAge = Duration(seconds: 15);
+
+  /// Whether [signal] says its sender is alive now: one delayed for long
+  /// (from a backlog) does not, or a crashed coordinator would seem alive.
+  bool _fresh(GroupCallSignal signal) =>
+      now().difference(signal.issuedAt) <= const Duration(seconds: 30);
+
+  /// The newest join (or leave: an empty admission) from [device], which
+  /// orders its later controls; at most 128 kept.
+  void _noteJoinIntent(
+    GroupCallRoom room,
+    String device,
+    String admission,
+    DateTime issuedAt,
+  ) {
+    if (!room.joinIntents.containsKey(device) &&
+        room.joinIntents.length >= 128) {
+      final oldest = room.joinIntents.entries.reduce(
+        (a, b) => a.value.$2.isBefore(b.value.$2) ? a : b,
+      );
+      room.joinIntents.remove(oldest.key);
+    }
+    room.joinIntents[device] = (admission, issuedAt);
+  }
 
   /// How long [peer] may stay silent before it counts as gone: a few
   /// control round trips, never less than 6 s for the coordinator (5 s for

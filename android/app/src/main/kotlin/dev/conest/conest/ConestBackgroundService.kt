@@ -194,6 +194,7 @@ class ConestBackgroundService : Service() {
                 readPlayback = ::nativeVoiceAudioReadPlayback,
                 noiseEnabled = ::nativeVoiceAudioNoiseEnabled,
                 platformNoise = ::nativeVoiceAudioPlatformNoise,
+                echoEnabled = ::nativeVoiceAudioEchoEnabled,
                 markFailed = ::nativeVoiceAudioMarkFailed,
                 onFailure = MainActivity::reportVoiceCallAudioFailure,
             )
@@ -238,6 +239,7 @@ class ConestBackgroundService : Service() {
 
     private external fun nativeVoiceAudioNoiseEnabled(handle: Long): Boolean
     private external fun nativeVoiceAudioPlatformNoise(handle: Long, enabled: Boolean)
+    private external fun nativeVoiceAudioEchoEnabled(handle: Long): Boolean
 
     private external fun nativeVoiceAudioMarkFailed(handle: Long)
 
@@ -252,7 +254,11 @@ class ConestBackgroundService : Service() {
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(
                 this,
-                if (hasCall()) CALL_CHANNEL_ID else MainActivity.BACKGROUND_CHANNEL_ID
+                when {
+                    hasCall() -> CALL_CHANNEL_ID
+                    transferActive -> TRANSFERS_CHANNEL_ID
+                    else -> MainActivity.BACKGROUND_CHANNEL_ID
+                }
             )
         } else {
             @Suppress("DEPRECATION")
@@ -277,6 +283,13 @@ class ConestBackgroundService : Service() {
                     }
                 )
                 .setContentText(callTitle.ifBlank { "Tap to return to Conest" })
+            if (callState == "ringing" && callIncoming) {
+                // Over the lock screen and with the screen off, as a phone
+                // call; Answer and Decline right in it.
+                builder.setFullScreenIntent(pendingIntent, true)
+                builder.addAction(callAction("Decline", NotificationActionReceiver.ACTION_CALL_DECLINE))
+                builder.addAction(answerAction())
+            }
         } else if (transferActive) {
             val progress = if (totalBytes > 0) {
                 ((transferredBytes.coerceIn(0L, totalBytes) * 1000L) / totalBytes).toInt()
@@ -311,6 +324,36 @@ class ConestBackgroundService : Service() {
         return builder.build()
     }
 
+    private fun answerAction(): Notification.Action {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_CALL_ANSWER, true)
+        }
+        val pending = PendingIntent.getActivity(
+            this,
+            3,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        @Suppress("DEPRECATION")
+        return Notification.Action.Builder(0, "Answer", pending).build()
+    }
+
+    private fun callAction(title: String, action: String): Notification.Action {
+        @Suppress("DEPRECATION")
+        return Notification.Action.Builder(
+            0,
+            title,
+            NotificationActionReceiver.pendingIntent(
+                this,
+                NotificationActionReceiver.CALL_CONVERSATION,
+                action,
+                null,
+                mutable = false,
+            ),
+        ).build()
+    }
+
     private fun action(title: String, control: String, requestCode: Int): Notification.Action {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -336,6 +379,15 @@ class ConestBackgroundService : Service() {
                 NotificationChannel(
                     MainActivity.BACKGROUND_CHANNEL_ID,
                     "Background runtime",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
+        }
+        if (manager.getNotificationChannel(TRANSFERS_CHANNEL_ID) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    TRANSFERS_CHANNEL_ID,
+                    "File transfers",
                     NotificationManager.IMPORTANCE_LOW
                 )
             )
@@ -442,10 +494,12 @@ class ConestBackgroundService : Service() {
         const val EXTRA_TOTAL = "total"
         const val EXTRA_PAUSED = "paused"
         const val EXTRA_TRANSFER_CONTROL = "transferControl"
+        const val EXTRA_CALL_ANSWER = "callAnswer"
         const val CONTROL_PAUSE_ALL = "pause_all"
         const val CONTROL_RESUME_ALL = "resume_all"
         const val CONTROL_CANCEL_ALL = "cancel_all"
         private const val CALL_CHANNEL_ID = "conest_calls_v2"
+        private const val TRANSFERS_CHANNEL_ID = "conest_transfers"
         private const val LEGACY_CALL_CHANNEL_ID = "conest_calls"
 
         @Volatile

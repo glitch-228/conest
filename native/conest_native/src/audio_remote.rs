@@ -96,12 +96,15 @@ impl RemoteStream {
 
 pub(super) struct RemoteMixer {
     streams: BTreeMap<u16, RemoteStream>,
+    /// Each participant's volume as set on this device (1 when unset).
+    volumes: BTreeMap<u16, f32>,
 }
 
 impl RemoteMixer {
     pub fn new() -> opus::Result<Self> {
         let mut mixer = Self {
             streams: BTreeMap::new(),
+            volumes: BTreeMap::new(),
         };
         // The unchanged public 1:1 ABI always addresses stream zero.
         mixer.set_active(0, true)?;
@@ -120,6 +123,20 @@ impl RemoteMixer {
             self.streams.insert(participant, RemoteStream::new()?);
         }
         Ok(true)
+    }
+
+    /// A participant's volume (0 to 2), kept across their stream restarting.
+    pub fn set_volume(&mut self, participant: u16, gain: f32) -> bool {
+        if participant >= MAX_REMOTE_STREAMS || !gain.is_finite() {
+            return false;
+        }
+        let gain = gain.clamp(0.0, 2.0);
+        if (gain - 1.0).abs() < f32::EPSILON {
+            self.volumes.remove(&participant);
+        } else {
+            self.volumes.insert(participant, gain);
+        }
+        true
     }
 
     pub fn push(&mut self, participant: u16, sequence: u64, packet: &[u8], now: Instant) -> bool {
@@ -163,9 +180,14 @@ impl RemoteMixer {
     pub fn render(&mut self, now: Instant) -> Option<[f32; FRAME_SAMPLES]> {
         let mut mixed = [0.0; FRAME_SAMPLES];
         let mut any_ready = false;
-        for stream in self.streams.values_mut() {
+        for (participant, stream) in self.streams.iter_mut() {
             let mut frame = [0.0; FRAME_SAMPLES];
             any_ready |= stream.render(now, &mut frame);
+            if let Some(gain) = self.volumes.get(participant) {
+                for sample in &mut frame {
+                    *sample *= gain;
+                }
+            }
             add_frame(&mut mixed, &frame);
         }
         if !any_ready {
@@ -220,6 +242,31 @@ mod tests {
         assert_eq!(mixer.level(1), 0.75);
         assert!(!mixer.set_active(MAX_REMOTE_STREAMS, true).unwrap());
         assert_eq!(mixer.streams.len(), 16);
+    }
+
+    #[test]
+    fn a_participant_volume_scales_only_that_stream() {
+        let now = Instant::now();
+        let mut mixer = RemoteMixer::new().unwrap();
+        mixer.set_active(1, true).unwrap();
+        assert!(mixer.set_volume(1, 0.5));
+        assert!(!mixer.set_volume(MAX_REMOTE_STREAMS, 0.5));
+        assert!(!mixer.set_volume(1, f32::NAN) || mixer.volumes[&1] == 0.5);
+        for id in [0, 1] {
+            mixer
+                .streams
+                .get_mut(&id)
+                .unwrap()
+                .pcm
+                .extend([0.2; FRAME_SAMPLES]);
+        }
+        let mixed = mixer.render(now).unwrap();
+        // 0.2 (stream 0) + 0.2 * 0.5 (stream 1).
+        assert!(mixed.iter().all(|&s| (s - 0.3).abs() < 1e-6));
+        // The level shows who speaks, whatever the volume.
+        assert_eq!(mixer.level(1), 0.2);
+        assert!(mixer.set_volume(1, 1.0));
+        assert!(mixer.volumes.is_empty());
     }
 
     #[test]

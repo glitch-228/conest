@@ -5598,6 +5598,144 @@ class AppLocalizationsId extends AppLocalizations {
   String get notificationPreviewHidden => 'Tidak ada';
 
   @override
+  String get voiceSettingsTitle => 'Suara';
+
+  @override
+  String get voiceInputDevice => 'Mikrofon';
+
+  @override
+  String get voiceOutputDevice => 'Speaker atau headphone';
+
+  @override
+  String get voiceSystemDefault => 'Bawaan sistem';
+
+  @override
+  String get voiceInputVolume => 'Volume mikrofon';
+
+  @override
+  String get voiceOutputVolume => 'Volume suara';
+
+  @override
+  String get voiceMicTest => 'Periksa mikrofon';
+
+  @override
+  String get voiceMicTestStart => 'Periksa';
+
+  @override
+  String get voiceMicTestStop => 'Berhenti';
+
+  @override
+  String get voiceMicTestLoopback => 'Dengar suara sendiri';
+
+  @override
+  String get voiceMicTestUnavailable =>
+      'Tes mikrofon tidak tersedia sekarang (sedang panggilan, atau versi ini tanpa audio panggilan).';
+
+  @override
+  String get voiceInputMode => 'Kirim suara saya';
+
+  @override
+  String get voiceInputModeAlways => 'Selalu';
+
+  @override
+  String get voiceInputModeActivity => 'Saat saya bicara';
+
+  @override
+  String get voiceInputModePushToTalk => 'Tekan untuk bicara';
+
+  @override
+  String get voiceSensitivityAutomatic => 'Atur sensitivitas otomatis';
+
+  @override
+  String get voiceSensitivity => 'Sensitivitas';
+
+  @override
+  String get voicePushToTalkKey => 'Tombol tekan untuk bicara';
+
+  @override
+  String get voicePushToTalkKeyNone => 'Hanya tombol panggilan';
+
+  @override
+  String get voicePushToTalkKeyPress => 'Tekan sebuah tombol…';
+
+  @override
+  String get voicePushToTalkKeyHint => 'berfungsi saat Conest di depan';
+
+  @override
+  String get voiceClear => 'Hapus';
+
+  @override
+  String get voiceProcessing => 'Pemrosesan';
+
+  @override
+  String get voiceNoiseSuppression => 'Peredam bising';
+
+  @override
+  String get voiceEchoCancellation => 'Peredam gema';
+
+  @override
+  String get voiceAutoGain => 'Volume otomatis';
+
+  @override
+  String get voiceCallSounds => 'Suara panggilan';
+
+  @override
+  String get voiceCallSoundsHint => 'Panggilan masuk tetap berdering.';
+
+  @override
+  String get voiceDevicesOnPhone =>
+      'Di Android, ponsel memilih mikrofon dan speaker untuk panggilan.';
+
+  @override
+  String get voiceSettingsButton => 'Pengaturan suara';
+
+  @override
+  String voiceParticipantVolume(String name) {
+    return 'Volume $name';
+  }
+
+  @override
+  String get voiceHoldToTalk => 'Tahan untuk bicara';
+
+  @override
+  String get quietHoursTitle => 'Jam tenang';
+
+  @override
+  String get quietHoursHint =>
+      'Notifikasi tetap muncul, tanpa suara atau getar.';
+
+  @override
+  String quietHoursFrom(String time) {
+    return 'Dari $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'Sampai $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'Panggilan tetap berdering';
+
+  @override
+  String get muteForHour => 'Selama 1 jam';
+
+  @override
+  String get muteForEightHours => 'Selama 8 jam';
+
+  @override
+  String get muteForDay => 'Selama 1 hari';
+
+  @override
+  String get muteUntilUnmuted => 'Sampai saya aktifkan lagi';
+
+  @override
+  String get notifyMentionsOnly => 'Beri tahu hanya saat disebut';
+
+  @override
+  String get notifyAllMessages => 'Beri tahu semua pesan';
+
+  @override
   String get relayAccessTitle => 'Akses relay';
 
   @override
