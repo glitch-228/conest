@@ -5666,4 +5666,36 @@ class AppLocalizationsFa extends AppLocalizations {
   String relayAccessFailed(String error) {
     return 'ثبت‌نام ممکن نشد: $error';
   }
+
+  @override
+  String get circumventionTitle => 'دور زدن سانسور';
+
+  @override
+  String get circumventionIntro =>
+      'برای شبکه‌هایی که Conest را مسدود یا فیلتر می‌کنند. «خودکار» این‌ها را فقط در شبکه‌هایی روشن می‌کند که به نظر می‌رسد مسیرها مسدودند.';
+
+  @override
+  String get circumventionPrivateDns => 'جست‌وجوی خصوصی نام‌ها (DNS روی HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting => 'تکه‌تکه کردن سلامِ اتصال امن';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'از فیلترهای ساده پنهان می‌کند به کدام سرور وصل می‌شوید.';
+
+  @override
+  String get circumventionAutomatic => 'خودکار';
+
+  @override
+  String get circumventionAlways => 'همیشه';
+
+  @override
+  String get circumventionNever => 'خاموش';
+
+  @override
+  String get circumventionActiveHere => 'در این شبکه در حال استفاده است.';
+
+  @override
+  String get circumventionIdleHere => 'در این شبکه استفاده نمی‌شود.';
 }

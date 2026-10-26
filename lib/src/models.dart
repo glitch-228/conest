@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 
+import 'circumvention/circumvention.dart';
 import 'links/link_preview_data.dart';
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
@@ -713,6 +714,7 @@ class GlobalConnectivityPreferences {
     this.irohTransferLimitEnabled = true,
     this.shareIdentifyingCarriersWithGroups = false,
     this.contentRefusals = ContentRefusals.none,
+    this.circumvention = const CircumventionPreferences(),
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -733,6 +735,9 @@ class GlobalConnectivityPreferences {
   final bool lanEnabled;
   final bool onlineEnabled;
   final bool irohRelayEnabled;
+
+  /// Censorship circumvention: private DNS and split TLS greetings (M38).
+  final CircumventionPreferences circumvention;
 
   /// Empty uses Iroh's standard N0 relay set. A non-empty list replaces it.
   final List<String> irohRelayUrls;
@@ -779,8 +784,10 @@ class GlobalConnectivityPreferences {
     bool? shareIdentifyingCarriersWithGroups,
     ContentRefusals? contentRefusals,
     Map<TransportKind, TransportPolicy>? transportPolicies,
+    CircumventionPreferences? circumvention,
   }) {
     return GlobalConnectivityPreferences(
+      circumvention: circumvention ?? this.circumvention,
       contentRefusals: contentRefusals ?? this.contentRefusals,
       shareIdentifyingCarriersWithGroups:
           shareIdentifyingCarriersWithGroups ??
@@ -812,6 +819,7 @@ class GlobalConnectivityPreferences {
     if (shareIdentifyingCarriersWithGroups)
       'shareIdentifyingCarriersWithGroups': true,
     if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
+    if (!circumvention.isDefault) 'circumvention': circumvention.toJson(),
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -832,6 +840,7 @@ class GlobalConnectivityPreferences {
       shareIdentifyingCarriersWithGroups:
           json['shareIdentifyingCarriersWithGroups'] == true,
       contentRefusals: ContentRefusals.fromJson(json['contentRefusals']),
+      circumvention: CircumventionPreferences.fromJson(json['circumvention']),
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])

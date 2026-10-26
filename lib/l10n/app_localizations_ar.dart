@@ -5796,4 +5796,36 @@ class AppLocalizationsAr extends AppLocalizations {
   String relayAccessFailed(String error) {
     return 'تعذّر التسجيل: $error';
   }
+
+  @override
+  String get circumventionTitle => 'تجاوز الرقابة';
+
+  @override
+  String get circumventionIntro =>
+      'للشبكات التي تحجب Conest أو ترشّحه. «تلقائي» يشغّلها فقط على الشبكات التي يبدو أن الطرق فيها محجوبة.';
+
+  @override
+  String get circumventionPrivateDns => 'بحث خاص عن الأسماء (DNS عبر HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting => 'تقسيم تحية الاتصال الآمن';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'يخفي عن المرشِّحات البسيطة الخادم الذي تتصل به.';
+
+  @override
+  String get circumventionAutomatic => 'تلقائي';
+
+  @override
+  String get circumventionAlways => 'دائمًا';
+
+  @override
+  String get circumventionNever => 'متوقف';
+
+  @override
+  String get circumventionActiveHere => 'قيد الاستخدام على هذه الشبكة.';
+
+  @override
+  String get circumventionIdleHere => 'غير مستخدم على هذه الشبكة.';
 }

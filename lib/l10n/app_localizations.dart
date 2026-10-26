@@ -9010,6 +9010,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Could not register: {error}'**
   String relayAccessFailed(String error);
+
+  /// Settings section: censorship circumvention.
+  ///
+  /// In en, this message translates to:
+  /// **'Censorship circumvention'**
+  String get circumventionTitle;
+
+  /// Censorship circumvention: what the section is for.
+  ///
+  /// In en, this message translates to:
+  /// **'For networks that block or filter Conest. Automatic turns these on only on networks where routes seem blocked.'**
+  String get circumventionIntro;
+
+  /// Censorship circumvention: DNS over HTTPS.
+  ///
+  /// In en, this message translates to:
+  /// **'Private name lookups (DNS over HTTPS)'**
+  String get circumventionPrivateDns;
+
+  /// Censorship circumvention: TLS ClientHello fragmentation.
+  ///
+  /// In en, this message translates to:
+  /// **'Split secure-connection greetings'**
+  String get circumventionSplitGreeting;
+
+  /// Censorship circumvention: what splitting does.
+  ///
+  /// In en, this message translates to:
+  /// **'Hides which server you connect to from simple filters.'**
+  String get circumventionSplitGreetingHint;
+
+  /// Censorship circumvention choice: automatic.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic'**
+  String get circumventionAutomatic;
+
+  /// Censorship circumvention choice: always.
+  ///
+  /// In en, this message translates to:
+  /// **'Always'**
+  String get circumventionAlways;
+
+  /// Censorship circumvention choice: off.
+  ///
+  /// In en, this message translates to:
+  /// **'Off'**
+  String get circumventionNever;
+
+  /// Censorship circumvention: in use on this network.
+  ///
+  /// In en, this message translates to:
+  /// **'In use on this network.'**
+  String get circumventionActiveHere;
+
+  /// Censorship circumvention: not in use on this network.
+  ///
+  /// In en, this message translates to:
+  /// **'Not in use on this network.'**
+  String get circumventionIdleHere;
 }
 
 class _AppLocalizationsDelegate

@@ -1474,5 +1474,15 @@
   "relayAccessPasswordLabel": "密码",
   "relayAccessRegister": "注册",
   "relayAccessRegisteredNow": "已注册。",
-  "relayAccessFailed": "无法注册：{error}"
+  "relayAccessFailed": "无法注册：{error}",
+  "circumventionTitle": "规避审查",
+  "circumventionIntro": "用于屏蔽或过滤 Conest 的网络。“自动”只在路由似乎被屏蔽的网络上开启。",
+  "circumventionPrivateDns": "私密域名解析（DNS over HTTPS）",
+  "circumventionSplitGreeting": "拆分安全连接的握手问候",
+  "circumventionSplitGreetingHint": "让简单的过滤器看不出您连接的是哪台服务器。",
+  "circumventionAutomatic": "自动",
+  "circumventionAlways": "始终",
+  "circumventionNever": "关闭",
+  "circumventionActiveHere": "在此网络上使用中。",
+  "circumventionIdleHere": "在此网络上未使用。"
 }

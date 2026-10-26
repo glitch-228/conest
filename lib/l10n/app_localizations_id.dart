@@ -5654,4 +5654,37 @@ class AppLocalizationsId extends AppLocalizations {
   String relayAccessFailed(String error) {
     return 'Tidak dapat mendaftar: $error';
   }
+
+  @override
+  String get circumventionTitle => 'Menghindari sensor';
+
+  @override
+  String get circumventionIntro =>
+      'Untuk jaringan yang memblokir atau menyaring Conest. Otomatis menyalakannya hanya di jaringan yang tampaknya memblokir rute.';
+
+  @override
+  String get circumventionPrivateDns =>
+      'Pencarian nama privat (DNS lewat HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting => 'Pecah salam koneksi aman';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'Menyembunyikan server yang Anda hubungi dari penyaring sederhana.';
+
+  @override
+  String get circumventionAutomatic => 'Otomatis';
+
+  @override
+  String get circumventionAlways => 'Selalu';
+
+  @override
+  String get circumventionNever => 'Mati';
+
+  @override
+  String get circumventionActiveHere => 'Dipakai di jaringan ini.';
+
+  @override
+  String get circumventionIdleHere => 'Tidak dipakai di jaringan ini.';
 }

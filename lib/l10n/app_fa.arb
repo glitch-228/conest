@@ -1474,5 +1474,15 @@
   "relayAccessPasswordLabel": "گذرواژه",
   "relayAccessRegister": "ثبت‌نام",
   "relayAccessRegisteredNow": "ثبت شد.",
-  "relayAccessFailed": "ثبت‌نام ممکن نشد: {error}"
+  "relayAccessFailed": "ثبت‌نام ممکن نشد: {error}",
+  "circumventionTitle": "دور زدن سانسور",
+  "circumventionIntro": "برای شبکه‌هایی که Conest را مسدود یا فیلتر می‌کنند. «خودکار» این‌ها را فقط در شبکه‌هایی روشن می‌کند که به نظر می‌رسد مسیرها مسدودند.",
+  "circumventionPrivateDns": "جست‌وجوی خصوصی نام‌ها (DNS روی HTTPS)",
+  "circumventionSplitGreeting": "تکه‌تکه کردن سلامِ اتصال امن",
+  "circumventionSplitGreetingHint": "از فیلترهای ساده پنهان می‌کند به کدام سرور وصل می‌شوید.",
+  "circumventionAutomatic": "خودکار",
+  "circumventionAlways": "همیشه",
+  "circumventionNever": "خاموش",
+  "circumventionActiveHere": "در این شبکه در حال استفاده است.",
+  "circumventionIdleHere": "در این شبکه استفاده نمی‌شود."
 }

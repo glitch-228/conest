@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../circumvention/circumvention.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -18,7 +19,13 @@ typedef NostrSocketConnector = Future<NostrSocket> Function(Uri url);
 
 /// Opens a real WebSocket.
 Future<NostrSocket> connectNostrSocket(Uri url) async {
-  final connecting = WebSocket.connect(url.toString());
+  final circumvention = Circumvention.instance;
+  HttpClient? client;
+  if (circumvention.anyActive) {
+    client = HttpClient();
+    await circumvention.configure(client);
+  }
+  final connecting = WebSocket.connect(url.toString(), customClient: client);
   try {
     return _IoNostrSocket(
       await connecting.timeout(const Duration(seconds: 15)),

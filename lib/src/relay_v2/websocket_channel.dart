@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../circumvention/circumvention.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -38,13 +39,15 @@ class WebSocketRelayChannel implements RelayByteChannel {
     required bool allowUntrustedCertificate,
     Duration timeout = const Duration(seconds: 8),
   }) async {
-    final socket = await SecureSocket.connect(
-      host,
-      port,
-      timeout: timeout,
-      supportedProtocols: const ['http/1.1'],
-      onBadCertificate: (_) => allowUntrustedCertificate,
-    ).timeout(timeout);
+    final socket = await Circumvention.instance
+        .secureConnect(
+          host,
+          port,
+          timeout: timeout,
+          supportedProtocols: const ['http/1.1'],
+          onBadCertificate: (_) => allowUntrustedCertificate,
+        )
+        .timeout(timeout);
     try {
       socket.setOption(SocketOption.tcpNoDelay, true);
     } on Object {

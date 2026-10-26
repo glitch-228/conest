@@ -5666,4 +5666,36 @@ class AppLocalizationsEn extends AppLocalizations {
   String relayAccessFailed(String error) {
     return 'Could not register: $error';
   }
+
+  @override
+  String get circumventionTitle => 'Censorship circumvention';
+
+  @override
+  String get circumventionIntro =>
+      'For networks that block or filter Conest. Automatic turns these on only on networks where routes seem blocked.';
+
+  @override
+  String get circumventionPrivateDns => 'Private name lookups (DNS over HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting => 'Split secure-connection greetings';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'Hides which server you connect to from simple filters.';
+
+  @override
+  String get circumventionAutomatic => 'Automatic';
+
+  @override
+  String get circumventionAlways => 'Always';
+
+  @override
+  String get circumventionNever => 'Off';
+
+  @override
+  String get circumventionActiveHere => 'In use on this network.';
+
+  @override
+  String get circumventionIdleHere => 'Not in use on this network.';
 }

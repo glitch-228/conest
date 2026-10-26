@@ -1474,5 +1474,15 @@
   "relayAccessPasswordLabel": "كلمة المرور",
   "relayAccessRegister": "تسجيل",
   "relayAccessRegisteredNow": "تم التسجيل.",
-  "relayAccessFailed": "تعذّر التسجيل: {error}"
+  "relayAccessFailed": "تعذّر التسجيل: {error}",
+  "circumventionTitle": "تجاوز الرقابة",
+  "circumventionIntro": "للشبكات التي تحجب Conest أو ترشّحه. «تلقائي» يشغّلها فقط على الشبكات التي يبدو أن الطرق فيها محجوبة.",
+  "circumventionPrivateDns": "بحث خاص عن الأسماء (DNS عبر HTTPS)",
+  "circumventionSplitGreeting": "تقسيم تحية الاتصال الآمن",
+  "circumventionSplitGreetingHint": "يخفي عن المرشِّحات البسيطة الخادم الذي تتصل به.",
+  "circumventionAutomatic": "تلقائي",
+  "circumventionAlways": "دائمًا",
+  "circumventionNever": "متوقف",
+  "circumventionActiveHere": "قيد الاستخدام على هذه الشبكة.",
+  "circumventionIdleHere": "غير مستخدم على هذه الشبكة."
 }

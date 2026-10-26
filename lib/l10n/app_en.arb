@@ -8458,5 +8458,45 @@
         "type": "String"
       }
     }
+  },
+  "circumventionTitle": "Censorship circumvention",
+  "@circumventionTitle": {
+    "description": "Settings section: censorship circumvention."
+  },
+  "circumventionIntro": "For networks that block or filter Conest. Automatic turns these on only on networks where routes seem blocked.",
+  "@circumventionIntro": {
+    "description": "Censorship circumvention: what the section is for."
+  },
+  "circumventionPrivateDns": "Private name lookups (DNS over HTTPS)",
+  "@circumventionPrivateDns": {
+    "description": "Censorship circumvention: DNS over HTTPS."
+  },
+  "circumventionSplitGreeting": "Split secure-connection greetings",
+  "@circumventionSplitGreeting": {
+    "description": "Censorship circumvention: TLS ClientHello fragmentation."
+  },
+  "circumventionSplitGreetingHint": "Hides which server you connect to from simple filters.",
+  "@circumventionSplitGreetingHint": {
+    "description": "Censorship circumvention: what splitting does."
+  },
+  "circumventionAutomatic": "Automatic",
+  "@circumventionAutomatic": {
+    "description": "Censorship circumvention choice: automatic."
+  },
+  "circumventionAlways": "Always",
+  "@circumventionAlways": {
+    "description": "Censorship circumvention choice: always."
+  },
+  "circumventionNever": "Off",
+  "@circumventionNever": {
+    "description": "Censorship circumvention choice: off."
+  },
+  "circumventionActiveHere": "In use on this network.",
+  "@circumventionActiveHere": {
+    "description": "Censorship circumvention: in use on this network."
+  },
+  "circumventionIdleHere": "Not in use on this network.",
+  "@circumventionIdleHere": {
+    "description": "Censorship circumvention: not in use on this network."
   }
 }

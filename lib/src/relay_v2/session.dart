@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../circumvention/circumvention.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -27,11 +28,9 @@ class SocketRelayChannel implements RelayByteChannel {
     int port, {
     Duration timeout = const Duration(seconds: 8),
   }) async {
-    final socket = await Socket.connect(
-      host,
-      port,
-      timeout: timeout,
-    ).timeout(timeout);
+    final socket = await Circumvention.instance
+        .connect(host, port, timeout: timeout)
+        .timeout(timeout);
     try {
       socket.setOption(SocketOption.tcpNoDelay, true);
     } on Object {

@@ -1474,5 +1474,15 @@
   "relayAccessPasswordLabel": "Пароль",
   "relayAccessRegister": "Зарегистрироваться",
   "relayAccessRegisteredNow": "Зарегистрировано.",
-  "relayAccessFailed": "Не удалось зарегистрироваться: {error}"
+  "relayAccessFailed": "Не удалось зарегистрироваться: {error}",
+  "circumventionTitle": "Обход цензуры",
+  "circumventionIntro": "Для сетей, которые блокируют или фильтруют Conest. «Автоматически» включает это только в сетях, где маршруты похоже заблокированы.",
+  "circumventionPrivateDns": "Частный поиск имён (DNS через HTTPS)",
+  "circumventionSplitGreeting": "Разделять приветствие защищённого соединения",
+  "circumventionSplitGreetingHint": "Скрывает от простых фильтров, к какому серверу вы подключаетесь.",
+  "circumventionAutomatic": "Автоматически",
+  "circumventionAlways": "Всегда",
+  "circumventionNever": "Выкл.",
+  "circumventionActiveHere": "Используется в этой сети.",
+  "circumventionIdleHere": "Не используется в этой сети."
 }

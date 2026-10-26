@@ -5416,4 +5416,34 @@ class AppLocalizationsZh extends AppLocalizations {
   String relayAccessFailed(String error) {
     return '无法注册：$error';
   }
+
+  @override
+  String get circumventionTitle => '规避审查';
+
+  @override
+  String get circumventionIntro => '用于屏蔽或过滤 Conest 的网络。“自动”只在路由似乎被屏蔽的网络上开启。';
+
+  @override
+  String get circumventionPrivateDns => '私密域名解析（DNS over HTTPS）';
+
+  @override
+  String get circumventionSplitGreeting => '拆分安全连接的握手问候';
+
+  @override
+  String get circumventionSplitGreetingHint => '让简单的过滤器看不出您连接的是哪台服务器。';
+
+  @override
+  String get circumventionAutomatic => '自动';
+
+  @override
+  String get circumventionAlways => '始终';
+
+  @override
+  String get circumventionNever => '关闭';
+
+  @override
+  String get circumventionActiveHere => '在此网络上使用中。';
+
+  @override
+  String get circumventionIdleHere => '在此网络上未使用。';
 }

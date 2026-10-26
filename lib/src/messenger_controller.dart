@@ -44,6 +44,7 @@ import 'email/delta_content.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
+import 'circumvention/circumvention.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
 import 'media_sanitizer.dart';
@@ -4570,7 +4571,21 @@ class MessengerController extends ChangeNotifier {
       _networkHistory.failed(route, routeFailureKindOf(error), now);
     }
     _networkHistoryChanged = true;
+    _syncCircumvention();
   }
+
+  /// Censorship circumvention follows the preferences and what this
+  /// network seems to block (M38).
+  void _syncCircumvention() => Circumvention.instance.update(
+    preferences: _snapshot.identity?.connectivity.circumvention,
+    blockedHere: _networkHistory.blockedHere().isNotEmpty,
+  );
+
+  /// Whether private DNS or split TLS greetings are in use now.
+  ({bool privateDns, bool splitGreeting}) get circumventionInUse => (
+    privateDns: Circumvention.instance.privateDnsActive,
+    splitGreeting: Circumvention.instance.splitGreetingActive,
+  );
 
   /// The network now in use ([label]: connectivity_plus's names, such as
   /// "wifi,vpn"), told apart by its kind and this device's LAN subnets.
@@ -4609,6 +4624,7 @@ class MessengerController extends ChangeNotifier {
       now: _now(),
     );
     _networkHistoryChanged = true;
+    _syncCircumvention();
     if (_disposed) return;
     unawaited(_saveSnapshotSilently(debounce: true).catchError((Object _) {}));
   }
@@ -10814,6 +10830,7 @@ class MessengerController extends ChangeNotifier {
         'Connectivity is fully off. The app will not send or receive.',
     };
     await _persist(label);
+    _syncCircumvention();
   }
 
   static const int recommendedIrohTransferLimitBytes = 100 * 1024 * 1024;
@@ -29422,6 +29439,7 @@ class MessengerController extends ChangeNotifier {
       );
       RelayClient.setRelayTokens(_snapshot.relayTokens);
       _refreshRelayTokenIfDue(route);
+      _syncCircumvention();
       _registerHiddenRelayPaths(me);
     }
     var key = _pinnedIdentityKeyForRoute(route);
