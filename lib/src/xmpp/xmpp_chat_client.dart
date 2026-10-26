@@ -2,7 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
+import 'omemo/omemo_engine.dart';
+import 'omemo/omemo_suite.dart';
+import 'omemo/omemo_xml.dart';
 import 'xmpp_chats.dart';
+import 'xmpp_omemo.dart';
 import 'xmpp_session.dart';
 import 'xmpp_socket.dart';
 import 'xmpp_xml.dart';
@@ -106,6 +110,7 @@ class XmppChatClient {
     required XmppChats Function() chats,
     required void Function(XmppChats chats) save,
     required this.sendReadMarkers,
+    this.omemo,
     this.httpPut = xmppHttpPut,
     this.log,
     DateTime Function()? now,
@@ -123,6 +128,9 @@ class XmppChatClient {
 
   /// Whether read markers go out (Conest's read-receipt setting).
   final bool Function() sendReadMarkers;
+
+  /// End-to-end encryption (OMEMO), if available.
+  final XmppOmemo? omemo;
   final XmppHttpPut httpPut;
   final void Function(String line)? log;
   final DateTime Function() _now;
@@ -189,6 +197,7 @@ class XmppChatClient {
       _enableCarbons(),
       _discoverUpload(),
     ]);
+    await _setUpOmemo();
     await _catchUp(null);
     final rooms = chats.chats.values.where(
       (chat) => chat.room && !chat.request,
@@ -200,6 +209,16 @@ class XmppChatClient {
           log?.call('XMPP chats: history of ${room.jid} failed: $error');
         }),
       );
+    }
+  }
+
+  Future<void> _setUpOmemo() async {
+    final o = omemo;
+    if (o == null) return;
+    try {
+      await o.setUp();
+    } catch (error) {
+      log?.call('XMPP chats: OMEMO could not be set up: $error');
     }
   }
 
@@ -468,6 +487,9 @@ class XmppChatClient {
     String? archiveId,
     bool fromArchive = false,
     String? archiveRoom,
+    bool decrypted = false,
+    XmppSecurity security = XmppSecurity.plain,
+    String? securityNote,
   }) {
     final type = message.attr('type') ?? 'normal';
     final from = message.attr('from');
@@ -491,6 +513,36 @@ class XmppChatClient {
     final room = type == 'groupchat';
     final fromBare = bareJid(from);
     if (fromBare == null && !(fromArchive && archiveRoom == null)) return;
+    if (!decrypted && omemo != null && !room) {
+      final encrypted = message.children
+          .where(
+            (child) =>
+                child.name == 'encrypted' &&
+                OmemoVersion.byNamespace(child.xmlns) != null,
+          )
+          .firstOrNull;
+      if (encrypted != null) {
+        final toBare = bareJid(to);
+        final outgoingCopy = carbonSent || (fromBare ?? own) == own;
+        final peer = outgoingCopy ? toBare : fromBare;
+        if (peer == null || (peer == own && !outgoingCopy)) return;
+        if (chats.blocked.contains(peer)) return;
+        unawaited(
+          _readEncrypted(
+            message,
+            encrypted,
+            sender: outgoingCopy ? own : peer,
+            peer: peer,
+            carbonSent: carbonSent,
+            delayed: delayed,
+            archiveId: archiveId,
+            fromArchive: fromArchive,
+            archiveRoom: archiveRoom,
+          ),
+        );
+        return;
+      }
+    }
     final String chatJid;
     final String sender;
     final bool outgoing;
@@ -587,7 +639,15 @@ class XmppChatClient {
         _update(
           (chats) => chats.updateMessage(
             chatJid,
-            (m) => m.id == target && m.from == sender && !m.retracted,
+            (m) =>
+                m.id == target &&
+                m.from == sender &&
+                !m.retracted &&
+                // A correction of an encrypted message must itself be
+                // encrypted: a server could forge a plain one.
+                (m.security == XmppSecurity.plain ||
+                    (security != XmppSecurity.plain &&
+                        security != XmppSecurity.unreadable)),
             (m) => m.copyWith(text: boundedXmppText(body), editedAt: at),
           ),
         );
@@ -632,7 +692,9 @@ class XmppChatClient {
         return;
       }
     }
-    if (body == null || body.trim().isEmpty) return;
+    final unreadable = security == XmppSecurity.unreadable;
+    if ((body == null || body.trim().isEmpty) && !unreadable) return;
+    final bodyText = body ?? '';
     final id =
         message.child('origin-id', XmppNs.stanzaId)?.attr('id') ??
         message.attr('id') ??
@@ -660,7 +722,7 @@ class XmppChatClient {
     if (known == null && request && _requestCount() >= maxRequests) return;
     final reply = message.child('reply', XmppNs.reply);
     final oob = message.child('x', XmppNs.oob)?.childText('url')?.trim();
-    final fileUrl = oob != null && oob == body.trim() && _isHttpsUrl(oob)
+    final fileUrl = oob != null && oob == bodyText.trim() && _isHttpsUrl(oob)
         ? oob
         : null;
     _update(
@@ -670,9 +732,11 @@ class XmppChatClient {
           id: id,
           stanzaId: stanzaId,
           from: sender,
-          text: boundedXmppText(body),
+          text: boundedXmppText(bodyText),
           at: at,
           outgoing: outgoing,
+          security: security,
+          securityNote: securityNote,
           replyTo: reply?.attr('id'),
           replySnippet: () {
             final quoted = known?.messages
@@ -715,6 +779,61 @@ class XmppChatClient {
     }
   }
 
+  /// Reads an encrypted message (in order, one at a time), then handles it
+  /// as if it had arrived in the clear, marked with how it was protected.
+  Future<void> _readEncrypted(
+    XmppElement message,
+    XmppElement encrypted, {
+    required String sender,
+    required String peer,
+    required bool carbonSent,
+    required DateTime? delayed,
+    required String? archiveId,
+    required bool fromArchive,
+    required String? archiveRoom,
+  }) async {
+    final o = omemo!;
+    try {
+      final received = await o.decrypt(
+        encrypted: encrypted,
+        sender: sender,
+        chat: peer,
+      );
+      if (!_started) return;
+      if (received == null) return;
+      final XmppElement merged;
+      var security = XmppSecurity.plain;
+      String? note;
+      if (received.readable) {
+        merged = omemoDecryptedMessage(message, received);
+        if (received.trust == OmemoTrust.distrusted) {
+          security = XmppSecurity.untrusted;
+        } else {
+          security = received.version == OmemoVersion.v2
+              ? XmppSecurity.omemo2
+              : XmppSecurity.legacyOmemo;
+        }
+      } else {
+        merged = omemoDecryptedMessage(message, received);
+        security = XmppSecurity.unreadable;
+        note = received.failure;
+      }
+      _onChatMessage(
+        merged,
+        carbonSent: carbonSent,
+        delayed: delayed,
+        archiveId: archiveId,
+        fromArchive: fromArchive,
+        archiveRoom: archiveRoom,
+        decrypted: true,
+        security: security,
+        securityNote: note,
+      );
+    } catch (error) {
+      log?.call('XMPP chats: an encrypted message could not be read: $error');
+    }
+  }
+
   int _requestCount() =>
       chats.chats.values.where((chat) => chat.request).length;
 
@@ -747,6 +866,85 @@ class XmppChatClient {
     final now = _now().toUtc();
     if (at == null) return now;
     return at.isAfter(now.add(const Duration(minutes: 10))) ? now : at.toUtc();
+  }
+
+  // Encryption.
+
+  static XmppSecurity _securityOf(OmemoVersion version) =>
+      version == OmemoVersion.v2
+      ? XmppSecurity.omemo2
+      : XmppSecurity.legacyOmemo;
+
+  /// Whether a message to [chat] would be encrypted now. Fails (rather
+  /// than answering "no") when that cannot be told.
+  Future<bool> _wouldEncrypt(XmppChat chat) async =>
+      await _versionFor(chat) != null;
+
+  /// The OMEMO version to use for [chat], or null for plain messages.
+  /// Throws when the contact's keys cannot be read: never falls back to
+  /// plain text on its own.
+  Future<OmemoVersion?> _versionFor(XmppChat chat) async {
+    final o = omemo;
+    if (o == null || chat.room || chat.encryption == XmppChatEncryption.off) {
+      return null;
+    }
+    final version = await o.versionFor(chat.jid, refresh: true);
+    if (version == null && chat.encryption == XmppChatEncryption.on) {
+      throw StateError('${chat.jid} has no OMEMO devices.');
+    }
+    return version;
+  }
+
+  /// Moves the body of [stanza] into an OMEMO envelope when [chat] is
+  /// encrypted. Returns the version used, or null when it stays plain.
+  Future<OmemoVersion?> _encryptStanza(
+    XmppChat chat,
+    XmppElement stanza, {
+    bool mustEncrypt = false,
+  }) async {
+    final o = omemo;
+    final version = await _versionFor(chat);
+    if (version == null) {
+      if (mustEncrypt) {
+        throw StateError('This chat is encrypted and cannot be corrected '
+            'in the clear.');
+      }
+      return null;
+    }
+    if (o == null || o.engine == null) {
+      throw StateError('Encryption is not ready yet.');
+    }
+    final body = stanza.child('body');
+    if (body == null) return null;
+    final reply = stanza.child('reply', XmppNs.reply);
+    final inside = <XmppElement>[
+      body,
+      if (version == OmemoVersion.v2 && reply != null) reply,
+    ];
+    final plaintext = o.plaintextFor(
+      version: version,
+      to: chat.jid,
+      content: inside,
+      body: body.text,
+    );
+    final encrypted = await o.encrypt(
+      jid: chat.jid,
+      version: version,
+      plaintext: plaintext,
+    );
+    stanza.children.removeWhere(inside.contains);
+    for (final element in OmemoXml.fallback(version)) {
+      stanza.add(element);
+    }
+    stanza.add(encrypted);
+    return version;
+  }
+
+  /// Chooses how a chat is encrypted (the setting, not the keys).
+  void setEncryption(String jid, XmppChatEncryption mode) {
+    final chat = chats.chats[jid];
+    if (chat == null || chat.room) return;
+    _update((chats) => chats.withChat(chat.copyWith(encryption: mode)));
   }
 
   // Outgoing.
@@ -822,6 +1020,16 @@ class XmppChatClient {
       ),
     );
     try {
+      final version = await _encryptStanza(chat, stanza);
+      if (version != null) {
+        _update(
+          (chats) => chats.updateMessage(
+            jid,
+            (m) => m.outgoing && m.id == id,
+            (m) => m.copyWith(security: _securityOf(version)),
+          ),
+        );
+      }
       await session.send(stanza);
       _update(
         (chats) => chats.updateMessage(
@@ -855,17 +1063,22 @@ class XmppChatClient {
     if (trimmed.isEmpty || trimmed.length > XmppChats.maxTextChars) {
       throw ArgumentError('Not a valid correction.');
     }
-    await session.send(
-      _message(chat, session.newId())
-        ..add(XmppElement('body', text: trimmed))
-        ..add(
-          XmppElement(
-            'replace',
-            xmlns: XmppNs.correction,
-            attributes: {'id': id},
-          ),
+    final correction = _message(chat, session.newId())
+      ..add(XmppElement('body', text: trimmed))
+      ..add(
+        XmppElement(
+          'replace',
+          xmlns: XmppNs.correction,
+          attributes: {'id': id},
         ),
+      );
+    // An encrypted message is only ever corrected in encrypted form.
+    await _encryptStanza(
+      chat,
+      correction,
+      mustEncrypt: original.security != XmppSecurity.plain,
     );
+    await session.send(correction);
     _update(
       (chats) => chats.updateMessage(
         jid,
@@ -1115,6 +1328,12 @@ class XmppChatClient {
   Future<String> sendFile(String jid, File file, {String? contentType}) async {
     final service = _uploadService;
     if (service == null) throw StateError('This server takes no files.');
+    if (await _wouldEncrypt(_chat(jid))) {
+      throw StateError(
+        'Files are not encrypted yet. Turn encryption off for this chat to '
+        'send one.',
+      );
+    }
     final size = await file.length();
     if (_uploadMaxBytes case final max? when size > max) {
       throw ArgumentError(

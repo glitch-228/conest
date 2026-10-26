@@ -3,6 +3,30 @@ import 'dart:math';
 /// Where an outgoing XMPP message got to.
 enum XmppMessageState { sending, sent, delivered, read, failed }
 
+/// How a message was protected. Append only (stored by name).
+enum XmppSecurity {
+  /// Sent in the clear (as far as the XMPP stream goes).
+  plain,
+
+  /// OMEMO 2, end to end.
+  omemo2,
+
+  /// Legacy OMEMO (the Conversations/Dino/Gajim format). Shown as such, not
+  /// as "encrypted", until the implementation has been reviewed.
+  legacyOmemo,
+
+  /// Encrypted, but it could not be read here.
+  unreadable,
+
+  /// Encrypted by a device the user has refused.
+  untrusted,
+}
+
+/// What the user chose for a chat: encrypt when the contact has OMEMO
+/// devices (auto), never, or always (and refuse to send otherwise). Stored
+/// by name; append only.
+enum XmppChatEncryption { auto, off, on }
+
 /// One message in an XMPP chat (1:1 or group chat).
 class XmppChatMessage {
   const XmppChatMessage({
@@ -19,6 +43,8 @@ class XmppChatMessage {
     this.replySnippet,
     this.reactions = const {},
     this.fileUrl,
+    this.security = XmppSecurity.plain,
+    this.securityNote,
   });
 
   /// The id the sender gave (origin id), which corrections and receipts
@@ -48,6 +74,12 @@ class XmppChatMessage {
   /// A file shared by link (HTTP upload, XEP-0363 / XEP-0066).
   final String? fileUrl;
 
+  /// How the message was protected.
+  final XmppSecurity security;
+
+  /// Why an encrypted message could not be read, if so.
+  final String? securityNote;
+
   XmppChatMessage copyWith({
     String? stanzaId,
     String? text,
@@ -55,6 +87,8 @@ class XmppChatMessage {
     DateTime? editedAt,
     bool? retracted,
     Map<String, Set<String>>? reactions,
+    XmppSecurity? security,
+    String? securityNote,
   }) => XmppChatMessage(
     id: id,
     from: from,
@@ -69,6 +103,8 @@ class XmppChatMessage {
     replySnippet: replySnippet,
     reactions: reactions ?? this.reactions,
     fileUrl: fileUrl,
+    security: security ?? this.security,
+    securityNote: securityNote ?? this.securityNote,
   );
 
   Map<String, Object?> toJson() => {
@@ -89,6 +125,8 @@ class XmppChatMessage {
           key: value.toList(),
       },
     'file': ?fileUrl,
+    if (security != XmppSecurity.plain) 'sec': security.name,
+    'secNote': ?securityNote,
   };
 
   static XmppChatMessage? fromJson(Object? json) {
@@ -121,6 +159,9 @@ class XmppChatMessage {
             if (value is List) key: {...value.whereType<String>().take(256)},
       },
       fileUrl: json['file'] as String?,
+      security:
+          XmppSecurity.values.asNameMap()[json['sec']] ?? XmppSecurity.plain,
+      securityNote: json['secNote'] as String?,
     );
   }
 }
@@ -136,6 +177,7 @@ class XmppChat {
     this.messages = const [],
     this.unread = 0,
     this.lastStanzaId,
+    this.encryption = XmppChatEncryption.auto,
   });
 
   final String jid;
@@ -158,6 +200,9 @@ class XmppChat {
   /// The newest archived message seen, where history catch-up resumes.
   final String? lastStanzaId;
 
+  /// Whether messages here are encrypted (OMEMO).
+  final XmppChatEncryption encryption;
+
   XmppChat copyWith({
     bool? request,
     String? title,
@@ -165,6 +210,7 @@ class XmppChat {
     List<XmppChatMessage>? messages,
     int? unread,
     String? lastStanzaId,
+    XmppChatEncryption? encryption,
   }) => XmppChat(
     jid: jid,
     room: room,
@@ -174,6 +220,7 @@ class XmppChat {
     messages: messages ?? this.messages,
     unread: unread ?? this.unread,
     lastStanzaId: lastStanzaId ?? this.lastStanzaId,
+    encryption: encryption ?? this.encryption,
   );
 
   Map<String, Object?> toJson() => {
@@ -185,6 +232,7 @@ class XmppChat {
     'messages': [for (final message in messages) message.toJson()],
     if (unread > 0) 'unread': unread,
     'last': ?lastStanzaId,
+    if (encryption != XmppChatEncryption.auto) 'enc': encryption.name,
   };
 
   static XmppChat? fromJson(Object? json) {
@@ -205,6 +253,9 @@ class XmppChat {
       ],
       unread: (json['unread'] as int?) ?? 0,
       lastStanzaId: json['last'] as String?,
+      encryption:
+          XmppChatEncryption.values.asNameMap()[json['enc']] ??
+          XmppChatEncryption.auto,
     );
   }
 }

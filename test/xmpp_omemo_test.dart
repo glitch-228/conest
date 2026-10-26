@@ -8,7 +8,9 @@ import 'package:conest/src/xmpp/omemo/omemo_proto.dart';
 import 'package:conest/src/xmpp/omemo/omemo_random.dart';
 import 'package:conest/src/xmpp/omemo/omemo_ratchet.dart';
 import 'package:conest/src/xmpp/omemo/omemo_suite.dart';
+import 'package:conest/src/xmpp/omemo/omemo_xml.dart';
 import 'package:conest/src/xmpp/omemo/xeddsa.dart';
+import 'package:conest/src/xmpp/xmpp_xml.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Uint8List hex(String text) {
@@ -201,6 +203,139 @@ void main() {
       expect(
         () => ProtoReader.parse(Uint8List(70000)),
         throwsA(isA<OmemoProtoException>()),
+      );
+    });
+  });
+
+  group('stanzas', () {
+    for (final version in OmemoVersion.values) {
+      test(
+        '${version.name} bundles survive the wire and still verify',
+        () async {
+          final engine = await OmemoEngine.create(random: CountingRandom(21));
+          final bundle = await engine.ownBundle(version);
+          final xml = OmemoXml.bundle(bundle).toXml();
+          final parsed = OmemoXml.parseBundle(version, parseXmppElement(xml))!;
+          expect(parsed.signedPreKeyId, bundle.signedPreKeyId);
+          expect(toHex(parsed.signedPreKey), toHex(bundle.signedPreKey));
+          expect(
+            toHex(parsed.identityMontgomery),
+            toHex(bundle.identityMontgomery),
+          );
+          expect(parsed.preKeys.length, bundle.preKeys.length);
+          expect(await parsed.verify(), isTrue);
+        },
+      );
+
+      test('${version.name} bundles with wrong sizes are refused', () async {
+        final engine = await OmemoEngine.create(random: CountingRandom(22));
+        final element = parseXmppElement(
+          OmemoXml.bundle(await engine.ownBundle(version)).toXml(),
+        );
+        final key = version == OmemoVersion.legacy ? 'identityKey' : 'ik';
+        element.child(key)!.text = base64.encode(List.filled(5, 1));
+        expect(OmemoXml.parseBundle(version, element), isNull);
+        element.child(key)!.text = '!!! not base64 !!!';
+        expect(OmemoXml.parseBundle(version, element), isNull);
+      });
+
+      test('${version.name} device lists are bounded and cleaned', () {
+        final root = XmppElement(
+          version == OmemoVersion.legacy ? 'list' : 'devices',
+          xmlns: version.namespace,
+          children: [
+            for (var i = 0; i < 500; i++)
+              XmppElement('device', attributes: {'id': '${i + 1}'}),
+            XmppElement('device', attributes: {'id': 'abc'}),
+            XmppElement('device', attributes: {'id': '-4'}),
+          ],
+        );
+        final ids = OmemoXml.parseDeviceList(version, root)!;
+        expect(ids.length, OmemoXml.maxDevices);
+        expect(ids.every((id) => id > 0), isTrue);
+        expect(
+          OmemoXml.parseDeviceList(
+            version == OmemoVersion.legacy
+                ? OmemoVersion.v2
+                : OmemoVersion.legacy,
+            root,
+          ),
+          isNull,
+        );
+      });
+    }
+
+    test('the envelope names the sender and the conversation', () {
+      final xml = OmemoXml.envelope(
+        content: [XmppElement('body', text: 'hi <there> & you')],
+        to: 'bob@example.org',
+        from: 'alice@example.org',
+        at: DateTime.utc(2026, 10, 26),
+        padding: 'abc',
+      );
+      final ok = OmemoXml.parseEnvelope(
+        xml,
+        from: 'alice@example.org',
+        to: 'bob@example.org',
+      )!;
+      expect(ok.content.single.text, 'hi <there> & you');
+      expect(ok.at, DateTime.utc(2026, 10, 26));
+      // Moved to another conversation or claimed by another sender.
+      expect(
+        OmemoXml.parseEnvelope(
+          xml,
+          from: 'alice@example.org',
+          to: 'carol@example.org',
+        ),
+        isNull,
+      );
+      expect(
+        OmemoXml.parseEnvelope(
+          xml,
+          from: 'mallory@example.org',
+          to: 'bob@example.org',
+        ),
+        isNull,
+      );
+      expect(
+        OmemoXml.parseEnvelope('<x/>', from: 'a@b.c', to: 'd@e.f'),
+        isNull,
+      );
+      expect(
+        OmemoXml.parseEnvelope('not xml at all <<', from: 'a@b.c', to: 'd@e.f'),
+        isNull,
+      );
+    });
+
+    test('an oversized payload or key element is ignored', () {
+      final big = base64.encode(List.filled(OmemoXml.maxPayloadBytes + 10, 7));
+      final element = XmppElement(
+        'encrypted',
+        xmlns: OmemoVersion.v2.namespace,
+        children: [
+          XmppElement(
+            'header',
+            attributes: {'sid': '5'},
+            children: [
+              XmppElement(
+                'keys',
+                attributes: {'jid': 'me@example.org'},
+                children: [
+                  XmppElement('key', attributes: {'rid': '9'}, text: 'AAAA'),
+                ],
+              ),
+            ],
+          ),
+          XmppElement('payload', text: big),
+        ],
+      );
+      expect(
+        OmemoXml.parseEncrypted(
+          element,
+          ownJid: 'me@example.org',
+          ownDevice: 9,
+        ),
+        isNull,
       );
     });
   });

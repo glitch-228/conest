@@ -9,6 +9,8 @@ import 'package:conest/src/xmpp/xmpp_socket.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
 import 'package:crypto/crypto.dart';
 
+const _pubsubNs = 'http://jabber.org/protocol/pubsub';
+
 /// An in-memory XMPP server for tests: stream negotiation with STARTTLS,
 /// SASL (SCRAM-SHA-1/256 and PLAIN), in-band registration, resource
 /// binding, stream management with resumption, offline storage, rosters
@@ -60,6 +62,18 @@ class FakeXmppServer {
 
   /// Blocked addresses, by account.
   final Map<String, Set<String>> blocklists = {};
+
+  /// PEP items: account, node, item id to the published element.
+  final Map<String, Map<String, Map<String, XmppElement>>> pep = {};
+
+  /// Every PEP publish: account, node, item id, whether options came along.
+  final List<(String, String, String, bool)> pepPublishes = [];
+
+  /// Make publishes with options fail (a server with other defaults).
+  bool pepRejectOptions = false;
+
+  /// Accounts whose PEP reads fail with a transient error.
+  final Set<String> pepUnreadable = {};
 
   /// Upload slots handed out: the get URL and the file name.
   final List<(String, String)> uploads = [];
@@ -701,6 +715,11 @@ class _FakeConnection {
     final to = iq.attr('to');
     final ownBare = '$_user@${server.domain}';
     if (fullJid != null) {
+      if (iq.child('pubsub', _pubsubNs) case final pubsub?
+          when to == null || to.endsWith('@${server.domain}')) {
+        _pep(iq, pubsub, ownBare, result, error);
+        return;
+      }
       if (iq.child('query', XmppNs.mam) case final query?) {
         _mamQuery(iq, query, to == null ? null : bareJid(to), result);
         return;
@@ -899,6 +918,96 @@ class _FakeConnection {
       return;
     }
     _send(error('service-unavailable'));
+  }
+
+  /// Personal eventing (PEP): publish to the own account's nodes, read any
+  /// account's items. Items are kept as sent.
+  void _pep(
+    XmppElement iq,
+    XmppElement pubsub,
+    String ownBare,
+    XmppElement Function([List<XmppElement> children]) result,
+    XmppElement Function(String condition) error,
+  ) {
+    final target = iq.attr('to') == null ? ownBare : bareJid(iq.attr('to'))!;
+    final publish = pubsub.child('publish');
+    if (publish != null) {
+      if (target != ownBare) return _send(error('forbidden'));
+      final node = publish.attr('node')!;
+      final item = publish.child('item')!;
+      server.pepPublishes.add((
+        ownBare,
+        node,
+        item.attr('id') ?? '',
+        pubsub.child('publish-options') != null,
+      ));
+      if (server.pepRejectOptions && pubsub.child('publish-options') != null) {
+        return _send(error('conflict'));
+      }
+      ((server.pep[ownBare] ??= {})[node] ??= {})[item.attr('id') ?? ''] =
+          item.children.first;
+      _send(
+        result([
+          XmppElement(
+            'pubsub',
+            xmlns: _pubsubNs,
+            children: [
+              XmppElement(
+                'publish',
+                attributes: {'node': node},
+                children: [
+                  XmppElement(
+                    'item',
+                    attributes: {'id': item.attr('id') ?? ''},
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ]),
+      );
+      return;
+    }
+    final items = pubsub.child('items');
+    if (items != null) {
+      if (server.pepUnreadable.contains(target)) {
+        return _send(error('remote-server-timeout'));
+      }
+      final node = items.attr('node')!;
+      final stored = server.pep[target]?[node];
+      final wanted = items.child('item')?.attr('id');
+      final entries = stored == null
+          ? const <MapEntry<String, XmppElement>>[]
+          : [
+              for (final entry in stored.entries)
+                if (wanted == null || entry.key == wanted) entry,
+            ];
+      if (entries.isEmpty) return _send(error('item-not-found'));
+      _send(
+        result([
+          XmppElement(
+            'pubsub',
+            xmlns: _pubsubNs,
+            children: [
+              XmppElement(
+                'items',
+                attributes: {'node': node},
+                children: [
+                  for (final entry in entries.take(1))
+                    XmppElement(
+                      'item',
+                      attributes: {'id': entry.key},
+                      children: [entry.value],
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ]),
+      );
+      return;
+    }
+    _send(error('feature-not-implemented'));
   }
 
   void _presence(XmppElement presence) {
