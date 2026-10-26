@@ -3776,6 +3776,182 @@ void main() {
   );
 
   test(
+    'group file pieces to a member on both LAN and Iroh go over both',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final aliceLan = _InProcessLanDirectChannel(host: '192.168.63.10');
+      final bobLan = _InProcessLanDirectChannel(host: '192.168.63.11');
+      addTearDown(aliceLan.stop);
+      addTearDown(bobLan.stop);
+      final aliceRoot = await Directory.systemTemp.createTemp('conest_gfs_a-');
+      final bobRoot = await Directory.systemTemp.createTemp('conest_gfs_b-');
+      addTearDown(() async {
+        if (await aliceRoot.exists()) await aliceRoot.delete(recursive: true);
+        if (await bobRoot.exists()) await bobRoot.delete(recursive: true);
+      });
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.63.10'],
+        lanDirectChannel: aliceLan,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.63.11'],
+        lanDirectChannel: bobLan,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final side in [alice, bob]) {
+        await side.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(
+            irohRelayEnabled: false,
+            lanEnabled: true,
+          ),
+        );
+      }
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Striped',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(() => bob.groups.isNotEmpty, reason: 'group');
+      final content = Uint8List(14 * 1024 * 1024);
+      for (var i = 0; i < content.length; i += 4099) {
+        content[i] = i & 0xff;
+      }
+      final source = await File(
+        '${aliceRoot.path}/big.bin',
+      ).writeAsBytes(content);
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'big.bin',
+        mimeType: 'application/octet-stream',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      await _waitForIroh(
+        () =>
+            bob.groupFileSession(eventId)?.download.state ==
+            GroupFileDownloadState.complete,
+        reason: 'group file download',
+        timeout: const Duration(seconds: 60),
+      );
+      expect(await File(bob.groupFilePathFor(eventId)!).readAsBytes(), content);
+      expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried some');
+      expect(
+        network.groupFileHeaders.where((h) => h.eventId == eventId),
+        isNotEmpty,
+        reason: 'Iroh carried some',
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
+    'file blocks follow the content refusals: a refused LAN carries none',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final aliceLan = _InProcessLanDirectChannel(host: '192.168.62.10');
+      final bobLan = _InProcessLanDirectChannel(host: '192.168.62.11');
+      addTearDown(aliceLan.stop);
+      addTearDown(bobLan.stop);
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.62.10'],
+        lanDirectChannel: aliceLan,
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.62.11'],
+        lanDirectChannel: bobLan,
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final side in [alice, bob]) {
+        await side.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(
+            irohRelayEnabled: false,
+            lanEnabled: true,
+          ),
+        );
+      }
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(
+          contentRefusals: const ContentRefusals().withRefused(
+            TransportKind.lan,
+            ContentClass.fileMedium,
+            true,
+          ),
+        ),
+      );
+      await _pairControllers(alice, bob);
+      expect(
+        alice.fileBlocksAllowedForTesting(
+          bob.identity!.deviceId,
+          TransportKind.lan,
+          8 * 1024 * 1024,
+        ),
+        isFalse,
+      );
+      final bytes = Uint8List(12 * 1024 * 1024);
+      for (var i = 0; i < bytes.length; i += 4099) {
+        bytes[i] = i & 0xff;
+      }
+      final sourceRoot = await Directory.systemTemp.createTemp(
+        'conest-refuse-',
+      );
+      addTearDown(() => sourceRoot.delete(recursive: true));
+      final sourceFile = File('${sourceRoot.path}/refused.bin');
+      await sourceFile.writeAsBytes(bytes);
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'refused-source',
+          fileName: 'refused.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: bytes.length,
+          filePath: sourceFile.path,
+        ),
+      );
+      ChatMessage? received;
+      for (var step = 0; step < 3000; step++) {
+        received = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment?.fileName == 'refused.bin')
+            .firstOrNull;
+        if (received != null) {
+          if (bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+            await bob.acceptIncomingAttachment(received.attachment!.id);
+          }
+          if (bob.attachmentAvailableLocally(received.attachment!.id)) break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(received, isNotNull);
+      final cache = await bob.attachmentCachePathFor(received!.attachment!.id);
+      expect(cache, isNotNull);
+      expect(await File(cache!).readAsBytes(), bytes);
+      expect(bobLan.acceptedBlocks, 0, reason: 'LAN is refused for files');
+      expect(network.attachmentRanges, greaterThan(0));
+    },
+  );
+
+  test(
     'verification progress renews the stall timer and cannot regress',
     () async {
       final timers = <Timer>[];

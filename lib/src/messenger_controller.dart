@@ -2959,9 +2959,19 @@ class MessengerController extends ChangeNotifier {
             }
             final manifest = GroupFileManifest.fromEvent(event);
             if (lan) {
-              return _effectiveTransports(contact).lan;
+              return _effectiveTransports(contact).lan &&
+                  _fileBlocksAllowed(
+                    contact,
+                    TransportKind.lan,
+                    manifest.sizeBytes,
+                  );
             }
             return _canUseIrohForContact(contact) &&
+                _fileBlocksAllowed(
+                  contact,
+                  TransportKind.iroh,
+                  manifest.sizeBytes,
+                ) &&
                 _irohFileAllowed(manifest.sizeBytes);
           },
           loadPreferences: (event) async =>
@@ -3061,42 +3071,12 @@ class MessengerController extends ChangeNotifier {
           ? lanChannel as BinaryLanDirectChannel
           : null;
       final lanEndpoint = _groupLanDirectEndpoint(contact);
-      if (binaryLanChannel != null &&
+      final lanUsable =
+          binaryLanChannel != null &&
           lanEndpoint != null &&
           _effectiveTransports(contact).lan &&
-          _lanDirectEndpointUsable(lanEndpoint)) {
-        try {
-          final accepted = await binaryLanChannel.putAttachmentBlock(
-            host: lanEndpoint.host,
-            port: lanEndpoint.port,
-            block: LanAttachmentBlock(
-              attachmentId: 'group-file:${event.eventId}:$request',
-              index: 0,
-              hash: Uint8List.fromList(dart_crypto.sha256.convert(bytes).bytes),
-              ciphertext: bytes,
-            ),
-            timeout: _binaryLanBlockTimeout,
-          );
-          if (accepted) {
-            _onLanDirectPutSuccess(peerId);
-            return;
-          }
-          appendDebugLog(
-            'Group file LAN block rejected for ${contact.alias} '
-            '(${binaryLanChannel is HttpLanDirectChannel ? binaryLanChannel.lastPutFailure : null}); '
-            'trying Iroh fallback.',
-          );
-        } catch (error) {
-          appendDebugLog(
-            'Group file LAN block to ${contact.alias} failed: $error; '
-            'trying Iroh fallback.',
-          );
-        }
-        // A failed LAN PUT must not strand the request. Probe and demote the
-        // endpoint in the background, while the current immutable block
-        // immediately continues through Iroh direct/relay discovery.
-        unawaited(_onLanDirectPutFailure(peerId));
-      }
+          _fileBlocksAllowed(contact, TransportKind.lan, manifest.sizeBytes) &&
+          _lanDirectEndpointUsable(lanEndpoint);
 
       final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
       final preference = groupFilePreference(event.groupId, event.eventId);
@@ -3110,57 +3090,119 @@ class MessengerController extends ChangeNotifier {
       final irohUsable =
           adapter != null &&
           _canUseIrohForContact(contact) &&
+          _fileBlocksAllowed(contact, TransportKind.iroh, manifest.sizeBytes) &&
           _irohFileAllowed(manifest.sizeBytes);
-      final peer = _transportPeerForContact(contact, allowRelay: true);
-      for (final route
-          in irohUsable
-              ? await adapter.discoverRoutes(peer)
-              : const <RouteCandidate>[]) {
-        if (!route.permitsPayload(bytes.length)) continue;
-        if (await _groupHistory.fileForPeer(
-              event.groupId,
-              event.eventId,
-              peerId,
-            ) ==
-            null) {
-          throw StateError('Group file authorization changed.');
+
+      Future<bool> sendOnLan() async {
+        try {
+          final accepted = await binaryLanChannel!.putAttachmentBlock(
+            host: lanEndpoint!.host,
+            port: lanEndpoint.port,
+            block: LanAttachmentBlock(
+              attachmentId: 'group-file:${event.eventId}:$request',
+              index: 0,
+              hash: Uint8List.fromList(dart_crypto.sha256.convert(bytes).bytes),
+              ciphertext: bytes,
+            ),
+            timeout: _binaryLanBlockTimeout,
+          );
+          if (accepted) {
+            _onLanDirectPutSuccess(peerId);
+            return true;
+          }
+          appendDebugLog(
+            'Group file LAN block rejected for ${contact.alias} '
+            '(${binaryLanChannel is HttpLanDirectChannel ? binaryLanChannel.lastPutFailure : null}); '
+            'trying another route.',
+          );
+        } catch (error) {
+          appendDebugLog(
+            'Group file LAN block to ${contact.alias} failed: $error; '
+            'trying another route.',
+          );
         }
-        // Group pieces are up to 4 MiB.  Use the binary attachment-range
-        // framing so they are not rejected by the ordinary message envelope
-        // limit, while retaining the same authenticated encrypted payload.
-        for (var attempt = 0; attempt < 2; attempt++) {
-          try {
-            // Routes come only from a usable adapter.
-            final receipt = await adapter!
-                .sendAttachmentRange(
-                  peer: peer,
-                  route: route,
-                  range: AttachmentRange(
-                    attachmentId: 'group-file:${event.eventId}:$request',
-                    offset: 0,
-                    bytes: bytes,
-                    sha256Base64: base64Encode(
-                      dart_crypto.sha256.convert(bytes).bytes,
+        // A failed LAN PUT must not strand the request. Probe and demote the
+        // endpoint in the background, while the current immutable block
+        // continues through the other routes.
+        unawaited(_onLanDirectPutFailure(peerId));
+        return false;
+      }
+
+      Future<bool> sendOnIroh() async {
+        final peer = _transportPeerForContact(contact, allowRelay: true);
+        for (final route in await adapter!.discoverRoutes(peer)) {
+          if (!route.permitsPayload(bytes.length)) continue;
+          if (await _groupHistory.fileForPeer(
+                event.groupId,
+                event.eventId,
+                peerId,
+              ) ==
+              null) {
+            throw StateError('Group file authorization changed.');
+          }
+          // Group pieces are up to 4 MiB.  Use the binary attachment-range
+          // framing so they are not rejected by the ordinary message envelope
+          // limit, while retaining the same authenticated encrypted payload.
+          for (var attempt = 0; attempt < 2; attempt++) {
+            try {
+              final receipt = await adapter
+                  .sendAttachmentRange(
+                    peer: peer,
+                    route: route,
+                    range: AttachmentRange(
+                      attachmentId: 'group-file:${event.eventId}:$request',
+                      offset: 0,
+                      bytes: bytes,
+                      sha256Base64: base64Encode(
+                        dart_crypto.sha256.convert(bytes).bytes,
+                      ),
                     ),
-                  ),
-                )
-                .timeout(const Duration(seconds: 45));
-            if (receipt.accepted) return;
-            lastError = StateError(
-              'Iroh route ${route.label} rejected the group file frame.',
-            );
-          } catch (error) {
-            lastError = error;
-            appendDebugLog(
-              'Group file frame ${event.eventId}/$request to '
-              '${contact.alias} via ${route.label} failed '
-              '(attempt ${attempt + 1}/2): $error',
-            );
-          }
-          if (attempt == 0) {
-            await Future<void>.delayed(const Duration(milliseconds: 250));
+                  )
+                  .timeout(const Duration(seconds: 45));
+              if (receipt.accepted) return true;
+              lastError = StateError(
+                'Iroh route ${route.label} rejected the group file frame.',
+              );
+            } catch (error) {
+              lastError = error;
+              appendDebugLog(
+                'Group file frame ${event.eventId}/$request to '
+                '${contact.alias} via ${route.label} failed '
+                '(attempt ${attempt + 1}/2): $error',
+              );
+            }
+            if (attempt == 0) {
+              await Future<void>.delayed(const Duration(milliseconds: 250));
+            }
           }
         }
+        return false;
+      }
+
+      // M27a: with LAN and Iroh both open to this member, each piece goes
+      // on the one that delivers best, the other taking over on a failure.
+      final routes = <_BlockRoute>[
+        if (lanUsable) _BlockRoute.lanBinary,
+        if (irohUsable) _BlockRoute.iroh,
+      ];
+      if (routes.isNotEmpty) {
+        final sent = await _sendBlockStriped(
+          _blockStriperFor(peerId),
+          routes,
+          bytes: bytes.length,
+          send: (route) =>
+              route == _BlockRoute.lanBinary ? sendOnLan() : sendOnIroh(),
+          stillActive: () => true,
+        );
+        if (sent) return;
+      }
+      if (await _groupHistory.fileForPeer(
+            event.groupId,
+            event.eventId,
+            peerId,
+          ) ==
+          null) {
+        throw StateError('Group file authorization changed.');
       }
       // As for files in direct chats: relays and Tor, in parts that fit
       // their envelopes, when LAN and Iroh do not get through.
@@ -21218,11 +21260,23 @@ class MessengerController extends ChangeNotifier {
     final lanUsable =
         !irohOnly &&
         _effectiveTransports(requester).lan &&
+        _fileBlocksAllowed(
+          requester,
+          TransportKind.lan,
+          state.descriptor.sizeBytes,
+        ) &&
         binaryLanChannel != null &&
         binaryLanEndpoint != null &&
         binaryLanEndpoint.binaryBlockVersion >= 1 &&
         _lanDirectEndpointUsable(binaryLanEndpoint);
-    var irohUsable = irohBinarySupported && !state.lanOnly;
+    var irohUsable =
+        irohBinarySupported &&
+        !state.lanOnly &&
+        _fileBlocksAllowed(
+          requester,
+          TransportKind.iroh,
+          state.descriptor.sizeBytes,
+        );
     var irohLimited = false;
     if (irohUsable) {
       final peerLimit = payload['maxIrohBytes'];
@@ -21420,6 +21474,11 @@ class MessengerController extends ChangeNotifier {
     final lanDirectChannel = _lanDirectChannel;
     final lanDirectEndpoint = _peerLanDirect[requester.deviceId];
     if (_effectiveTransports(requester).lan &&
+        _fileBlocksAllowed(
+          requester,
+          TransportKind.lan,
+          state.descriptor.sizeBytes,
+        ) &&
         lanDirectChannel != null &&
         lanDirectChannel.isRunning &&
         lanDirectEndpoint != null &&
@@ -29053,6 +29112,30 @@ class MessengerController extends ChangeNotifier {
             : TransportPolicy.disabled,
     };
   }
+
+  /// Whether file blocks of a [sizeBytes] file to [contact] may go over
+  /// [kind]: the same layers of refusals as for envelopes, which binary
+  /// blocks used to skip.
+  bool _fileBlocksAllowed(
+    ContactRecord contact,
+    TransportKind kind,
+    int sizeBytes,
+  ) => contentAllowed(
+    kind,
+    fileContentClass(sizeBytes),
+    device:
+        _snapshot.identity?.connectivity.contentRefusals ??
+        ContentRefusals.none,
+    contact: contact.routing.contentRefusals,
+    peer: contact.peerContentRefusals,
+  );
+
+  @visibleForTesting
+  bool fileBlocksAllowedForTesting(
+    String deviceId,
+    TransportKind kind,
+    int sizeBytes,
+  ) => _fileBlocksAllowed(_contactByDeviceId(deviceId)!, kind, sizeBytes);
 
   @visibleForTesting
   Map<TransportKind, TransportPolicy> contentPoliciesForTesting(
