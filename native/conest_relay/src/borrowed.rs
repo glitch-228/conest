@@ -708,7 +708,10 @@ mod tests {
         );
         config.ext.borrow_sni = Some("cdn.example.com".to_owned());
         let named = RelayState::new(config, identity);
-        assert_eq!(named.borrowed_info().expect("info")["sni"], "cdn.example.com");
+        assert_eq!(
+            named.borrowed_info().expect("info")["sni"],
+            "cdn.example.com"
+        );
     }
 
     #[test]

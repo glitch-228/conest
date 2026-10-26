@@ -35,7 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: rust-tests
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --no-fail-fast
       - name: Bluetooth hostile-input sabotage checks
         run: python3 tool/m37_rust_sabotage.py
       - name: M36 audio behavior negative checks
