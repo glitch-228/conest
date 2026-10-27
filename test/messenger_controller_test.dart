@@ -5929,8 +5929,14 @@ void main() {
       final (alice, bob, bridge) = await pair();
       await connect(alice, bob);
       await alice.setPushToTalkHeld(true);
-      await alice.groupCallService!.tick();
+      // The group service really announces a change (the controller's
+      // listener runs on it) while no group call is joined.
+      var changes = 0;
+      final watch = alice.groupCallService!.changes.listen((_) => changes++);
+      addTearDown(watch.cancel);
+      await alice.groupCallService!.setNoiseSuppression(true);
       await Future<void>.delayed(Duration.zero);
+      expect(changes, 1);
       expect(alice.pushToTalkHeld, isTrue);
       expect(bridge.mutes.last, isFalse);
     });
