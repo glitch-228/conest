@@ -20,6 +20,9 @@ enum TransportKind {
 
   /// XMPP (Jabber): frames through an XMPP account (M51).
   xmpp,
+
+  /// A Telegram bot (bot-to-bot messages) carrying frames (M30).
+  telegram,
 }
 
 enum TransportPolicy { automatic, preferred, disabled, askBeforeUse }
@@ -56,6 +59,7 @@ extension TransportKindLabel on TransportKind {
     TransportKind.bitchat => 'Bluetooth mesh',
     TransportKind.tor => 'Tor',
     TransportKind.xmpp => 'XMPP',
+    TransportKind.telegram => 'Telegram',
   };
 }
 
@@ -69,7 +73,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.matrix ||
     TransportKind.nostr ||
     TransportKind.tor ||
-    TransportKind.xmpp => true,
+    TransportKind.xmpp ||
+    TransportKind.telegram => true,
     _ => false,
   };
 
@@ -84,7 +89,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.meshCore ||
     TransportKind.bitchat ||
     TransportKind.tor ||
-    TransportKind.xmpp => true,
+    TransportKind.xmpp ||
+    TransportKind.telegram => true,
     _ => false,
   };
 
@@ -114,7 +120,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.meshCore ||
     TransportKind.bitchat ||
     TransportKind.tor ||
-    TransportKind.xmpp => true,
+    TransportKind.xmpp ||
+    TransportKind.telegram => true,
     _ => false,
   };
 
@@ -129,6 +136,7 @@ extension TransportKindTraits on TransportKind {
     TransportKind.nostr => 31,
     TransportKind.deltaChat => 32,
     TransportKind.xmpp => 33,
+    TransportKind.telegram => 34,
     TransportKind.bitchat => 40,
     TransportKind.reticulum ||
     TransportKind.meshtastic ||

@@ -9640,6 +9640,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Chat request'**
   String get xmppRequestShort;
+
+  /// Presentation text for message route information: the Telegram bot carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by Telegram bots, still end-to-end encrypted by Conest; Telegram sees both bots and when.'**
+  String get routeTelegramDescription;
+
+  /// Settings: subtitle of the Telegram bot carrier switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Carry messages through a Telegram bot you made'**
+  String get telegramCarrierSubtitle;
+
+  /// Settings: change the Telegram bot of the carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Change bot'**
+  String get telegramChangeBot;
+
+  /// Settings: how to set up the Telegram bot carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Make a bot with @BotFather, switch on bot-to-bot messaging for it, and paste its token here. Use a bot only Conest reads. Your contact does the same.'**
+  String get telegramBotHelp;
+
+  /// Settings: field label for the Telegram bot token.
+  ///
+  /// In en, this message translates to:
+  /// **'Bot token'**
+  String get telegramBotTokenField;
 }
 
 class _AppLocalizationsDelegate

@@ -1576,5 +1576,10 @@
   "onbXmppInstead": "استخدمه كعميل XMPP بدلًا من ذلك",
   "xmppSignIn": "سجّل الدخول إلى حساب XMPP",
   "xmppNoChats": "لا توجد محادثات XMPP بعد",
-  "xmppRequestShort": "طلب محادثة"
+  "xmppRequestShort": "طلب محادثة",
+  "routeTelegramDescription": "يُنقل عبر بوتات تيليجرام، ومشفّر من طرف إلى طرف بواسطة Conest؛ يرى تيليجرام البوتين والوقت.",
+  "telegramCarrierSubtitle": "نقل الرسائل عبر بوت تيليجرام أنشأته",
+  "telegramChangeBot": "تغيير البوت",
+  "telegramBotHelp": "أنشئ بوتًا عبر @BotFather وفعّل المراسلة بين البوتات له والصق الرمز هنا. استخدم بوتًا يقرؤه Conest فقط. ويفعل جهة اتصالك الشيء نفسه.",
+  "telegramBotTokenField": "رمز البوت"
 }

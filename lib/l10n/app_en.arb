@@ -8898,5 +8898,25 @@
   "xmppRequestShort": "Chat request",
   "@xmppRequestShort": {
     "description": "XMPP: chat list label for a request."
+  },
+  "routeTelegramDescription": "Carried by Telegram bots, still end-to-end encrypted by Conest; Telegram sees both bots and when.",
+  "@routeTelegramDescription": {
+    "description": "Presentation text for message route information: the Telegram bot carrier."
+  },
+  "telegramCarrierSubtitle": "Carry messages through a Telegram bot you made",
+  "@telegramCarrierSubtitle": {
+    "description": "Settings: subtitle of the Telegram bot carrier switch."
+  },
+  "telegramChangeBot": "Change bot",
+  "@telegramChangeBot": {
+    "description": "Settings: change the Telegram bot of the carrier."
+  },
+  "telegramBotHelp": "Make a bot with @BotFather, switch on bot-to-bot messaging for it, and paste its token here. Use a bot only Conest reads. Your contact does the same.",
+  "@telegramBotHelp": {
+    "description": "Settings: how to set up the Telegram bot carrier."
+  },
+  "telegramBotTokenField": "Bot token",
+  "@telegramBotTokenField": {
+    "description": "Settings: field label for the Telegram bot token."
   }
 }

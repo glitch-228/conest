@@ -1576,5 +1576,10 @@
   "onbXmppInstead": "Gunakan sebagai klien XMPP saja",
   "xmppSignIn": "Masuk ke akun XMPP Anda",
   "xmppNoChats": "Belum ada obrolan XMPP",
-  "xmppRequestShort": "Permintaan obrolan"
+  "xmppRequestShort": "Permintaan obrolan",
+  "routeTelegramDescription": "Dibawa oleh bot Telegram, tetap dienkripsi ujung ke ujung oleh Conest; Telegram melihat kedua bot dan waktunya.",
+  "telegramCarrierSubtitle": "Bawa pesan lewat bot Telegram yang Anda buat",
+  "telegramChangeBot": "Ganti bot",
+  "telegramBotHelp": "Buat bot dengan @BotFather, aktifkan pesan antar-bot untuknya, lalu tempel tokennya di sini. Pakai bot yang hanya dibaca Conest. Kontak Anda melakukan hal yang sama.",
+  "telegramBotTokenField": "Token bot"
 }

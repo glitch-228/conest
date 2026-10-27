@@ -6125,4 +6125,22 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'Запрос на чат';
+
+  @override
+  String get routeTelegramDescription =>
+      'Передаётся ботами Telegram, по-прежнему со сквозным шифрованием Conest; Telegram видит обоих ботов и время.';
+
+  @override
+  String get telegramCarrierSubtitle =>
+      'Передавать сообщения через созданного вами бота Telegram';
+
+  @override
+  String get telegramChangeBot => 'Сменить бота';
+
+  @override
+  String get telegramBotHelp =>
+      'Создайте бота через @BotFather, включите для него обмен сообщениями между ботами и вставьте токен сюда. Бот должен использоваться только Conest. Ваш контакт делает то же самое.';
+
+  @override
+  String get telegramBotTokenField => 'Токен бота';
 }

@@ -123,6 +123,9 @@ import 'support/observing_ratchet_store.dart';
 import 'support/fake_rns_bus.dart';
 import 'support/fake_tor.dart';
 import 'support/fake_xmpp_server.dart';
+import 'support/fake_telegram_bots.dart';
+import 'package:conest/src/telegram/telegram_bot_api.dart';
+import 'package:conest/src/telegram/telegram_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
 import 'package:conest/src/ui/xmpp_carrier_panel.dart';
@@ -133,6 +136,7 @@ import 'package:conest/src/conest_theme.dart';
 part 'delta_controller_content_tests.dart';
 part 'l10n_controller_cases.dart';
 part 'xmpp_controller_cases.dart';
+part 'telegram_controller_cases.dart';
 
 final _unreachableXmppNetwork = XmppNetwork(
   connector: (host, port, {required tls, alpn}) =>
@@ -140,6 +144,10 @@ final _unreachableXmppNetwork = XmppNetwork(
   webSocketConnector: (url) =>
       Future.error(const SocketException('no XMPP in tests')),
   webSocketLookup: null,
+);
+
+final _unreachableTelegramNetwork = TelegramNetwork(
+  botApi: (token) => FakeTelegramBots().network.botApi(token),
 );
 
 const _fakeRelayIdentityKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
@@ -1155,11 +1163,15 @@ Future<MessengerController> _createController({
   EnergyPolicy? energyPolicy,
   bool keepErrorHistory = false,
   XmppNetwork? xmppNetwork,
+  TelegramNetwork? telegramNetwork,
 }) async {
   final controller = MessengerController(
     keepErrorHistory: keepErrorHistory,
     // No real XMPP server is ever contacted from tests.
     xmppNetwork: xmppNetwork ?? _unreachableXmppNetwork,
+    // No real Telegram is ever contacted from tests (an empty hub: every
+    // token is refused).
+    telegramNetwork: telegramNetwork ?? _unreachableTelegramNetwork,
     energyPolicy: energyPolicy,
     torApi: torApi,
     bitchatConnector: bitchatConnector,
@@ -1506,6 +1518,7 @@ void main() {
   deltaContentControllerTests();
   _localizationControllerTests();
   _xmppControllerTests();
+  _telegramControllerTests();
   test('a desktop notifies only while Conest is not in front', () async {
     final relay = _FakeRelayClient();
     final recorder = _RecordingPlatformBridge();

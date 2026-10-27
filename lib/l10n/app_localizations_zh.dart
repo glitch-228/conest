@@ -5741,4 +5741,21 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get xmppRequestShort => '聊天请求';
+
+  @override
+  String get routeTelegramDescription =>
+      '通过 Telegram 机器人传送，仍由 Conest 端到端加密；Telegram 能看到两个机器人以及时间。';
+
+  @override
+  String get telegramCarrierSubtitle => '通过你创建的 Telegram 机器人传送消息';
+
+  @override
+  String get telegramChangeBot => '更换机器人';
+
+  @override
+  String get telegramBotHelp =>
+      '用 @BotFather 创建一个机器人，为它开启机器人之间的消息功能，然后在此粘贴令牌。该机器人只供 Conest 使用。你的联系人也这样做。';
+
+  @override
+  String get telegramBotTokenField => '机器人令牌';
 }

@@ -1576,5 +1576,10 @@
   "onbXmppInstead": "改为用作 XMPP 客户端",
   "xmppSignIn": "登录你的 XMPP 账号",
   "xmppNoChats": "还没有 XMPP 聊天",
-  "xmppRequestShort": "聊天请求"
+  "xmppRequestShort": "聊天请求",
+  "routeTelegramDescription": "通过 Telegram 机器人传送，仍由 Conest 端到端加密；Telegram 能看到两个机器人以及时间。",
+  "telegramCarrierSubtitle": "通过你创建的 Telegram 机器人传送消息",
+  "telegramChangeBot": "更换机器人",
+  "telegramBotHelp": "用 @BotFather 创建一个机器人，为它开启机器人之间的消息功能，然后在此粘贴令牌。该机器人只供 Conest 使用。你的联系人也这样做。",
+  "telegramBotTokenField": "机器人令牌"
 }

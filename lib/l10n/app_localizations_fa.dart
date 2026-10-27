@@ -6000,4 +6000,22 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'درخواست گفتگو';
+
+  @override
+  String get routeTelegramDescription =>
+      'از طریق ربات‌های تلگرام منتقل می‌شود و همچنان با رمزنگاری سرتاسری Conest است؛ تلگرام هر دو ربات و زمان را می‌بیند.';
+
+  @override
+  String get telegramCarrierSubtitle =>
+      'انتقال پیام‌ها از طریق رباتی در تلگرام که ساخته‌اید';
+
+  @override
+  String get telegramChangeBot => 'تغییر ربات';
+
+  @override
+  String get telegramBotHelp =>
+      'با @BotFather یک ربات بسازید، پیام‌رسانی بین رباتی را برایش روشن کنید و توکن آن را اینجا بچسبانید. رباتی را به کار ببرید که فقط Conest می‌خواند. مخاطب شما هم همین کار را می‌کند.';
+
+  @override
+  String get telegramBotTokenField => 'توکن ربات';
 }

@@ -43,6 +43,10 @@ enum ApplicationCapability {
 
   /// Understands XMPP carrier addresses (`jid|resource`) and frames (M51).
   xmppCarrierV1,
+
+  /// Understands Telegram bot carrier addresses (bot usernames) and frames
+  /// (M30).
+  telegramCarrierV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

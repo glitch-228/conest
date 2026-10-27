@@ -5986,4 +5986,22 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'Permintaan obrolan';
+
+  @override
+  String get routeTelegramDescription =>
+      'Dibawa oleh bot Telegram, tetap dienkripsi ujung ke ujung oleh Conest; Telegram melihat kedua bot dan waktunya.';
+
+  @override
+  String get telegramCarrierSubtitle =>
+      'Bawa pesan lewat bot Telegram yang Anda buat';
+
+  @override
+  String get telegramChangeBot => 'Ganti bot';
+
+  @override
+  String get telegramBotHelp =>
+      'Buat bot dengan @BotFather, aktifkan pesan antar-bot untuknya, lalu tempel tokennya di sini. Pakai bot yang hanya dibaca Conest. Kontak Anda melakukan hal yang sama.';
+
+  @override
+  String get telegramBotTokenField => 'Token bot';
 }

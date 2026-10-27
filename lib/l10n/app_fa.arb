@@ -1576,5 +1576,10 @@
   "onbXmppInstead": "به‌جای آن به‌عنوان کارخواه XMPP استفاده کن",
   "xmppSignIn": "به حساب XMPP خود وارد شوید",
   "xmppNoChats": "هنوز گفتگوی XMPP نیست",
-  "xmppRequestShort": "درخواست گفتگو"
+  "xmppRequestShort": "درخواست گفتگو",
+  "routeTelegramDescription": "از طریق ربات‌های تلگرام منتقل می‌شود و همچنان با رمزنگاری سرتاسری Conest است؛ تلگرام هر دو ربات و زمان را می‌بیند.",
+  "telegramCarrierSubtitle": "انتقال پیام‌ها از طریق رباتی در تلگرام که ساخته‌اید",
+  "telegramChangeBot": "تغییر ربات",
+  "telegramBotHelp": "با @BotFather یک ربات بسازید، پیام‌رسانی بین رباتی را برایش روشن کنید و توکن آن را اینجا بچسبانید. رباتی را به کار ببرید که فقط Conest می‌خواند. مخاطب شما هم همین کار را می‌کند.",
+  "telegramBotTokenField": "توکن ربات"
 }

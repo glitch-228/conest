@@ -1576,5 +1576,10 @@
   "onbXmppInstead": "Использовать как клиент XMPP",
   "xmppSignIn": "Войдите в учётную запись XMPP",
   "xmppNoChats": "Чатов XMPP пока нет",
-  "xmppRequestShort": "Запрос на чат"
+  "xmppRequestShort": "Запрос на чат",
+  "routeTelegramDescription": "Передаётся ботами Telegram, по-прежнему со сквозным шифрованием Conest; Telegram видит обоих ботов и время.",
+  "telegramCarrierSubtitle": "Передавать сообщения через созданного вами бота Telegram",
+  "telegramChangeBot": "Сменить бота",
+  "telegramBotHelp": "Создайте бота через @BotFather, включите для него обмен сообщениями между ботами и вставьте токен сюда. Бот должен использоваться только Conest. Ваш контакт делает то же самое.",
+  "telegramBotTokenField": "Токен бота"
 }

@@ -6000,4 +6000,22 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'Chat request';
+
+  @override
+  String get routeTelegramDescription =>
+      'Carried by Telegram bots, still end-to-end encrypted by Conest; Telegram sees both bots and when.';
+
+  @override
+  String get telegramCarrierSubtitle =>
+      'Carry messages through a Telegram bot you made';
+
+  @override
+  String get telegramChangeBot => 'Change bot';
+
+  @override
+  String get telegramBotHelp =>
+      'Make a bot with @BotFather, switch on bot-to-bot messaging for it, and paste its token here. Use a bot only Conest reads. Your contact does the same.';
+
+  @override
+  String get telegramBotTokenField => 'Bot token';
 }

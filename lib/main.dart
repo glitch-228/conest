@@ -108,6 +108,7 @@ import 'src/ui/signature_decoration.dart';
 import 'src/ui/signature_panels.dart';
 import 'src/ui/signature_widgets.dart';
 import 'src/ui/tor_carrier_panel.dart';
+import 'src/ui/telegram_carrier_panel.dart';
 import 'src/ui/xmpp_carrier_panel.dart';
 import 'src/ui/xmpp_chats_screen.dart';
 import 'src/ui/client_only_home.dart';
@@ -16220,6 +16221,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             const SizedBox(height: 12),
                             XmppCarrierPanel(controller: widget.controller),
                             XmppChatsPanel(controller: widget.controller),
+                            TelegramCarrierPanel(controller: widget.controller),
                             if (widget
                                 .controller
                                 .userMode
@@ -22442,6 +22444,7 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.viaContact => const Color(0xFFEF6C00),
     MessageRoute.viaOwnDevice => const Color(0xFF8D6E63),
     MessageRoute.xmppCarrier => const Color(0xFF2E7D32),
+    MessageRoute.telegramCarrier => const Color(0xFF229ED9),
   };
 
   String shortLabel(BuildContext context) => switch (this) {
@@ -22464,6 +22467,7 @@ extension MessageRouteStyle on MessageRoute {
     MessageRoute.viaContact => l10nOf(context).routeShortContact,
     MessageRoute.viaOwnDevice => l10nOf(context).routeShortOwnDevice,
     MessageRoute.xmppCarrier => 'XMPP',
+    MessageRoute.telegramCarrier => 'Telegram',
   };
 }
 

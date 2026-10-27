@@ -6128,4 +6128,21 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'طلب محادثة';
+
+  @override
+  String get routeTelegramDescription =>
+      'يُنقل عبر بوتات تيليجرام، ومشفّر من طرف إلى طرف بواسطة Conest؛ يرى تيليجرام البوتين والوقت.';
+
+  @override
+  String get telegramCarrierSubtitle => 'نقل الرسائل عبر بوت تيليجرام أنشأته';
+
+  @override
+  String get telegramChangeBot => 'تغيير البوت';
+
+  @override
+  String get telegramBotHelp =>
+      'أنشئ بوتًا عبر @BotFather وفعّل المراسلة بين البوتات له والصق الرمز هنا. استخدم بوتًا يقرؤه Conest فقط. ويفعل جهة اتصالك الشيء نفسه.';
+
+  @override
+  String get telegramBotTokenField => 'رمز البوت';
 }

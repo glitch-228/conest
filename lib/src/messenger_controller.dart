@@ -93,6 +93,8 @@ import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
+import 'telegram/telegram_bot_api.dart';
+import 'telegram/telegram_carrier.dart';
 import 'xmpp/xmpp_carrier.dart';
 import 'xmpp/xmpp_chat_client.dart';
 import 'xmpp/xmpp_chats.dart';
@@ -589,7 +591,9 @@ class MessengerController extends ChangeNotifier {
     TorApi? torApi,
     EnergyPolicy? energyPolicy,
     XmppNetwork? xmppNetwork,
+    TelegramNetwork? telegramNetwork,
   }) : _xmppNetwork = xmppNetwork ?? const XmppNetwork(),
+       _telegramNetwork = telegramNetwork ?? const TelegramNetwork(),
        _groupCallMediaOverride = groupCallMedia,
        _groupCallLinkPolicy = groupCallLinkPolicy,
        _vaultStore = vaultStore,
@@ -707,6 +711,7 @@ class MessengerController extends ChangeNotifier {
   TorApi? _torApi;
   bool _torApiResolved;
   final XmppNetwork _xmppNetwork;
+  final TelegramNetwork _telegramNetwork;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -5323,6 +5328,10 @@ class MessengerController extends ChangeNotifier {
         !_carrierTransports.containsKey(TransportKind.xmpp)) {
       await _startXmppCarrier(advertise: false);
     }
+    if (telegramBotConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.telegram)) {
+      await _startTelegramCarrier(advertise: false);
+    }
   }
 
   /// Tor through Arti in the native library, looked up once.
@@ -5625,6 +5634,68 @@ class MessengerController extends ChangeNotifier {
       },
     );
     unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
+  // Telegram bot carrier (M30): a bot the user made, whose token is kept in
+  // the vault. Frames go bot to bot.
+
+  /// The Telegram bot carrier's saved bot, if set up.
+  TelegramBotConfig? get telegramBotConfig => TelegramBotConfig.fromJson(
+    _snapshot.carrierAccounts[TransportKind.telegram.name],
+  );
+
+  /// The running Telegram bot connection, for its state in settings.
+  TelegramCarrierChannel? get telegramChannel => _telegramChannel;
+  TelegramCarrierChannel? _telegramChannel;
+
+  /// Reaches contacts through the bot with [token] (made with @BotFather).
+  /// Returns the bot's username.
+  Future<String> enableTelegramCarrier(String token) async {
+    _requireIdentity();
+    if (!_carrierAllowed(TransportKind.telegram)) {
+      throw StateError('Turn on Online and Telegram in Connectivity first.');
+    }
+    final config = await checkTelegramBot(token, _telegramNetwork);
+    await unregisterCarrierTransport(TransportKind.telegram);
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.telegram.name: config.toJson(),
+      },
+    );
+    await _persist('Telegram bot carrier set up as @${config.username}.');
+    await _startTelegramCarrier();
+    return config.username;
+  }
+
+  /// Stops the Telegram bot carrier and forgets the bot token here.
+  Future<void> disableTelegramCarrier() async {
+    await unregisterCarrierTransport(TransportKind.telegram);
+    _telegramChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.telegram.name),
+    );
+    await _persist('Telegram bot carrier removed.');
+  }
+
+  Future<void> _startTelegramCarrier({bool advertise = true}) async {
+    final config = telegramBotConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.telegram] ??
+        createTelegramCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = TelegramCarrierChannel(
+      config: config,
+      api: _telegramNetwork.botApi(config.token),
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+      log: (line) => appendDebugLog(line),
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _telegramChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
   }
 
   // XMPP chats (M51 B1): the account's chats beside Conest's, or alone in
@@ -8450,6 +8521,15 @@ class MessengerController extends ChangeNotifier {
             ready: false,
             address: adapter.status.address,
             lastError: xmpp.lastError ?? xmpp.state.name,
+          ),
+        // The bot's name is the address from the start: ready while polling.
+        final TelegramCarrierChannel telegram
+            when telegram.state != TelegramCarrierState.connected =>
+          CarrierStatus(
+            kind: adapter.kind,
+            ready: false,
+            address: adapter.status.address,
+            lastError: telegram.lastError ?? telegram.state.name,
           ),
         // Reticulum has its address from the start: ready only while its
         // link is up, or a node that drops every link looks fine.
@@ -30798,6 +30878,7 @@ class MessengerController extends ChangeNotifier {
     TransportKind.matrix,
     TransportKind.tor,
     TransportKind.xmpp,
+    TransportKind.telegram,
     // Through the target's inbox (bitchatInboxKey): its pair ids need keys
     // it does not have before the request.
     TransportKind.bitchat,
@@ -30837,6 +30918,7 @@ class MessengerController extends ChangeNotifier {
   static const Set<TransportKind> _identifyingCarriers = {
     TransportKind.deltaChat,
     TransportKind.matrix,
+    TransportKind.telegram,
   };
 
   /// The carrier addresses this device publishes to members of its groups.
@@ -35968,6 +36050,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.routeProbeV1,
       ApplicationCapability.groupFileRelayV1,
       ApplicationCapability.xmppCarrierV1,
+      ApplicationCapability.telegramCarrierV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
