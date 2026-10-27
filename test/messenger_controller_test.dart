@@ -20589,6 +20589,137 @@ void main() {
           isNot(MessageRoute.viaOwnDevice),
         );
       });
+
+      Future<Uint8List> fileBytes() async {
+        final bytes = Uint8List(200 * 1024);
+        for (var i = 0; i < bytes.length; i += 7) {
+          bytes[i] = (i * 31) & 0xff;
+        }
+        return bytes;
+      }
+
+      Future<String> waitForFile(
+        MessengerController who,
+        String chatId,
+        String name,
+        MessengerController alice,
+        MessengerController phone,
+        MessengerController bob,
+      ) async {
+        String? id;
+        await _waitForIroh(
+          () {
+            unawaited(alice.pollNow());
+            unawaited(phone.pollNow());
+            unawaited(bob.pollNow());
+            final m = who
+                .messagesFor(chatId)
+                .where((m) => m.attachment?.fileName == name)
+                .firstOrNull;
+            id = m?.attachment?.id;
+            return id != null && who.attachmentAvailableLocally(id!);
+          },
+          reason: 'the file did not reach the device',
+          timeout: const Duration(seconds: 30),
+        );
+        return id!;
+      }
+
+      test('a file sent from the phone shows on the laptop, fetched from '
+          'the phone, and only own devices are served', () async {
+        final (alice, bob, phone, _, _, _) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final bytes = await fileBytes();
+        await phone.sendAttachment(
+          contact: phone.contacts.single,
+          bytes: bytes,
+          fileName: 'from_phone.bin',
+        );
+        final id = await waitForFile(
+          alice,
+          bobId,
+          'from_phone.bin',
+          alice,
+          phone,
+          bob,
+        );
+        final copy = alice
+            .messagesFor(bobId)
+            .firstWhere((m) => m.attachment?.id == id);
+        expect(copy.outbound, isTrue);
+        expect(copy.senderDeviceId, phone.identity!.deviceId);
+        expect(
+          await File((await alice.attachmentCachePathFor(id))!).readAsBytes(),
+          bytes,
+        );
+        // A contact is not served the phone's file by this path.
+        expect(await phone.ownDeviceServesForTesting(bobId, id), isFalse);
+        expect(
+          await phone.ownDeviceServesForTesting(alice.identity!.deviceId, id),
+          isTrue,
+        );
+        // Bob has it too, from the phone (not twice).
+        await _waitForIroh(() {
+          unawaited(bob.pollNow());
+          return bob.messageForAttachment(id) != null;
+        }, reason: 'Bob did not get the file');
+      });
+
+      test('a file that reached only the laptop shows on the phone, '
+          'fetched from the laptop', () async {
+        final (alice, bob, phone, network, relay, advance) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final phoneId = phone.identity!.deviceId;
+        relay.shouldFailStore = (_, _, _, _, envelope) =>
+            envelope.recipientDeviceId == phoneId;
+        network.blockedPairs
+          ..add((
+            bob.identity!.irohEndpointId!,
+            phone.identity!.irohEndpointId!,
+          ))
+          ..add((
+            phone.identity!.irohEndpointId!,
+            bob.identity!.irohEndpointId!,
+          ));
+        final bytes = await fileBytes();
+        await bob.sendAttachment(
+          contact: bob.contacts.single,
+          bytes: bytes,
+          fileName: 'to_laptop.bin',
+        );
+        await _waitForIroh(
+          () {
+            unawaited(alice.pollNow());
+            return alice
+                .messagesFor(bobId)
+                .any(
+                  (m) =>
+                      m.attachment?.fileName == 'to_laptop.bin' &&
+                      alice.attachmentAvailableLocally(m.attachment!.id),
+                );
+          },
+          reason: 'the laptop did not get the file',
+          timeout: const Duration(seconds: 30),
+        );
+        advance(const Duration(seconds: 20));
+        final id = await waitForFile(
+          phone,
+          bobId,
+          'to_laptop.bin',
+          alice,
+          phone,
+          bob,
+        );
+        final copy = phone
+            .messagesFor(bobId)
+            .firstWhere((m) => m.attachment?.id == id);
+        expect(copy.outbound, isFalse);
+        expect(copy.senderDeviceId, bobId);
+        expect(
+          await File((await phone.attachmentCachePathFor(id))!).readAsBytes(),
+          bytes,
+        );
+      });
     });
 
     test('groups show on the account\'s other devices through the one that '

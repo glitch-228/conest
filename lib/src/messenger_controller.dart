@@ -13291,6 +13291,8 @@ class MessengerController extends ChangeNotifier {
     );
     message = message.copyWith(attachment: descriptor);
     _upsertMessage(contact.deviceId, message);
+    // The account's other devices show it too (and fetch it from here).
+    if (debugTest == null) _syncSentMessage(contact.deviceId, message);
     final outboundState = _OutboundAttachmentState(
       messageId: message.id,
       peerDeviceId: contact.deviceId,
@@ -20806,11 +20808,11 @@ class MessengerController extends ChangeNotifier {
             (_snapshot.identity?.connectivity.autoDownloadPreset ??
                     AutoDownloadPreset.medium)
                 .allows(
-              mimeType: descriptor.mimeType,
-              sizeBytes: descriptor.sizeBytes,
-              network: _networkCostClass,
-              verifiedContact: sender.canSendOutbound,
-            ));
+                  mimeType: descriptor.mimeType,
+                  sizeBytes: descriptor.sizeBytes,
+                  network: _networkCostClass,
+                  verifiedContact: sender.canSendOutbound,
+                ));
     final awaitingAcceptance =
         debugTest == null &&
         (!autoDownload || (requiresLan && !directAvailable));
@@ -21211,7 +21213,8 @@ class MessengerController extends ChangeNotifier {
     // their HTTP server instead of round-tripping the relay.
     _cachePeerLanDirectFromPayload(requester.deviceId, payload);
     final registered = _outboundAttachments[attachmentId];
-    final found = registered != null && registered.peerDeviceId == requester.deviceId
+    final found =
+        registered != null && registered.peerDeviceId == requester.deviceId
         ? registered
         // An own device of this account asking for a file in its chats.
         : await _ownDeviceServingState(requester, attachmentId);
@@ -21278,7 +21281,10 @@ class MessengerController extends ChangeNotifier {
         (state.lanOnly
             ? !_hasUsableLanDirectEndpoint(requester.deviceId)
             : !_hasUsableLargeDirectTransport(requester))) {
-      setSession(TransferState.waitingForLan, error: 'Waiting for LAN or direct Iroh; relay use is not automatic.');
+      setSession(
+        TransferState.waitingForLan,
+        error: 'Waiting for LAN or direct Iroh; relay use is not automatic.',
+      );
       return;
     }
     final Uint8List chunkBytes;
@@ -21471,7 +21477,10 @@ class MessengerController extends ChangeNotifier {
           !irohUsable &&
           state.lanOnly &&
           state.descriptor.chunkSize > _attachmentChunkSize) {
-        setSession(TransferState.reconnecting, error: 'Binary LAN block failed; retrying without losing progress.');
+        setSession(
+          TransferState.reconnecting,
+          error: 'Binary LAN block failed; retrying without losing progress.',
+        );
         // The peer explicitly advertised binary v1. A failed PUT is a
         // transient path failure, not evidence of protocol incompatibility;
         // the receiver's durable-range retry will request this same block.
@@ -21494,8 +21503,12 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (state.descriptor.chunkSize > _attachmentChunkSize) {
-      setSession(TransferState.failed, error: 'The peer does not support binary direct attachment blocks. '
-            'Update Conest on both devices and retry.');
+      setSession(
+        TransferState.failed,
+        error:
+            'The peer does not support binary direct attachment blocks. '
+            'Update Conest on both devices and retry.',
+      );
       return;
     }
     final chunk = AttachmentChunk(
@@ -21573,13 +21586,19 @@ class MessengerController extends ChangeNotifier {
       );
     }
     if (state.lanOnly) {
-      setSession(TransferState.waitingForLan, error: 'LAN diagnostic is waiting for the peer LAN endpoint.');
+      setSession(
+        TransferState.waitingForLan,
+        error: 'LAN diagnostic is waiting for the peer LAN endpoint.',
+      );
       return;
     }
     if (state.requiresLan &&
         !allowLargeIrohRelay &&
         !_hasUsableLargeDirectTransport(requester)) {
-      setSession(TransferState.waitingForLan, error: 'Direct delivery unavailable; relay use is not automatic.');
+      setSession(
+        TransferState.waitingForLan,
+        error: 'Direct delivery unavailable; relay use is not automatic.',
+      );
       return;
     }
     try {
@@ -21598,7 +21617,7 @@ class MessengerController extends ChangeNotifier {
       // this is the active outbound for this contact (the receiver could
       // be re-requesting after a stale state).
       if (state.servesOwnDevice ||
-            _isActiveOutbound(state.peerDeviceId, attachmentId)) {
+          _isActiveOutbound(state.peerDeviceId, attachmentId)) {
         if (index > state.highestChunkSent) {
           state.highestChunkSent = index;
         }
@@ -21644,9 +21663,16 @@ class MessengerController extends ChangeNotifier {
         _notifyTransferProgress();
       }
       if (state.requiresLan && !allowLargeIrohRelay) {
-        setSession(TransferState.waitingForLan, error: 'Direct route unavailable. Continue over Iroh relay or wait for direct.');
+        setSession(
+          TransferState.waitingForLan,
+          error:
+              'Direct route unavailable. Continue over Iroh relay or wait for direct.',
+        );
       } else {
-        setSession(TransferState.reconnecting, error: 'Transfer route failed; retrying without losing progress.');
+        setSession(
+          TransferState.reconnecting,
+          error: 'Transfer route failed; retrying without losing progress.',
+        );
       }
     }
   }
@@ -34375,6 +34401,16 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  @visibleForTesting
+  Future<bool> ownDeviceServesForTesting(
+    String requesterDeviceId,
+    String attachmentId,
+  ) async {
+    final requester = _contactByDeviceId(requesterDeviceId);
+    return requester != null &&
+        await _ownDeviceServingState(requester, attachmentId) != null;
+  }
+
   /// The file [state] is now here, fetched from an own device.
   void _noteOwnDeviceFileFetched(_InboundAttachmentState state) {
     appendDebugLog(
@@ -35215,7 +35251,8 @@ class MessengerController extends ChangeNotifier {
           final ({AttachmentDescriptor descriptor, String? albumId})? file;
           try {
             file = _syncedAttachmentIn(event['attachment']);
-          } catch (_) {
+          } catch (error) {
+            appendDebugLog('Own-device file not taken: ${error.runtimeType}');
             continue;
           }
           final now = _now().toUtc();
@@ -35280,7 +35317,8 @@ class MessengerController extends ChangeNotifier {
           final ({AttachmentDescriptor descriptor, String? albumId})? file;
           try {
             file = _syncedAttachmentIn(event['attachment']);
-          } catch (_) {
+          } catch (error) {
+            appendDebugLog('Own-device file not taken: ${error.runtimeType}');
             continue;
           }
           final now = _now().toUtc();
