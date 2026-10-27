@@ -684,6 +684,8 @@ class GlobalConnectivityPreferences {
     this.shareIdentifyingCarriersWithGroups = false,
     this.contentRefusals = ContentRefusals.none,
     this.syncSpeed = SyncSpeed.steady,
+    this.shareSettings = false,
+    this.settingsChangedAt,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -727,6 +729,14 @@ class GlobalConnectivityPreferences {
 
   /// How fast this device syncs with the account's other devices.
   final SyncSpeed syncSpeed;
+
+  /// This device shares its general settings with the account's other
+  /// devices that do too (the newest change wins).
+  final bool shareSettings;
+
+  /// When the shared settings last changed (here, or on a device that
+  /// shared them).
+  final DateTime? settingsChangedAt;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -753,9 +763,13 @@ class GlobalConnectivityPreferences {
     bool? shareIdentifyingCarriersWithGroups,
     ContentRefusals? contentRefusals,
     SyncSpeed? syncSpeed,
+    bool? shareSettings,
+    DateTime? settingsChangedAt,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return GlobalConnectivityPreferences(
+      shareSettings: shareSettings ?? this.shareSettings,
+      settingsChangedAt: settingsChangedAt ?? this.settingsChangedAt,
       contentRefusals: contentRefusals ?? this.contentRefusals,
       syncSpeed: syncSpeed ?? this.syncSpeed,
       shareIdentifyingCarriersWithGroups:
@@ -789,6 +803,9 @@ class GlobalConnectivityPreferences {
       'shareIdentifyingCarriersWithGroups': true,
     if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
     if (syncSpeed != SyncSpeed.steady) 'syncSpeed': syncSpeed.name,
+    if (shareSettings) 'shareSettings': true,
+    if (settingsChangedAt != null)
+      'settingsChangedAt': settingsChangedAt!.toUtc().toIso8601String(),
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -809,6 +826,10 @@ class GlobalConnectivityPreferences {
       shareIdentifyingCarriersWithGroups:
           json['shareIdentifyingCarriersWithGroups'] == true,
       contentRefusals: ContentRefusals.fromJson(json['contentRefusals']),
+      shareSettings: json['shareSettings'] == true,
+      settingsChangedAt: DateTime.tryParse(
+        json['settingsChangedAt'] as String? ?? '',
+      )?.toUtc(),
       syncSpeed: SyncSpeed.values.firstWhere(
         (value) => value.name == json['syncSpeed'],
         orElse: () => SyncSpeed.steady,

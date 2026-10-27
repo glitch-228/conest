@@ -20880,6 +20880,72 @@ void main() {
           },
         );
       }
+
+      test('settings are shared only between devices that opt in, the newest '
+          'change winning', () async {
+        final (alice, bob, phone, _, _, advance) = await linkedPair();
+        expect(bob, isNotNull);
+        AutoDownloadPreset presetOf(MessengerController c) =>
+            c.identity!.connectivity.autoDownloadPreset;
+        Future<void> settle(bool Function() done, String why) =>
+            _waitForIroh(() {
+              unawaited(alice.pollNow());
+              unawaited(phone.pollNow());
+              return done();
+            }, reason: why);
+        // Alice shares, the phone does not: nothing changes there.
+        await alice.updateGlobalConnectivity(
+          alice.identity!.connectivity.copyWith(
+            shareSettings: true,
+            autoDownloadPreset: AutoDownloadPreset.low,
+          ),
+        );
+        for (var i = 0; i < 10; i++) {
+          await alice.pollNow();
+          await phone.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(presetOf(phone), AutoDownloadPreset.medium);
+        // The phone opts in, then a later change on the laptop arrives.
+        await phone.updateGlobalConnectivity(
+          phone.identity!.connectivity.copyWith(shareSettings: true),
+        );
+        advance(const Duration(minutes: 1));
+        await alice.updateGlobalConnectivity(
+          alice.identity!.connectivity.copyWith(
+            autoDownloadPreset: AutoDownloadPreset.high,
+            storageReserveEnabled: false,
+          ),
+        );
+        await settle(
+          () => presetOf(phone) == AutoDownloadPreset.high,
+          'the phone did not take the change',
+        );
+        expect(phone.identity!.connectivity.storageReserveEnabled, isFalse);
+        // And back, from the phone.
+        advance(const Duration(minutes: 1));
+        await phone.updateGlobalConnectivity(
+          phone.identity!.connectivity.copyWith(
+            autoDownloadPreset: AutoDownloadPreset.low,
+          ),
+        );
+        await settle(
+          () => presetOf(alice) == AutoDownloadPreset.low,
+          'the laptop did not take the change',
+        );
+        // A change older than the last one is ignored.
+        final aliceId = alice.identity!.deviceId;
+        await phone.sendAccountSyncForTesting(aliceId, {
+          'type': 'settings',
+          'at': DateTime.utc(2020).toIso8601String(),
+          'values': {'autoDownloadPreset': 'high'},
+        });
+        for (var i = 0; i < 10; i++) {
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(presetOf(alice), AutoDownloadPreset.low);
+      });
     });
 
     test('groups show on the account\'s other devices through the one that '

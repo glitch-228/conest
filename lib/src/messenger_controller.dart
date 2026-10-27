@@ -10865,7 +10865,22 @@ class MessengerController extends ChangeNotifier {
     );
     final refusalsChanged =
         me.connectivity.contentRefusals != prefs.contentRefusals;
+    // The settings shared with own devices: a change here is told to them.
+    final sharedBefore = _sharedSettingsOf(me.connectivity);
+    final sharedNow = _sharedSettingsOf(prefs);
+    final tellSettings =
+        prefs.shareSettings &&
+        !_applyingSharedSettings &&
+        (!me.connectivity.shareSettings || !mapEquals(sharedBefore, sharedNow));
+    if (tellSettings) prefs = prefs.copyWith(settingsChangedAt: _now().toUtc());
     _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: prefs));
+    if (tellSettings) {
+      _syncToOwnDevices({
+        'type': 'settings',
+        'at': prefs.settingsChangedAt!.toIso8601String(),
+        'values': sharedNow,
+      });
+    }
     if (restartNative) {
       await _stopTransportRegistry();
     }
@@ -33964,7 +33979,7 @@ class MessengerController extends ChangeNotifier {
         queued['type'] == event['type'] &&
         queued['chat'] == event['chat'] &&
         switch (event['type']) {
-          'read' || 'group_state' || 'digest' || 'reach' => true,
+          'read' || 'group_state' || 'digest' || 'reach' || 'settings' => true,
           'state' || 'group_message' => queued['id'] == event['id'],
           _ => false,
         };
@@ -34097,6 +34112,59 @@ class MessengerController extends ChangeNotifier {
   /// What syncing with own devices may use now.
   SyncPermission get ownDeviceSyncPermission =>
       ownDeviceSyncPolicy.permit(_syncConditions);
+
+  /// The general settings that own devices share (when both opt in).
+  static Map<String, Object> _sharedSettingsOf(
+    GlobalConnectivityPreferences prefs,
+  ) => {
+    'autoDownloadPreset': prefs.autoDownloadPreset.name,
+    'storageReserveEnabled': prefs.storageReserveEnabled,
+    'irohTransferLimitEnabled': prefs.irohTransferLimitEnabled,
+  };
+
+  bool _applyingSharedSettings = false;
+
+  /// Settings another own device shared: taken when this device shares too,
+  /// the change is newer than the last one here, and every value is one of
+  /// the shared settings with a value it can have.
+  Future<void> _takeSharedSettings(
+    ContactRecord sender,
+    Map<String, dynamic> event,
+  ) async {
+    final me = identity;
+    final values = event['values'];
+    final at = DateTime.tryParse(event['at'] as String? ?? '')?.toUtc();
+    if (me == null ||
+        !me.connectivity.shareSettings ||
+        at == null ||
+        values is! Map) {
+      return;
+    }
+    final now = _now().toUtc();
+    final when = at.isAfter(now) ? now : at;
+    final last = me.connectivity.settingsChangedAt;
+    if (last != null && !when.isAfter(last)) return;
+    var next = me.connectivity;
+    final preset = values['autoDownloadPreset'];
+    if (preset is String) {
+      final found = AutoDownloadPreset.values
+          .where((value) => value.name == preset)
+          .firstOrNull;
+      if (found != null) next = next.copyWith(autoDownloadPreset: found);
+    }
+    if (values['storageReserveEnabled'] case final bool value) {
+      next = next.copyWith(storageReserveEnabled: value);
+    }
+    if (values['irohTransferLimitEnabled'] case final bool value) {
+      next = next.copyWith(irohTransferLimitEnabled: value);
+    }
+    _applyingSharedSettings = true;
+    try {
+      await updateGlobalConnectivity(next.copyWith(settingsChangedAt: when));
+    } finally {
+      _applyingSharedSettings = false;
+    }
+  }
 
   /// Chooses how fast to sync with own devices. Fast counts only when the
   /// user confirmed it ([confirmFast]); it is asked again each time.
@@ -35425,6 +35493,10 @@ class MessengerController extends ChangeNotifier {
       if (event is! Map<String, dynamic>) continue;
       if (event['type'] == 'seen') {
         _dropQueuedReceived(sender.deviceId, event['ids']);
+        continue;
+      }
+      if (event['type'] == 'settings') {
+        await _takeSharedSettings(sender, event);
         continue;
       }
       if (event['type'] == 'reach') {
