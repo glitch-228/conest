@@ -9173,10 +9173,28 @@ abstract class AppLocalizations {
   /// **'Notify for all messages'**
   String get notifyAllMessages;
 
+  /// XMPP chat header: end-to-end encrypted with OMEMO, but not every device of the contact was verified by comparing fingerprints.
+  ///
+  /// In en, this message translates to:
+  /// **'encrypted, unverified (OMEMO)'**
+  String get xmppEncOmemo2Unverified;
+
+  /// Keys screen: a device that appeared after the user verified another device of the contact; nothing is sent to it until confirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'new device, not confirmed'**
+  String get xmppTrustPending;
+
+  /// Note on a message sent by a new, unconfirmed device of a contact.
+  ///
+  /// In en, this message translates to:
+  /// **'From a new device you have not confirmed.'**
+  String get xmppUnconfirmedMsg;
+
   /// XMPP chat header: the chat is end-to-end encrypted with OMEMO.
   ///
   /// In en, this message translates to:
-  /// **'encrypted (OMEMO)'**
+  /// **'encrypted, verified (OMEMO)'**
   String get xmppEncOmemo2;
 
   /// XMPP chat header: legacy OMEMO is in use, which has not been reviewed yet, so it is not called encrypted.

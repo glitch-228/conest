@@ -5501,6 +5501,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get notifyAllMessages => '所有消息都通知';
 
   @override
+  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+
+  @override
+  String get xmppTrustPending => 'new device, not confirmed';
+
+  @override
+  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+
+  @override
   String get xmppEncOmemo2 => '已加密（OMEMO）';
 
   @override

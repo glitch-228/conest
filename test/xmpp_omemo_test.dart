@@ -900,4 +900,172 @@ void main() {
       bob.fingerprint,
     );
   });
+
+  group('review fixes', () {
+    test('a new device of a contact with a verified device waits for '
+        'confirmation', () async {
+      final alice = await OmemoEngine.create(random: CountingRandom(31));
+      final phone = await OmemoEngine.create(random: CountingRandom(32));
+      final laptop = await OmemoEngine.create(random: CountingRandom(33));
+      for (final version in OmemoVersion.values) {
+        await send(
+          alice,
+          'a@x',
+          phone,
+          'b@x',
+          version,
+          'hi',
+          bundle: await phone.ownBundle(version),
+        );
+      }
+      // Before anything is verified, a new device is trusted as before.
+      expect(alice.hasVerifiedDevice('b@x'), isFalse);
+      alice.setTrust('b@x', phone.deviceId, OmemoTrust.verified);
+      expect(alice.allDevicesVerified('b@x'), isTrue);
+      for (final version in OmemoVersion.values) {
+        final payload = await alice.encryptPayload(version, utf8.encode('x'));
+        await expectLater(
+          alice.encryptKey(
+            version: version,
+            jid: 'b@x',
+            deviceId: laptop.deviceId,
+            keyMaterial: payload.keyMaterial,
+            bundle: await laptop.ownBundle(version),
+          ),
+          throwsA(isA<OmemoKeyAgreementException>()),
+          reason: version.name,
+        );
+      }
+      expect(
+        alice.deviceRecord('b@x', laptop.deviceId)!.trust,
+        OmemoTrust.pending,
+      );
+      expect(alice.allDevicesVerified('b@x'), isFalse);
+      // Confirming it (blind) lets keys flow again.
+      alice.setTrust('b@x', laptop.deviceId, OmemoTrust.blind);
+      expect(
+        await send(
+          alice,
+          'a@x',
+          laptop,
+          'b@x',
+          OmemoVersion.v2,
+          'now ok',
+          bundle: await laptop.ownBundle(OmemoVersion.v2),
+        ),
+        'now ok',
+      );
+    });
+
+    test('a contact with no verified device keeps trusting new ones', () async {
+      final (alice, bob) = await pair(34);
+      await send(
+        alice,
+        'a@x',
+        bob,
+        'b@x',
+        OmemoVersion.v2,
+        'hi',
+        bundle: await bob.ownBundle(OmemoVersion.v2),
+      );
+      expect(alice.deviceRecord('b@x', bob.deviceId)!.trust, OmemoTrust.blind);
+    });
+
+    for (final version in OmemoVersion.values) {
+      test(
+        'a spent pre key makes the bundle stale (${version.name})',
+        () async {
+          final (alice, bob) = await pair(35);
+          expect(await bob.maintainKeys(), isFalse);
+          final before = await bob.ownBundle(version);
+          await send(alice, 'a@x', bob, 'b@x', version, 'hi', bundle: before);
+          expect(await bob.maintainKeys(), isTrue, reason: 'republish needed');
+          final after = await bob.ownBundle(version);
+          expect(after.preKeys.length, before.preKeys.length - 1);
+          expect(await bob.maintainKeys(), isFalse, reason: 'only once');
+        },
+      );
+    }
+
+    for (final version in OmemoVersion.values) {
+      test('bad ratchet keys are decrypt errors, not crashes '
+          '(${version.name})', () async {
+        final (alice, bob) = await pair(36);
+        const aJid = 'a@x';
+        const bJid = 'b@x';
+        final bundle = await bob.ownBundle(version);
+        await send(alice, aJid, bob, bJid, version, 'one', bundle: bundle);
+        await send(bob, bJid, alice, aJid, version, 'two');
+        // Alice's next message is a plain ratchet message.
+        final payload = await alice.encryptPayload(version, utf8.encode('3'));
+        final third = await alice.encryptKey(
+          version: version,
+          jid: bJid,
+          deviceId: bob.deviceId,
+          keyMaterial: payload.keyMaterial,
+        );
+        expect(third.keyExchange, isFalse);
+        final session =
+            alice.sessions['${version.name}|$bJid|${bob.deviceId}']!.first;
+        final alicePub = await OmemoCrypto.x25519Public(
+          session.ratchet.ownPriv,
+        );
+        Uint8List swap(Uint8List blob, Uint8List from, Uint8List to) {
+          final out = Uint8List.fromList(blob);
+          for (var i = 0; i + from.length <= out.length; i++) {
+            var same = true;
+            for (var j = 0; j < from.length; j++) {
+              if (out[i + j] != from[j]) {
+                same = false;
+                break;
+              }
+            }
+            if (same) {
+              out.setRange(i, i + to.length, to);
+              return out;
+            }
+          }
+          fail('ratchet key not found in the message');
+        }
+
+        // A low-order ratchet key (all zero) reaches Bob.
+        final zero = swap(third.blob, alicePub, Uint8List(32));
+        await expectLater(
+          bob.decryptKey(
+            version: version,
+            sender: aJid,
+            senderDevice: alice.deviceId,
+            blob: zero,
+            keyExchange: false,
+          ),
+          throwsA(isA<OmemoDecryptException>()),
+        );
+        // A message whose ratchet key is the signed pre key Alice used
+        // reaches Alice, who has no receiving chain for it yet.
+        final (a2, b2) = await pair(37);
+        final bundle2 = await b2.ownBundle(version);
+        await send(a2, aJid, b2, bJid, version, 'one', bundle: bundle2);
+        final p2 = await a2.encryptPayload(version, utf8.encode('x'));
+        final k2 = await a2.encryptKey(
+          version: version,
+          jid: bJid,
+          deviceId: b2.deviceId,
+          keyMaterial: p2.keyMaterial,
+        );
+        final s2 = a2.sessions['${version.name}|$bJid|${b2.deviceId}']!.first;
+        final pub2 = await OmemoCrypto.x25519Public(s2.ratchet.ownPriv);
+        final forged = swap(k2.blob, pub2, bundle2.signedPreKey);
+        await expectLater(
+          a2.decryptKey(
+            version: version,
+            sender: bJid,
+            senderDevice: b2.deviceId,
+            blob: forged,
+            keyExchange: false,
+          ),
+          throwsA(isA<OmemoDecryptException>()),
+        );
+      });
+    }
+  });
 }

@@ -20,6 +20,11 @@ enum OmemoTrust {
 
   /// The user refuses it: nothing is sent to it.
   distrusted,
+
+  /// A new device of a contact who already has a verified device. Nothing is
+  /// sent to it, and its messages are marked, until the user confirms it
+  /// (verifies it, or accepts it blind).
+  pending,
 }
 
 class OmemoDeviceRecord {
@@ -117,6 +122,10 @@ class OmemoEngine {
 
   /// Devices of others by bare JID, then device id.
   final Map<String, Map<int, OmemoDeviceRecord>> devices;
+
+  /// Versions whose published bundle is out of date because a pre key was
+  /// spent. [maintainKeys] reports and clears them.
+  final Set<OmemoVersion> staleBundles = {};
 
   static const int maxSessionsPerDevice = 3;
   static const int maxDeviceKeys = 1500;
@@ -244,7 +253,8 @@ class OmemoEngine {
   /// Rotates old signed pre keys and refills pre keys. True when a bundle
   /// has to be published again.
   Future<bool> maintainKeys() async {
-    var changed = false;
+    var changed = staleBundles.isNotEmpty;
+    staleBundles.clear();
     for (final version in OmemoVersion.values) {
       final suiteKeys = keys[version]!;
       final age = now() - suiteKeys.signedPreKey.createdAt;
@@ -282,9 +292,14 @@ class OmemoEngine {
     if (devices.length > maxJids) {
       throw const OmemoProtoException('too many contacts');
     }
+    // Once the user verified a device of this contact, new devices are not
+    // trusted on their own: a server could add one.
+    final hasVerified = perJid.values.any(
+      (device) => device.trust == OmemoTrust.verified,
+    );
     final record = OmemoDeviceRecord(
       identity: Uint8List.fromList(identityKey),
-      trust: OmemoTrust.blind,
+      trust: hasVerified ? OmemoTrust.pending : OmemoTrust.blind,
       firstSeen: now(),
     );
     perJid[deviceId] = record;
@@ -305,6 +320,19 @@ class OmemoEngine {
     _remember(jid, deviceId, identityKey);
   }
 
+  /// Whether the contact has devices and every one is verified (and none is
+  /// refused or waiting for confirmation).
+  bool allDevicesVerified(String jid) {
+    final records = devices[jid]?.values;
+    if (records == null || records.isEmpty) return false;
+    return records.every((device) => device.trust == OmemoTrust.verified);
+  }
+
+  /// Whether [jid] has a verified device (new devices then need a
+  /// confirmation).
+  bool hasVerifiedDevice(String jid) =>
+      devices[jid]?.values.any((d) => d.trust == OmemoTrust.verified) ?? false;
+
   void setTrust(String jid, int deviceId, OmemoTrust trust) {
     devices[jid]?[deviceId]?.trust = trust;
   }
@@ -322,6 +350,13 @@ class OmemoEngine {
   void forgetJid(String jid) {
     devices.remove(jid);
     sessions.removeWhere((key, _) => key.split('|')[1] == jid);
+  }
+
+  bool hasAnySession(OmemoVersion version, String jid) {
+    final prefix = '${version.name}|$jid|';
+    return sessions.entries.any(
+      (entry) => entry.key.startsWith(prefix) && entry.value.isNotEmpty,
+    );
   }
 
   bool hasSession(OmemoVersion version, String jid, int deviceId) =>
@@ -453,6 +488,20 @@ class OmemoEngine {
     }
   }
 
+  void _requireSendable(OmemoDeviceRecord record) {
+    switch (record.trust) {
+      case OmemoTrust.distrusted:
+        throw const OmemoKeyAgreementException('the device is distrusted');
+      case OmemoTrust.pending:
+        throw const OmemoKeyAgreementException(
+          'a new device that has not been confirmed',
+        );
+      case OmemoTrust.blind:
+      case OmemoTrust.verified:
+        return;
+    }
+  }
+
   /// Encrypts [keyMaterial] for one device, starting a session from
   /// [bundle] when there is none. Throws [OmemoNeedsBundle] when a session
   /// is needed and [bundle] is null; [OmemoIdentityChanged] when the
@@ -470,9 +519,7 @@ class OmemoEngine {
     if (session == null) {
       if (bundle == null) throw OmemoNeedsBundle(jid, deviceId);
       final record = _remember(jid, deviceId, bundle.identityMontgomery);
-      if (record.trust == OmemoTrust.distrusted) {
-        throw const OmemoKeyAgreementException('the device is distrusted');
-      }
+      _requireSendable(record);
       final suite = version.suite;
       final agreement = await omemoAgreeActive(suite, identity, bundle, random);
       final ratchet = await OmemoRatchet.initiate(
@@ -496,8 +543,9 @@ class OmemoEngine {
             ? identity.montgomery
             : identity.edwards,
       );
-    } else if (devices[jid]?[deviceId]?.trust == OmemoTrust.distrusted) {
-      throw const OmemoKeyAgreementException('the device is distrusted');
+    } else {
+      final record = devices[jid]?[deviceId];
+      if (record != null) _requireSendable(record);
     }
     final (blob, isKex) = await session.encrypt(keyMaterial);
     _putSession(session);
@@ -597,7 +645,11 @@ class OmemoEngine {
     final plain = await session.decrypt(kex.message, random);
     // Only now is the sender's key remembered and the pre key spent.
     _remember(sender, senderDevice, initiatorMontgomery);
-    suiteKeys.preKeys.remove(kex.preKeyId);
+    if (suiteKeys.preKeys.remove(kex.preKeyId) != null) {
+      // The published bundle still offers the spent key; peers that pick it
+      // would be stuck. It has to be published again.
+      staleBundles.add(version);
+    }
     _putSession(session);
     return plain;
   }

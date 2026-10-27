@@ -5874,6 +5874,15 @@ class AppLocalizationsRu extends AppLocalizations {
   String get notifyAllMessages => 'Уведомлять обо всех сообщениях';
 
   @override
+  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+
+  @override
+  String get xmppTrustPending => 'new device, not confirmed';
+
+  @override
+  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+
+  @override
   String get xmppEncOmemo2 => 'зашифровано (OMEMO)';
 
   @override

@@ -5749,6 +5749,15 @@ class AppLocalizationsFa extends AppLocalizations {
   String get notifyAllMessages => 'برای همهٔ پیام‌ها اعلان بده';
 
   @override
+  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+
+  @override
+  String get xmppTrustPending => 'new device, not confirmed';
+
+  @override
+  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+
+  @override
   String get xmppEncOmemo2 => 'رمزگذاری‌شده (OMEMO)';
 
   @override

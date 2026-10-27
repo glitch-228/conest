@@ -12,15 +12,31 @@ import '../xmpp/omemo/omemo_suite.dart';
 import '../xmpp/xmpp_chats.dart';
 import '../xmpp/xmpp_omemo.dart';
 
-/// What the chat header says about encryption. Legacy OMEMO is never
-/// called "encrypted" until that code has been reviewed.
-String xmppEncryptionLabel(BuildContext context, XmppChat chat) {
+/// Whether every known device of the chat's contact is verified.
+bool xmppChatVerified(MessengerController controller, XmppChat chat) =>
+    !chat.room &&
+    (controller.xmppChatClient?.omemo?.engine?.allDevicesVerified(chat.jid) ??
+        false);
+
+bool _isOmemo2(XmppSecurity? security) =>
+    security == XmppSecurity.omemo2 || security == XmppSecurity.omemo2Verified;
+
+/// What the chat header says about encryption. OMEMO 2 is "encrypted,
+/// unverified" unless every device of the contact is verified; legacy OMEMO
+/// is never called "encrypted" until that code has been reviewed.
+String xmppEncryptionLabel(
+  BuildContext context,
+  XmppChat chat, {
+  bool verified = false,
+}) {
   final l10n = l10nOf(context);
   if (chat.room) return l10n.xmppNotEncrypted;
   final last = chat.messages
       .where((m) => m.security != XmppSecurity.plain)
       .lastOrNull;
-  if (last?.security == XmppSecurity.omemo2) return l10n.xmppEncOmemo2;
+  if (_isOmemo2(last?.security)) {
+    return verified ? l10n.xmppEncOmemo2 : l10n.xmppEncOmemo2Unverified;
+  }
   if (last?.security == XmppSecurity.legacyOmemo) return l10n.xmppEncLegacy;
   return switch (chat.encryption) {
     XmppChatEncryption.auto => l10n.xmppEncAuto,
@@ -32,11 +48,12 @@ String xmppEncryptionLabel(BuildContext context, XmppChat chat) {
 /// A lock beside the header only for OMEMO 2 messages.
 bool xmppShowsLock(XmppChat chat) =>
     !chat.room &&
-    chat.messages
-            .where((m) => m.security != XmppSecurity.plain)
-            .lastOrNull
-            ?.security ==
-        XmppSecurity.omemo2;
+    _isOmemo2(
+      chat.messages
+          .where((m) => m.security != XmppSecurity.plain)
+          .lastOrNull
+          ?.security,
+    );
 
 /// What a message shows instead of (or beside) its text, if anything.
 String? xmppSecurityNote(BuildContext context, XmppChatMessage message) {
@@ -44,6 +61,7 @@ String? xmppSecurityNote(BuildContext context, XmppChatMessage message) {
   return switch (message.security) {
     XmppSecurity.unreadable => l10n.xmppUnreadable,
     XmppSecurity.untrusted => l10n.xmppUntrustedMsg,
+    XmppSecurity.unconfirmed => l10n.xmppUnconfirmedMsg,
     XmppSecurity.legacyOmemo => l10n.xmppEncLegacy,
     _ => null,
   };
@@ -158,6 +176,7 @@ class _XmppKeysScreenState extends State<XmppKeysScreen> {
       OmemoTrust.blind => l10n.xmppTrustBlind,
       OmemoTrust.verified => l10n.xmppTrustVerified,
       OmemoTrust.distrusted => l10n.xmppTrustRefused,
+      OmemoTrust.pending => l10n.xmppTrustPending,
     };
   }
 
@@ -248,6 +267,8 @@ class _XmppKeysScreenState extends State<XmppKeysScreen> {
                                 ? Icons.verified_outlined
                                 : device.trust == OmemoTrust.distrusted
                                 ? Icons.block
+                                : device.trust == OmemoTrust.pending
+                                ? Icons.new_releases_outlined
                                 : Icons.help_outline,
                             size: 16,
                           ),
@@ -279,7 +300,8 @@ class _XmppKeysScreenState extends State<XmppKeysScreen> {
                             ),
                             child: Text(l10n.xmppTrustVerify),
                           ),
-                        if (device.trust == OmemoTrust.distrusted)
+                        if (device.trust == OmemoTrust.distrusted ||
+                            device.trust == OmemoTrust.pending)
                           TextButton(
                             onPressed: () => setState(
                               () => omemo?.setTrust(

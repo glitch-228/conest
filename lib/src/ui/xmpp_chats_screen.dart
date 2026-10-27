@@ -366,7 +366,7 @@ class _XmppChatScreenState extends State<XmppChatScreen> {
                   child: Text(
                     // What protects this chat, said plainly.
                     '${chat.room ? l10n.xmppGroupChat : chat.jid} · '
-                    '${xmppEncryptionLabel(context, chat)}',
+                    '${xmppEncryptionLabel(context, chat, verified: xmppChatVerified(controller, chat))}',
                     key: const ValueKey('xmpp-encryption-mark'),
                     style: theme.textTheme.labelSmall,
                     maxLines: 1,
@@ -619,17 +619,21 @@ class _XmppChatScreenState extends State<XmppChatScreen> {
                     const SizedBox(width: 4),
                     Text(l10n.xmppEdited, style: theme.textTheme.labelSmall),
                   ],
-                  if (message.security == XmppSecurity.omemo2) ...[
+                  if (message.security == XmppSecurity.omemo2Verified) ...[
                     const SizedBox(width: 4),
                     const Icon(Icons.lock_outline, size: 12),
-                  ] else if (xmppSecurityNote(context, message)
-                      case final note?
+                  ] else if (message.security == XmppSecurity.omemo2) ...[
+                    const SizedBox(width: 4),
+                    const Icon(Icons.gpp_maybe_outlined, size: 12),
+                  ] else if (xmppSecurityNote(context, message) case final note?
                       when message.security != XmppSecurity.unreadable) ...[
                     const SizedBox(width: 4),
                     Text(
                       note,
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: message.security == XmppSecurity.untrusted
+                        color:
+                            message.security == XmppSecurity.untrusted ||
+                                message.security == XmppSecurity.unconfirmed
                             ? theme.colorScheme.error
                             : null,
                       ),

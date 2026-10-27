@@ -8,7 +8,7 @@ enum XmppSecurity {
   /// Sent in the clear (as far as the XMPP stream goes).
   plain,
 
-  /// OMEMO 2, end to end.
+  /// OMEMO 2, end to end, but with devices that were never verified.
   omemo2,
 
   /// Legacy OMEMO (the Conversations/Dino/Gajim format). Shown as such, not
@@ -20,6 +20,13 @@ enum XmppSecurity {
 
   /// Encrypted by a device the user has refused.
   untrusted,
+
+  /// OMEMO 2, from or to devices the user verified.
+  omemo2Verified,
+
+  /// Encrypted by a new device of a contact who has verified devices, which
+  /// the user has not confirmed yet.
+  unconfirmed,
 }
 
 /// What the user chose for a chat: encrypt when the contact has OMEMO

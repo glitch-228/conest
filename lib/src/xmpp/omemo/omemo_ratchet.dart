@@ -171,13 +171,20 @@ class OmemoRatchet {
 
     final work = _copy();
     final newSkipped = <String, Uint8List>{};
-    final messageKey = await work._nextKey(
-      pub,
-      counter,
-      previous,
-      newSkipped,
-      random,
-    );
+    final Uint8List messageKey;
+    try {
+      messageKey = await work._nextKey(
+        pub,
+        counter,
+        previous,
+        newSkipped,
+        random,
+      );
+    } on StateError {
+      // A low-order ratchet key (all-zero secret) and the like: the message
+      // is bad, not the program.
+      throw const OmemoDecryptException('invalid ratchet key');
+    }
     final plain = await _open(suite, messageKey, ad, sealed);
 
     rootKey = work.rootKey;
@@ -227,7 +234,12 @@ class OmemoRatchet {
       ownPriv = random.bytes(32);
       await _replaceChain(sendingSide: true);
     }
-    final chain = receiving!;
+    final chain = receiving;
+    if (chain == null) {
+      // The ratchet key is our own signed pre key or another key that gave
+      // no receiving chain: not a message of this session.
+      throw const OmemoDecryptException('no receiving chain');
+    }
     final missing = counter - chain.length;
     if (missing > maxSkipPerMessage) {
       throw const OmemoDecryptException('too many messages skipped');

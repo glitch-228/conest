@@ -8572,7 +8572,19 @@
   "@notifyAllMessages": {
     "description": "Group menu: back to every message."
   },
-  "xmppEncOmemo2": "encrypted (OMEMO)",
+  "xmppEncOmemo2Unverified": "encrypted, unverified (OMEMO)",
+  "@xmppEncOmemo2Unverified": {
+    "description": "XMPP chat header: end-to-end encrypted with OMEMO, but not every device of the contact was verified by comparing fingerprints."
+  },
+  "xmppTrustPending": "new device, not confirmed",
+  "@xmppTrustPending": {
+    "description": "Keys screen: a device that appeared after the user verified another device of the contact; nothing is sent to it until confirmed."
+  },
+  "xmppUnconfirmedMsg": "From a new device you have not confirmed.",
+  "@xmppUnconfirmedMsg": {
+    "description": "Note on a message sent by a new, unconfirmed device of a contact."
+  },
+  "xmppEncOmemo2": "encrypted, verified (OMEMO)",
   "@xmppEncOmemo2": {
     "description": "XMPP chat header: the chat is end-to-end encrypted with OMEMO."
   },

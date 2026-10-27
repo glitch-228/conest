@@ -42,6 +42,7 @@ class OmemoReceived {
     this.body,
     this.trust,
     this.failure,
+    this.at,
   });
 
   final OmemoVersion version;
@@ -59,6 +60,10 @@ class OmemoReceived {
 
   /// Why the message could not be read, if so.
   final String? failure;
+
+  /// The time the sender put inside the encryption (OMEMO 2); unlike the
+  /// outer delay it cannot be changed by a server.
+  final DateTime? at;
 
   bool get readable => failure == null;
 }
@@ -373,6 +378,16 @@ class XmppOmemo {
     return ids;
   }
 
+  /// Whether this device already has keys with [jid] (a session in a version
+  /// in use, or a verified device). Then "no OMEMO devices" is not believed
+  /// when [jid] is asked again: it could be a server hiding them.
+  bool hasEstablishedEncryption(String jid) {
+    final engine = _engine;
+    if (engine == null) return false;
+    return engine.hasVerifiedDevice(jid) ||
+        versions.any((version) => engine.hasAnySession(version, jid));
+  }
+
   /// The version to use with [jid]: OMEMO 2 when any of their devices
   /// takes it, else legacy when enabled, else null (no OMEMO).
   Future<OmemoVersion?> versionFor(String jid, {bool refresh = false}) async {
@@ -572,6 +587,7 @@ class XmppOmemo {
         version: version,
         senderDevice: incoming.senderDevice,
         content: envelope.content,
+        at: envelope.at,
         body: envelope.content.where((e) => e.name == 'body').firstOrNull?.text,
         trust: record?.trust,
       );
@@ -610,7 +626,11 @@ class XmppOmemo {
     final hex = engine.identity.montgomery
         .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
         .join();
-    return 'xmpp:$ownJid?omemo-sid-${engine.deviceId}=$hex';
+    // The fingerprint is the Curve25519 identity key in hex for both
+    // versions (python-omemo's documentation: "in its Curve25519 form as per
+    // the specification"). Clients differ in the parameter name they scan.
+    final id = engine.deviceId;
+    return 'xmpp:$ownJid?omemo-sid-$id=$hex;omemo2-sid-$id=$hex';
   }
 
   /// The devices of [jid] known from lookups and sessions.
@@ -697,6 +717,7 @@ class XmppOmemo {
     }
     var verified = 0;
     var mismatched = 0;
+    final seen = <int>{};
     for (final part
         in value
             .substring(question + 1)
@@ -707,6 +728,8 @@ class XmppOmemo {
       ).firstMatch(part);
       if (match == null) continue;
       final id = int.parse(match.group(1)!);
+      // The same device may be named twice (omemo- and omemo2-).
+      if (!seen.add(id)) continue;
       final record = engine.deviceRecord(jid, id);
       if (record == null) {
         mismatched++;
@@ -759,7 +782,13 @@ XmppElement omemoDecryptedMessage(XmppElement message, OmemoReceived received) {
     final isFallback =
         child.name == 'body' ||
         (child.name == 'encryption' && child.xmlns == OmemoXml.eme);
-    if (isEncrypted || isFallback) continue;
+    // With OMEMO 2 the elements that change earlier messages must come from
+    // inside the encryption; the same elements outside could be added by a
+    // server.
+    final isOuterEdit =
+        received.content != null &&
+        const {'replace', 'retract', 'reactions', 'reply'}.contains(child.name);
+    if (isEncrypted || isFallback || isOuterEdit) continue;
     merged.add(child);
   }
   final content = received.content;
@@ -772,6 +801,7 @@ XmppElement omemoDecryptedMessage(XmppElement message, OmemoReceived received) {
         'reply',
         'replace',
         'reactions',
+        'retract',
         'origin-id',
       }.contains(child.name)) {
         merged.add(

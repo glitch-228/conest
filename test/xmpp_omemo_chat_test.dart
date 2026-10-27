@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:conest/src/xmpp/omemo/omemo_engine.dart';
+import 'package:conest/src/xmpp/omemo/omemo_keys.dart';
 import 'package:conest/src/xmpp/omemo/omemo_suite.dart';
 import 'package:conest/src/xmpp/omemo/omemo_xml.dart';
 import 'package:conest/src/xmpp/xmpp_carrier.dart';
@@ -35,6 +36,7 @@ class _Person {
     String resource = 'chat',
     bool withOmemo = true,
     bool legacy = false,
+    DateTime Function()? omemoNow,
   }) {
     server.passwords.putIfAbsent(local, () => 'pw-$local');
     session = XmppSession(
@@ -51,6 +53,7 @@ class _Person {
         save: (state) =>
             omemoState = jsonDecode(jsonEncode(state)) as Map<String, Object?>,
         legacyEnabled: legacy,
+        now: omemoNow,
       );
     }
     client = XmppChatClient(
@@ -105,6 +108,7 @@ void main() {
     String resource = 'chat',
     bool withOmemo = true,
     bool legacy = false,
+    DateTime Function()? omemoNow,
   }) async {
     final p = _Person(
       server,
@@ -112,6 +116,7 @@ void main() {
       resource: resource,
       withOmemo: withOmemo,
       legacy: legacy,
+      omemoNow: omemoNow,
     );
     people.add(p);
     await p.start();
@@ -471,4 +476,275 @@ void main() {
       expect(bob.messages(alice.jid).last.security, XmppSecurity.omemo2);
     },
   );
+
+  group('review fixes', () {
+    XmppElement plainEdit(
+      String from,
+      String to,
+      String id,
+      List<XmppElement> children,
+    ) => XmppElement(
+      'message',
+      attributes: {'from': from, 'to': to, 'type': 'chat', 'id': id},
+      children: children,
+    );
+
+    test('a new device is not trusted once the contact has a verified one, '
+        'and its messages are marked', () async {
+      final alice = await person('alice');
+      final phone = await person('bob', resource: 'phone');
+      alice.client.startChat(phone.jid);
+      phone.client.startChat(alice.jid);
+      await alice.client.sendText(phone.jid, 'hi');
+      await _until(() => phone.messages(alice.jid).isNotEmpty);
+      alice.omemo!.setTrust(
+        phone.jid,
+        phone.omemo!.engine!.deviceId,
+        OmemoTrust.verified,
+      );
+      final laptop = await person('bob', resource: 'laptop');
+      laptop.client.startChat(alice.jid);
+      await alice.client.sendText(phone.jid, 'after the new device');
+      await _until(() => phone.messages(alice.jid).length == 2);
+      expect(phone.messages(alice.jid).last.text, 'after the new device');
+      expect(phone.messages(alice.jid).last.security, XmppSecurity.omemo2);
+      final laptopId = laptop.omemo!.engine!.deviceId;
+      expect(alice.omemo!.skippedDevices.map((d) => d.$2), contains(laptopId));
+      expect(
+        alice.omemo!.engine!.deviceRecord(phone.jid, laptopId)!.trust,
+        OmemoTrust.pending,
+      );
+      expect(
+        laptop.messages(alice.jid).where((m) => m.text.isNotEmpty),
+        isEmpty,
+      );
+      // A message from the new device is shown with a mark.
+      await laptop.client.sendText(alice.jid, 'from the new laptop');
+      await _until(
+        () => alice
+            .messages(phone.jid)
+            .any(
+              (m) =>
+                  !m.outgoing &&
+                  m.text.isNotEmpty &&
+                  m.from.contains('bob') &&
+                  m.text == 'from the new laptop',
+            ),
+      );
+      expect(alice.messages(phone.jid).last.security, XmppSecurity.unconfirmed);
+      // Confirming it lets it receive.
+      alice.omemo!.setTrust(phone.jid, laptopId, OmemoTrust.blind);
+      await alice.client.sendText(phone.jid, 'now for both');
+      await _until(
+        () => laptop.messages(alice.jid).any((m) => m.text == 'now for both'),
+      );
+    });
+
+    test('messages from verified devices are marked verified', () async {
+      final alice = await person('alice');
+      final bob = await person('bob');
+      alice.client.startChat(bob.jid);
+      bob.client.startChat(alice.jid);
+      await alice.client.sendText(bob.jid, 'one');
+      await _until(() => bob.messages(alice.jid).isNotEmpty);
+      await bob.client.sendText(alice.jid, 'two');
+      await _until(() => alice.messages(bob.jid).length == 2);
+      expect(alice.messages(bob.jid).last.security, XmppSecurity.omemo2);
+      expect(alice.omemo!.engine!.allDevicesVerified(bob.jid), isFalse);
+      alice.omemo!.setTrust(
+        bob.jid,
+        bob.omemo!.engine!.deviceId,
+        OmemoTrust.verified,
+      );
+      expect(alice.omemo!.engine!.allDevicesVerified(bob.jid), isTrue);
+      await bob.client.sendText(alice.jid, 'three');
+      await _until(() => alice.messages(bob.jid).length == 3);
+      expect(
+        alice.messages(bob.jid).last.security,
+        XmppSecurity.omemo2Verified,
+      );
+      await alice.client.sendText(bob.jid, 'four');
+      expect(
+        alice.messages(bob.jid).last.security,
+        XmppSecurity.omemo2Verified,
+      );
+    });
+
+    test('the bundle is published again after a pre key was used', () async {
+      final alice = await person('alice');
+      final bob = await person('bob');
+      OmemoBundle? published() => OmemoXml.parseBundle(
+        OmemoVersion.v2,
+        server.pep[bob
+            .jid]!['urn:xmpp:omemo:2:bundles']!['${bob.omemo!.engine!.deviceId}']!,
+      );
+      expect(published()!.preKeys.length, 100);
+      alice.client.startChat(bob.jid);
+      await alice.client.sendText(bob.jid, 'uses a pre key');
+      await _until(() => bob.messages(alice.jid).isNotEmpty);
+      await _until(
+        () => published()!.preKeys.length == 99,
+        reason: 'bundle without the spent pre key',
+      );
+    });
+
+    test('plain retractions and corrections cannot touch encrypted messages, '
+        'encrypted ones can', () async {
+      final alice = await person('alice');
+      final bob = await person('bob');
+      alice.client.startChat(bob.jid);
+      bob.client.startChat(alice.jid);
+      final id = await alice.client.sendText(bob.jid, 'keep me');
+      await _until(() => bob.messages(alice.jid).isNotEmpty);
+      server.inject(
+        plainEdit(alice.jid, bob.jid, 'x1', [
+          XmppElement('retract', xmlns: XmppNs.retract, attributes: {'id': id}),
+        ]),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(bob.messages(alice.jid).single.retracted, isFalse);
+      // A reaction travels encrypted, too.
+      await bob.client.react(alice.jid, id, {'x'});
+      await bob.client.sendText(alice.jid, 'so the reply path exists');
+      await _until(() => alice.messages(bob.jid).length == 2);
+      await alice.client.react(bob.jid, id, {'+'});
+      final reaction = server.received.lastWhere(
+        (s) => s.name == 'message' && s.attr('to') == bob.jid,
+      );
+      expect(reaction.child('encrypted', OmemoVersion.v2.namespace), isNotNull);
+      expect(reaction.child('reactions', XmppNs.reactions), isNull);
+      await _until(
+        () =>
+            bob.messages(alice.jid).first.reactions['+']?.contains(alice.jid) ??
+            false,
+        reason: 'the encrypted reaction arrives',
+      );
+      await alice.client.retract(bob.jid, id);
+      final retraction = server.received.lastWhere(
+        (s) => s.name == 'message' && s.attr('to') == bob.jid,
+      );
+      expect(
+        retraction.child('encrypted', OmemoVersion.v2.namespace),
+        isNotNull,
+      );
+      expect(retraction.child('retract', XmppNs.retract), isNull);
+      await _until(() => bob.messages(alice.jid).first.retracted);
+    });
+
+    test('outer edit elements are dropped from decrypted OMEMO 2 messages', () {
+      final message = XmppElement(
+        'message',
+        attributes: {'from': 'a@x', 'to': 'b@x'},
+        children: [
+          XmppElement('body', text: 'fallback'),
+          XmppElement(
+            'replace',
+            xmlns: XmppNs.correction,
+            attributes: {'id': 'other'},
+          ),
+          XmppElement(
+            'retract',
+            xmlns: XmppNs.retract,
+            attributes: {'id': 'o'},
+          ),
+          XmppElement(
+            'reactions',
+            xmlns: XmppNs.reactions,
+            attributes: {'id': 'o'},
+          ),
+          XmppElement('encrypted', xmlns: OmemoVersion.v2.namespace),
+        ],
+      );
+      final merged = omemoDecryptedMessage(
+        message,
+        OmemoReceived(
+          version: OmemoVersion.v2,
+          senderDevice: 1,
+          content: [XmppElement('body', text: 'real')],
+        ),
+      );
+      expect(merged.child('replace', XmppNs.correction), isNull);
+      expect(merged.child('retract', XmppNs.retract), isNull);
+      expect(merged.child('reactions', XmppNs.reactions), isNull);
+      expect(merged.childText('body'), 'real');
+    });
+
+    test('auto mode does not fall back to plain text when keys were used '
+        'before', () async {
+      final alice = await person('alice');
+      final bob = await person('bob');
+      alice.client.startChat(bob.jid);
+      await alice.client.sendText(bob.jid, 'first, encrypted');
+      await _until(() => bob.messages(alice.jid).isNotEmpty);
+      // The server now claims Bob has no OMEMO devices.
+      server.pep[bob.jid]!.remove('urn:xmpp:omemo:2:devices');
+      alice.omemo!.forgetLookups();
+      await expectLater(
+        alice.client.sendText(bob.jid, 'downgrade me'),
+        throwsA(isA<StateError>()),
+      );
+      expect(everythingSent(), isNot(contains('downgrade me')));
+      // The user can still choose plain text.
+      alice.client.setEncryption(bob.jid, XmppChatEncryption.off);
+      await alice.client.sendText(bob.jid, 'plain on purpose');
+      expect(everythingSent(), contains('plain on purpose'));
+    });
+
+    test('the time inside the encryption wins over the outer delay', () async {
+      final past = DateTime.utc(2026, 1, 2, 3, 4, 5);
+      final alice = await person('alice', omemoNow: () => past);
+      final bob = await person('bob');
+      alice.client.startChat(bob.jid);
+      await alice.client.sendText(bob.jid, 'dated');
+      await _until(() => bob.messages(alice.jid).isNotEmpty);
+      expect(bob.messages(alice.jid).single.at, past);
+    });
+
+    test('an OMEMO message in a group chat is not shown as text', () async {
+      final bob = await person('bob');
+      const room = 'room@muc.example.org';
+      bob.chats = bob.chats.withChat(
+        XmppChat(jid: room, room: true, nick: 'bob'),
+      );
+      server.inject(
+        XmppElement(
+          'message',
+          attributes: {
+            'from': '$room/mallory',
+            'to': bob.jid,
+            'type': 'groupchat',
+            'id': 'muc1',
+          },
+          children: [
+            XmppElement('body', text: 'I sent you an OMEMO encrypted message'),
+            XmppElement('encrypted', xmlns: OmemoVersion.v2.namespace),
+          ],
+        ),
+      );
+      await _until(() => bob.messages(room).isNotEmpty);
+      final shown = bob.messages(room).single;
+      expect(shown.security, XmppSecurity.unreadable);
+      expect(shown.text, isNot(contains('I sent you')));
+    });
+
+    test('the own code carries the fingerprint under both names and '
+        'counts a device once', () async {
+      final alice = await person('alice');
+      final bob = await person('bob');
+      bob.client.startChat(alice.jid);
+      await bob.client.sendText(alice.jid, 'so bob knows alice');
+      await _until(() => alice.messages(bob.jid).isNotEmpty);
+      final uri = alice.omemo!.ownUri!;
+      final id = alice.omemo!.engine!.deviceId;
+      expect(uri, contains('omemo-sid-$id='));
+      expect(uri, contains('omemo2-sid-$id='));
+      final result = bob.omemo!.verifyFromUri(alice.jid, uri);
+      expect(result.verified, 1);
+      expect(result.mismatched, 0);
+      expect(
+        bob.omemo!.engine!.deviceRecord(alice.jid, id)!.trust,
+        OmemoTrust.verified,
+      );
+    });
+  });
 }

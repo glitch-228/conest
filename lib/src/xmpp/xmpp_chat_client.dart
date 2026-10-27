@@ -513,6 +513,36 @@ class XmppChatClient {
     final room = type == 'groupchat';
     final fromBare = bareJid(from);
     if (fromBare == null && !(fromArchive && archiveRoom == null)) return;
+    if (!decrypted && room) {
+      // OMEMO in group chats is not supported: show the message as
+      // unreadable, not its "I sent you an OMEMO message" fallback text.
+      final version = message.children
+          .where((child) => child.name == 'encrypted')
+          .map((child) => OmemoVersion.byNamespace(child.xmlns))
+          .nonNulls
+          .firstOrNull;
+      if (version != null) {
+        _onChatMessage(
+          omemoDecryptedMessage(
+            message,
+            OmemoReceived(
+              version: version,
+              senderDevice: 0,
+              failure: 'group chats are not encrypted here yet',
+            ),
+          ),
+          carbonSent: carbonSent,
+          delayed: delayed,
+          archiveId: archiveId,
+          fromArchive: fromArchive,
+          archiveRoom: archiveRoom,
+          decrypted: true,
+          security: XmppSecurity.unreadable,
+          securityNote: 'group chats are not encrypted here yet',
+        );
+        return;
+      }
+    }
     if (!decrypted && omemo != null && !room) {
       final encrypted = message.children
           .where(
@@ -593,7 +623,10 @@ class XmppChatClient {
             chatJid,
             (m) =>
                 (room ? m.stanzaId == target : m.id == target) &&
-                m.from == sender,
+                m.from == sender &&
+                // Retracting an encrypted message must itself be encrypted,
+                // or the server could retract anything.
+                (m.security == XmppSecurity.plain || _authenticated(security)),
             (m) => m.copyWith(retracted: true, text: ''),
           ),
         );
@@ -645,9 +678,7 @@ class XmppChatClient {
                 !m.retracted &&
                 // A correction of an encrypted message must itself be
                 // encrypted: a server could forge a plain one.
-                (m.security == XmppSecurity.plain ||
-                    (security != XmppSecurity.plain &&
-                        security != XmppSecurity.unreadable)),
+                (m.security == XmppSecurity.plain || _authenticated(security)),
             (m) => m.copyWith(text: boundedXmppText(body), editedAt: at),
           ),
         );
@@ -808,10 +839,14 @@ class XmppChatClient {
         merged = omemoDecryptedMessage(message, received);
         if (received.trust == OmemoTrust.distrusted) {
           security = XmppSecurity.untrusted;
+        } else if (received.trust == OmemoTrust.pending) {
+          security = XmppSecurity.unconfirmed;
+        } else if (received.version == OmemoVersion.v2) {
+          security = received.trust == OmemoTrust.verified
+              ? XmppSecurity.omemo2Verified
+              : XmppSecurity.omemo2;
         } else {
-          security = received.version == OmemoVersion.v2
-              ? XmppSecurity.omemo2
-              : XmppSecurity.legacyOmemo;
+          security = XmppSecurity.legacyOmemo;
         }
       } else {
         merged = omemoDecryptedMessage(message, received);
@@ -821,7 +856,7 @@ class XmppChatClient {
       _onChatMessage(
         merged,
         carbonSent: carbonSent,
-        delayed: delayed,
+        delayed: received.at ?? delayed,
         archiveId: archiveId,
         fromArchive: fromArchive,
         archiveRoom: archiveRoom,
@@ -870,10 +905,19 @@ class XmppChatClient {
 
   // Encryption.
 
-  static XmppSecurity _securityOf(OmemoVersion version) =>
-      version == OmemoVersion.v2
-      ? XmppSecurity.omemo2
-      : XmppSecurity.legacyOmemo;
+  /// Whether a message was protected such that the elements inside it (a
+  /// correction, a retraction) were authenticated. Legacy OMEMO only covers
+  /// the text, not the elements around it.
+  static bool _authenticated(XmppSecurity security) =>
+      security == XmppSecurity.omemo2 ||
+      security == XmppSecurity.omemo2Verified;
+
+  XmppSecurity _securityOf(OmemoVersion version, String peer) {
+    if (version != OmemoVersion.v2) return XmppSecurity.legacyOmemo;
+    return (omemo?.engine?.allDevicesVerified(peer) ?? false)
+        ? XmppSecurity.omemo2Verified
+        : XmppSecurity.omemo2;
+  }
 
   /// Whether a message to [chat] would be encrypted now. Fails (rather
   /// than answering "no") when that cannot be told.
@@ -891,6 +935,14 @@ class XmppChatClient {
     final version = await o.versionFor(chat.jid, refresh: true);
     if (version == null && chat.encryption == XmppChatEncryption.on) {
       throw StateError('${chat.jid} has no OMEMO devices.');
+    }
+    if (version == null && o.hasEstablishedEncryption(chat.jid)) {
+      // Keys were used with this contact before: an answer that says they
+      // are gone could be a server's downgrade. Fail instead of sending in
+      // the clear; the user can switch encryption off for the chat.
+      throw StateError(
+        '${chat.jid} used OMEMO before but no keys were found now.',
+      );
     }
     return version;
   }
@@ -917,17 +969,27 @@ class XmppChatClient {
       throw StateError('Encryption is not ready yet.');
     }
     final body = stanza.child('body');
-    if (body == null) return null;
-    final reply = stanza.child('reply', XmppNs.reply);
+    final v2 = version == OmemoVersion.v2;
+    // Elements that change earlier messages go inside the encryption (OMEMO
+    // 2), where a server cannot add or alter them.
     final inside = <XmppElement>[
-      body,
-      if (version == OmemoVersion.v2 && reply != null) reply,
+      ?body,
+      if (v2)
+        for (final (name, ns) in [
+          ('reply', XmppNs.reply),
+          ('replace', XmppNs.correction),
+          ('retract', XmppNs.retract),
+          ('reactions', XmppNs.reactions),
+        ])
+          ?stanza.child(name, ns),
     ];
+    if (body == null && !v2) return null;
+    if (inside.isEmpty) return null;
     final plaintext = o.plaintextFor(
       version: version,
       to: chat.jid,
       content: inside,
-      body: body.text,
+      body: body?.text,
     );
     final encrypted = await o.encrypt(
       jid: chat.jid,
@@ -935,6 +997,7 @@ class XmppChatClient {
       plaintext: plaintext,
     );
     stanza.children.removeWhere(inside.contains);
+    stanza.children.removeWhere((e) => e.name == 'fallback');
     for (final element in OmemoXml.fallback(version)) {
       stanza.add(element);
     }
@@ -1028,7 +1091,7 @@ class XmppChatClient {
           (chats) => chats.updateMessage(
             jid,
             (m) => m.outgoing && m.id == id,
-            (m) => m.copyWith(security: _securityOf(version)),
+            (m) => m.copyWith(security: _securityOf(version, jid)),
           ),
         );
       }
@@ -1099,32 +1162,36 @@ class XmppChatClient {
     }
     final target = chat.room ? original.stanzaId : original.id;
     if (target == null) throw StateError('The room has not confirmed it yet.');
-    await session.send(
-      _message(chat, session.newId())
-        ..add(
-          XmppElement(
-            'retract',
-            xmlns: XmppNs.retract,
-            attributes: {'id': target},
-          ),
-        )
-        ..add(
-          XmppElement(
-            'fallback',
-            xmlns: 'urn:xmpp:fallback:0',
-            attributes: {'for': XmppNs.retract},
-          ),
-        )
-        ..add(
-          XmppElement(
-            'body',
-            text:
-                'This person attempted to retract a previous message, '
-                "but it's unsupported by your client.",
-          ),
-        )
-        ..add(XmppElement('store', xmlns: XmppNs.hints)),
+    final retraction = _message(chat, session.newId())
+      ..add(
+        XmppElement(
+          'retract',
+          xmlns: XmppNs.retract,
+          attributes: {'id': target},
+        ),
+      )
+      ..add(
+        XmppElement(
+          'fallback',
+          xmlns: 'urn:xmpp:fallback:0',
+          attributes: {'for': XmppNs.retract},
+        ),
+      )
+      ..add(
+        XmppElement(
+          'body',
+          text:
+              'This person attempted to retract a previous message, '
+              "but it's unsupported by your client.",
+        ),
+      )
+      ..add(XmppElement('store', xmlns: XmppNs.hints));
+    await _encryptStanza(
+      chat,
+      retraction,
+      mustEncrypt: original.security != XmppSecurity.plain,
     );
+    await session.send(retraction);
     _update(
       (chats) => chats.updateMessage(
         jid,
@@ -1142,21 +1209,24 @@ class XmppChatClient {
     final target = chat.room ? message.stanzaId : message.id;
     if (target == null) throw StateError('The room has not confirmed it yet.');
     final me = chat.room ? (chat.nick ?? _defaultNick) : this.jid;
-    await session.send(
-      _message(chat, session.newId())
-        ..add(
-          XmppElement(
-            'reactions',
-            xmlns: XmppNs.reactions,
-            attributes: {'id': target},
-            children: [
-              for (final symbol in emoji.take(16))
-                XmppElement('reaction', text: symbol),
-            ],
-          ),
-        )
-        ..add(XmppElement('store', xmlns: XmppNs.hints)),
-    );
+    final reaction = _message(chat, session.newId())
+      ..add(
+        XmppElement(
+          'reactions',
+          xmlns: XmppNs.reactions,
+          attributes: {'id': target},
+          children: [
+            for (final symbol in emoji.take(16))
+              XmppElement('reaction', text: symbol),
+          ],
+        ),
+      )
+      ..add(XmppElement('store', xmlns: XmppNs.hints));
+    // A reaction to an encrypted message is encrypted as well (OMEMO 2).
+    if (message.security != XmppSecurity.plain) {
+      await _encryptStanza(chat, reaction, mustEncrypt: true);
+    }
+    await session.send(reaction);
     _update(
       (chats) => chats.updateMessage(jid, (m) => m.id == id, (m) {
         final next = <String, Set<String>>{

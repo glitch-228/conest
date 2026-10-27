@@ -5736,6 +5736,15 @@ class AppLocalizationsId extends AppLocalizations {
   String get notifyAllMessages => 'Beri tahu semua pesan';
 
   @override
+  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+
+  @override
+  String get xmppTrustPending => 'new device, not confirmed';
+
+  @override
+  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+
+  @override
   String get xmppEncOmemo2 => 'terenkripsi (OMEMO)';
 
   @override
