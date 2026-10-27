@@ -250,7 +250,12 @@ impl VoiceGate {
             1 => threshold_db,
             _ => self.noise_floor_db + 12.0,
         };
-        if level_db >= threshold {
+        if muted {
+            // Nothing is sent, so nothing opens or extends the hold (and
+            // no 300 ms of open gate follows an unmute).
+            self.hold = 0;
+            false
+        } else if level_db >= threshold {
             self.hold = GATE_HOLD_FRAMES;
             true
         } else if self.hold > 0 {
@@ -1601,6 +1606,9 @@ mod tests {
         }
         assert_eq!(auto.noise_floor_db, floor);
         // The room's own noise after un-muting does not open the gate.
+        assert!(!auto.open(-55.0, 2, 0.0, false));
+        // A loud muted frame does not hold the gate open after the unmute.
+        assert!(!auto.open(-30.0, 2, 0.0, true));
         assert!(!auto.open(-55.0, 2, 0.0, false));
     }
 

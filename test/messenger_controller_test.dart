@@ -5925,6 +5925,16 @@ void main() {
       expect(bridge.mutes.last, isTrue);
     });
 
+    test('a group-call change during a 1:1 call keeps the hold', () async {
+      final (alice, bob, bridge) = await pair();
+      await connect(alice, bob);
+      await alice.setPushToTalkHeld(true);
+      await alice.groupCallService!.tick();
+      await Future<void>.delayed(Duration.zero);
+      expect(alice.pushToTalkHeld, isTrue);
+      expect(bridge.mutes.last, isFalse);
+    });
+
     test('losing the window focus lets go of the key', () async {
       final (alice, bob, bridge) = await pair();
       await connect(alice, bob);

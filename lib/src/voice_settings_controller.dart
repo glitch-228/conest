@@ -95,7 +95,18 @@ extension VoiceSettingsController on MessengerController {
 
   /// A different call (or none) has the microphone: a hold from before
   /// does not carry over, so the next call starts muted.
-  void _syncPushToTalkSession(Object? session) {
+  void _syncPushToTalkSession() {
+    // One key for both kinds of call: the joined group room, else the 1:1
+    // call (a reconnecting one is the same call). Only its change resets.
+    final room = _groupCallService?.active;
+    final call = _voiceCallService?.active;
+    final Object? session = room != null && room.joined
+        ? room
+        : call != null &&
+              (call.state == VoiceCallState.connected ||
+                  call.state == VoiceCallState.reconnecting)
+        ? call.callId
+        : null;
     if (_pushToTalkSession == session) return;
     _pushToTalkSession = session;
     _pushToTalkHeld = false;

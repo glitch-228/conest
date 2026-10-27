@@ -467,13 +467,13 @@ class PushToTalkKeyHandler {
       return false;
     }
     // Typing: a printable key goes to the text field, not to the microphone.
-    if (event is KeyDownEvent &&
+    if (event is! KeyUpEvent &&
         event.character != null &&
         event.character!.trim().isNotEmpty &&
         _typingInTextField()) {
       return false;
     }
-    if (event is KeyDownEvent) unawaited(controller.setPushToTalkHeld(true));
+    if (event is! KeyUpEvent) unawaited(controller.setPushToTalkHeld(true));
     return true;
   }
 

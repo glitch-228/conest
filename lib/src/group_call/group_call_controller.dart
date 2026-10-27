@@ -184,7 +184,7 @@ extension GroupCallController on MessengerController {
         return;
       }
       final room = _groupCallService?.active;
-      _syncPushToTalkSession(room != null && room.joined ? room : null);
+      _syncPushToTalkSession();
       if (room == null && _voiceCallService?.mediaBusy == true) {
         notifyListeners();
         return;

@@ -1502,9 +1502,7 @@ class MessengerController extends ChangeNotifier {
         incoming: session != null && !session.outgoing,
       );
       _voiceCallSoundCues.handle(session);
-      _syncPushToTalkSession(
-        session?.state == VoiceCallState.connected ? session!.callId : null,
-      );
+      _syncPushToTalkSession();
       if (session?.state == VoiceCallState.connected) {
         unawaited(_applyPushToTalk());
         unawaited(voiceMessageService.stopPlayback());

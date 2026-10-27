@@ -182,6 +182,8 @@ class ConestBackgroundService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, buildNotification())
             }
+            // Only a post that went out counts as the ring's alert.
+            if (callState == "ringing") ringAnnounced = true
         } catch (error: Exception) {
             // Not allowed now (for example from the background on newer
             // Android): the service carries on without its notification.
@@ -199,7 +201,8 @@ class ConestBackgroundService : Service() {
     }
 
     private fun startVoiceCallAudio(handle: Long) {
-        stopVoiceCallAudio()
+        // The test flag of this very start stays.
+        stopVoiceCallAudio(keepMicrophoneTest = true)
         try {
             if (!voiceAudioLibraryLoaded) {
                 System.loadLibrary("conest_native")
@@ -252,8 +255,8 @@ class ConestBackgroundService : Service() {
         }
     }
 
-    private fun stopVoiceCallAudio() {
-        microphoneTest = false
+    private fun stopVoiceCallAudio(keepMicrophoneTest: Boolean = false) {
+        if (!keepMicrophoneTest) microphoneTest = false
         voiceCallAudioStarting = false
         voiceCallAudio?.stop()
         voiceCallAudio = null
@@ -326,7 +329,6 @@ class ConestBackgroundService : Service() {
                 builder.addAction(callAction("Decline", NotificationActionReceiver.ACTION_CALL_DECLINE))
                 builder.addAction(answerAction())
             }
-            if (callState == "ringing") ringAnnounced = true
         } else if (transferActive) {
             val progress = if (totalBytes > 0) {
                 ((transferredBytes.coerceIn(0L, totalBytes) * 1000L) / totalBytes).toInt()
@@ -613,7 +615,19 @@ class ConestBackgroundService : Service() {
         fun stopVoiceCallMedia() {
             requestedCallAudioHandle = 0L
             requestedSpeakerphone = null
-            currentInstance?.stopVoiceCallAudio()
+            val service = currentInstance ?: return
+            service.stopVoiceCallAudio()
+            // The microphone test may have been all that kept the service
+            // up: go, or re-post without its notice.
+            if (!service.backgroundEnabled && !service.callsEnabled &&
+                !service.hasCall() && !service.transferActive &&
+                !service.notificationWork
+            ) {
+                service.stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE)
+                service.stopSelf()
+            } else {
+                service.promoteToForeground()
+            }
         }
     }
 }
