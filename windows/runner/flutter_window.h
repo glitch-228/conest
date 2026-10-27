@@ -54,7 +54,7 @@ class FlutterWindow : public Win32Window {
   void ShowFromTray();
   void ShowTrayMenu();
   bool Notify(const std::string& chat, const std::wstring& title,
-              const std::wstring& body);
+              const std::wstring& body, bool silent = false);
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

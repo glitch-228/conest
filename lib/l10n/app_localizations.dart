@@ -8915,275 +8915,263 @@ abstract class AppLocalizations {
   /// **'Nothing'**
   String get notificationPreviewHidden;
 
-  /// Presentation text for message route information: the XMPP carrier.
+  /// Settings category: calls and microphone.
   ///
   /// In en, this message translates to:
-  /// **'Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.'**
-  String get routeXmppDescription;
+  /// **'Voice'**
+  String get voiceSettingsTitle;
 
-  /// Settings: subtitle of the XMPP carrier switch.
+  /// Settings → Voice: microphone picker.
   ///
   /// In en, this message translates to:
-  /// **'Carry messages through an XMPP (Jabber) account'**
-  String get xmppCarrierSubtitle;
+  /// **'Microphone'**
+  String get voiceInputDevice;
 
-  /// Settings: the XMPP account was created by Conest.
+  /// Settings → Voice: output picker.
   ///
   /// In en, this message translates to:
-  /// **'Account made by Conest'**
-  String get xmppCreatedAccount;
+  /// **'Speaker or headphones'**
+  String get voiceOutputDevice;
 
-  /// Settings: the XMPP account is the user's own.
+  /// Device picker: follow the system's choice.
   ///
   /// In en, this message translates to:
-  /// **'Your own account'**
-  String get xmppOwnAccount;
+  /// **'System default'**
+  String get voiceSystemDefault;
 
-  /// Settings: button to change the XMPP carrier account.
+  /// Settings → Voice slider.
   ///
   /// In en, this message translates to:
-  /// **'Change account'**
-  String get xmppChangeAccount;
+  /// **'Microphone volume'**
+  String get voiceInputVolume;
 
-  /// Settings: field for the XMPP server on which Conest creates an account.
+  /// Settings → Voice slider.
   ///
   /// In en, this message translates to:
-  /// **'XMPP server (empty: the first one that answers here)'**
-  String get xmppServerField;
+  /// **'Output volume'**
+  String get voiceOutputVolume;
 
-  /// Settings: checkbox to use the user's own XMPP account.
+  /// Settings → Voice: microphone test heading.
   ///
   /// In en, this message translates to:
-  /// **'Use my own XMPP account'**
-  String get xmppUseOwnAccount;
+  /// **'Check your microphone'**
+  String get voiceMicTest;
 
-  /// Settings: explanation of using one's own XMPP account.
+  /// Starts the microphone test.
   ///
   /// In en, this message translates to:
-  /// **'Conest signs in as an extra device; your other XMPP apps do not see its messages.'**
-  String get xmppOwnAccountNote;
+  /// **'Let\'s check'**
+  String get voiceMicTestStart;
 
-  /// Settings: field for an XMPP address.
+  /// Stops the microphone test.
   ///
   /// In en, this message translates to:
-  /// **'XMPP address (name@server)'**
-  String get xmppAddressField;
+  /// **'Stop'**
+  String get voiceMicTestStop;
 
-  /// Settings: field for the XMPP account password.
+  /// Microphone test: play your voice back.
   ///
   /// In en, this message translates to:
-  /// **'Password'**
-  String get xmppPasswordField;
+  /// **'Hear yourself'**
+  String get voiceMicTestLoopback;
 
-  /// XMPP chat: a message its sender took back.
+  /// Shown when the test cannot start.
   ///
   /// In en, this message translates to:
-  /// **'Message retracted'**
-  String get xmppRetracted;
+  /// **'The microphone test is not available now (during a call, or without call audio in this build).'**
+  String get voiceMicTestUnavailable;
 
-  /// XMPP chat: a shared file.
+  /// Settings → Voice: input mode heading.
   ///
   /// In en, this message translates to:
-  /// **'File'**
-  String get xmppFile;
+  /// **'Send my voice'**
+  String get voiceInputMode;
 
-  /// XMPP: start a new chat.
+  /// Input mode.
   ///
   /// In en, this message translates to:
-  /// **'New XMPP chat'**
-  String get xmppNewChat;
+  /// **'Always'**
+  String get voiceInputModeAlways;
 
-  /// XMPP: address field of a new chat.
+  /// Input mode: voice activity.
   ///
   /// In en, this message translates to:
-  /// **'Address or xmpp: link'**
-  String get xmppNewChatAddress;
+  /// **'When I speak'**
+  String get voiceInputModeActivity;
 
-  /// XMPP: a group chat (MUC).
+  /// Input mode.
   ///
   /// In en, this message translates to:
-  /// **'Group chat'**
-  String get xmppGroupChat;
+  /// **'Push to talk'**
+  String get voiceInputModePushToTalk;
 
-  /// XMPP: nickname in a group chat.
+  /// Voice activity switch.
   ///
   /// In en, this message translates to:
-  /// **'Your nickname'**
-  String get xmppNickname;
+  /// **'Set sensitivity automatically'**
+  String get voiceSensitivityAutomatic;
 
-  /// XMPP: open the chat button.
+  /// Voice activity threshold slider.
   ///
   /// In en, this message translates to:
-  /// **'Open'**
-  String get xmppOpenChat;
+  /// **'Sensitivity'**
+  String get voiceSensitivity;
 
-  /// XMPP: the file's metadata could not all be removed.
+  /// Settings → Voice.
   ///
   /// In en, this message translates to:
-  /// **'Some details stay in this file'**
-  String get xmppMetadataTitle;
+  /// **'Push-to-talk key'**
+  String get voicePushToTalkKey;
 
-  /// XMPP: explanation of remaining metadata.
+  /// No key chosen.
   ///
   /// In en, this message translates to:
-  /// **'Conest could not remove all hidden details (such as location or device) from this file. Send it anyway?'**
-  String get xmppMetadataBody;
+  /// **'The call\'s button only'**
+  String get voicePushToTalkKeyNone;
 
-  /// XMPP: send despite metadata.
+  /// Waiting for the key.
   ///
   /// In en, this message translates to:
-  /// **'Send anyway'**
-  String get xmppSendAnyway;
+  /// **'Press a key…'**
+  String get voicePushToTalkKeyPress;
 
-  /// XMPP: reply to a message.
+  /// Where the key works.
   ///
   /// In en, this message translates to:
-  /// **'Reply'**
-  String get xmppReply;
+  /// **'works while Conest is in front'**
+  String get voicePushToTalkKeyHint;
 
-  /// XMPP: copy a message.
+  /// Removes the chosen key.
   ///
   /// In en, this message translates to:
-  /// **'Copy'**
-  String get xmppCopy;
+  /// **'Clear'**
+  String get voiceClear;
 
-  /// XMPP: correct own message.
+  /// Settings → Voice heading.
   ///
   /// In en, this message translates to:
-  /// **'Edit'**
-  String get xmppEdit;
+  /// **'Processing'**
+  String get voiceProcessing;
 
-  /// XMPP: retract own message.
+  /// Switch.
   ///
   /// In en, this message translates to:
-  /// **'Retract'**
-  String get xmppRetract;
+  /// **'Noise suppression'**
+  String get voiceNoiseSuppression;
 
-  /// XMPP: the chat no longer exists.
+  /// Switch.
   ///
   /// In en, this message translates to:
-  /// **'This chat is gone.'**
-  String get xmppChatGone;
+  /// **'Echo cancellation'**
+  String get voiceEchoCancellation;
 
-  /// XMPP: the chat is not end-to-end encrypted.
+  /// Switch: automatic gain control.
   ///
   /// In en, this message translates to:
-  /// **'not encrypted'**
-  String get xmppNotEncrypted;
+  /// **'Automatic volume'**
+  String get voiceAutoGain;
 
-  /// XMPP: leave a group chat.
+  /// Switch: tones when calls connect, end, mute.
   ///
   /// In en, this message translates to:
-  /// **'Leave group chat'**
-  String get xmppLeaveRoom;
+  /// **'Call sounds'**
+  String get voiceCallSounds;
 
-  /// XMPP: delete a chat here.
+  /// Under the call sounds switch.
   ///
   /// In en, this message translates to:
-  /// **'Delete chat'**
-  String get xmppDeleteChat;
+  /// **'An incoming call still rings.'**
+  String get voiceCallSoundsHint;
 
-  /// XMPP: block someone.
+  /// Settings → Voice on phones.
   ///
   /// In en, this message translates to:
-  /// **'Block'**
-  String get xmppBlock;
+  /// **'On Android the phone picks the microphone and speaker for calls.'**
+  String get voiceDevicesOnPhone;
 
-  /// XMPP: accept a chat request.
+  /// Button in a call screen.
   ///
   /// In en, this message translates to:
-  /// **'Accept'**
-  String get xmppAccept;
+  /// **'Voice settings'**
+  String get voiceSettingsButton;
 
-  /// XMPP: banner for a stranger's chat.
+  /// Group call: one member's volume on this device.
   ///
   /// In en, this message translates to:
-  /// **'Someone not in your contacts wrote to you. Replies and read markers go out only once you accept.'**
-  String get xmppRequest;
+  /// **'Volume for {name}'**
+  String voiceParticipantVolume(String name);
 
-  /// XMPP: banner for a group chat invitation.
+  /// Push-to-talk button in a 1:1 call.
   ///
   /// In en, this message translates to:
-  /// **'You were invited to this group chat. Join it?'**
-  String get xmppRoomInvitation;
+  /// **'Hold to talk'**
+  String get voiceHoldToTalk;
 
-  /// XMPP: attach a file.
+  /// Settings: notifications without sound.
   ///
   /// In en, this message translates to:
-  /// **'Attach a file'**
-  String get xmppAttach;
+  /// **'Quiet hours'**
+  String get quietHoursTitle;
 
-  /// XMPP: composer hint.
+  /// Under the quiet hours switch.
   ///
   /// In en, this message translates to:
-  /// **'Message'**
-  String get xmppMessageHint;
+  /// **'Notifications still appear, without sound or vibration.'**
+  String get quietHoursHint;
 
-  /// XMPP: message was corrected.
+  /// Quiet hours start.
   ///
   /// In en, this message translates to:
-  /// **'edited'**
-  String get xmppEdited;
+  /// **'From {time}'**
+  String quietHoursFrom(String time);
 
-  /// Settings: XMPP chats switch.
+  /// Quiet hours end.
   ///
   /// In en, this message translates to:
-  /// **'XMPP chats'**
-  String get xmppChats;
+  /// **'Until {time}'**
+  String quietHoursUntil(String time);
 
-  /// Settings: XMPP chats switch subtitle.
+  /// Quiet hours: incoming calls.
   ///
   /// In en, this message translates to:
-  /// **'Chat with anyone on XMPP (Jabber), beside your Conest chats'**
-  String get xmppChatsSubtitle;
+  /// **'Calls still ring'**
+  String get quietHoursCallsRing;
 
-  /// Settings: use another XMPP account for chats.
+  /// Mute a chat.
   ///
   /// In en, this message translates to:
-  /// **'Use another account than the one Conest carries messages through'**
-  String get xmppChatsOtherAccount;
+  /// **'For 1 hour'**
+  String get muteForHour;
 
-  /// XMPP: connected.
+  /// Mute a chat.
   ///
   /// In en, this message translates to:
-  /// **'connected'**
-  String get xmppConnected;
+  /// **'For 8 hours'**
+  String get muteForEightHours;
 
-  /// XMPP: connecting.
+  /// Mute a chat.
   ///
   /// In en, this message translates to:
-  /// **'connecting'**
-  String get xmppConnecting;
+  /// **'For 1 day'**
+  String get muteForDay;
 
-  /// App mode: confirm switching to a client-only mode for a network.
+  /// Mute a chat.
   ///
   /// In en, this message translates to:
-  /// **'Use Conest as a {network} client?'**
-  String appModeClientOnlyTitle(String network);
+  /// **'Until I unmute'**
+  String get muteUntilUnmuted;
 
-  /// Onboarding: use the app as an XMPP client.
+  /// Group menu: notify only when mentioned or replied to.
   ///
   /// In en, this message translates to:
-  /// **'Use as an XMPP client instead'**
-  String get onbXmppInstead;
+  /// **'Notify only for mentions'**
+  String get notifyMentionsOnly;
 
-  /// XMPP-only mode: sign in heading.
+  /// Group menu: back to every message.
   ///
   /// In en, this message translates to:
-  /// **'Sign in to your XMPP account'**
-  String get xmppSignIn;
-
-  /// XMPP-only mode: no chats yet.
-  ///
-  /// In en, this message translates to:
-  /// **'No XMPP chats yet'**
-  String get xmppNoChats;
-
-  /// XMPP: chat list label for a request.
-  ///
-  /// In en, this message translates to:
-  /// **'Chat request'**
-  String get xmppRequestShort;
+  /// **'Notify for all messages'**
+  String get notifyAllMessages;
 
   /// XMPP chat header: the chat is end-to-end encrypted with OMEMO.
   ///

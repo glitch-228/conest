@@ -50,6 +50,29 @@ void main() {
       ]);
     });
 
+    test('in quiet hours without ringing calls, nothing rings', () async {
+      cues.ringAllowed = () => false;
+      await service.receiveInvite(_invite('call-3'));
+      await service.accept();
+      await service.end();
+      await settle();
+
+      expect(played, ['play connected', 'play ended', 'dispose']);
+    });
+
+    test('with call sounds off only an incoming call rings', () async {
+      cues.enabled = false;
+      final session = await service.startOutgoing('peer');
+      await service.onAccepted(callId: session.callId);
+      await service.toggleMute();
+      await service.end();
+      await service.receiveInvite(_invite('call-2'));
+      await service.end();
+      await settle();
+
+      expect(played, ['play incomingRing', 'stop', 'dispose']);
+    });
+
     test('an accepted incoming call stops ringing before connecting', () async {
       await service.receiveInvite(_invite('call-1'));
       await service.accept();

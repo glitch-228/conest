@@ -36,6 +36,14 @@ typedef _SelectOutputNative = Bool Function(Uint64, Pointer<Utf8>);
 typedef _SelectOutputDart = bool Function(int, Pointer<Utf8>);
 typedef _StatsNative = Pointer<Utf8> Function(Uint64);
 typedef _StatsDart = Pointer<Utf8> Function(int);
+typedef _OpenWithNative = Uint64 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _OpenWithDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _TuneNative = Bool Function(Uint64, Pointer<Utf8>);
+typedef _TuneDart = bool Function(int, Pointer<Utf8>);
+typedef _InputLevelNative = Float Function(Uint64);
+typedef _InputLevelDart = double Function(int);
+typedef _ParticipantVolumeNative = Bool Function(Uint64, Uint16, Float);
+typedef _ParticipantVolumeDart = bool Function(int, int, double);
 typedef _ErrorNative = Pointer<Utf8> Function();
 typedef _ErrorDart = Pointer<Utf8> Function();
 typedef _FreeNative = Void Function(Pointer<Utf8>);
@@ -101,6 +109,40 @@ class _NativeVoiceAudioBindings {
               'conest_voice_audio_stats',
             )
           : null,
+      // Optional: Settings → Voice needs a native library that has them.
+      openWith = library.providesSymbol('conest_voice_audio_open_with')
+          ? library.lookupFunction<_OpenWithNative, _OpenWithDart>(
+              'conest_voice_audio_open_with',
+            )
+          : null,
+      inputDevices = library.providesSymbol('conest_voice_audio_input_devices')
+          ? library.lookupFunction<_OutputDevicesNative, _OutputDevicesDart>(
+              'conest_voice_audio_input_devices',
+            )
+          : null,
+      selectInput =
+          library.providesSymbol('conest_voice_audio_set_input_device')
+          ? library.lookupFunction<_SelectOutputNative, _SelectOutputDart>(
+              'conest_voice_audio_set_input_device',
+            )
+          : null,
+      tune = library.providesSymbol('conest_voice_audio_tune')
+          ? library.lookupFunction<_TuneNative, _TuneDart>(
+              'conest_voice_audio_tune',
+            )
+          : null,
+      inputLevel = library.providesSymbol('conest_voice_audio_input_level')
+          ? library.lookupFunction<_InputLevelNative, _InputLevelDart>(
+              'conest_voice_audio_input_level',
+            )
+          : null,
+      participantVolume =
+          library.providesSymbol('conest_voice_audio_set_participant_volume')
+          ? library.lookupFunction<
+              _ParticipantVolumeNative,
+              _ParticipantVolumeDart
+            >('conest_voice_audio_set_participant_volume')
+          : null,
       lastError = library.lookupFunction<_ErrorNative, _ErrorDart>(
         'conest_last_error',
       ),
@@ -137,6 +179,12 @@ class _NativeVoiceAudioBindings {
   final _OutputDevicesDart outputDevices;
   final _SelectOutputDart selectOutput;
   final _StatsDart? stats;
+  final _OpenWithDart? openWith;
+  final _OutputDevicesDart? inputDevices;
+  final _SelectOutputDart? selectInput;
+  final _TuneDart? tune;
+  final _InputLevelDart? inputLevel;
+  final _ParticipantVolumeDart? participantVolume;
   final _ErrorDart lastError;
   final _FreeDart freeString;
   final _StartMessageRecordingDart startMessageRecording;
@@ -201,10 +249,20 @@ class NativeVoiceCallAudio {
     return null;
   }
 
-  Future<void> open() async {
+  /// Opens call audio; on desktop on the named microphone and output
+  /// (null: the system default).
+  Future<void> open({String? input, String? output}) async {
     if (_handle != null) throw StateError('Voice audio is already open.');
     final libraryPath = _libraryPath;
-    final handle = await Isolate.run(() => _openVoiceAudioNative(libraryPath));
+    final named =
+        (input != null || output != null) &&
+        _bindings.openWith != null &&
+        (Platform.isLinux || Platform.isWindows);
+    final handle = await Isolate.run(
+      () => named
+          ? _openVoiceAudioWithNative(libraryPath, input, output)
+          : _openVoiceAudioNative(libraryPath),
+    );
     if (handle == 0) {
       throw StateError('Native microphone/audio failed to open.');
     }
@@ -223,6 +281,57 @@ class NativeVoiceCallAudio {
     if (!Platform.isLinux && !Platform.isWindows) return const [];
     final libraryPath = _libraryPath;
     return Isolate.run(() => _voiceAudioOutputDevicesNative(libraryPath));
+  }
+
+  Future<List<String>> availableInputDevices() async {
+    if (!Platform.isLinux && !Platform.isWindows) return const [];
+    if (_bindings.inputDevices == null) return const [];
+    final libraryPath = _libraryPath;
+    return Isolate.run(() => _voiceAudioInputDevicesNative(libraryPath));
+  }
+
+  Future<void> selectInputDevice(String name) async {
+    final handle = _handle;
+    if (handle == null) throw StateError('Voice audio is not active.');
+    if (_bindings.selectInput == null) {
+      throw StateError('This build cannot choose the microphone.');
+    }
+    final libraryPath = _libraryPath;
+    final result = await Isolate.run(
+      () => _voiceAudioSelectInputNative(libraryPath, handle, name),
+    );
+    if (!result) throw StateError('Could not select the microphone.');
+  }
+
+  /// Settings → Voice for the open session (absent keys stay as they are).
+  bool tune(Map<String, Object?> settings) {
+    final handle = _handle;
+    final apply = _bindings.tune;
+    if (handle == null || apply == null) return false;
+    final json = jsonEncode(settings).toNativeUtf8();
+    try {
+      return apply(handle, json);
+    } finally {
+      calloc.free(json);
+    }
+  }
+
+  /// The microphone's level now (0 to 1); 0 when not open.
+  double inputLevel() {
+    final handle = _handle;
+    final read = _bindings.inputLevel;
+    if (handle == null || read == null) return 0;
+    return read(handle);
+  }
+
+  bool setParticipantVolume(int participant, double gain) {
+    final handle = _handle;
+    final apply = _bindings.participantVolume;
+    return handle != null &&
+        apply != null &&
+        participant >= 0 &&
+        participant < 16 &&
+        apply(handle, participant, gain.clamp(0.0, 2.0));
   }
 
   Future<void> selectOutputDevice(String name) async {
@@ -457,6 +566,50 @@ int _openVoiceAudioNative(String libraryPath) {
   final handle = bindings.open();
   if (handle == 0) throw StateError(bindings.takeLastError());
   return handle;
+}
+
+int _openVoiceAudioWithNative(
+  String libraryPath,
+  String? input,
+  String? output,
+) {
+  final bindings = _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath));
+  final inputPointer = input?.toNativeUtf8() ?? nullptr;
+  final outputPointer = output?.toNativeUtf8() ?? nullptr;
+  try {
+    final handle = bindings.openWith!(inputPointer, outputPointer);
+    if (handle == 0) throw StateError(bindings.takeLastError());
+    return handle;
+  } finally {
+    if (inputPointer != nullptr) calloc.free(inputPointer);
+    if (outputPointer != nullptr) calloc.free(outputPointer);
+  }
+}
+
+List<String> _voiceAudioInputDevicesNative(String libraryPath) {
+  final bindings = _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath));
+  final pointer = bindings.inputDevices?.call() ?? nullptr;
+  if (pointer == nullptr) return const [];
+  try {
+    final decoded = jsonDecode(pointer.toDartString());
+    return decoded is List ? decoded.whereType<String>().toList() : const [];
+  } catch (_) {
+    return const [];
+  } finally {
+    bindings.freeString(pointer);
+  }
+}
+
+bool _voiceAudioSelectInputNative(String libraryPath, int handle, String name) {
+  final bindings = _NativeVoiceAudioBindings(DynamicLibrary.open(libraryPath));
+  final namePointer = name.toNativeUtf8();
+  try {
+    final selected = bindings.selectInput!(handle, namePointer);
+    if (!selected) throw StateError(bindings.takeLastError());
+    return true;
+  } finally {
+    calloc.free(namePointer);
+  }
 }
 
 List<String> _voiceAudioOutputDevicesNative(String libraryPath) {

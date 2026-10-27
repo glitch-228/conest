@@ -10,6 +10,8 @@ import 'group_file_manifest.dart';
 import 'feature_models.dart';
 import 'group_call/group_call_models.dart';
 import 'content_routing.dart';
+import 'voice_settings.dart';
+import 'notification_rules.dart';
 
 export 'feature_models.dart';
 export 'group_call/group_call_models.dart' show GroupCallSummary;
@@ -990,6 +992,8 @@ class IdentityRecord {
     // there they are on unless the user opts out.
     this.experimentalVoiceCallsEnabled = true,
     this.voiceNoiseSuppressionEnabled = true,
+    this.voiceSettings = const VoiceSettings(),
+    this.quietHours = const QuietHours(),
     this.advertisedFeatureCapabilities,
     required this.suppressReadReceipts,
     this.connectivity = const GlobalConnectivityPreferences(),
@@ -1047,6 +1051,12 @@ class IdentityRecord {
   final NotificationPreview notificationPreview;
   final bool experimentalVoiceCallsEnabled;
   final bool voiceNoiseSuppressionEnabled;
+
+  /// Settings → Voice (devices, volumes, processing, input mode).
+  final VoiceSettings voiceSettings;
+
+  /// Notifications without sound at night (or as set).
+  final QuietHours quietHours;
 
   /// Capability names last sent to contacts. When this build's capabilities
   /// differ (an update added or removed one), contacts are told again.
@@ -1123,6 +1133,8 @@ class IdentityRecord {
     NotificationPreview? notificationPreview,
     bool? experimentalVoiceCallsEnabled,
     bool? voiceNoiseSuppressionEnabled,
+    VoiceSettings? voiceSettings,
+    QuietHours? quietHours,
     List<String>? advertisedFeatureCapabilities,
     bool? suppressReadReceipts,
     GlobalConnectivityPreferences? connectivity,
@@ -1167,6 +1179,8 @@ class IdentityRecord {
           experimentalVoiceCallsEnabled ?? this.experimentalVoiceCallsEnabled,
       voiceNoiseSuppressionEnabled:
           voiceNoiseSuppressionEnabled ?? this.voiceNoiseSuppressionEnabled,
+      voiceSettings: voiceSettings ?? this.voiceSettings,
+      quietHours: quietHours ?? this.quietHours,
       advertisedFeatureCapabilities:
           advertisedFeatureCapabilities ?? this.advertisedFeatureCapabilities,
       suppressReadReceipts: suppressReadReceipts ?? this.suppressReadReceipts,
@@ -1218,6 +1232,8 @@ class IdentityRecord {
             .toIso8601String(),
       'experimentalVoiceCallsEnabled': experimentalVoiceCallsEnabled,
       'voiceNoiseSuppressionEnabled': voiceNoiseSuppressionEnabled,
+      'voiceSettings': voiceSettings.toJson(),
+      'quietHours': quietHours.toJson(),
       if (advertisedFeatureCapabilities != null)
         'advertisedFeatureCapabilities': advertisedFeatureCapabilities,
       'suppressReadReceipts': suppressReadReceipts,
@@ -1306,6 +1322,8 @@ class IdentityRecord {
           json['experimentalVoiceCallsEnabled'] as bool? ?? true,
       voiceNoiseSuppressionEnabled:
           json['voiceNoiseSuppressionEnabled'] as bool? ?? true,
+      voiceSettings: VoiceSettings.fromJson(json['voiceSettings']),
+      quietHours: QuietHours.fromJson(json['quietHours']),
       advertisedFeatureCapabilities:
           (json['advertisedFeatureCapabilities'] as List?)
               ?.whereType<String>()
@@ -3760,6 +3778,8 @@ class ConversationRecord {
     this.pinned = false,
     this.archived = false,
     this.muted = false,
+    this.mutedUntil,
+    this.mentionsOnly = false,
   });
 
   final String id;
@@ -3772,7 +3792,19 @@ class ConversationRecord {
   final String draft;
   final bool pinned;
   final bool archived;
+
+  /// Muted until unmuted (see [mutedUntil] for a while).
   final bool muted;
+
+  /// Muted for a while: notifications come back after this time.
+  final DateTime? mutedUntil;
+
+  /// Groups: notify only when someone mentions you (or replies to you).
+  final bool mentionsOnly;
+
+  /// Whether notifications are off for this chat at [now].
+  bool mutedAt(DateTime now) =>
+      muted || (mutedUntil != null && mutedUntil!.isAfter(now));
 
   ConversationRecord copyWith({
     List<ChatMessage>? messages,
@@ -3780,6 +3812,9 @@ class ConversationRecord {
     bool? pinned,
     bool? archived,
     bool? muted,
+    DateTime? mutedUntil,
+    bool clearMutedUntil = false,
+    bool? mentionsOnly,
     DateTime? lastReadAt,
   }) {
     return ConversationRecord(
@@ -3787,6 +3822,8 @@ class ConversationRecord {
       pinned: pinned ?? this.pinned,
       archived: archived ?? this.archived,
       muted: muted ?? this.muted,
+      mutedUntil: clearMutedUntil ? null : mutedUntil ?? this.mutedUntil,
+      mentionsOnly: mentionsOnly ?? this.mentionsOnly,
       id: id,
       kind: kind,
       peerDeviceId: peerDeviceId,
@@ -3801,6 +3838,9 @@ class ConversationRecord {
       'pinned': pinned,
       'archived': archived,
       'muted': muted,
+      if (mutedUntil != null)
+        'mutedUntil': mutedUntil!.toUtc().toIso8601String(),
+      if (mentionsOnly) 'mentionsOnly': true,
       'id': id,
       'kind': kind.name,
       'peerDeviceId': peerDeviceId,
@@ -3829,6 +3869,8 @@ class ConversationRecord {
       pinned: json['pinned'] == true,
       archived: json['archived'] == true,
       muted: json['muted'] == true,
+      mutedUntil: DateTime.tryParse(json['mutedUntil'] as String? ?? ''),
+      mentionsOnly: json['mentionsOnly'] == true,
       id: json['id'] as String,
       kind: ConversationKind.values.byName(json['kind'] as String),
       peerDeviceId: json['peerDeviceId'] as String,

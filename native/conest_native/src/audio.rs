@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -85,6 +85,177 @@ fn call_outputs(host: &cpal::Host) -> Result<Vec<Device>> {
         .into_iter()
         .filter(|device| offered_output(&id(device), sound_server))
         .collect())
+}
+
+/// The microphones a call may use: as for outputs, with a sound server
+/// only its own devices (a card's own would take it from other apps).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn call_inputs(host: &cpal::Host) -> Result<Vec<Device>> {
+    let devices: Vec<Device> = host
+        .input_devices()
+        .context("Could not enumerate microphones")?
+        .collect();
+    let id = |device: &Device| device.id().map(|id| id.id().to_owned()).unwrap_or_default();
+    let sound_server = devices
+        .iter()
+        .any(|device| matches!(id(device).as_str(), "pipewire" | "pulse"));
+    Ok(devices
+        .into_iter()
+        .filter(|device| offered_output(&id(device), sound_server))
+        .collect())
+}
+
+/// What the user set in Settings → Voice, changed live during a call.
+/// Gains are linear factors (0 to 2) kept as f32 bits.
+pub struct VoiceTuning {
+    input_gain: AtomicU32,
+    output_gain: AtomicU32,
+    echo_cancellation: AtomicBool,
+    auto_gain: AtomicBool,
+    /// 0: always send; 1: voice activity at [gate_threshold_db]; 2: voice
+    /// activity with an automatic threshold (above the noise floor).
+    gate_mode: AtomicU8,
+    gate_threshold_db: AtomicU32,
+    /// The microphone test: what is captured is played back here.
+    loopback: AtomicBool,
+    /// The newest processed microphone frame's level (RMS, 0 to 1).
+    input_level: AtomicU32,
+    /// Whether the voice gate lets the microphone through right now.
+    gate_open: AtomicBool,
+}
+
+impl Default for VoiceTuning {
+    fn default() -> Self {
+        Self {
+            input_gain: AtomicU32::new(1.0_f32.to_bits()),
+            output_gain: AtomicU32::new(1.0_f32.to_bits()),
+            echo_cancellation: AtomicBool::new(true),
+            auto_gain: AtomicBool::new(false),
+            gate_mode: AtomicU8::new(0),
+            gate_threshold_db: AtomicU32::new((-50.0_f32).to_bits()),
+            loopback: AtomicBool::new(false),
+            input_level: AtomicU32::new(0.0_f32.to_bits()),
+            gate_open: AtomicBool::new(true),
+        }
+    }
+}
+
+/// Settings → Voice as sent over FFI (absent fields stay as they are).
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceTuningUpdate {
+    pub input_gain: Option<f32>,
+    pub output_gain: Option<f32>,
+    pub echo_cancellation: Option<bool>,
+    pub auto_gain: Option<bool>,
+    pub gate_mode: Option<u8>,
+    pub gate_threshold_db: Option<f32>,
+    pub loopback: Option<bool>,
+}
+
+fn load_f32(value: &AtomicU32) -> f32 {
+    f32::from_bits(value.load(Ordering::Relaxed))
+}
+
+fn store_f32(value: &AtomicU32, number: f32) {
+    value.store(number.to_bits(), Ordering::Relaxed);
+}
+
+impl VoiceTuning {
+    pub fn apply(&self, update: &VoiceTuningUpdate) {
+        let gain = |value: f32| if value.is_finite() { value.clamp(0.0, 2.0) } else { 1.0 };
+        if let Some(value) = update.input_gain {
+            store_f32(&self.input_gain, gain(value));
+        }
+        if let Some(value) = update.output_gain {
+            store_f32(&self.output_gain, gain(value));
+        }
+        if let Some(value) = update.echo_cancellation {
+            self.echo_cancellation.store(value, Ordering::Relaxed);
+        }
+        if let Some(value) = update.auto_gain {
+            self.auto_gain.store(value, Ordering::Relaxed);
+        }
+        if let Some(value) = update.gate_mode {
+            self.gate_mode.store(value.min(2), Ordering::Relaxed);
+        }
+        if let Some(value) = update.gate_threshold_db
+            && value.is_finite()
+        {
+            store_f32(&self.gate_threshold_db, value.clamp(-90.0, 0.0));
+        }
+        if let Some(value) = update.loopback {
+            self.loopback.store(value, Ordering::Relaxed);
+        }
+    }
+
+    pub fn input_level(&self) -> f32 {
+        load_f32(&self.input_level)
+    }
+}
+
+/// Scales samples by a linear gain, clipping at full scale.
+fn apply_gain(samples: &mut [f32], gain: f32) {
+    if (gain - 1.0).abs() < f32::EPSILON {
+        return;
+    }
+    for sample in samples {
+        *sample = (*sample * gain).clamp(-1.0, 1.0);
+    }
+}
+
+/// RMS of a frame and the same in dBFS (floored at -100).
+fn frame_level(samples: &[f32]) -> (f32, f32) {
+    if samples.is_empty() {
+        return (0.0, -100.0);
+    }
+    let energy = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+    let rms = energy.sqrt().min(1.0);
+    let db = if rms > 0.0 { (20.0 * rms.log10()).max(-100.0) } else { -100.0 };
+    (rms, db)
+}
+
+/// Voice activity: the microphone is sent while its level is above a
+/// threshold, and for 300 ms after (so word endings are kept). The
+/// automatic threshold sits 12 dB above a tracked noise floor.
+struct VoiceGate {
+    hold: u32,
+    noise_floor_db: f32,
+}
+
+const GATE_HOLD_FRAMES: u32 = 15;
+
+impl VoiceGate {
+    fn new() -> Self {
+        Self {
+            hold: 0,
+            noise_floor_db: -60.0,
+        }
+    }
+
+    fn open(&mut self, level_db: f32, mode: u8, threshold_db: f32) -> bool {
+        // The floor falls at once to quieter frames and rises slowly
+        // (1 dB a second), so speech does not lift it.
+        if level_db < self.noise_floor_db {
+            self.noise_floor_db = level_db.max(-90.0);
+        } else {
+            self.noise_floor_db = (self.noise_floor_db + 0.02).min(-20.0);
+        }
+        let threshold = match mode {
+            0 => return true,
+            1 => threshold_db,
+            _ => self.noise_floor_db + 12.0,
+        };
+        if level_db >= threshold {
+            self.hold = GATE_HOLD_FRAMES;
+            true
+        } else if self.hold > 0 {
+            self.hold -= 1;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[path = "audio_remote.rs"]
@@ -236,6 +407,25 @@ impl EchoProcessor {
         self.apm.apply_config(config);
     }
 
+    /// Echo cancellation (desktop; Android uses the platform's) and
+    /// automatic gain (AGC2's adaptive digital gain), as the user set them.
+    /// Only a change is applied.
+    fn set_echo_and_gain(&mut self, echo_cancellation: bool, auto_gain: bool) {
+        let echo = echo_cancellation && !cfg!(target_os = "android");
+        let config = self.apm.config();
+        if config.echo_canceller.is_some() == echo && config.gain_controller2.is_some() == auto_gain
+        {
+            return;
+        }
+        let mut config = config.clone();
+        config.echo_canceller = echo.then(sonora::config::EchoCanceller::default);
+        config.gain_controller2 = auto_gain.then(|| sonora::config::GainController2 {
+            adaptive_digital: Some(sonora::config::AdaptiveDigital::default()),
+            ..Default::default()
+        });
+        self.apm.apply_config(config);
+    }
+
     /// Cancels echo in one capture frame in place. Every rendered sample is
     /// analyzed before the capture that may contain its echo. While muted the
     /// canceller still sees both streams so it stays converged, but the frame
@@ -297,6 +487,7 @@ pub struct VoiceAudioSession {
     playback: Arc<ArrayQueue<f32>>,
     render_reference: Arc<ArrayQueue<f32>>,
     counters: Arc<CallCounters>,
+    tuning: Arc<VoiceTuning>,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     input_stream: Option<Stream>,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -307,15 +498,32 @@ pub struct VoiceAudioSession {
 impl VoiceAudioSession {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn open() -> Result<Self> {
-        Self::open_with_output(None)
+        Self::open_with_devices(None, None)
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn open_with_output(output_name: Option<&str>) -> Result<Self> {
+        Self::open_with_devices(None, output_name)
+    }
+
+    /// Opens the named microphone and output (None: the system's default).
+    /// A named device that is gone falls back to the default, so a call
+    /// still starts after a headset was unplugged.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn open_with_devices(input_name: Option<&str>, output_name: Option<&str>) -> Result<Self> {
         let host = cpal::default_host();
-        let input = host
-            .default_input_device()
-            .context("No default microphone device is available")?;
+        let named_input = input_name.and_then(|name| {
+            call_inputs(&host)
+                .ok()?
+                .into_iter()
+                .find(|device| output_device_name(device).as_deref() == Some(name))
+        });
+        let input = match named_input {
+            Some(device) => device,
+            None => host
+                .default_input_device()
+                .context("No default microphone device is available")?,
+        };
         let output = match output_name {
             Some(name) => call_outputs(&host)?
                 .into_iter()
@@ -366,6 +574,41 @@ impl VoiceAudioSession {
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn input_device_names() -> Vec<String> {
+        call_inputs(&cpal::default_host())
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|device| output_device_name(&device))
+            .fold(Vec::new(), |mut names, name| {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                names
+            })
+    }
+
+    /// Switches a live call (or the microphone test) to a named microphone.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn set_input_device(&mut self, name: &str) -> Result<()> {
+        let input = call_inputs(&cpal::default_host())?
+            .into_iter()
+            .find(|device| output_device_name(device).as_deref() == Some(name))
+            .with_context(|| format!("Microphone '{name}' is unavailable"))?;
+        let input_stream = open_input_stream(
+            &input,
+            self.capture.clone(),
+            self.muted.clone(),
+            self.failed.clone(),
+        )?;
+        input_stream
+            .play()
+            .context("Could not start the selected microphone")?;
+        self.input_stream = Some(input_stream);
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn set_output_device(&mut self, name: &str) -> Result<()> {
         let output = call_outputs(&cpal::default_host())?
             .into_iter()
@@ -402,6 +645,16 @@ impl VoiceAudioSession {
         anyhow::bail!("Android audio routing is controlled by the system call route.")
     }
 
+    #[cfg(target_os = "android")]
+    pub fn input_device_names() -> Vec<String> {
+        Vec::new()
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn set_input_device(&mut self, _name: &str) -> Result<()> {
+        anyhow::bail!("Android chooses the call microphone itself.")
+    }
+
     fn create_codec() -> Result<Self> {
         let running = Arc::new(AtomicBool::new(true));
         let muted = Arc::new(AtomicBool::new(false));
@@ -414,6 +667,7 @@ impl VoiceAudioSession {
         let render_reference = Arc::new(ArrayQueue::new(ECHO_REFERENCE_QUEUE_SAMPLES));
         let encoded = Arc::new(ArrayQueue::new(OPUS_PACKET_QUEUE));
         let counters = Arc::new(CallCounters::default());
+        let tuning = Arc::new(VoiceTuning::default());
         let incoming = Arc::new(Mutex::new(
             RemoteMixer::new().context("Could not initialize the remote audio mixer")?,
         ));
@@ -435,6 +689,8 @@ impl VoiceAudioSession {
                 let noise_suppression = noise_suppression.clone();
                 let platform_noise_suppression = platform_noise_suppression.clone();
                 let counters = counters.clone();
+                let tuning = tuning.clone();
+                let incoming = incoming.clone();
                 move || {
                     encode_loop(
                         running,
@@ -447,6 +703,8 @@ impl VoiceAudioSession {
                         noise_suppression,
                         platform_noise_suppression,
                         counters,
+                        tuning,
+                        incoming,
                     )
                 }
             })
@@ -458,7 +716,8 @@ impl VoiceAudioSession {
                 let incoming = incoming.clone();
                 let playback = playback.clone();
                 let counters = counters.clone();
-                move || decode_loop(running, incoming, playback, counters)
+                let tuning = tuning.clone();
+                move || decode_loop(running, incoming, playback, counters, tuning)
             }) {
             Ok(worker) => worker,
             Err(error) => {
@@ -481,6 +740,7 @@ impl VoiceAudioSession {
             playback,
             render_reference,
             counters,
+            tuning,
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             input_stream: None,
             #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -495,6 +755,31 @@ impl VoiceAudioSession {
 
     pub fn set_noise_suppression(&self, enabled: bool) {
         self.noise_suppression.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Settings → Voice, applied live.
+    pub fn tune(&self, update: &VoiceTuningUpdate) {
+        self.tuning.apply(update);
+    }
+
+    /// The microphone's level now (RMS of the newest frame, 0 to 1).
+    pub fn input_level(&self) -> f32 {
+        self.tuning.input_level()
+    }
+
+    /// Echo cancellation as set (Android asks, for its platform effect).
+    #[cfg(target_os = "android")]
+    pub fn echo_cancellation_enabled(&self) -> bool {
+        self.tuning.echo_cancellation.load(Ordering::Relaxed)
+    }
+
+    /// One participant's volume (0 to 2), on this device only.
+    pub fn set_participant_volume(&self, participant: u16, gain: f32) -> bool {
+        self.incoming
+            .lock()
+            .ok()
+            .map(|mut mixer| mixer.set_volume(participant, gain))
+            .unwrap_or(false)
     }
 
     #[cfg(target_os = "android")]
@@ -877,10 +1162,14 @@ fn encode_loop(
     noise_suppression: Arc<AtomicBool>,
     platform_noise_suppression: Arc<AtomicBool>,
     counters: Arc<CallCounters>,
+    tuning: Arc<VoiceTuning>,
+    incoming: Arc<Mutex<RemoteMixer>>,
 ) {
     let mut frame = vec![0.0_f32; FRAME_SAMPLES];
     let mut bitrate = AdaptiveBitrate::default();
     let mut echo = EchoProcessor::new();
+    let mut gate = VoiceGate::new();
+    let mut loopback_sequence = 0_u64;
     while running.load(Ordering::Relaxed) {
         let mut count = 0;
         while count < FRAME_SAMPLES {
@@ -894,9 +1183,14 @@ fn encode_loop(
                 }
             }
         }
+        apply_gain(&mut frame, load_f32(&tuning.input_gain));
         echo.set_noise_suppression(
             noise_suppression.load(Ordering::Relaxed)
                 && !platform_noise_suppression.load(Ordering::Relaxed),
+        );
+        echo.set_echo_and_gain(
+            tuning.echo_cancellation.load(Ordering::Relaxed),
+            tuning.auto_gain.load(Ordering::Relaxed),
         );
         echo.process_frame(
             &mut frame,
@@ -904,6 +1198,19 @@ fn encode_loop(
             capture.len(),
             muted.load(Ordering::Relaxed),
         );
+        let (rms, level_db) = frame_level(&frame);
+        store_f32(&tuning.input_level, rms);
+        let open = gate.open(
+            level_db,
+            tuning.gate_mode.load(Ordering::Relaxed),
+            load_f32(&tuning.gate_threshold_db),
+        );
+        tuning.gate_open.store(open, Ordering::Relaxed);
+        if !open {
+            // Silence keeps the stream's sequence (and the far side's
+            // jitter buffer) steady; Opus makes it a few bytes.
+            frame.fill(0.0);
+        }
         let queue_depth = if network_congested.load(Ordering::Relaxed) {
             HIGH_QUEUE_WATERMARK
         } else {
@@ -915,6 +1222,14 @@ fn encode_loop(
         if let Ok(packet) = encoder.encode_vec_float(&frame, MAX_OPUS_PACKET)
             && !packet.is_empty()
         {
+            if tuning.loopback.load(Ordering::Relaxed) {
+                // The microphone test: hear yourself through the same
+                // codec and jitter buffer a call uses.
+                loopback_sequence += 1;
+                if let Ok(mut mixer) = incoming.lock() {
+                    mixer.push(0, loopback_sequence, &packet, Instant::now());
+                }
+            }
             counters.sent.fetch_add(1, Ordering::Relaxed);
             if let Err(packet) = encoded.push(packet) {
                 // The oldest goes; this newest one takes its place.
@@ -931,6 +1246,7 @@ fn decode_loop(
     incoming: Arc<Mutex<RemoteMixer>>,
     playback: Arc<ArrayQueue<f32>>,
     counters: Arc<CallCounters>,
+    tuning: Arc<VoiceTuning>,
 ) {
     let mut next_playout = Instant::now();
     while running.load(Ordering::Relaxed) {
@@ -944,9 +1260,10 @@ fn decode_loop(
         // concealed frame and a 6 ms wait as an audible gap).
         let frame = incoming.lock().ok().and_then(|mut mixer| mixer.render(now));
         next_playout = next_playout_after(next_playout, now);
-        let Some(frame) = frame else {
+        let Some(mut frame) = frame else {
             continue;
         };
+        apply_gain(&mut frame, load_f32(&tuning.output_gain));
         counters.played_frames.fetch_add(1, Ordering::Relaxed);
         if playback.len().saturating_add(frame.len()) > PLAYBACK_QUEUE_SAMPLES * 3 / 4 {
             counters.playback_trimmed.fetch_add(1, Ordering::Relaxed);
@@ -1141,10 +1458,12 @@ mod config_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdaptiveBitrate, Application, Channels, Encoder, MAX_BUFFERED_PACKETS, MAX_JITTER_WAIT,
-        MIN_JITTER_WAIT, PacketJitterBuffer, SKIP_WAIT_BACKLOG, next_playout_after,
+        AdaptiveBitrate, Application, Channels, Encoder, GATE_HOLD_FRAMES, MAX_BUFFERED_PACKETS,
+        MAX_JITTER_WAIT, MIN_JITTER_WAIT, PacketJitterBuffer, SKIP_WAIT_BACKLOG, VoiceGate,
+        VoiceTuning, VoiceTuningUpdate, apply_gain, frame_level, load_f32, next_playout_after,
     };
     use opus::Decoder;
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1239,6 +1558,49 @@ mod tests {
         );
         processor.set_noise_suppression(false);
         assert!(processor.apm.config().noise_suppression.is_none());
+    }
+
+    #[test]
+    fn voice_gate_holds_after_speech_and_learns_the_noise_floor() {
+        let mut gate = VoiceGate::new();
+        // Always-send mode never closes.
+        assert!(gate.open(-90.0, 0, -50.0));
+        // Manual threshold: speech opens it, 300 ms of hold, then closed.
+        assert!(gate.open(-20.0, 1, -40.0));
+        for _ in 0..GATE_HOLD_FRAMES {
+            assert!(gate.open(-70.0, 1, -40.0));
+        }
+        assert!(!gate.open(-70.0, 1, -40.0));
+        // Automatic: a steady room at -55 dB stays out, speech 20 dB over
+        // it comes through.
+        let mut auto = VoiceGate::new();
+        for _ in 0..200 {
+            auto.open(-55.0, 2, 0.0);
+        }
+        assert!(!auto.open(-55.0, 2, 0.0));
+        assert!(auto.open(-35.0, 2, 0.0));
+    }
+
+    #[test]
+    fn gains_scale_and_clip_and_tuning_is_bounded() {
+        let mut samples = [0.25_f32, -0.75, 0.6];
+        apply_gain(&mut samples, 2.0);
+        assert_eq!(samples, [0.5, -1.0, 1.0]);
+        let tuning = VoiceTuning::default();
+        tuning.apply(&VoiceTuningUpdate {
+            input_gain: Some(5.0),
+            output_gain: Some(f32::NAN),
+            gate_mode: Some(9),
+            gate_threshold_db: Some(-200.0),
+            ..Default::default()
+        });
+        assert_eq!(load_f32(&tuning.input_gain), 2.0);
+        assert_eq!(load_f32(&tuning.output_gain), 1.0);
+        assert_eq!(tuning.gate_mode.load(Ordering::Relaxed), 2);
+        assert_eq!(load_f32(&tuning.gate_threshold_db), -90.0);
+        let (rms, db) = frame_level(&[0.5; 960]);
+        assert!((rms - 0.5).abs() < 1e-6);
+        assert!((db + 6.02).abs() < 0.01);
     }
 
     #[test]

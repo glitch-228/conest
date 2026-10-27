@@ -100,6 +100,8 @@ import 'xmpp/xmpp_omemo.dart';
 import 'xmpp/xmpp_session.dart' show XmppSession;
 import 'xmpp/xmpp_socket.dart' show XmppEndpoint;
 import 'xmpp/xmpp_xml.dart' show isValidBareJid;
+import 'voice_settings.dart';
+import 'notification_rules.dart';
 
 export 'staged_attachment.dart' show StagedAttachment;
 export 'beam_protocol.dart'
@@ -126,6 +128,7 @@ import 'content_routing.dart';
 
 part 'delta_attachments_controller.dart';
 part 'group_call/group_call_controller.dart';
+part 'voice_settings_controller.dart';
 
 /// Receiving in the background on Android: in every build since v0.4.2
 /// (only debug builds had it before); a build can still leave it out.
@@ -768,6 +771,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> _startConestRuntime() async {
     if (_snapshot.identity == null || !conestActive) return;
     await _startLanDirectChannel();
+    _applyVoiceSettings(voiceSettings);
     _ensureVoiceCallService();
     await _restoreCarrierAccounts();
     await _startTransportRegistry();
@@ -1507,6 +1511,7 @@ class MessengerController extends ChangeNotifier {
       );
       _voiceCallSoundCues.handle(session);
       if (session?.state == VoiceCallState.connected) {
+        unawaited(_applyPushToTalk());
         unawaited(voiceMessageService.stopPlayback());
         unawaited(voiceMessageService.stopForInterruption());
       }
@@ -1542,6 +1547,9 @@ class MessengerController extends ChangeNotifier {
   }
 
   bool _recoveringCallAudio = false;
+  // Settings → Voice (voice_settings_controller.dart).
+  bool _pushToTalkHeld = false;
+  String _appliedParticipantVolumes = '';
 
   /// The call's audio device stopped (a headset disconnected, the default
   /// device changed): the call moves to the current device, and ends only
@@ -4752,6 +4760,25 @@ class MessengerController extends ChangeNotifier {
     if (!_ready || identity == null) {
       if (_notificationActionsBeforeReady.length < 32) {
         _notificationActionsBeforeReady.add(action);
+      }
+      return;
+    }
+    if (action.action == 'callAnswer' || action.action == 'callDecline') {
+      // An incoming call's notification (Android): answer or decline the
+      // call that rings now.
+      final call = _voiceCallService?.active;
+      try {
+        if (call != null &&
+            !call.outgoing &&
+            call.state == VoiceCallState.ringing) {
+          action.action == 'callAnswer'
+              ? await acceptVoiceCall()
+              : await rejectVoiceCall();
+        }
+      } catch (error) {
+        appendDebugLog('Call action from a notification failed: $error');
+      } finally {
+        if (finish) unawaited(_platformBridge.notificationActionsDone());
       }
       return;
     }
@@ -11011,6 +11038,15 @@ class MessengerController extends ChangeNotifier {
     final me = _requireIdentity();
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(notificationPreview: preview),
+    );
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// Quiet hours: notifications without sound or vibration.
+  Future<void> updateQuietHours(QuietHours quietHours) async {
+    final me = _requireIdentity();
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(quietHours: quietHours),
     );
     await _saveSnapshotSilently(notify: true);
   }
@@ -18586,30 +18622,49 @@ class MessengerController extends ChangeNotifier {
     };
   }
 
-  ({bool pinned, bool archived, bool muted, String draft})
+  ({
+    bool pinned,
+    bool archived,
+    bool muted,
+    DateTime? mutedUntil,
+    bool mentionsOnly,
+    String draft,
+  })
   conversationPreferences(ConversationKind kind, String id) {
     final conversation = _draftConversation(kind, id);
     return (
       pinned: conversation.pinned,
       archived: conversation.archived,
-      muted: conversation.muted,
+      // Muted for a while counts as muted until then.
+      muted: conversation.mutedAt(_now()),
+      mutedUntil: conversation.muted ? null : conversation.mutedUntil,
+      mentionsOnly: conversation.mentionsOnly,
       draft: conversation.draft,
     );
   }
 
+  /// [muted] true with [mutedFor]: muted for that long; false: unmuted
+  /// (also a mute for a while).
   Future<void> updateConversationPreferences(
     ConversationKind kind,
     String id, {
     bool? pinned,
     bool? archived,
     bool? muted,
+    Duration? mutedFor,
+    bool? mentionsOnly,
   }) async {
     if (identity == null) return;
     final current = _draftConversation(kind, id);
     final updated = current.copyWith(
       pinned: pinned,
       archived: archived,
-      muted: muted,
+      muted: muted == null ? null : muted && mutedFor == null,
+      mutedUntil: muted == true && mutedFor != null
+          ? _now().toUtc().add(mutedFor)
+          : null,
+      clearMutedUntil: muted == false,
+      mentionsOnly: mentionsOnly,
     );
     final conversations = List<ConversationRecord>.of(_snapshot.conversations);
     final index = conversations.indexWhere(
@@ -24101,6 +24156,7 @@ class MessengerController extends ChangeNotifier {
         group: group,
         sender: sender,
         body: payload.body,
+        replyToDeviceId: payload.replySenderDeviceId,
       );
     }
     _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
@@ -24408,7 +24464,7 @@ class MessengerController extends ChangeNotifier {
     final me = identity;
     if (me == null ||
         !me.notificationsEnabled ||
-        _conversationFor(contact.deviceId).muted ||
+        _conversationFor(contact.deviceId).mutedAt(_now()) ||
         _notificationWhileInFront) {
       return;
     }
@@ -24435,6 +24491,7 @@ class MessengerController extends ChangeNotifier {
         throughMessageId: _newestInbound(
           _conversationFor(contact.deviceId).messages,
         )?.id,
+        silent: me.quietHours.quietAt(_now().toLocal()),
       ),
     );
   }
@@ -24443,11 +24500,19 @@ class MessengerController extends ChangeNotifier {
     required GroupRecord group,
     required ContactRecord sender,
     required String body,
+    String? replyToDeviceId,
   }) {
     final me = identity;
+    final conversation = _groupConversation(group.groupId);
     if (me == null ||
         !me.notificationsEnabled ||
-        _groupConversation(group.groupId).muted ||
+        conversation.mutedAt(_now()) ||
+        (conversation.mentionsOnly &&
+            !mentionsMe(
+              body: body,
+              myName: me.displayName,
+              replyToMe: replyToDeviceId == me.deviceId,
+            )) ||
         _notificationWhileInFront) {
       return;
     }
@@ -24477,6 +24542,8 @@ class MessengerController extends ChangeNotifier {
         throughMessageId: _newestInbound(
           _groupConversation(group.groupId).messages,
         )?.id,
+        silent: me.quietHours.quietAt(_now().toLocal()),
+        group: true,
       ),
     );
   }
@@ -34493,6 +34560,7 @@ class MessengerController extends ChangeNotifier {
           group: group,
           sender: from,
           body: message.body,
+          replyToDeviceId: message.replySenderDeviceId,
         );
       }
     }

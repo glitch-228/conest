@@ -382,10 +382,27 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun dispatchTransferControl(intent: Intent?) {
+        dispatchCallAnswer(intent)
         val action = intent?.getStringExtra(ConestBackgroundService.EXTRA_TRANSFER_CONTROL)
             ?: return
         intent.removeExtra(ConestBackgroundService.EXTRA_TRANSFER_CONTROL)
         systemChannel?.invokeMethod("transferControl", mapOf("action" to action))
+    }
+
+    /// Answer on an incoming call's notification: the app comes to the
+    /// front (the microphone needs it) and Dart answers.
+    private fun dispatchCallAnswer(intent: Intent?) {
+        if (intent?.getBooleanExtra(ConestBackgroundService.EXTRA_CALL_ANSWER, false) != true) {
+            return
+        }
+        intent.removeExtra(ConestBackgroundService.EXTRA_CALL_ANSWER)
+        systemChannel?.invokeMethod(
+            "notificationAction",
+            mapOf(
+                "conversationId" to NotificationActionReceiver.CALL_CONVERSATION,
+                "action" to NotificationActionReceiver.ACTION_CALL_ANSWER,
+            )
+        )
     }
 
     private fun requestNotificationPermissionIfNeeded() {

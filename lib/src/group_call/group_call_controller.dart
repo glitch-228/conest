@@ -191,6 +191,8 @@ extension GroupCallController on MessengerController {
       if (room != null) {
         unawaited(voiceMessageService.stopPlayback());
         unawaited(voiceMessageService.stopForInterruption());
+        _applyParticipantVolumes();
+        unawaited(_applyPushToTalk());
       }
       _updateCallForeground(
         title: room == null ? null : _groupById(room.groupId)?.title,

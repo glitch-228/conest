@@ -5611,150 +5611,142 @@ class AppLocalizationsEn extends AppLocalizations {
   String get notificationPreviewHidden => 'Nothing';
 
   @override
-  String get routeXmppDescription =>
-      'Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.';
+  String get voiceSettingsTitle => 'Voice';
 
   @override
-  String get xmppCarrierSubtitle =>
-      'Carry messages through an XMPP (Jabber) account';
+  String get voiceInputDevice => 'Microphone';
 
   @override
-  String get xmppCreatedAccount => 'Account made by Conest';
+  String get voiceOutputDevice => 'Speaker or headphones';
 
   @override
-  String get xmppOwnAccount => 'Your own account';
+  String get voiceSystemDefault => 'System default';
 
   @override
-  String get xmppChangeAccount => 'Change account';
+  String get voiceInputVolume => 'Microphone volume';
 
   @override
-  String get xmppServerField =>
-      'XMPP server (empty: the first one that answers here)';
+  String get voiceOutputVolume => 'Output volume';
 
   @override
-  String get xmppUseOwnAccount => 'Use my own XMPP account';
+  String get voiceMicTest => 'Check your microphone';
 
   @override
-  String get xmppOwnAccountNote =>
-      'Conest signs in as an extra device; your other XMPP apps do not see its messages.';
+  String get voiceMicTestStart => 'Let\'s check';
 
   @override
-  String get xmppAddressField => 'XMPP address (name@server)';
+  String get voiceMicTestStop => 'Stop';
 
   @override
-  String get xmppPasswordField => 'Password';
+  String get voiceMicTestLoopback => 'Hear yourself';
 
   @override
-  String get xmppRetracted => 'Message retracted';
+  String get voiceMicTestUnavailable =>
+      'The microphone test is not available now (during a call, or without call audio in this build).';
 
   @override
-  String get xmppFile => 'File';
+  String get voiceInputMode => 'Send my voice';
 
   @override
-  String get xmppNewChat => 'New XMPP chat';
+  String get voiceInputModeAlways => 'Always';
 
   @override
-  String get xmppNewChatAddress => 'Address or xmpp: link';
+  String get voiceInputModeActivity => 'When I speak';
 
   @override
-  String get xmppGroupChat => 'Group chat';
+  String get voiceInputModePushToTalk => 'Push to talk';
 
   @override
-  String get xmppNickname => 'Your nickname';
+  String get voiceSensitivityAutomatic => 'Set sensitivity automatically';
 
   @override
-  String get xmppOpenChat => 'Open';
+  String get voiceSensitivity => 'Sensitivity';
 
   @override
-  String get xmppMetadataTitle => 'Some details stay in this file';
+  String get voicePushToTalkKey => 'Push-to-talk key';
 
   @override
-  String get xmppMetadataBody =>
-      'Conest could not remove all hidden details (such as location or device) from this file. Send it anyway?';
+  String get voicePushToTalkKeyNone => 'The call\'s button only';
 
   @override
-  String get xmppSendAnyway => 'Send anyway';
+  String get voicePushToTalkKeyPress => 'Press a key…';
 
   @override
-  String get xmppReply => 'Reply';
+  String get voicePushToTalkKeyHint => 'works while Conest is in front';
 
   @override
-  String get xmppCopy => 'Copy';
+  String get voiceClear => 'Clear';
 
   @override
-  String get xmppEdit => 'Edit';
+  String get voiceProcessing => 'Processing';
 
   @override
-  String get xmppRetract => 'Retract';
+  String get voiceNoiseSuppression => 'Noise suppression';
 
   @override
-  String get xmppChatGone => 'This chat is gone.';
+  String get voiceEchoCancellation => 'Echo cancellation';
 
   @override
-  String get xmppNotEncrypted => 'not encrypted';
+  String get voiceAutoGain => 'Automatic volume';
 
   @override
-  String get xmppLeaveRoom => 'Leave group chat';
+  String get voiceCallSounds => 'Call sounds';
 
   @override
-  String get xmppDeleteChat => 'Delete chat';
+  String get voiceCallSoundsHint => 'An incoming call still rings.';
 
   @override
-  String get xmppBlock => 'Block';
+  String get voiceDevicesOnPhone =>
+      'On Android the phone picks the microphone and speaker for calls.';
 
   @override
-  String get xmppAccept => 'Accept';
+  String get voiceSettingsButton => 'Voice settings';
 
   @override
-  String get xmppRequest =>
-      'Someone not in your contacts wrote to you. Replies and read markers go out only once you accept.';
-
-  @override
-  String get xmppRoomInvitation =>
-      'You were invited to this group chat. Join it?';
-
-  @override
-  String get xmppAttach => 'Attach a file';
-
-  @override
-  String get xmppMessageHint => 'Message';
-
-  @override
-  String get xmppEdited => 'edited';
-
-  @override
-  String get xmppChats => 'XMPP chats';
-
-  @override
-  String get xmppChatsSubtitle =>
-      'Chat with anyone on XMPP (Jabber), beside your Conest chats';
-
-  @override
-  String get xmppChatsOtherAccount =>
-      'Use another account than the one Conest carries messages through';
-
-  @override
-  String get xmppConnected => 'connected';
-
-  @override
-  String get xmppConnecting => 'connecting';
-
-  @override
-  String appModeClientOnlyTitle(String network) {
-    return 'Use Conest as a $network client?';
+  String voiceParticipantVolume(String name) {
+    return 'Volume for $name';
   }
 
   @override
-  String get onbXmppInstead => 'Use as an XMPP client instead';
+  String get voiceHoldToTalk => 'Hold to talk';
 
   @override
-  String get xmppSignIn => 'Sign in to your XMPP account';
+  String get quietHoursTitle => 'Quiet hours';
 
   @override
-  String get xmppNoChats => 'No XMPP chats yet';
+  String get quietHoursHint =>
+      'Notifications still appear, without sound or vibration.';
 
   @override
-  String get xmppRequestShort => 'Chat request';
+  String quietHoursFrom(String time) {
+    return 'From $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'Until $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'Calls still ring';
+
+  @override
+  String get muteForHour => 'For 1 hour';
+
+  @override
+  String get muteForEightHours => 'For 8 hours';
+
+  @override
+  String get muteForDay => 'For 1 day';
+
+  @override
+  String get muteUntilUnmuted => 'Until I unmute';
+
+  @override
+  String get notifyMentionsOnly => 'Notify only for mentions';
+
+  @override
+  String get notifyAllMessages => 'Notify for all messages';
 
   @override
   String get xmppEncOmemo2 => 'encrypted (OMEMO)';

@@ -107,9 +107,22 @@ class VoiceCallSoundCues {
   bool _looping = false;
   bool _disposed = false;
 
+  /// Settings → Voice → call sounds. Off, only an incoming call still
+  /// rings (missing one is worse than a sound).
+  bool enabled = true;
+
+  /// Whether an incoming call may ring now (quiet hours may say no).
+  bool Function() ringAllowed = _always;
+  static bool _always() => true;
+
   void handle(VoiceCallSession? session) {
     if (_disposed) return;
-    final cue = voiceCallCueFor(_previous, session);
+    final found = voiceCallCueFor(_previous, session);
+    final cue = found == VoiceCallCue.incomingRing
+        ? (ringAllowed() ? found : null)
+        : enabled
+        ? found
+        : null;
     final stillRinging =
         session != null &&
         session.callId == _previous?.callId &&

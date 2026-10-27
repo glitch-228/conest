@@ -5612,150 +5612,141 @@ class AppLocalizationsFa extends AppLocalizations {
   String get notificationPreviewHidden => 'هیچ';
 
   @override
-  String get routeXmppDescription =>
-      'خادم‌های XMPP آن را می‌برند و همچنان با Conest سرتاسری رمزگذاری شده است؛ خادم‌ها هر دو حساب و زمان را می‌بینند.';
+  String get voiceSettingsTitle => 'صدا';
 
   @override
-  String get xmppCarrierSubtitle =>
-      'انتقال پیام‌ها از طریق یک حساب XMPP (Jabber)';
+  String get voiceInputDevice => 'میکروفون';
 
   @override
-  String get xmppCreatedAccount => 'حسابی که Conest ساخته است';
+  String get voiceOutputDevice => 'بلندگو یا هدفون';
 
   @override
-  String get xmppOwnAccount => 'حساب خودتان';
+  String get voiceSystemDefault => 'پیش‌فرض سیستم';
 
   @override
-  String get xmppChangeAccount => 'تغییر حساب';
+  String get voiceInputVolume => 'بلندی میکروفون';
 
   @override
-  String get xmppServerField =>
-      'خادم XMPP (خالی: نخستین خادمی که اینجا پاسخ می‌دهد)';
+  String get voiceOutputVolume => 'بلندی صدا';
 
   @override
-  String get xmppUseOwnAccount => 'استفاده از حساب XMPP خودم';
+  String get voiceMicTest => 'بررسی میکروفون';
 
   @override
-  String get xmppOwnAccountNote =>
-      'Conest به‌عنوان یک دستگاه اضافه وارد می‌شود؛ برنامه‌های دیگر XMPP شما پیام‌های آن را نمی‌بینند.';
+  String get voiceMicTestStart => 'بررسی کن';
 
   @override
-  String get xmppAddressField => 'نشانی XMPP (نام@خادم)';
+  String get voiceMicTestStop => 'توقف';
 
   @override
-  String get xmppPasswordField => 'گذرواژه';
+  String get voiceMicTestLoopback => 'شنیدن صدای خود';
 
   @override
-  String get xmppRetracted => 'پیام پس گرفته شد';
+  String get voiceMicTestUnavailable =>
+      'بررسی میکروفون الان در دسترس نیست (هنگام تماس، یا این نسخه تماس صوتی ندارد).';
 
   @override
-  String get xmppFile => 'فایل';
+  String get voiceInputMode => 'ارسال صدای من';
 
   @override
-  String get xmppNewChat => 'گفتگوی XMPP تازه';
+  String get voiceInputModeAlways => 'همیشه';
 
   @override
-  String get xmppNewChatAddress => 'نشانی یا پیوند xmpp:';
+  String get voiceInputModeActivity => 'وقتی حرف می‌زنم';
 
   @override
-  String get xmppGroupChat => 'گفتگوی گروهی';
+  String get voiceInputModePushToTalk => 'فشار برای صحبت';
 
   @override
-  String get xmppNickname => 'نام مستعار شما';
+  String get voiceSensitivityAutomatic => 'تنظیم خودکار حساسیت';
 
   @override
-  String get xmppOpenChat => 'باز کردن';
+  String get voiceSensitivity => 'حساسیت';
 
   @override
-  String get xmppMetadataTitle => 'برخی جزئیات در این فایل می‌ماند';
+  String get voicePushToTalkKey => 'کلید فشار برای صحبت';
 
   @override
-  String get xmppMetadataBody =>
-      'Conest نتوانست همه جزئیات پنهان (مانند مکان یا دستگاه) را از این فایل پاک کند. با این حال بفرستید؟';
+  String get voicePushToTalkKeyNone => 'فقط دکمهٔ تماس';
 
   @override
-  String get xmppSendAnyway => 'به هر حال بفرست';
+  String get voicePushToTalkKeyPress => 'یک کلید را فشار دهید…';
 
   @override
-  String get xmppReply => 'پاسخ';
+  String get voicePushToTalkKeyHint => 'وقتی Conest جلو است کار می‌کند';
 
   @override
-  String get xmppCopy => 'رونوشت';
+  String get voiceClear => 'پاک کردن';
 
   @override
-  String get xmppEdit => 'ویرایش';
+  String get voiceProcessing => 'پردازش';
 
   @override
-  String get xmppRetract => 'پس گرفتن';
+  String get voiceNoiseSuppression => 'حذف نویز';
 
   @override
-  String get xmppChatGone => 'این گفتگو دیگر وجود ندارد.';
+  String get voiceEchoCancellation => 'حذف پژواک';
 
   @override
-  String get xmppNotEncrypted => 'رمزگذاری نشده';
+  String get voiceAutoGain => 'تنظیم خودکار بلندی';
 
   @override
-  String get xmppLeaveRoom => 'ترک گفتگوی گروهی';
+  String get voiceCallSounds => 'صداهای تماس';
 
   @override
-  String get xmppDeleteChat => 'حذف گفتگو';
+  String get voiceCallSoundsHint => 'تماس ورودی همچنان زنگ می‌زند.';
 
   @override
-  String get xmppBlock => 'مسدود کردن';
+  String get voiceDevicesOnPhone =>
+      'در اندروید، گوشی میکروفون و بلندگوی تماس را انتخاب می‌کند.';
 
   @override
-  String get xmppAccept => 'پذیرفتن';
+  String get voiceSettingsButton => 'تنظیمات صدا';
 
   @override
-  String get xmppRequest =>
-      'کسی که در مخاطبان شما نیست پیام داده است. پاسخ و نشانگر خوانده‌شدن فقط پس از پذیرش فرستاده می‌شود.';
-
-  @override
-  String get xmppRoomInvitation =>
-      'به این گفتگوی گروهی دعوت شده‌اید. می‌پیوندید؟';
-
-  @override
-  String get xmppAttach => 'پیوست فایل';
-
-  @override
-  String get xmppMessageHint => 'پیام';
-
-  @override
-  String get xmppEdited => 'ویرایش‌شده';
-
-  @override
-  String get xmppChats => 'گفتگوهای XMPP';
-
-  @override
-  String get xmppChatsSubtitle =>
-      'با هر کسی در XMPP (Jabber) گفتگو کنید، کنار گفتگوهای Conest';
-
-  @override
-  String get xmppChatsOtherAccount =>
-      'استفاده از حسابی جز حسابی که Conest پیام‌ها را با آن می‌برد';
-
-  @override
-  String get xmppConnected => 'متصل';
-
-  @override
-  String get xmppConnecting => 'در حال اتصال';
-
-  @override
-  String appModeClientOnlyTitle(String network) {
-    return 'از Conest به‌عنوان کارخواه $network استفاده شود؟';
+  String voiceParticipantVolume(String name) {
+    return 'بلندی صدای $name';
   }
 
   @override
-  String get onbXmppInstead => 'به‌جای آن به‌عنوان کارخواه XMPP استفاده کن';
+  String get voiceHoldToTalk => 'برای صحبت نگه دارید';
 
   @override
-  String get xmppSignIn => 'به حساب XMPP خود وارد شوید';
+  String get quietHoursTitle => 'ساعات سکوت';
 
   @override
-  String get xmppNoChats => 'هنوز گفتگوی XMPP نیست';
+  String get quietHoursHint => 'اعلان‌ها بدون صدا و لرزش نمایش داده می‌شوند.';
 
   @override
-  String get xmppRequestShort => 'درخواست گفتگو';
+  String quietHoursFrom(String time) {
+    return 'از $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'تا $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'تماس‌ها همچنان زنگ می‌زنند';
+
+  @override
+  String get muteForHour => 'برای ۱ ساعت';
+
+  @override
+  String get muteForEightHours => 'برای ۸ ساعت';
+
+  @override
+  String get muteForDay => 'برای ۱ روز';
+
+  @override
+  String get muteUntilUnmuted => 'تا وقتی که خودم روشن کنم';
+
+  @override
+  String get notifyMentionsOnly => 'فقط هنگام اشاره به من اعلان بده';
+
+  @override
+  String get notifyAllMessages => 'برای همهٔ پیام‌ها اعلان بده';
 
   @override
   String get xmppEncOmemo2 => 'رمزگذاری‌شده (OMEMO)';

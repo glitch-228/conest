@@ -42,6 +42,9 @@ import 'src/iroh_ffi_bridge.dart';
 import 'src/iroh_transport.dart';
 import 'src/media_picker_sheet.dart';
 import 'src/ui/file_metadata_consent.dart';
+import 'src/ui/voice_settings_panel.dart';
+import 'src/ui/quiet_hours_settings.dart';
+import 'src/voice_settings.dart';
 import 'src/ui/battery_exemption.dart';
 import 'src/desktop_autostart.dart';
 import 'src/desktop_tray.dart';
@@ -1162,6 +1165,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     _controllerUserMode = widget.controller.userMode;
     _controllerLocale = widget.controller.localeCode;
     widget.controller.addListener(_handleControllerChanged);
+    _pushToTalkKeys = PushToTalkKeyHandler(widget.controller)..attach();
     _startedHidden = widget.startHidden && _desktopTraySupported;
     widget.controller.setAppForegroundState(!_startedHidden);
     widget.updateService.addListener(_handleUpdateServiceChanged);
@@ -1200,12 +1204,17 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_handleControllerChanged);
       widget.controller.addListener(_handleControllerChanged);
+      _pushToTalkKeys.detach();
+      _pushToTalkKeys = PushToTalkKeyHandler(widget.controller)..attach();
       _handleControllerChanged();
     }
   }
 
   /// Asked at most once a run (and the controller remembers an answer).
   bool _batteryExemptionChecked = false;
+
+  // Settings → Voice: the push-to-talk key, anywhere in the app.
+  late PushToTalkKeyHandler _pushToTalkKeys;
 
   // Desktops: Conest stays in the tray when its window is closed.
   final DesktopTray _tray = DesktopTray();
@@ -1365,6 +1374,7 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeTimingsCallback(_recordFrameTimings);
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_handleControllerChanged);
+    _pushToTalkKeys.detach();
     widget.updateService.removeListener(_handleUpdateServiceChanged);
     unawaited(_showRequests?.cancel());
     unawaited(_notificationOpens?.cancel());
@@ -4134,6 +4144,37 @@ class _VoiceCallOverlayState extends State<_VoiceCallOverlay> {
                             icon: const Icon(Icons.speaker_outlined),
                             label: Text(l10nOf(context).uiAudioOutput2B89CC),
                           ),
+                        if (connected)
+                          OutlinedButton.icon(
+                            key: const ValueKey('call-voice-settings'),
+                            onPressed: () => showVoiceSettingsSheet(
+                              context,
+                              widget.controller,
+                            ),
+                            icon: const Icon(Icons.tune),
+                            label: Text(l10nOf(context).voiceSettingsButton),
+                          ),
+                        if (connected &&
+                            widget.controller.voiceSettings.inputMode ==
+                                VoiceInputMode.pushToTalk)
+                          Listener(
+                            key: const ValueKey('call-hold-to-talk'),
+                            onPointerDown: (_) =>
+                                widget.controller.setPushToTalkHeld(true),
+                            onPointerUp: (_) =>
+                                widget.controller.setPushToTalkHeld(false),
+                            onPointerCancel: (_) =>
+                                widget.controller.setPushToTalkHeld(false),
+                            child: FilledButton.tonalIcon(
+                              onPressed: () {},
+                              icon: const Icon(Icons.record_voice_over),
+                              label: Text(
+                                widget.controller.pushToTalkHeld
+                                    ? l10nOf(context).uiTalkingC34D84
+                                    : l10nOf(context).voiceHoldToTalk,
+                              ),
+                            ),
+                          ),
                         if (ended)
                           FilledButton.icon(
                             onPressed: widget.onMinimize,
@@ -4723,6 +4764,34 @@ class _CourierHomeState extends State<_CourierHome> {
     }
   }
 
+  /// How long to mute a chat; [Duration.zero] for until unmuted.
+  Future<Duration?> _askMuteDuration() => showModalBottomSheet<Duration>(
+    context: context,
+    showDragHandle: true,
+    builder: (context) {
+      final l10n = l10nOf(context);
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final (duration, label) in [
+              (const Duration(hours: 1), l10n.muteForHour),
+              (const Duration(hours: 8), l10n.muteForEightHours),
+              (const Duration(days: 1), l10n.muteForDay),
+              (Duration.zero, l10n.muteUntilUnmuted),
+            ])
+              ListTile(
+                key: ValueKey('mute-for-${duration.inMinutes}'),
+                leading: const Icon(Icons.notifications_off_outlined),
+                title: Text(label),
+                onTap: () => Navigator.pop(context, duration),
+              ),
+          ],
+        ),
+      );
+    },
+  );
+
   Future<void> _chatActions(
     ConversationKind kind,
     String id, {
@@ -4736,6 +4805,14 @@ class _CourierHomeState extends State<_CourierHome> {
         Icons.notifications_off_outlined,
         prefs.muted ? 'Unmute' : 'Mute',
       ),
+      if (kind == ConversationKind.group)
+        (
+          'mentions',
+          Icons.alternate_email,
+          prefs.mentionsOnly
+              ? l10nOf(context).notifyAllMessages
+              : l10nOf(context).notifyMentionsOnly,
+        ),
       (
         'archive',
         Icons.archive_outlined,
@@ -4849,12 +4926,21 @@ class _CourierHomeState extends State<_CourierHome> {
       if (mounted) setState(() {});
       return;
     }
+    // Muting asks for how long (unmuting does not).
+    Duration? mutedFor;
+    if (selected == 'mute' && !prefs.muted) {
+      final chosen = await _askMuteDuration();
+      if (chosen == null || !mounted) return;
+      mutedFor = chosen == Duration.zero ? null : chosen;
+    }
     try {
       await widget.controller.updateConversationPreferences(
         kind,
         id,
         pinned: selected == 'pin' ? !prefs.pinned : null,
         muted: selected == 'mute' ? !prefs.muted : null,
+        mutedFor: mutedFor,
+        mentionsOnly: selected == 'mentions' ? !prefs.mentionsOnly : null,
         archived: selected == 'archive' ? !prefs.archived : null,
       );
       if (mounted) setState(() {});
@@ -15077,6 +15163,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   static const _settingsCategories = [
     'Personal / Preferences',
+    'Voice',
     'Devices',
     'Connectivity',
     'Network / Relay',
@@ -15088,6 +15175,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
   String _settingsCategoryLabel(BuildContext context, String category) =>
       switch (category) {
         'Personal / Preferences' => l10nOf(context).settingsPersonal,
+        'Voice' => l10nOf(context).voiceSettingsTitle,
         'Devices' => l10nOf(context).uiDevicesDF485C,
         'Storage' => l10nOf(context).settingsStorage,
         'Connectivity' => l10nOf(context).settingsConnectivity,
@@ -15099,6 +15187,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   static IconData _settingsCategoryIcon(String category) => switch (category) {
     'Personal / Preferences' => Icons.person_outline,
+    'Voice' => Icons.mic_none_outlined,
     'Devices' => Icons.devices_outlined,
     'Connectivity' => Icons.hub_outlined,
     'Network / Relay' => Icons.dns_outlined,
@@ -15538,6 +15627,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                   ],
                                 ),
                               ),
+                            if (identity.notificationsEnabled)
+                              QuietHoursSettings(
+                                quietHours: identity.quietHours,
+                                onChanged: (quiet) => _run(
+                                  () =>
+                                      widget.controller.updateQuietHours(quiet),
+                                ),
+                              ),
                             if (widget
                                     .controller
                                     .voiceCallService
@@ -15808,6 +15905,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ),
                     const SizedBox(height: 16),
+                    if (categorized && _settingsCategory == 'Voice') ...[
+                      _SettingsSection(
+                        title: l10nOf(context).voiceSettingsTitle,
+                        palette: widget.palette,
+                        child: VoiceSettingsPanel(
+                          controller: widget.controller,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     if (!categorized || _settingsCategory == 'Devices') ...[
                       _SettingsSection(
                         title: l10nOf(context).uiDevicesDF485C,

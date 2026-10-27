@@ -5736,150 +5736,142 @@ class AppLocalizationsRu extends AppLocalizations {
   String get notificationPreviewHidden => 'Ничего';
 
   @override
-  String get routeXmppDescription =>
-      'Передаётся серверами XMPP, по-прежнему со сквозным шифрованием Conest; серверы видят обе учётные записи и время.';
+  String get voiceSettingsTitle => 'Голос';
 
   @override
-  String get xmppCarrierSubtitle =>
-      'Передавать сообщения через учётную запись XMPP (Jabber)';
+  String get voiceInputDevice => 'Микрофон';
 
   @override
-  String get xmppCreatedAccount => 'Учётная запись создана Conest';
+  String get voiceOutputDevice => 'Динамик или наушники';
 
   @override
-  String get xmppOwnAccount => 'Ваша учётная запись';
+  String get voiceSystemDefault => 'Как в системе';
 
   @override
-  String get xmppChangeAccount => 'Сменить учётную запись';
+  String get voiceInputVolume => 'Громкость микрофона';
 
   @override
-  String get xmppServerField =>
-      'Сервер XMPP (пусто: первый, что отвечает здесь)';
+  String get voiceOutputVolume => 'Громкость звука';
 
   @override
-  String get xmppUseOwnAccount => 'Использовать свою учётную запись XMPP';
+  String get voiceMicTest => 'Проверка микрофона';
 
   @override
-  String get xmppOwnAccountNote =>
-      'Conest входит как ещё одно устройство; другие ваши приложения XMPP не видят его сообщений.';
+  String get voiceMicTestStart => 'Проверить';
 
   @override
-  String get xmppAddressField => 'Адрес XMPP (имя@сервер)';
+  String get voiceMicTestStop => 'Остановить';
 
   @override
-  String get xmppPasswordField => 'Пароль';
+  String get voiceMicTestLoopback => 'Слышать себя';
 
   @override
-  String get xmppRetracted => 'Сообщение отозвано';
+  String get voiceMicTestUnavailable =>
+      'Проверка микрофона сейчас недоступна (идёт звонок или в этой сборке нет звонков).';
 
   @override
-  String get xmppFile => 'Файл';
+  String get voiceInputMode => 'Передавать мой голос';
 
   @override
-  String get xmppNewChat => 'Новый чат XMPP';
+  String get voiceInputModeAlways => 'Всегда';
 
   @override
-  String get xmppNewChatAddress => 'Адрес или ссылка xmpp:';
+  String get voiceInputModeActivity => 'Когда я говорю';
 
   @override
-  String get xmppGroupChat => 'Групповой чат';
+  String get voiceInputModePushToTalk => 'Рация (по нажатию)';
 
   @override
-  String get xmppNickname => 'Ваш ник';
+  String get voiceSensitivityAutomatic =>
+      'Подбирать чувствительность автоматически';
 
   @override
-  String get xmppOpenChat => 'Открыть';
+  String get voiceSensitivity => 'Чувствительность';
 
   @override
-  String get xmppMetadataTitle => 'Часть сведений останется в файле';
+  String get voicePushToTalkKey => 'Клавиша рации';
 
   @override
-  String get xmppMetadataBody =>
-      'Conest не смог удалить из файла все скрытые сведения (например, место или устройство). Всё равно отправить?';
+  String get voicePushToTalkKeyNone => 'Только кнопка в звонке';
 
   @override
-  String get xmppSendAnyway => 'Всё равно отправить';
+  String get voicePushToTalkKeyPress => 'Нажмите клавишу…';
 
   @override
-  String get xmppReply => 'Ответить';
+  String get voicePushToTalkKeyHint => 'работает, пока Conest на экране';
 
   @override
-  String get xmppCopy => 'Копировать';
+  String get voiceClear => 'Сбросить';
 
   @override
-  String get xmppEdit => 'Изменить';
+  String get voiceProcessing => 'Обработка';
 
   @override
-  String get xmppRetract => 'Отозвать';
+  String get voiceNoiseSuppression => 'Шумоподавление';
 
   @override
-  String get xmppChatGone => 'Этого чата больше нет.';
+  String get voiceEchoCancellation => 'Подавление эха';
 
   @override
-  String get xmppNotEncrypted => 'без шифрования';
+  String get voiceAutoGain => 'Автоматическая громкость';
 
   @override
-  String get xmppLeaveRoom => 'Покинуть групповой чат';
+  String get voiceCallSounds => 'Звуки звонка';
 
   @override
-  String get xmppDeleteChat => 'Удалить чат';
+  String get voiceCallSoundsHint => 'Входящий звонок всё равно звонит.';
 
   @override
-  String get xmppBlock => 'Заблокировать';
+  String get voiceDevicesOnPhone =>
+      'На Android микрофон и динамик для звонков выбирает телефон.';
 
   @override
-  String get xmppAccept => 'Принять';
+  String get voiceSettingsButton => 'Настройки голоса';
 
   @override
-  String get xmppRequest =>
-      'Вам написал человек не из ваших контактов. Ответы и отметки о прочтении уйдут только после того, как вы примете.';
-
-  @override
-  String get xmppRoomInvitation =>
-      'Вас пригласили в этот групповой чат. Войти?';
-
-  @override
-  String get xmppAttach => 'Прикрепить файл';
-
-  @override
-  String get xmppMessageHint => 'Сообщение';
-
-  @override
-  String get xmppEdited => 'изменено';
-
-  @override
-  String get xmppChats => 'Чаты XMPP';
-
-  @override
-  String get xmppChatsSubtitle =>
-      'Общайтесь с кем угодно в XMPP (Jabber) рядом с чатами Conest';
-
-  @override
-  String get xmppChatsOtherAccount =>
-      'Использовать другую учётную запись, не ту, через которую Conest передаёт сообщения';
-
-  @override
-  String get xmppConnected => 'подключено';
-
-  @override
-  String get xmppConnecting => 'подключение';
-
-  @override
-  String appModeClientOnlyTitle(String network) {
-    return 'Использовать Conest как клиент $network?';
+  String voiceParticipantVolume(String name) {
+    return 'Громкость: $name';
   }
 
   @override
-  String get onbXmppInstead => 'Использовать как клиент XMPP';
+  String get voiceHoldToTalk => 'Удерживайте, чтобы говорить';
 
   @override
-  String get xmppSignIn => 'Войдите в учётную запись XMPP';
+  String get quietHoursTitle => 'Тихие часы';
 
   @override
-  String get xmppNoChats => 'Чатов XMPP пока нет';
+  String get quietHoursHint => 'Уведомления приходят без звука и вибрации.';
 
   @override
-  String get xmppRequestShort => 'Запрос на чат';
+  String quietHoursFrom(String time) {
+    return 'С $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'До $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'Звонки всё равно звонят';
+
+  @override
+  String get muteForHour => 'На 1 час';
+
+  @override
+  String get muteForEightHours => 'На 8 часов';
+
+  @override
+  String get muteForDay => 'На 1 день';
+
+  @override
+  String get muteUntilUnmuted => 'Пока не включу';
+
+  @override
+  String get notifyMentionsOnly => 'Уведомлять только об упоминаниях';
+
+  @override
+  String get notifyAllMessages => 'Уведомлять обо всех сообщениях';
 
   @override
   String get xmppEncOmemo2 => 'зашифровано (OMEMO)';

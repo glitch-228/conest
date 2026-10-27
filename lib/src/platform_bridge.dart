@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'desktop_notifications.dart';
 import 'energy_policy.dart';
 import 'voice_audio_ffi.dart';
+import 'voice_settings.dart';
 
 /// Reply or "Mark as read" chosen on a message notification (Android).
 /// [throughMessageId] is the newest message the notification showed: what
@@ -76,8 +77,11 @@ class PlatformBridge {
 
   /// Reply and "Mark as read" from message notifications while Conest runs;
   /// those from before it ran come from [takePendingNotificationActions].
-  Stream<NotificationAction> get notificationActions =>
-      _notificationActions.stream;
+  Stream<NotificationAction> get notificationActions {
+    // Desktops: start listening for their notifications' actions too.
+    _desktopNotifications;
+    return _notificationActions.stream;
+  }
 
   /// What Android sends for a notification action; null for anything else.
   static NotificationAction? notificationActionFrom(Object? arguments) {
@@ -235,7 +239,16 @@ class PlatformBridge {
   /// Message notifications on Linux and Windows.
   late final DesktopNotifications? _desktopNotifications =
       !kIsWeb && (Platform.isLinux || Platform.isWindows)
-      ? (DesktopNotifications()..opened.listen(_conversationOpens.add))
+      ? (DesktopNotifications()
+          ..opened.listen(_conversationOpens.add)
+          ..actions.listen(
+            (action) => _notificationActions.add((
+              conversationId: action.chat,
+              action: action.action,
+              text: action.text,
+              throughMessageId: action.throughMessageId,
+            )),
+          ))
       : null;
 
   /// The chat (its conversation id) whose notification was clicked.
@@ -410,8 +423,18 @@ class PlatformBridge {
   }) async {
     final nativeAudio = _voiceAudio;
     if (!supportsVoiceCallMedia || nativeAudio == null) return false;
+    final test = peerDeviceId == _microphoneTestPeer;
+    if (!test && _microphoneTestOpen) {
+      // A call takes the audio from the microphone test.
+      await closeVoiceCallMedia();
+    }
     await prepareVoiceCallMedia();
-    await nativeAudio.open();
+    final settings = _voiceSettings;
+    await nativeAudio.open(
+      input: settings.inputDevice,
+      output: settings.outputDevice,
+    );
+    nativeAudio.tune(settings.toNative(loopback: _micTestLoopback));
     if (Platform.isAndroid) {
       try {
         final started = await _channel
@@ -507,7 +530,67 @@ class PlatformBridge {
       _voiceAudio?.stats() ?? _lastVoiceCallStats;
   Map<String, Object?>? _lastVoiceCallStats;
 
+  VoiceSettings _voiceSettings = const VoiceSettings();
+  bool _micTestLoopback = false;
+  bool _microphoneTestOpen = false;
+  static const _microphoneTestPeer = 'microphone-test';
+
+  /// Whether the microphone test (not a call) has the audio now.
+  bool get microphoneTestOpen => _microphoneTestOpen;
+
+  /// Settings → Voice: used when call audio opens, and at once by open
+  /// audio (a call or the microphone test).
+  void applyVoiceSettings(VoiceSettings settings) {
+    _voiceSettings = settings;
+    _voiceAudio?.tune(settings.toNative(loopback: _micTestLoopback));
+  }
+
+  Future<List<String>> voiceCallInputDevices() async =>
+      await _voiceAudio?.availableInputDevices() ?? const [];
+
+  Future<void> selectVoiceCallInputDevice(String name) async {
+    final audio = _voiceAudio;
+    if (audio == null) throw StateError('Native voice audio is unavailable.');
+    await audio.selectInputDevice(name);
+  }
+
+  /// The microphone's level now (0 to 1), while call audio is open.
+  double voiceCallInputLevel() => _voiceAudio?.inputLevel() ?? 0;
+
+  bool setGroupCallParticipantVolume(int participant, double gain) =>
+      _voiceAudio?.setParticipantVolume(participant, gain) ?? false;
+
+  /// The microphone test: opens call audio without a call, optionally
+  /// playing your own voice back. Closed with [closeVoiceCallMedia].
+  Future<bool> openMicrophoneTest({required bool loopback}) async {
+    if (_microphoneTestOpen) {
+      setMicrophoneTestLoopback(loopback);
+      return true;
+    }
+    if (_voiceAudio?.isOpen == true) return false;
+    _micTestLoopback = loopback;
+    try {
+      final opened = await openVoiceCallMedia(
+        peerDeviceId: _microphoneTestPeer,
+        outgoing: true,
+      );
+      _microphoneTestOpen = opened;
+      if (!opened) _micTestLoopback = false;
+      return opened;
+    } catch (_) {
+      _micTestLoopback = false;
+      rethrow;
+    }
+  }
+
+  void setMicrophoneTestLoopback(bool loopback) {
+    _micTestLoopback = loopback;
+    _voiceAudio?.tune({'loopback': loopback});
+  }
+
   Future<void> closeVoiceCallMedia() async {
+    _micTestLoopback = false;
+    _microphoneTestOpen = false;
     final nativeAudio = _voiceAudio;
     if (nativeAudio == null) return;
     _lastVoiceCallStats = nativeAudio.stats() ?? _lastVoiceCallStats;
@@ -602,12 +685,18 @@ class PlatformBridge {
     String? replyLabel,
     String? markReadLabel,
     String? throughMessageId,
+    bool silent = false,
+    bool group = false,
   }) async {
     if (!_supportsAndroidSystemCalls) {
       await _desktopNotifications?.show(
         chat: conversationId,
         title: title,
         body: body,
+        silent: silent,
+        replyLabel: replyLabel,
+        markReadLabel: markReadLabel,
+        throughMessageId: throughMessageId,
       );
       return;
     }
@@ -621,6 +710,10 @@ class PlatformBridge {
         'replyLabel': ?replyLabel,
         'markReadLabel': ?markReadLabel,
         'throughMessageId': ?throughMessageId,
+        // Quiet hours: shown without sound or vibration.
+        'silent': silent,
+        // Groups have their own channel (sound and importance per type).
+        'group': group,
         'recentMessages': recentMessages
             .map(
               (m) => <String, Object?>{

@@ -8385,190 +8385,192 @@
   "@notificationPreviewHidden": {
     "description": "Notifications show neither sender nor message."
   },
-  "routeXmppDescription": "Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.",
-  "@routeXmppDescription": {
-    "description": "Presentation text for message route information: the XMPP carrier."
+  "voiceSettingsTitle": "Voice",
+  "@voiceSettingsTitle": {
+    "description": "Settings category: calls and microphone."
   },
-  "xmppCarrierSubtitle": "Carry messages through an XMPP (Jabber) account",
-  "@xmppCarrierSubtitle": {
-    "description": "Settings: subtitle of the XMPP carrier switch."
+  "voiceInputDevice": "Microphone",
+  "@voiceInputDevice": {
+    "description": "Settings → Voice: microphone picker."
   },
-  "xmppCreatedAccount": "Account made by Conest",
-  "@xmppCreatedAccount": {
-    "description": "Settings: the XMPP account was created by Conest."
+  "voiceOutputDevice": "Speaker or headphones",
+  "@voiceOutputDevice": {
+    "description": "Settings → Voice: output picker."
   },
-  "xmppOwnAccount": "Your own account",
-  "@xmppOwnAccount": {
-    "description": "Settings: the XMPP account is the user's own."
+  "voiceSystemDefault": "System default",
+  "@voiceSystemDefault": {
+    "description": "Device picker: follow the system's choice."
   },
-  "xmppChangeAccount": "Change account",
-  "@xmppChangeAccount": {
-    "description": "Settings: button to change the XMPP carrier account."
+  "voiceInputVolume": "Microphone volume",
+  "@voiceInputVolume": {
+    "description": "Settings → Voice slider."
   },
-  "xmppServerField": "XMPP server (empty: the first one that answers here)",
-  "@xmppServerField": {
-    "description": "Settings: field for the XMPP server on which Conest creates an account."
+  "voiceOutputVolume": "Output volume",
+  "@voiceOutputVolume": {
+    "description": "Settings → Voice slider."
   },
-  "xmppUseOwnAccount": "Use my own XMPP account",
-  "@xmppUseOwnAccount": {
-    "description": "Settings: checkbox to use the user's own XMPP account."
+  "voiceMicTest": "Check your microphone",
+  "@voiceMicTest": {
+    "description": "Settings → Voice: microphone test heading."
   },
-  "xmppOwnAccountNote": "Conest signs in as an extra device; your other XMPP apps do not see its messages.",
-  "@xmppOwnAccountNote": {
-    "description": "Settings: explanation of using one's own XMPP account."
+  "voiceMicTestStart": "Let's check",
+  "@voiceMicTestStart": {
+    "description": "Starts the microphone test."
   },
-  "xmppAddressField": "XMPP address (name@server)",
-  "@xmppAddressField": {
-    "description": "Settings: field for an XMPP address."
+  "voiceMicTestStop": "Stop",
+  "@voiceMicTestStop": {
+    "description": "Stops the microphone test."
   },
-  "xmppPasswordField": "Password",
-  "@xmppPasswordField": {
-    "description": "Settings: field for the XMPP account password."
+  "voiceMicTestLoopback": "Hear yourself",
+  "@voiceMicTestLoopback": {
+    "description": "Microphone test: play your voice back."
   },
-  "xmppRetracted": "Message retracted",
-  "@xmppRetracted": {
-    "description": "XMPP chat: a message its sender took back."
+  "voiceMicTestUnavailable": "The microphone test is not available now (during a call, or without call audio in this build).",
+  "@voiceMicTestUnavailable": {
+    "description": "Shown when the test cannot start."
   },
-  "xmppFile": "File",
-  "@xmppFile": {
-    "description": "XMPP chat: a shared file."
+  "voiceInputMode": "Send my voice",
+  "@voiceInputMode": {
+    "description": "Settings → Voice: input mode heading."
   },
-  "xmppNewChat": "New XMPP chat",
-  "@xmppNewChat": {
-    "description": "XMPP: start a new chat."
+  "voiceInputModeAlways": "Always",
+  "@voiceInputModeAlways": {
+    "description": "Input mode."
   },
-  "xmppNewChatAddress": "Address or xmpp: link",
-  "@xmppNewChatAddress": {
-    "description": "XMPP: address field of a new chat."
+  "voiceInputModeActivity": "When I speak",
+  "@voiceInputModeActivity": {
+    "description": "Input mode: voice activity."
   },
-  "xmppGroupChat": "Group chat",
-  "@xmppGroupChat": {
-    "description": "XMPP: a group chat (MUC)."
+  "voiceInputModePushToTalk": "Push to talk",
+  "@voiceInputModePushToTalk": {
+    "description": "Input mode."
   },
-  "xmppNickname": "Your nickname",
-  "@xmppNickname": {
-    "description": "XMPP: nickname in a group chat."
+  "voiceSensitivityAutomatic": "Set sensitivity automatically",
+  "@voiceSensitivityAutomatic": {
+    "description": "Voice activity switch."
   },
-  "xmppOpenChat": "Open",
-  "@xmppOpenChat": {
-    "description": "XMPP: open the chat button."
+  "voiceSensitivity": "Sensitivity",
+  "@voiceSensitivity": {
+    "description": "Voice activity threshold slider."
   },
-  "xmppMetadataTitle": "Some details stay in this file",
-  "@xmppMetadataTitle": {
-    "description": "XMPP: the file's metadata could not all be removed."
+  "voicePushToTalkKey": "Push-to-talk key",
+  "@voicePushToTalkKey": {
+    "description": "Settings → Voice."
   },
-  "xmppMetadataBody": "Conest could not remove all hidden details (such as location or device) from this file. Send it anyway?",
-  "@xmppMetadataBody": {
-    "description": "XMPP: explanation of remaining metadata."
+  "voicePushToTalkKeyNone": "The call's button only",
+  "@voicePushToTalkKeyNone": {
+    "description": "No key chosen."
   },
-  "xmppSendAnyway": "Send anyway",
-  "@xmppSendAnyway": {
-    "description": "XMPP: send despite metadata."
+  "voicePushToTalkKeyPress": "Press a key…",
+  "@voicePushToTalkKeyPress": {
+    "description": "Waiting for the key."
   },
-  "xmppReply": "Reply",
-  "@xmppReply": {
-    "description": "XMPP: reply to a message."
+  "voicePushToTalkKeyHint": "works while Conest is in front",
+  "@voicePushToTalkKeyHint": {
+    "description": "Where the key works."
   },
-  "xmppCopy": "Copy",
-  "@xmppCopy": {
-    "description": "XMPP: copy a message."
+  "voiceClear": "Clear",
+  "@voiceClear": {
+    "description": "Removes the chosen key."
   },
-  "xmppEdit": "Edit",
-  "@xmppEdit": {
-    "description": "XMPP: correct own message."
+  "voiceProcessing": "Processing",
+  "@voiceProcessing": {
+    "description": "Settings → Voice heading."
   },
-  "xmppRetract": "Retract",
-  "@xmppRetract": {
-    "description": "XMPP: retract own message."
+  "voiceNoiseSuppression": "Noise suppression",
+  "@voiceNoiseSuppression": {
+    "description": "Switch."
   },
-  "xmppChatGone": "This chat is gone.",
-  "@xmppChatGone": {
-    "description": "XMPP: the chat no longer exists."
+  "voiceEchoCancellation": "Echo cancellation",
+  "@voiceEchoCancellation": {
+    "description": "Switch."
   },
-  "xmppNotEncrypted": "not encrypted",
-  "@xmppNotEncrypted": {
-    "description": "XMPP: the chat is not end-to-end encrypted."
+  "voiceAutoGain": "Automatic volume",
+  "@voiceAutoGain": {
+    "description": "Switch: automatic gain control."
   },
-  "xmppLeaveRoom": "Leave group chat",
-  "@xmppLeaveRoom": {
-    "description": "XMPP: leave a group chat."
+  "voiceCallSounds": "Call sounds",
+  "@voiceCallSounds": {
+    "description": "Switch: tones when calls connect, end, mute."
   },
-  "xmppDeleteChat": "Delete chat",
-  "@xmppDeleteChat": {
-    "description": "XMPP: delete a chat here."
+  "voiceCallSoundsHint": "An incoming call still rings.",
+  "@voiceCallSoundsHint": {
+    "description": "Under the call sounds switch."
   },
-  "xmppBlock": "Block",
-  "@xmppBlock": {
-    "description": "XMPP: block someone."
+  "voiceDevicesOnPhone": "On Android the phone picks the microphone and speaker for calls.",
+  "@voiceDevicesOnPhone": {
+    "description": "Settings → Voice on phones."
   },
-  "xmppAccept": "Accept",
-  "@xmppAccept": {
-    "description": "XMPP: accept a chat request."
+  "voiceSettingsButton": "Voice settings",
+  "@voiceSettingsButton": {
+    "description": "Button in a call screen."
   },
-  "xmppRequest": "Someone not in your contacts wrote to you. Replies and read markers go out only once you accept.",
-  "@xmppRequest": {
-    "description": "XMPP: banner for a stranger's chat."
-  },
-  "xmppRoomInvitation": "You were invited to this group chat. Join it?",
-  "@xmppRoomInvitation": {
-    "description": "XMPP: banner for a group chat invitation."
-  },
-  "xmppAttach": "Attach a file",
-  "@xmppAttach": {
-    "description": "XMPP: attach a file."
-  },
-  "xmppMessageHint": "Message",
-  "@xmppMessageHint": {
-    "description": "XMPP: composer hint."
-  },
-  "xmppEdited": "edited",
-  "@xmppEdited": {
-    "description": "XMPP: message was corrected."
-  },
-  "xmppChats": "XMPP chats",
-  "@xmppChats": {
-    "description": "Settings: XMPP chats switch."
-  },
-  "xmppChatsSubtitle": "Chat with anyone on XMPP (Jabber), beside your Conest chats",
-  "@xmppChatsSubtitle": {
-    "description": "Settings: XMPP chats switch subtitle."
-  },
-  "xmppChatsOtherAccount": "Use another account than the one Conest carries messages through",
-  "@xmppChatsOtherAccount": {
-    "description": "Settings: use another XMPP account for chats."
-  },
-  "xmppConnected": "connected",
-  "@xmppConnected": {
-    "description": "XMPP: connected."
-  },
-  "xmppConnecting": "connecting",
-  "@xmppConnecting": {
-    "description": "XMPP: connecting."
-  },
-  "appModeClientOnlyTitle": "Use Conest as a {network} client?",
-  "@appModeClientOnlyTitle": {
-    "description": "App mode: confirm switching to a client-only mode for a network.",
+  "voiceParticipantVolume": "Volume for {name}",
+  "@voiceParticipantVolume": {
+    "description": "Group call: one member's volume on this device.",
     "placeholders": {
-      "network": {
+      "name": {
         "type": "String"
       }
     }
   },
-  "onbXmppInstead": "Use as an XMPP client instead",
-  "@onbXmppInstead": {
-    "description": "Onboarding: use the app as an XMPP client."
+  "voiceHoldToTalk": "Hold to talk",
+  "@voiceHoldToTalk": {
+    "description": "Push-to-talk button in a 1:1 call."
   },
-  "xmppSignIn": "Sign in to your XMPP account",
-  "@xmppSignIn": {
-    "description": "XMPP-only mode: sign in heading."
+  "quietHoursTitle": "Quiet hours",
+  "@quietHoursTitle": {
+    "description": "Settings: notifications without sound."
   },
-  "xmppNoChats": "No XMPP chats yet",
-  "@xmppNoChats": {
-    "description": "XMPP-only mode: no chats yet."
+  "quietHoursHint": "Notifications still appear, without sound or vibration.",
+  "@quietHoursHint": {
+    "description": "Under the quiet hours switch."
   },
-  "xmppRequestShort": "Chat request",
-  "@xmppRequestShort": {
-    "description": "XMPP: chat list label for a request."
+  "quietHoursFrom": "From {time}",
+  "@quietHoursFrom": {
+    "description": "Quiet hours start.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "quietHoursUntil": "Until {time}",
+  "@quietHoursUntil": {
+    "description": "Quiet hours end.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "quietHoursCallsRing": "Calls still ring",
+  "@quietHoursCallsRing": {
+    "description": "Quiet hours: incoming calls."
+  },
+  "muteForHour": "For 1 hour",
+  "@muteForHour": {
+    "description": "Mute a chat."
+  },
+  "muteForEightHours": "For 8 hours",
+  "@muteForEightHours": {
+    "description": "Mute a chat."
+  },
+  "muteForDay": "For 1 day",
+  "@muteForDay": {
+    "description": "Mute a chat."
+  },
+  "muteUntilUnmuted": "Until I unmute",
+  "@muteUntilUnmuted": {
+    "description": "Mute a chat."
+  },
+  "notifyMentionsOnly": "Notify only for mentions",
+  "@notifyMentionsOnly": {
+    "description": "Group menu: notify only when mentioned or replied to."
+  },
+  "notifyAllMessages": "Notify for all messages",
+  "@notifyAllMessages": {
+    "description": "Group menu: back to every message."
   },
   "xmppEncOmemo2": "encrypted (OMEMO)",
   "@xmppEncOmemo2": {

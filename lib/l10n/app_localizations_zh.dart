@@ -5366,142 +5366,139 @@ class AppLocalizationsZh extends AppLocalizations {
   String get notificationPreviewHidden => '不显示';
 
   @override
-  String get routeXmppDescription =>
-      '由 XMPP 服务器传送，仍由 Conest 端到端加密；服务器能看到双方账号和时间。';
+  String get voiceSettingsTitle => '语音';
 
   @override
-  String get xmppCarrierSubtitle => '通过 XMPP（Jabber）账号传送消息';
+  String get voiceInputDevice => '麦克风';
 
   @override
-  String get xmppCreatedAccount => '由 Conest 创建的账号';
+  String get voiceOutputDevice => '扬声器或耳机';
 
   @override
-  String get xmppOwnAccount => '你自己的账号';
+  String get voiceSystemDefault => '系统默认';
 
   @override
-  String get xmppChangeAccount => '更换账号';
+  String get voiceInputVolume => '麦克风音量';
 
   @override
-  String get xmppServerField => 'XMPP 服务器（留空：此处第一个响应的服务器）';
+  String get voiceOutputVolume => '输出音量';
 
   @override
-  String get xmppUseOwnAccount => '使用我自己的 XMPP 账号';
+  String get voiceMicTest => '检查麦克风';
 
   @override
-  String get xmppOwnAccountNote => 'Conest 以额外设备身份登录；你的其他 XMPP 应用看不到它的消息。';
+  String get voiceMicTestStart => '开始检查';
 
   @override
-  String get xmppAddressField => 'XMPP 地址（名称@服务器）';
+  String get voiceMicTestStop => '停止';
 
   @override
-  String get xmppPasswordField => '密码';
+  String get voiceMicTestLoopback => '听到自己';
 
   @override
-  String get xmppRetracted => '消息已撤回';
+  String get voiceMicTestUnavailable => '现在无法测试麦克风（通话中，或此版本没有通话音频）。';
 
   @override
-  String get xmppFile => '文件';
+  String get voiceInputMode => '发送我的声音';
 
   @override
-  String get xmppNewChat => '新的 XMPP 聊天';
+  String get voiceInputModeAlways => '始终';
 
   @override
-  String get xmppNewChatAddress => '地址或 xmpp: 链接';
+  String get voiceInputModeActivity => '说话时';
 
   @override
-  String get xmppGroupChat => '群聊';
+  String get voiceInputModePushToTalk => '按键说话';
 
   @override
-  String get xmppNickname => '你的昵称';
+  String get voiceSensitivityAutomatic => '自动设置灵敏度';
 
   @override
-  String get xmppOpenChat => '打开';
+  String get voiceSensitivity => '灵敏度';
 
   @override
-  String get xmppMetadataTitle => '此文件中仍保留部分信息';
+  String get voicePushToTalkKey => '按键说话的按键';
 
   @override
-  String get xmppMetadataBody => 'Conest 无法移除此文件中的全部隐藏信息（如位置或设备）。仍要发送吗？';
+  String get voicePushToTalkKeyNone => '仅通话中的按钮';
 
   @override
-  String get xmppSendAnyway => '仍然发送';
+  String get voicePushToTalkKeyPress => '请按一个键…';
 
   @override
-  String get xmppReply => '回复';
+  String get voicePushToTalkKeyHint => '在 Conest 位于前台时有效';
 
   @override
-  String get xmppCopy => '复制';
+  String get voiceClear => '清除';
 
   @override
-  String get xmppEdit => '编辑';
+  String get voiceProcessing => '处理';
 
   @override
-  String get xmppRetract => '撤回';
+  String get voiceNoiseSuppression => '降噪';
 
   @override
-  String get xmppChatGone => '此聊天已不存在。';
+  String get voiceEchoCancellation => '回声消除';
 
   @override
-  String get xmppNotEncrypted => '未加密';
+  String get voiceAutoGain => '自动音量';
 
   @override
-  String get xmppLeaveRoom => '退出群聊';
+  String get voiceCallSounds => '通话提示音';
 
   @override
-  String get xmppDeleteChat => '删除聊天';
+  String get voiceCallSoundsHint => '来电仍会响铃。';
 
   @override
-  String get xmppBlock => '屏蔽';
+  String get voiceDevicesOnPhone => '在 Android 上，由手机选择通话的麦克风和扬声器。';
 
   @override
-  String get xmppAccept => '接受';
+  String get voiceSettingsButton => '语音设置';
 
   @override
-  String get xmppRequest => '不在你联系人中的人给你发了消息。接受之后才会发送回复和已读标记。';
-
-  @override
-  String get xmppRoomInvitation => '你被邀请加入此群聊。要加入吗？';
-
-  @override
-  String get xmppAttach => '附加文件';
-
-  @override
-  String get xmppMessageHint => '消息';
-
-  @override
-  String get xmppEdited => '已编辑';
-
-  @override
-  String get xmppChats => 'XMPP 聊天';
-
-  @override
-  String get xmppChatsSubtitle => '在 Conest 聊天旁与任何 XMPP（Jabber）用户聊天';
-
-  @override
-  String get xmppChatsOtherAccount => '使用 Conest 传送消息所用账号之外的另一个账号';
-
-  @override
-  String get xmppConnected => '已连接';
-
-  @override
-  String get xmppConnecting => '正在连接';
-
-  @override
-  String appModeClientOnlyTitle(String network) {
-    return '将 Conest 用作 $network 客户端？';
+  String voiceParticipantVolume(String name) {
+    return '$name 的音量';
   }
 
   @override
-  String get onbXmppInstead => '改为用作 XMPP 客户端';
+  String get voiceHoldToTalk => '按住说话';
 
   @override
-  String get xmppSignIn => '登录你的 XMPP 账号';
+  String get quietHoursTitle => '免打扰时段';
 
   @override
-  String get xmppNoChats => '还没有 XMPP 聊天';
+  String get quietHoursHint => '通知仍会显示，但没有声音或振动。';
 
   @override
-  String get xmppRequestShort => '聊天请求';
+  String quietHoursFrom(String time) {
+    return '从 $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return '到 $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => '来电仍会响铃';
+
+  @override
+  String get muteForHour => '1 小时';
+
+  @override
+  String get muteForEightHours => '8 小时';
+
+  @override
+  String get muteForDay => '1 天';
+
+  @override
+  String get muteUntilUnmuted => '直到我取消静音';
+
+  @override
+  String get notifyMentionsOnly => '仅在提及我时通知';
+
+  @override
+  String get notifyAllMessages => '所有消息都通知';
 
   @override
   String get xmppEncOmemo2 => '已加密（OMEMO）';

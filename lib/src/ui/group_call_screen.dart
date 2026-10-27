@@ -6,6 +6,8 @@ import '../group_call/group_call_models.dart';
 import '../group_call/group_call_service.dart';
 import '../messenger_controller.dart';
 import '../models.dart' show ChatMessage;
+import '../voice_settings.dart';
+import 'voice_settings_panel.dart';
 
 Future<void> openGroupCallScreen(
   BuildContext context,
@@ -34,6 +36,22 @@ Future<void> openGroupCallScreen(
           service: service,
           members: () => controller.groupCallMembersFor(groupId),
           onNoiseChanged: controller.setVoiceNoiseSuppression,
+          // Push-to-talk is Settings → Voice's input mode (1:1 calls too).
+          onPushToTalkChanged: (enabled) => controller.updateVoiceSettings(
+            controller.voiceSettings.copyWith(
+              inputMode: enabled
+                  ? VoiceInputMode.pushToTalk
+                  : VoiceInputMode.always,
+            ),
+          ),
+          onHoldToTalk: controller.setPushToTalkHeld,
+          // A chosen key works app-wide; without one, space here.
+          hasPushToTalkKey: () =>
+              controller.voiceSettings.pushToTalkKey != null,
+          volumeFor: (deviceId) => controller.voiceSettings.volumeFor(deviceId),
+          onVolumeChanged: controller.setCallParticipantVolume,
+          onOpenVoiceSettings: (context) =>
+              showVoiceSettingsSheet(context, controller),
         ),
       ),
     );
@@ -142,12 +160,24 @@ class GroupCallScreen extends StatefulWidget {
     required this.service,
     required this.members,
     this.onNoiseChanged,
+    this.onPushToTalkChanged,
+    this.onHoldToTalk,
+    this.hasPushToTalkKey,
+    this.volumeFor,
+    this.onVolumeChanged,
+    this.onOpenVoiceSettings,
   });
   final String groupId;
   final String title;
   final GroupCallService service;
   final List<GroupCallMember> Function() members;
   final Future<void> Function(bool)? onNoiseChanged;
+  final Future<void> Function(bool enabled)? onPushToTalkChanged;
+  final Future<void> Function(bool held)? onHoldToTalk;
+  final bool Function()? hasPushToTalkKey;
+  final double Function(String deviceId)? volumeFor;
+  final Future<void> Function(String deviceId, double gain)? onVolumeChanged;
+  final void Function(BuildContext context)? onOpenVoiceSettings;
   @override
   State<GroupCallScreen> createState() => _GroupCallScreenState();
 }
@@ -165,7 +195,10 @@ class _GroupCallScreenState extends State<GroupCallScreen>
   void _releaseTalk() {
     final room = _room;
     if (room?.holdingToTalk == true) {
-      unawaited(widget.service.setPushToTalk(true).catchError((Object _) {}));
+      unawaited(
+        (widget.onHoldToTalk?.call(false) ?? widget.service.setPushToTalk(true))
+            .catchError((Object _) {}),
+      );
     }
   }
 
@@ -208,12 +241,49 @@ class _GroupCallScreenState extends State<GroupCallScreen>
   void _hold(bool held) {
     if (_room?.pushToTalk != true) return;
     unawaited(
-      widget.service.setPushToTalk(true, held: held).catchError((Object _) {}),
+      (widget.onHoldToTalk?.call(held) ??
+              widget.service.setPushToTalk(true, held: held))
+          .catchError((Object _) {}),
     );
+  }
+
+  Future<void> _chooseVolume(GroupCallMember member) async {
+    final change = widget.onVolumeChanged;
+    if (change == null) return;
+    var value = widget.volumeFor?.call(member.deviceId) ?? 1;
+    final chosen = await showDialog<double>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: Text(l10nOf(context).voiceParticipantVolume(member.name)),
+          content: Slider(
+            key: const ValueKey('group-call-member-volume'),
+            value: value,
+            max: 2,
+            divisions: 40,
+            label: '${(value * 100).round()}%',
+            onChanged: (v) => setDialog(() => value = v),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(l10nOf(context).actionCancel),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(value),
+              child: Text(MaterialLocalizations.of(context).okButtonLabel),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (chosen != null) await change(member.deviceId, chosen);
+    if (mounted) setState(() {});
   }
 
   KeyEventResult _key(FocusNode _, KeyEvent event) {
     if (_room?.pushToTalk != true ||
+        widget.hasPushToTalkKey?.call() == true ||
         event.logicalKey != LogicalKeyboardKey.space) {
       return KeyEventResult.ignored;
     }
@@ -310,6 +380,29 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                                     ? l10nOf(context).uiCallEnded9933A4
                                     : _quality(member, room),
                               ),
+                              trailing:
+                                  widget.onVolumeChanged == null ||
+                                      member.deviceId ==
+                                          widget.service.localDeviceId
+                                  ? null
+                                  : IconButton(
+                                      key: ValueKey(
+                                        'group-call-volume-${member.deviceId}',
+                                      ),
+                                      tooltip: l10nOf(
+                                        context,
+                                      ).voiceParticipantVolume(member.name),
+                                      icon: Icon(
+                                        (widget.volumeFor?.call(
+                                                      member.deviceId,
+                                                    ) ??
+                                                    1) ==
+                                                1
+                                            ? Icons.volume_up_outlined
+                                            : Icons.tune,
+                                      ),
+                                      onPressed: () => _chooseVolume(member),
+                                    ),
                             ),
                         ],
                       ),
@@ -339,9 +432,19 @@ class _GroupCallScreenState extends State<GroupCallScreen>
                             onSelected: _busy
                                 ? null
                                 : (enabled) => _run(
-                                    () => widget.service.setPushToTalk(enabled),
+                                    () =>
+                                        (widget.onPushToTalkChanged ??
+                                        widget.service.setPushToTalk)(enabled),
                                   ),
                           ),
+                          if (widget.onOpenVoiceSettings != null)
+                            OutlinedButton.icon(
+                              key: const ValueKey('group-call-voice-settings'),
+                              onPressed: () =>
+                                  widget.onOpenVoiceSettings!(context),
+                              icon: const Icon(Icons.tune),
+                              label: Text(l10nOf(context).voiceSettingsButton),
+                            ),
                           FilterChip(
                             label: Text(
                               l10nOf(context).uiNoiseSuppression71DE3C,

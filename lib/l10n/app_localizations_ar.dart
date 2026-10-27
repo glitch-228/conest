@@ -5742,148 +5742,141 @@ class AppLocalizationsAr extends AppLocalizations {
   String get notificationPreviewHidden => 'لا شيء';
 
   @override
-  String get routeXmppDescription =>
-      'تحمله خوادم XMPP، مع بقائه مشفّرًا من طرف إلى طرف بواسطة Conest؛ ترى الخوادم الحسابين والتوقيت.';
+  String get voiceSettingsTitle => 'الصوت';
 
   @override
-  String get xmppCarrierSubtitle => 'نقل الرسائل عبر حساب XMPP (Jabber)';
+  String get voiceInputDevice => 'الميكروفون';
 
   @override
-  String get xmppCreatedAccount => 'حساب أنشأه Conest';
+  String get voiceOutputDevice => 'السماعة أو سماعات الرأس';
 
   @override
-  String get xmppOwnAccount => 'حسابك الخاص';
+  String get voiceSystemDefault => 'افتراضي النظام';
 
   @override
-  String get xmppChangeAccount => 'تغيير الحساب';
+  String get voiceInputVolume => 'مستوى الميكروفون';
 
   @override
-  String get xmppServerField => 'خادم XMPP (فارغ: أول خادم يستجيب هنا)';
+  String get voiceOutputVolume => 'مستوى الصوت';
 
   @override
-  String get xmppUseOwnAccount => 'استخدام حساب XMPP الخاص بي';
+  String get voiceMicTest => 'اختبار الميكروفون';
 
   @override
-  String get xmppOwnAccountNote =>
-      'يسجّل Conest الدخول كجهاز إضافي؛ لا ترى تطبيقات XMPP الأخرى رسائله.';
+  String get voiceMicTestStart => 'لنختبر';
 
   @override
-  String get xmppAddressField => 'عنوان XMPP (الاسم@الخادم)';
+  String get voiceMicTestStop => 'إيقاف';
 
   @override
-  String get xmppPasswordField => 'كلمة المرور';
+  String get voiceMicTestLoopback => 'اسمع صوتك';
 
   @override
-  String get xmppRetracted => 'سُحبت الرسالة';
+  String get voiceMicTestUnavailable =>
+      'اختبار الميكروفون غير متاح الآن (أثناء مكالمة، أو لا يدعم هذا الإصدار المكالمات).';
 
   @override
-  String get xmppFile => 'ملف';
+  String get voiceInputMode => 'إرسال صوتي';
 
   @override
-  String get xmppNewChat => 'محادثة XMPP جديدة';
+  String get voiceInputModeAlways => 'دائمًا';
 
   @override
-  String get xmppNewChatAddress => 'العنوان أو رابط xmpp:';
+  String get voiceInputModeActivity => 'عندما أتكلم';
 
   @override
-  String get xmppGroupChat => 'محادثة جماعية';
+  String get voiceInputModePushToTalk => 'اضغط للتحدث';
 
   @override
-  String get xmppNickname => 'اسمك المستعار';
+  String get voiceSensitivityAutomatic => 'ضبط الحساسية تلقائيًا';
 
   @override
-  String get xmppOpenChat => 'فتح';
+  String get voiceSensitivity => 'الحساسية';
 
   @override
-  String get xmppMetadataTitle => 'تبقى بعض التفاصيل في هذا الملف';
+  String get voicePushToTalkKey => 'مفتاح الضغط للتحدث';
 
   @override
-  String get xmppMetadataBody =>
-      'تعذّر على Conest إزالة كل التفاصيل المخفية (مثل الموقع أو الجهاز) من هذا الملف. أترسله رغم ذلك؟';
+  String get voicePushToTalkKeyNone => 'زر المكالمة فقط';
 
   @override
-  String get xmppSendAnyway => 'أرسل على أي حال';
+  String get voicePushToTalkKeyPress => 'اضغط مفتاحًا…';
 
   @override
-  String get xmppReply => 'رد';
+  String get voicePushToTalkKeyHint => 'يعمل عندما يكون Conest في المقدمة';
 
   @override
-  String get xmppCopy => 'نسخ';
+  String get voiceClear => 'مسح';
 
   @override
-  String get xmppEdit => 'تعديل';
+  String get voiceProcessing => 'المعالجة';
 
   @override
-  String get xmppRetract => 'سحب';
+  String get voiceNoiseSuppression => 'كتم الضوضاء';
 
   @override
-  String get xmppChatGone => 'لم تعد هذه المحادثة موجودة.';
+  String get voiceEchoCancellation => 'إلغاء الصدى';
 
   @override
-  String get xmppNotEncrypted => 'غير مشفّرة';
+  String get voiceAutoGain => 'مستوى صوت تلقائي';
 
   @override
-  String get xmppLeaveRoom => 'مغادرة المحادثة الجماعية';
+  String get voiceCallSounds => 'أصوات المكالمة';
 
   @override
-  String get xmppDeleteChat => 'حذف المحادثة';
+  String get voiceCallSoundsHint => 'تظل المكالمة الواردة ترن.';
 
   @override
-  String get xmppBlock => 'حظر';
+  String get voiceDevicesOnPhone =>
+      'على أندرويد يختار الهاتف الميكروفون والسماعة للمكالمات.';
 
   @override
-  String get xmppAccept => 'قبول';
+  String get voiceSettingsButton => 'إعدادات الصوت';
 
   @override
-  String get xmppRequest =>
-      'راسلك شخص ليس من جهات اتصالك. لا تُرسل الردود وعلامات القراءة إلا بعد قبولك.';
-
-  @override
-  String get xmppRoomInvitation =>
-      'تمت دعوتك إلى هذه المحادثة الجماعية. هل تنضم؟';
-
-  @override
-  String get xmppAttach => 'إرفاق ملف';
-
-  @override
-  String get xmppMessageHint => 'رسالة';
-
-  @override
-  String get xmppEdited => 'معدّلة';
-
-  @override
-  String get xmppChats => 'محادثات XMPP';
-
-  @override
-  String get xmppChatsSubtitle =>
-      'تحدث مع أي شخص على XMPP (Jabber) بجانب محادثات Conest';
-
-  @override
-  String get xmppChatsOtherAccount =>
-      'استخدام حساب غير الذي ينقل به Conest الرسائل';
-
-  @override
-  String get xmppConnected => 'متصل';
-
-  @override
-  String get xmppConnecting => 'جارٍ الاتصال';
-
-  @override
-  String appModeClientOnlyTitle(String network) {
-    return 'هل تستخدم Conest كعميل $network؟';
+  String voiceParticipantVolume(String name) {
+    return 'مستوى صوت $name';
   }
 
   @override
-  String get onbXmppInstead => 'استخدمه كعميل XMPP بدلًا من ذلك';
+  String get voiceHoldToTalk => 'اضغط مطولًا للتحدث';
 
   @override
-  String get xmppSignIn => 'سجّل الدخول إلى حساب XMPP';
+  String get quietHoursTitle => 'ساعات الهدوء';
 
   @override
-  String get xmppNoChats => 'لا توجد محادثات XMPP بعد';
+  String get quietHoursHint => 'تظهر الإشعارات دون صوت أو اهتزاز.';
 
   @override
-  String get xmppRequestShort => 'طلب محادثة';
+  String quietHoursFrom(String time) {
+    return 'من $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'حتى $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'تظل المكالمات ترن';
+
+  @override
+  String get muteForHour => 'لمدة ساعة';
+
+  @override
+  String get muteForEightHours => 'لمدة 8 ساعات';
+
+  @override
+  String get muteForDay => 'لمدة يوم';
+
+  @override
+  String get muteUntilUnmuted => 'حتى ألغي الكتم';
+
+  @override
+  String get notifyMentionsOnly => 'الإشعار عند الإشارة إليّ فقط';
+
+  @override
+  String get notifyAllMessages => 'الإشعار لكل الرسائل';
 
   @override
   String get xmppEncOmemo2 => 'مشفّرة (OMEMO)';

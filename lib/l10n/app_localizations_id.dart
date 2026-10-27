@@ -5598,149 +5598,142 @@ class AppLocalizationsId extends AppLocalizations {
   String get notificationPreviewHidden => 'Tidak ada';
 
   @override
-  String get routeXmppDescription =>
-      'Dibawa server XMPP, tetap terenkripsi ujung ke ujung oleh Conest; server melihat kedua akun dan waktunya.';
+  String get voiceSettingsTitle => 'Suara';
 
   @override
-  String get xmppCarrierSubtitle => 'Bawa pesan melalui akun XMPP (Jabber)';
+  String get voiceInputDevice => 'Mikrofon';
 
   @override
-  String get xmppCreatedAccount => 'Akun dibuat oleh Conest';
+  String get voiceOutputDevice => 'Speaker atau headphone';
 
   @override
-  String get xmppOwnAccount => 'Akun Anda sendiri';
+  String get voiceSystemDefault => 'Bawaan sistem';
 
   @override
-  String get xmppChangeAccount => 'Ganti akun';
+  String get voiceInputVolume => 'Volume mikrofon';
 
   @override
-  String get xmppServerField =>
-      'Server XMPP (kosong: yang pertama menjawab di sini)';
+  String get voiceOutputVolume => 'Volume suara';
 
   @override
-  String get xmppUseOwnAccount => 'Gunakan akun XMPP saya sendiri';
+  String get voiceMicTest => 'Periksa mikrofon';
 
   @override
-  String get xmppOwnAccountNote =>
-      'Conest masuk sebagai perangkat tambahan; aplikasi XMPP Anda yang lain tidak melihat pesannya.';
+  String get voiceMicTestStart => 'Periksa';
 
   @override
-  String get xmppAddressField => 'Alamat XMPP (nama@server)';
+  String get voiceMicTestStop => 'Berhenti';
 
   @override
-  String get xmppPasswordField => 'Kata sandi';
+  String get voiceMicTestLoopback => 'Dengar suara sendiri';
 
   @override
-  String get xmppRetracted => 'Pesan ditarik';
+  String get voiceMicTestUnavailable =>
+      'Tes mikrofon tidak tersedia sekarang (sedang panggilan, atau versi ini tanpa audio panggilan).';
 
   @override
-  String get xmppFile => 'Berkas';
+  String get voiceInputMode => 'Kirim suara saya';
 
   @override
-  String get xmppNewChat => 'Obrolan XMPP baru';
+  String get voiceInputModeAlways => 'Selalu';
 
   @override
-  String get xmppNewChatAddress => 'Alamat atau tautan xmpp:';
+  String get voiceInputModeActivity => 'Saat saya bicara';
 
   @override
-  String get xmppGroupChat => 'Obrolan grup';
+  String get voiceInputModePushToTalk => 'Tekan untuk bicara';
 
   @override
-  String get xmppNickname => 'Nama panggilan Anda';
+  String get voiceSensitivityAutomatic => 'Atur sensitivitas otomatis';
 
   @override
-  String get xmppOpenChat => 'Buka';
+  String get voiceSensitivity => 'Sensitivitas';
 
   @override
-  String get xmppMetadataTitle => 'Beberapa detail tetap ada di berkas ini';
+  String get voicePushToTalkKey => 'Tombol tekan untuk bicara';
 
   @override
-  String get xmppMetadataBody =>
-      'Conest tidak dapat menghapus semua detail tersembunyi (seperti lokasi atau perangkat) dari berkas ini. Tetap kirim?';
+  String get voicePushToTalkKeyNone => 'Hanya tombol panggilan';
 
   @override
-  String get xmppSendAnyway => 'Tetap kirim';
+  String get voicePushToTalkKeyPress => 'Tekan sebuah tombol…';
 
   @override
-  String get xmppReply => 'Balas';
+  String get voicePushToTalkKeyHint => 'berfungsi saat Conest di depan';
 
   @override
-  String get xmppCopy => 'Salin';
+  String get voiceClear => 'Hapus';
 
   @override
-  String get xmppEdit => 'Sunting';
+  String get voiceProcessing => 'Pemrosesan';
 
   @override
-  String get xmppRetract => 'Tarik';
+  String get voiceNoiseSuppression => 'Peredam bising';
 
   @override
-  String get xmppChatGone => 'Obrolan ini sudah tidak ada.';
+  String get voiceEchoCancellation => 'Peredam gema';
 
   @override
-  String get xmppNotEncrypted => 'tidak terenkripsi';
+  String get voiceAutoGain => 'Volume otomatis';
 
   @override
-  String get xmppLeaveRoom => 'Keluar dari obrolan grup';
+  String get voiceCallSounds => 'Suara panggilan';
 
   @override
-  String get xmppDeleteChat => 'Hapus obrolan';
+  String get voiceCallSoundsHint => 'Panggilan masuk tetap berdering.';
 
   @override
-  String get xmppBlock => 'Blokir';
+  String get voiceDevicesOnPhone =>
+      'Di Android, ponsel memilih mikrofon dan speaker untuk panggilan.';
 
   @override
-  String get xmppAccept => 'Terima';
+  String get voiceSettingsButton => 'Pengaturan suara';
 
   @override
-  String get xmppRequest =>
-      'Seseorang yang bukan kontak Anda menulis kepada Anda. Balasan dan tanda baca dikirim hanya setelah Anda menerima.';
-
-  @override
-  String get xmppRoomInvitation =>
-      'Anda diundang ke obrolan grup ini. Bergabung?';
-
-  @override
-  String get xmppAttach => 'Lampirkan berkas';
-
-  @override
-  String get xmppMessageHint => 'Pesan';
-
-  @override
-  String get xmppEdited => 'disunting';
-
-  @override
-  String get xmppChats => 'Obrolan XMPP';
-
-  @override
-  String get xmppChatsSubtitle =>
-      'Mengobrol dengan siapa pun di XMPP (Jabber), di samping obrolan Conest';
-
-  @override
-  String get xmppChatsOtherAccount =>
-      'Gunakan akun lain selain yang dipakai Conest membawa pesan';
-
-  @override
-  String get xmppConnected => 'terhubung';
-
-  @override
-  String get xmppConnecting => 'menghubungkan';
-
-  @override
-  String appModeClientOnlyTitle(String network) {
-    return 'Gunakan Conest sebagai klien $network?';
+  String voiceParticipantVolume(String name) {
+    return 'Volume $name';
   }
 
   @override
-  String get onbXmppInstead => 'Gunakan sebagai klien XMPP saja';
+  String get voiceHoldToTalk => 'Tahan untuk bicara';
 
   @override
-  String get xmppSignIn => 'Masuk ke akun XMPP Anda';
+  String get quietHoursTitle => 'Jam tenang';
 
   @override
-  String get xmppNoChats => 'Belum ada obrolan XMPP';
+  String get quietHoursHint =>
+      'Notifikasi tetap muncul, tanpa suara atau getar.';
 
   @override
-  String get xmppRequestShort => 'Permintaan obrolan';
+  String quietHoursFrom(String time) {
+    return 'Dari $time';
+  }
+
+  @override
+  String quietHoursUntil(String time) {
+    return 'Sampai $time';
+  }
+
+  @override
+  String get quietHoursCallsRing => 'Panggilan tetap berdering';
+
+  @override
+  String get muteForHour => 'Selama 1 jam';
+
+  @override
+  String get muteForEightHours => 'Selama 8 jam';
+
+  @override
+  String get muteForDay => 'Selama 1 hari';
+
+  @override
+  String get muteUntilUnmuted => 'Sampai saya aktifkan lagi';
+
+  @override
+  String get notifyMentionsOnly => 'Beri tahu hanya saat disebut';
+
+  @override
+  String get notifyAllMessages => 'Beri tahu semua pesan';
 
   @override
   String get xmppEncOmemo2 => 'terenkripsi (OMEMO)';
