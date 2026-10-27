@@ -177,11 +177,9 @@ fn main() -> std::io::Result<()> {
             let listener = std::net::TcpListener::bind(bind)?;
             listener.set_nonblocking(true)?;
             println!("conest relay borrowing the handshake of {site} on {bind}");
-            let layer = borrowed::BorrowedLayer::new(
-                site.clone(),
-                state.identity.noise_private,
-                state.identity.noise_public,
-            );
+            let (secret, public) =
+                borrowed::key_pair_from_seed(&state.identity.signing_key.to_bytes());
+            let layer = borrowed::BorrowedLayer::new(site.clone(), secret, public);
             Some((listener, layer))
         }
         _ => None,

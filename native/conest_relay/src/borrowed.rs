@@ -64,6 +64,21 @@ const HELLO_RETRY: [u8; 32] = [
     0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
 ];
 
+/// The key pair the layer runs on, from the relay's identity seed: the
+/// X25519 form of its Ed25519 identity (the clamped first half of the
+/// seed's SHA-512, as for any Ed25519 key), so a client that has pinned
+/// the identity needs nothing else to address the relay.
+pub(crate) fn key_pair_from_seed(seed: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
+    let digest = sha2::Sha512::digest(seed);
+    let mut secret = [0_u8; 32];
+    secret.copy_from_slice(&digest[..32]);
+    secret[0] &= 248;
+    secret[31] &= 127;
+    secret[31] |= 64;
+    let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
+    (secret, public.to_bytes())
+}
+
 /// The secret both sides derive from the key agreement.
 pub(crate) fn exchange_key(dh: &[u8; 32], ephemeral: &[u8], relay_public: &[u8; 32]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -511,7 +526,7 @@ mod tests {
 
     fn start_relay(site: &str) -> (SocketAddr, [u8; 32]) {
         let identity = RelayIdentity::from_seed_bytes([7_u8; 32]);
-        let (secret, public) = (identity.noise_private, identity.noise_public);
+        let (secret, public) = key_pair_from_seed(&[7_u8; 32]);
         let state = RelayState::new(parity_config(), identity);
         let layer: Arc<dyn OuterLayer> =
             Arc::new(BorrowedLayer::new(site.to_owned(), secret, public));
@@ -628,8 +643,8 @@ mod tests {
         // A marker for the right key but another relay's key.
         let (site2, received2) = start_site();
         let (address2, _) = start_relay(&site2);
-        let other = RelayIdentity::from_seed_bytes([8_u8; 32]);
-        let (foreign, _) = marker(&other.noise_public, &[1; 32]);
+        let (_, other_public) = key_pair_from_seed(&[8_u8; 32]);
+        let (foreign, _) = marker(&other_public, &[1; 32]);
         let mut stream = connect(address2);
         stream.write_all(&handshake_prefix()).expect("write");
         read_records(&mut stream, 3);
