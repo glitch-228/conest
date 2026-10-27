@@ -50,7 +50,10 @@ class OmemoSession {
 
   OmemoSuite get suite => version.suite;
 
-  Uint8List _adFor({required bool sending}) {
+  /// The associated data the MAC covers for a message sent ([sending]) or
+  /// received by this side: legacy OMEMO authenticates "sender identity,
+  /// receiver identity".
+  Uint8List associatedDataFor({required bool sending}) {
     if (!suite.directional) return associatedData;
     // Legacy OMEMO authenticates "sender identity, receiver identity".
     final initiatorSends = (initiation == OmemoInitiation.active) == sending;
@@ -76,7 +79,10 @@ class OmemoSession {
   /// Encrypts [keyMaterial] for the peer; the result is what goes into the
   /// `<key>` element, and whether the element is a key exchange.
   Future<(Uint8List, bool)> encrypt(Uint8List keyMaterial) async {
-    final sealed = await ratchet.encrypt(keyMaterial, _adFor(sending: true));
+    final sealed = await ratchet.encrypt(
+      keyMaterial,
+      associatedDataFor(sending: true),
+    );
     if (!needsKeyExchange) return (sealed, false);
     final kex = suite.encodeKeyExchange(
       OmemoKeyExchange(
@@ -92,7 +98,11 @@ class OmemoSession {
 
   /// Decrypts a sealed ratchet message (the key exchange already taken off).
   Future<Uint8List> decrypt(Uint8List sealed, OmemoRandom random) async {
-    final plain = await ratchet.decrypt(sealed, _adFor(sending: false), random);
+    final plain = await ratchet.decrypt(
+      sealed,
+      associatedDataFor(sending: false),
+      random,
+    );
     confirmed = true;
     return plain;
   }

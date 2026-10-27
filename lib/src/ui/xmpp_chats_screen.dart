@@ -12,6 +12,7 @@ import '../xmpp/xmpp_chat_client.dart';
 import '../xmpp/xmpp_chats.dart';
 import '../xmpp/xmpp_files.dart';
 import 'linked_text.dart';
+import 'xmpp_omemo_screens.dart';
 
 /// What to call [jid] in XMPP chats: the room's subject or the contact
 /// list's name, else the address.
@@ -353,12 +354,26 @@ class _XmppChatScreenState extends State<XmppChatScreen> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-            Text(
-              // Encryption (OMEMO) comes later: said plainly per chat.
-              '${chat.room ? l10n.xmppGroupChat : chat.jid} · '
-              '${l10n.xmppNotEncrypted}',
-              key: const ValueKey('xmpp-encryption-mark'),
-              style: theme.textTheme.labelSmall,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (xmppShowsLock(chat))
+                  const Padding(
+                    padding: EdgeInsetsDirectional.only(end: 4),
+                    child: Icon(Icons.lock_outline, size: 12),
+                  ),
+                Flexible(
+                  child: Text(
+                    // What protects this chat, said plainly.
+                    '${chat.room ? l10n.xmppGroupChat : chat.jid} · '
+                    '${xmppEncryptionLabel(context, chat)}',
+                    key: const ValueKey('xmpp-encryption-mark'),
+                    style: theme.textTheme.labelSmall,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -371,6 +386,12 @@ class _XmppChatScreenState extends State<XmppChatScreen> {
               } else if (value == 'block') {
                 await _run(() async => client?.block(widget.jid));
                 if (context.mounted) Navigator.pop(context);
+              } else if (value == 'encryption') {
+                await showXmppEncryptionDialog(
+                  context,
+                  widget.controller,
+                  widget.jid,
+                );
               }
             },
             itemBuilder: (context) => [
@@ -380,6 +401,11 @@ class _XmppChatScreenState extends State<XmppChatScreen> {
                   chat.room ? l10n.xmppLeaveRoom : l10n.xmppDeleteChat,
                 ),
               ),
+              if (!chat.room && client?.omemo != null)
+                PopupMenuItem(
+                  value: 'encryption',
+                  child: Text(l10n.xmppEncryptionMenu),
+                ),
               if (!chat.room)
                 PopupMenuItem(value: 'block', child: Text(l10n.xmppBlock)),
             ],
@@ -535,7 +561,15 @@ class _XmppChatScreenState extends State<XmppChatScreen> {
                     style: theme.textTheme.bodySmall,
                   ),
                 ),
-              if (message.retracted)
+              if (message.security == XmppSecurity.unreadable)
+                Text(
+                  l10n.xmppUnreadable,
+                  key: const ValueKey('xmpp-unreadable'),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontStyle: FontStyle.italic,
+                  ),
+                )
+              else if (message.retracted)
                 Text(
                   l10n.xmppRetracted,
                   style: theme.textTheme.bodyMedium?.copyWith(
@@ -584,6 +618,22 @@ class _XmppChatScreenState extends State<XmppChatScreen> {
                   if (message.editedAt != null) ...[
                     const SizedBox(width: 4),
                     Text(l10n.xmppEdited, style: theme.textTheme.labelSmall),
+                  ],
+                  if (message.security == XmppSecurity.omemo2) ...[
+                    const SizedBox(width: 4),
+                    const Icon(Icons.lock_outline, size: 12),
+                  ] else if (xmppSecurityNote(context, message)
+                      case final note?
+                      when message.security != XmppSecurity.unreadable) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      note,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: message.security == XmppSecurity.untrusted
+                            ? theme.colorScheme.error
+                            : null,
+                      ),
+                    ),
                   ],
                   if (outgoing) ...[
                     const SizedBox(width: 4),
@@ -705,7 +755,9 @@ class _XmppChatsPanelState extends State<XmppChatsPanel> {
                   ),
                 ),
               ],
-            ] else
+            ] else ...[
+              if (client?.omemo != null)
+                XmppLegacyOmemoTile(controller: controller),
               ListTile(
                 key: const ValueKey('xmpp-new-chat'),
                 contentPadding: EdgeInsets.zero,
@@ -715,6 +767,7 @@ class _XmppChatsPanelState extends State<XmppChatsPanel> {
                     ? null
                     : () => startXmppChat(context, controller),
               ),
+            ],
             if (_error != null)
               Text(
                 _error!,

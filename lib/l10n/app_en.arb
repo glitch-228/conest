@@ -8569,5 +8569,135 @@
   "xmppRequestShort": "Chat request",
   "@xmppRequestShort": {
     "description": "XMPP: chat list label for a request."
+  },
+  "xmppEncOmemo2": "encrypted (OMEMO)",
+  "@xmppEncOmemo2": {
+    "description": "XMPP chat header: the chat is end-to-end encrypted with OMEMO."
+  },
+  "xmppEncLegacy": "legacy OMEMO (not reviewed yet)",
+  "@xmppEncLegacy": {
+    "description": "XMPP chat header: legacy OMEMO is in use, which has not been reviewed yet, so it is not called encrypted."
+  },
+  "xmppEncAuto": "encrypted if the contact supports it",
+  "@xmppEncAuto": {
+    "description": "XMPP chat header: messages are encrypted when the contact has OMEMO devices."
+  },
+  "xmppEncRequired": "always encrypted",
+  "@xmppEncRequired": {
+    "description": "XMPP chat header: encryption is required for this chat."
+  },
+  "xmppEncryptionMenu": "Encryption and keys",
+  "@xmppEncryptionMenu": {
+    "description": "XMPP chat menu entry opening encryption settings and keys."
+  },
+  "xmppEncryptionTitle": "Encryption",
+  "@xmppEncryptionTitle": {
+    "description": "Title of the dialog choosing whether an XMPP chat is encrypted."
+  },
+  "xmppEncryptionAuto": "When the contact supports it",
+  "@xmppEncryptionAuto": {
+    "description": "Encryption choice: encrypt when the contact supports it."
+  },
+  "xmppEncryptionOn": "Always (send nothing otherwise)",
+  "@xmppEncryptionOn": {
+    "description": "Encryption choice: always encrypt; send nothing when that is impossible."
+  },
+  "xmppEncryptionOff": "Never",
+  "@xmppEncryptionOff": {
+    "description": "Encryption choice: never encrypt."
+  },
+  "xmppKeysTitle": "Encryption keys",
+  "@xmppKeysTitle": {
+    "description": "Title of the screen with the OMEMO keys of a chat."
+  },
+  "xmppKeysYours": "Your key",
+  "@xmppKeysYours": {
+    "description": "Heading above the user's own OMEMO fingerprint."
+  },
+  "xmppKeysYoursHint": "Compare this fingerprint with your contact, in person or on a call you trust, or let them scan the code.",
+  "@xmppKeysYoursHint": {
+    "description": "Explains how to check the own fingerprint with a contact."
+  },
+  "xmppKeysTheirs": "Devices of {name}",
+  "@xmppKeysTheirs": {
+    "description": "Heading above the contact's devices.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "xmppKeysNone": "No OMEMO devices found for this contact.",
+  "@xmppKeysNone": {
+    "description": "Shown when a contact has no OMEMO devices."
+  },
+  "xmppTrustBlind": "not verified",
+  "@xmppTrustBlind": {
+    "description": "Trust state of a device: seen but not compared."
+  },
+  "xmppTrustVerified": "verified",
+  "@xmppTrustVerified": {
+    "description": "Trust state of a device: fingerprint compared."
+  },
+  "xmppTrustRefused": "refused",
+  "@xmppTrustRefused": {
+    "description": "Trust state of a device: the user refuses it."
+  },
+  "xmppTrustVerify": "Mark as verified",
+  "@xmppTrustVerify": {
+    "description": "Action: mark a device as verified."
+  },
+  "xmppTrustRefuse": "Refuse this device",
+  "@xmppTrustRefuse": {
+    "description": "Action: refuse a device."
+  },
+  "xmppTrustAllow": "Allow again",
+  "@xmppTrustAllow": {
+    "description": "Action: allow a refused device again."
+  },
+  "xmppKeysScan": "Scan their code",
+  "@xmppKeysScan": {
+    "description": "Button: scan the contact's code to verify their keys."
+  },
+  "xmppKeysRefresh": "Check for devices",
+  "@xmppKeysRefresh": {
+    "description": "Button: look for the contact's devices again."
+  },
+  "xmppKeysForget": "Forget this device's key",
+  "@xmppKeysForget": {
+    "description": "Action: forget the remembered key of a device."
+  },
+  "xmppKeysChanged": "Its key changed: it gets nothing until you forget the old key.",
+  "@xmppKeysChanged": {
+    "description": "Shown for a device whose key changed."
+  },
+  "xmppKeysScanMatch": "Verified {count} device(s).",
+  "@xmppKeysScanMatch": {
+    "description": "After scanning: how many devices were verified.",
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "xmppKeysScanMismatch": "The code does not match this contact's keys. Do not trust them.",
+  "@xmppKeysScanMismatch": {
+    "description": "After scanning: the code does not match."
+  },
+  "xmppUnreadable": "This message could not be decrypted.",
+  "@xmppUnreadable": {
+    "description": "Shown instead of a message that could not be decrypted."
+  },
+  "xmppUntrustedMsg": "From a device you refused.",
+  "@xmppUntrustedMsg": {
+    "description": "Warning under a message from a device the user refused."
+  },
+  "xmppLegacySwitch": "Legacy OMEMO (experimental)",
+  "@xmppLegacySwitch": {
+    "description": "Switch: use legacy OMEMO in XMPP chats."
+  },
+  "xmppLegacyHint": "Chat encrypted with older apps such as Conversations, Dino and Gajim. Not reviewed yet, so such messages are not marked as encrypted.",
+  "@xmppLegacyHint": {
+    "description": "Explains legacy OMEMO."
   }
 }

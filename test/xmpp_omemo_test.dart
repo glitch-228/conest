@@ -412,6 +412,47 @@ void main() {
         }
       });
 
+      test(
+        'the MAC covers sender then receiver identity (legacy only)',
+        () async {
+          final (alice, bob) = await pair(30);
+          await send(
+            alice,
+            aliceJid,
+            bob,
+            bobJid,
+            version,
+            'x',
+            bundle: await bob.ownBundle(version),
+          );
+          final a = alice.sessions.values.first.first;
+          final b = bob.sessions.values.first.first;
+          final suite = version.suite;
+          Uint8List id(OmemoEngine e) => suite.associatedIdentity(
+            e.identity.montgomery,
+            e.identity.edwards,
+          );
+          List<int> both(OmemoEngine x, OmemoEngine y) => [...id(x), ...id(y)];
+          if (version == OmemoVersion.legacy) {
+            expect(a.associatedDataFor(sending: true), both(alice, bob));
+            expect(a.associatedDataFor(sending: false), both(bob, alice));
+            expect(b.associatedDataFor(sending: true), both(bob, alice));
+            expect(b.associatedDataFor(sending: false), both(alice, bob));
+          } else {
+            for (final session in [a, b]) {
+              expect(
+                session.associatedDataFor(sending: true),
+                both(alice, bob),
+              );
+              expect(
+                session.associatedDataFor(sending: false),
+                both(alice, bob),
+              );
+            }
+          }
+        },
+      );
+
       test('after the answer no key exchange is sent', () async {
         final (alice, bob) = await pair(3);
         final bundle = await bob.ownBundle(version);

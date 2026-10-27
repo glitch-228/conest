@@ -5880,4 +5880,102 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'Запрос на чат';
+
+  @override
+  String get xmppEncOmemo2 => 'зашифровано (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'старый OMEMO (ещё не проверен)';
+
+  @override
+  String get xmppEncAuto => 'шифруется, если контакт поддерживает';
+
+  @override
+  String get xmppEncRequired => 'всегда шифруется';
+
+  @override
+  String get xmppEncryptionMenu => 'Шифрование и ключи';
+
+  @override
+  String get xmppEncryptionTitle => 'Шифрование';
+
+  @override
+  String get xmppEncryptionAuto => 'Если контакт поддерживает';
+
+  @override
+  String get xmppEncryptionOn => 'Всегда (иначе ничего не отправлять)';
+
+  @override
+  String get xmppEncryptionOff => 'Никогда';
+
+  @override
+  String get xmppKeysTitle => 'Ключи шифрования';
+
+  @override
+  String get xmppKeysYours => 'Ваш ключ';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'Сравните этот отпечаток с контактом лично или в надёжном звонке, либо дайте ему отсканировать код.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'Устройства: $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'У этого контакта не найдено устройств OMEMO.';
+
+  @override
+  String get xmppTrustBlind => 'не проверено';
+
+  @override
+  String get xmppTrustVerified => 'проверено';
+
+  @override
+  String get xmppTrustRefused => 'отклонено';
+
+  @override
+  String get xmppTrustVerify => 'Отметить как проверенное';
+
+  @override
+  String get xmppTrustRefuse => 'Отклонить это устройство';
+
+  @override
+  String get xmppTrustAllow => 'Разрешить снова';
+
+  @override
+  String get xmppKeysScan => 'Сканировать их код';
+
+  @override
+  String get xmppKeysRefresh => 'Проверить устройства';
+
+  @override
+  String get xmppKeysForget => 'Забыть ключ этого устройства';
+
+  @override
+  String get xmppKeysChanged =>
+      'Его ключ изменился: ему ничего не отправляется, пока вы не забудете старый ключ.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return 'Проверено устройств: $count.';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'Код не совпадает с ключами контакта. Не доверяйте им.';
+
+  @override
+  String get xmppUnreadable => 'Это сообщение не удалось расшифровать.';
+
+  @override
+  String get xmppUntrustedMsg => 'С устройства, которое вы отклонили.';
+
+  @override
+  String get xmppLegacySwitch => 'Старый OMEMO (экспериментально)';
+
+  @override
+  String get xmppLegacyHint =>
+      'Зашифрованные чаты со старыми приложениями вроде Conversations, Dino и Gajim. Ещё не проверено, поэтому такие сообщения не помечаются как зашифрованные.';
 }

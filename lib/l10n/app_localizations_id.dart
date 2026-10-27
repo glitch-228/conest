@@ -5741,4 +5741,102 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'Permintaan obrolan';
+
+  @override
+  String get xmppEncOmemo2 => 'terenkripsi (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'OMEMO lama (belum ditinjau)';
+
+  @override
+  String get xmppEncAuto => 'terenkripsi jika kontak mendukung';
+
+  @override
+  String get xmppEncRequired => 'selalu terenkripsi';
+
+  @override
+  String get xmppEncryptionMenu => 'Enkripsi dan kunci';
+
+  @override
+  String get xmppEncryptionTitle => 'Enkripsi';
+
+  @override
+  String get xmppEncryptionAuto => 'Saat kontak mendukung';
+
+  @override
+  String get xmppEncryptionOn => 'Selalu (jangan kirim jika tidak bisa)';
+
+  @override
+  String get xmppEncryptionOff => 'Tidak pernah';
+
+  @override
+  String get xmppKeysTitle => 'Kunci enkripsi';
+
+  @override
+  String get xmppKeysYours => 'Kunci Anda';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'Bandingkan sidik jari ini dengan kontak Anda, langsung atau lewat panggilan tepercaya, atau biarkan mereka memindai kodenya.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'Perangkat $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'Tidak ada perangkat OMEMO untuk kontak ini.';
+
+  @override
+  String get xmppTrustBlind => 'belum diverifikasi';
+
+  @override
+  String get xmppTrustVerified => 'terverifikasi';
+
+  @override
+  String get xmppTrustRefused => 'ditolak';
+
+  @override
+  String get xmppTrustVerify => 'Tandai terverifikasi';
+
+  @override
+  String get xmppTrustRefuse => 'Tolak perangkat ini';
+
+  @override
+  String get xmppTrustAllow => 'Izinkan lagi';
+
+  @override
+  String get xmppKeysScan => 'Pindai kode mereka';
+
+  @override
+  String get xmppKeysRefresh => 'Periksa perangkat';
+
+  @override
+  String get xmppKeysForget => 'Lupakan kunci perangkat ini';
+
+  @override
+  String get xmppKeysChanged =>
+      'Kuncinya berubah: tidak ada yang dikirim sampai Anda melupakan kunci lama.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return '$count perangkat terverifikasi.';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'Kode tidak cocok dengan kunci kontak ini. Jangan percayai.';
+
+  @override
+  String get xmppUnreadable => 'Pesan ini tidak dapat didekripsi.';
+
+  @override
+  String get xmppUntrustedMsg => 'Dari perangkat yang Anda tolak.';
+
+  @override
+  String get xmppLegacySwitch => 'OMEMO lama (eksperimental)';
+
+  @override
+  String get xmppLegacyHint =>
+      'Mengobrol terenkripsi dengan aplikasi lama seperti Conversations, Dino, dan Gajim. Belum ditinjau, jadi pesan semacam itu tidak ditandai terenkripsi.';
 }

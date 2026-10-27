@@ -9184,6 +9184,186 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Chat request'**
   String get xmppRequestShort;
+
+  /// XMPP chat header: the chat is end-to-end encrypted with OMEMO.
+  ///
+  /// In en, this message translates to:
+  /// **'encrypted (OMEMO)'**
+  String get xmppEncOmemo2;
+
+  /// XMPP chat header: legacy OMEMO is in use, which has not been reviewed yet, so it is not called encrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'legacy OMEMO (not reviewed yet)'**
+  String get xmppEncLegacy;
+
+  /// XMPP chat header: messages are encrypted when the contact has OMEMO devices.
+  ///
+  /// In en, this message translates to:
+  /// **'encrypted if the contact supports it'**
+  String get xmppEncAuto;
+
+  /// XMPP chat header: encryption is required for this chat.
+  ///
+  /// In en, this message translates to:
+  /// **'always encrypted'**
+  String get xmppEncRequired;
+
+  /// XMPP chat menu entry opening encryption settings and keys.
+  ///
+  /// In en, this message translates to:
+  /// **'Encryption and keys'**
+  String get xmppEncryptionMenu;
+
+  /// Title of the dialog choosing whether an XMPP chat is encrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'Encryption'**
+  String get xmppEncryptionTitle;
+
+  /// Encryption choice: encrypt when the contact supports it.
+  ///
+  /// In en, this message translates to:
+  /// **'When the contact supports it'**
+  String get xmppEncryptionAuto;
+
+  /// Encryption choice: always encrypt; send nothing when that is impossible.
+  ///
+  /// In en, this message translates to:
+  /// **'Always (send nothing otherwise)'**
+  String get xmppEncryptionOn;
+
+  /// Encryption choice: never encrypt.
+  ///
+  /// In en, this message translates to:
+  /// **'Never'**
+  String get xmppEncryptionOff;
+
+  /// Title of the screen with the OMEMO keys of a chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Encryption keys'**
+  String get xmppKeysTitle;
+
+  /// Heading above the user's own OMEMO fingerprint.
+  ///
+  /// In en, this message translates to:
+  /// **'Your key'**
+  String get xmppKeysYours;
+
+  /// Explains how to check the own fingerprint with a contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Compare this fingerprint with your contact, in person or on a call you trust, or let them scan the code.'**
+  String get xmppKeysYoursHint;
+
+  /// Heading above the contact's devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Devices of {name}'**
+  String xmppKeysTheirs(String name);
+
+  /// Shown when a contact has no OMEMO devices.
+  ///
+  /// In en, this message translates to:
+  /// **'No OMEMO devices found for this contact.'**
+  String get xmppKeysNone;
+
+  /// Trust state of a device: seen but not compared.
+  ///
+  /// In en, this message translates to:
+  /// **'not verified'**
+  String get xmppTrustBlind;
+
+  /// Trust state of a device: fingerprint compared.
+  ///
+  /// In en, this message translates to:
+  /// **'verified'**
+  String get xmppTrustVerified;
+
+  /// Trust state of a device: the user refuses it.
+  ///
+  /// In en, this message translates to:
+  /// **'refused'**
+  String get xmppTrustRefused;
+
+  /// Action: mark a device as verified.
+  ///
+  /// In en, this message translates to:
+  /// **'Mark as verified'**
+  String get xmppTrustVerify;
+
+  /// Action: refuse a device.
+  ///
+  /// In en, this message translates to:
+  /// **'Refuse this device'**
+  String get xmppTrustRefuse;
+
+  /// Action: allow a refused device again.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow again'**
+  String get xmppTrustAllow;
+
+  /// Button: scan the contact's code to verify their keys.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan their code'**
+  String get xmppKeysScan;
+
+  /// Button: look for the contact's devices again.
+  ///
+  /// In en, this message translates to:
+  /// **'Check for devices'**
+  String get xmppKeysRefresh;
+
+  /// Action: forget the remembered key of a device.
+  ///
+  /// In en, this message translates to:
+  /// **'Forget this device\'s key'**
+  String get xmppKeysForget;
+
+  /// Shown for a device whose key changed.
+  ///
+  /// In en, this message translates to:
+  /// **'Its key changed: it gets nothing until you forget the old key.'**
+  String get xmppKeysChanged;
+
+  /// After scanning: how many devices were verified.
+  ///
+  /// In en, this message translates to:
+  /// **'Verified {count} device(s).'**
+  String xmppKeysScanMatch(String count);
+
+  /// After scanning: the code does not match.
+  ///
+  /// In en, this message translates to:
+  /// **'The code does not match this contact\'s keys. Do not trust them.'**
+  String get xmppKeysScanMismatch;
+
+  /// Shown instead of a message that could not be decrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'This message could not be decrypted.'**
+  String get xmppUnreadable;
+
+  /// Warning under a message from a device the user refused.
+  ///
+  /// In en, this message translates to:
+  /// **'From a device you refused.'**
+  String get xmppUntrustedMsg;
+
+  /// Switch: use legacy OMEMO in XMPP chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Legacy OMEMO (experimental)'**
+  String get xmppLegacySwitch;
+
+  /// Explains legacy OMEMO.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat encrypted with older apps such as Conversations, Dino and Gajim. Not reviewed yet, so such messages are not marked as encrypted.'**
+  String get xmppLegacyHint;
 }
 
 class _AppLocalizationsDelegate

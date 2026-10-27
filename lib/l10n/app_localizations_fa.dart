@@ -5756,4 +5756,102 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'درخواست گفتگو';
+
+  @override
+  String get xmppEncOmemo2 => 'رمزگذاری‌شده (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'OMEMO قدیمی (هنوز بررسی نشده)';
+
+  @override
+  String get xmppEncAuto => 'در صورت پشتیبانی مخاطب رمزگذاری می‌شود';
+
+  @override
+  String get xmppEncRequired => 'همیشه رمزگذاری‌شده';
+
+  @override
+  String get xmppEncryptionMenu => 'رمزگذاری و کلیدها';
+
+  @override
+  String get xmppEncryptionTitle => 'رمزگذاری';
+
+  @override
+  String get xmppEncryptionAuto => 'وقتی مخاطب پشتیبانی می‌کند';
+
+  @override
+  String get xmppEncryptionOn => 'همیشه (در غیر این صورت چیزی ارسال نشود)';
+
+  @override
+  String get xmppEncryptionOff => 'هرگز';
+
+  @override
+  String get xmppKeysTitle => 'کلیدهای رمزگذاری';
+
+  @override
+  String get xmppKeysYours => 'کلید شما';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'این اثرانگشت را حضوری یا در تماسی مطمئن با مخاطب مقایسه کنید، یا بگذارید کد را اسکن کند.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'دستگاه‌های $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'هیچ دستگاه OMEMO برای این مخاطب پیدا نشد.';
+
+  @override
+  String get xmppTrustBlind => 'تأیید نشده';
+
+  @override
+  String get xmppTrustVerified => 'تأیید شده';
+
+  @override
+  String get xmppTrustRefused => 'رد شده';
+
+  @override
+  String get xmppTrustVerify => 'علامت‌گذاری به‌عنوان تأییدشده';
+
+  @override
+  String get xmppTrustRefuse => 'رد این دستگاه';
+
+  @override
+  String get xmppTrustAllow => 'دوباره مجاز کن';
+
+  @override
+  String get xmppKeysScan => 'اسکن کد آن‌ها';
+
+  @override
+  String get xmppKeysRefresh => 'بررسی دستگاه‌ها';
+
+  @override
+  String get xmppKeysForget => 'فراموش‌کردن کلید این دستگاه';
+
+  @override
+  String get xmppKeysChanged =>
+      'کلید آن تغییر کرده است: تا وقتی کلید قدیمی را فراموش نکنید چیزی به آن ارسال نمی‌شود.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return '$count دستگاه تأیید شد.';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'کد با کلیدهای این مخاطب مطابقت ندارد. به آن‌ها اعتماد نکنید.';
+
+  @override
+  String get xmppUnreadable => 'رمزگشایی این پیام ممکن نبود.';
+
+  @override
+  String get xmppUntrustedMsg => 'از دستگاهی که رد کرده‌اید.';
+
+  @override
+  String get xmppLegacySwitch => 'OMEMO قدیمی (آزمایشی)';
+
+  @override
+  String get xmppLegacyHint =>
+      'گفتگوی رمزگذاری‌شده با برنامه‌های قدیمی‌تر مانند Conversations، Dino و Gajim. هنوز بررسی نشده، پس این پیام‌ها رمزگذاری‌شده علامت نمی‌خورند.';
 }

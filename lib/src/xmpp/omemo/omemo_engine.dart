@@ -299,6 +299,12 @@ class OmemoEngine {
         OmemoCrypto.constantTimeEquals(known.identity, identityKey);
   }
 
+  /// Remembers the key of a device seen in a published bundle. Throws
+  /// [OmemoIdentityChanged] when it differs from the remembered one.
+  void noteDevice(String jid, int deviceId, Uint8List identityKey) {
+    _remember(jid, deviceId, identityKey);
+  }
+
   void setTrust(String jid, int deviceId, OmemoTrust trust) {
     devices[jid]?[deviceId]?.trust = trust;
   }

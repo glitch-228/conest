@@ -63,6 +63,38 @@ class OmemoReceived {
   bool get readable => failure == null;
 }
 
+/// One device of a contact as the keys screen shows it.
+class OmemoDeviceInfo {
+  const OmemoDeviceInfo({
+    required this.id,
+    required this.fingerprint,
+    required this.trust,
+    required this.versions,
+    required this.changed,
+  });
+
+  final int id;
+
+  /// Empty until the device's keys were fetched or used once.
+  final String fingerprint;
+  final OmemoTrust trust;
+  final Set<OmemoVersion> versions;
+
+  /// A different key was published under the remembered device id.
+  final bool changed;
+}
+
+/// What scanning a contact's code did.
+class OmemoScanResult {
+  const OmemoScanResult({required this.verified, required this.mismatched});
+
+  /// Devices whose fingerprint matched and are now verified.
+  final int verified;
+
+  /// Devices named in the code with another fingerprint than the one known.
+  final int mismatched;
+}
+
 /// OMEMO over an XMPP session (XEP-0384): publishes this device's keys,
 /// finds other people's, and wraps/unwraps messages. The cryptography is
 /// in [OmemoEngine]; this class only does the XMPP and the policy.
@@ -563,6 +595,135 @@ class XmppOmemo {
     } catch (error) {
       log?.call('OMEMO: could not refresh the keys: $error');
     }
+  }
+
+  // ---- For the keys screen -----------------------------------------------
+
+  String? get ownFingerprint => _engine?.fingerprint;
+  int? get ownDeviceId => _engine?.deviceId;
+
+  /// This device's fingerprint as a link others can scan
+  /// (`xmpp:me@example.org?omemo-sid-123=<hex>`).
+  String? get ownUri {
+    final engine = _engine;
+    if (engine == null) return null;
+    final hex = engine.identity.montgomery
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return 'xmpp:$ownJid?omemo-sid-${engine.deviceId}=$hex';
+  }
+
+  /// The devices of [jid] known from lookups and sessions.
+  List<OmemoDeviceInfo> knownDevices(String jid) {
+    final engine = _engine;
+    if (engine == null) return const [];
+    final lists = _devices[jid];
+    final ids = <int>{
+      ...engine.devicesOf(jid).map((entry) => entry.key),
+      for (final version in OmemoVersion.values) ...?lists?.get(version),
+    };
+    final out = <OmemoDeviceInfo>[];
+    for (final id in ids.take(OmemoXml.maxDevices)) {
+      final record = engine.deviceRecord(jid, id);
+      out.add(
+        OmemoDeviceInfo(
+          id: id,
+          fingerprint: record?.fingerprint ?? '',
+          trust: record?.trust ?? OmemoTrust.blind,
+          versions: {
+            for (final version in OmemoVersion.values)
+              if (lists?.get(version)?.contains(id) ?? false) version,
+          },
+          changed: _changed.contains('$jid|$id'),
+        ),
+      );
+    }
+    out.sort((a, b) => a.id.compareTo(b.id));
+    return out;
+  }
+
+  final Set<String> _changed = {};
+
+  /// Reads the contact's device lists and the keys of every device, so
+  /// fingerprints can be compared before the first message.
+  Future<List<OmemoDeviceInfo>> refreshDevices(String jid) => _locked(() async {
+    final engine = _engine;
+    if (engine == null) return const <OmemoDeviceInfo>[];
+    for (final version in versions) {
+      final ids = await devicesOf(jid, version, refresh: true);
+      for (final id in ids.take(OmemoXml.maxDevices)) {
+        if (jid == ownJid && id == engine.deviceId) continue;
+        try {
+          final bundle = await _fetchBundle(jid, id, version);
+          if (bundle == null) continue;
+          engine.noteDevice(jid, id, bundle.identityMontgomery);
+          _changed.remove('$jid|$id');
+        } on OmemoIdentityChanged {
+          _changed.add('$jid|$id');
+        } on OmemoLookupFailed catch (error) {
+          log?.call('OMEMO: $error');
+        }
+      }
+    }
+    _persist();
+    return knownDevices(jid);
+  });
+
+  void setTrust(String jid, int deviceId, OmemoTrust trust) {
+    _engine?.setTrust(jid, deviceId, trust);
+    _persist();
+  }
+
+  /// Forgets a device's remembered key and its sessions.
+  void forgetDevice(String jid, int deviceId) {
+    _engine?.forgetDevice(jid, deviceId);
+    _changed.remove('$jid|$deviceId');
+    _persist();
+  }
+
+  /// Reads a scanned `xmpp:` link of [jid]'s fingerprints: matching devices
+  /// become verified. Fingerprints that differ are counted, never trusted.
+  OmemoScanResult verifyFromUri(String jid, String text) {
+    final engine = _engine;
+    final value = text.trim();
+    if (engine == null || !value.toLowerCase().startsWith('xmpp:')) {
+      return const OmemoScanResult(verified: 0, mismatched: 0);
+    }
+    final question = value.indexOf('?');
+    if (question < 0) return const OmemoScanResult(verified: 0, mismatched: 0);
+    final address = bareJid(Uri.decodeComponent(value.substring(5, question)));
+    if (address != jid) {
+      return const OmemoScanResult(verified: 0, mismatched: 1);
+    }
+    var verified = 0;
+    var mismatched = 0;
+    for (final part
+        in value
+            .substring(question + 1)
+            .split(RegExp('[;&]'))
+            .take(OmemoXml.maxDevices)) {
+      final match = RegExp(
+        r'^omemo2?-sid-(\d{1,10})=([0-9a-fA-F]{64})$',
+      ).firstMatch(part);
+      if (match == null) continue;
+      final id = int.parse(match.group(1)!);
+      final record = engine.deviceRecord(jid, id);
+      if (record == null) {
+        mismatched++;
+        continue;
+      }
+      final hex = record.identity
+          .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+          .join();
+      if (hex == match.group(2)!.toLowerCase()) {
+        record.trust = OmemoTrust.verified;
+        verified++;
+      } else {
+        mismatched++;
+      }
+    }
+    _persist();
+    return OmemoScanResult(verified: verified, mismatched: mismatched);
   }
 
   /// Drops cached device lists, so the next send reads them again.

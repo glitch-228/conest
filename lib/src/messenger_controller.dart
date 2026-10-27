@@ -96,6 +96,7 @@ import 'voice_message_service.dart';
 import 'xmpp/xmpp_carrier.dart';
 import 'xmpp/xmpp_chat_client.dart';
 import 'xmpp/xmpp_chats.dart';
+import 'xmpp/xmpp_omemo.dart';
 import 'xmpp/xmpp_session.dart' show XmppSession;
 import 'xmpp/xmpp_socket.dart' show XmppEndpoint;
 import 'xmpp/xmpp_xml.dart' show isValidBareJid;
@@ -1408,6 +1409,7 @@ class MessengerController extends ChangeNotifier {
             message: message,
           );
   }
+
   @visibleForTesting
   Future<int> runHeartbeatPassNow() async =>
       (await _runHeartbeatPass(force: true)).sentCount;
@@ -1612,8 +1614,7 @@ class MessengerController extends ChangeNotifier {
     if (contact == null || !contact.canSendOutbound) {
       throw StateError('Voice calls require an approved contact.');
     }
-    if (signal.action == 'invite' &&
-        me.experimentalVoiceCallsEnabled != true) {
+    if (signal.action == 'invite' && me.experimentalVoiceCallsEnabled != true) {
       throw StateError(
         'Experimental voice calls are off. Enable them in Settings to call.',
       );
@@ -4104,6 +4105,7 @@ class MessengerController extends ChangeNotifier {
           ? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)
           : latest.reduce((a, b) => a.isAfter(b) ? a : b);
     }
+
     final candidates = [
       for (final contact in contacts)
         if (contact.canSendOutbound &&
@@ -5681,7 +5683,7 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       carrierAccounts: {..._snapshot.carrierAccounts}..remove('xmppChats'),
       networkChats: forget
-          ? ({..._snapshot.networkChats}..remove('xmpp'))
+          ? (({..._snapshot.networkChats}..remove('xmpp'))..remove('xmppOmemo'))
           : _snapshot.networkChats,
     );
     await _persist('XMPP chats off.');
@@ -5707,12 +5709,21 @@ class MessengerController extends ChangeNotifier {
       onStateChanged: notifyListeners,
       log: appendDebugLog,
     );
+    final omemo = XmppOmemo(
+      session: session,
+      load: () => (_snapshot.networkChats['xmppOmemo']?['engine'] as Map?)
+          ?.cast<String, Object?>(),
+      save: _saveXmppOmemo,
+      legacyEnabled: xmppLegacyOmemo,
+      log: appendDebugLog,
+    );
     _xmppChatClient = XmppChatClient(
       session: session,
       ownsSession: true,
       chats: () => xmppChats,
       save: _saveXmppChats,
       sendReadMarkers: () => !(identity?.suppressReadReceipts ?? false),
+      omemo: omemo,
       log: appendDebugLog,
       now: _now,
     )..start();
@@ -5732,6 +5743,42 @@ class MessengerController extends ChangeNotifier {
     } else if (_xmppChatClient != null) {
       unawaited(_stopXmppChats());
     }
+  }
+
+  /// Whether legacy OMEMO (Conversations' format) may be used in XMPP chats.
+  /// Off until that implementation has been checked against the reference
+  /// and reviewed.
+  bool get xmppLegacyOmemo =>
+      _snapshot.networkChats['xmppOmemo']?['legacy'] == true;
+
+  Future<void> setXmppLegacyOmemo(bool enabled) async {
+    final stored = _snapshot.networkChats['xmppOmemo'];
+    _snapshot = _snapshot.copyWith(
+      networkChats: {
+        ..._snapshot.networkChats,
+        'xmppOmemo': {...?stored, 'legacy': enabled},
+      },
+    );
+    final omemo = _xmppChatClient?.omemo;
+    if (omemo != null) {
+      omemo.legacyEnabled = enabled;
+      unawaited(
+        omemo.setUp().catchError((Object error) {
+          appendDebugLog('XMPP chats: OMEMO update failed: $error');
+        }),
+      );
+    }
+    await _persist(enabled ? 'Legacy OMEMO on.' : 'Legacy OMEMO off.');
+  }
+
+  void _saveXmppOmemo(Map<String, Object?> state) {
+    _snapshot = _snapshot.copyWith(
+      networkChats: {
+        ..._snapshot.networkChats,
+        'xmppOmemo': {'engine': state, 'legacy': xmppLegacyOmemo},
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
   }
 
   void _saveXmppChats(XmppChats chats) {
@@ -11639,7 +11686,11 @@ class MessengerController extends ChangeNotifier {
       }
       return contact.routeHints.any((route) => route.routeKey == key);
     });
-    await _persist(removed == null ? 'Contact removed.' : 'Contact removed locally. Sending a removal notice in the background.');
+    await _persist(
+      removed == null
+          ? 'Contact removed.'
+          : 'Contact removed locally. Sending a removal notice in the background.',
+    );
     if (notifyPeer && removed != null) {
       final notified = removed;
       unawaited(
@@ -12204,9 +12255,7 @@ class MessengerController extends ChangeNotifier {
       pairingState: approvalGranted
           ? ContactPairingState.accepted
           : ContactPairingState.queued,
-      pairingRequestId: approvalGranted
-          ? pairingRequestId
-          : _randomId('pair'),
+      pairingRequestId: approvalGranted ? pairingRequestId : _randomId('pair'),
       carrierAddresses: _carrierHintsForContact(invite).carriers,
       bitchatInboxSecret: _carrierHintsForContact(invite).bitchatInboxSecret,
       matrixAddress: _carrierHintsForContact(invite).matrixAddress,
@@ -12269,7 +12318,9 @@ class MessengerController extends ChangeNotifier {
             pairingRequestId: pairingRequestId,
             pairingResponse: 'accepted',
           ).catchError((Object error) {
-            appendDebugLog('Contact approval response remains retryable: $error');
+            appendDebugLog(
+              'Contact approval response remains retryable: $error',
+            );
             return false;
           }),
         );
@@ -12684,7 +12735,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> cancelContactPairing(String deviceId) async {
     final contact = _contactByDeviceId(deviceId);
-    if (contact == null || contact.pairingState == ContactPairingState.accepted) {
+    if (contact == null ||
+        contact.pairingState == ContactPairingState.accepted) {
       return;
     }
     _replaceContactRecord(
@@ -12846,7 +12898,9 @@ class MessengerController extends ChangeNotifier {
 
   void _replaceContactRecord(ContactRecord contact) {
     final contacts = List<ContactRecord>.of(_snapshot.contacts);
-    final index = contacts.indexWhere((entry) => entry.deviceId == contact.deviceId);
+    final index = contacts.indexWhere(
+      (entry) => entry.deviceId == contact.deviceId,
+    );
     if (index < 0) return;
     contacts[index] = contact;
     _snapshot = _snapshot.copyWith(contacts: contacts);
@@ -13470,11 +13524,7 @@ class MessengerController extends ChangeNotifier {
         } catch (_) {}
       }
       _setTransferSessionState(attachmentId, TransferState.canceled);
-      _updateMessageState(
-        contact.deviceId,
-        message.id,
-        DeliveryState.canceled,
-      );
+      _updateMessageState(contact.deviceId, message.id, DeliveryState.canceled);
       await _saveSnapshotSilently(notify: true);
       return;
     }
@@ -14809,7 +14859,9 @@ class MessengerController extends ChangeNotifier {
       try {
         await cancelTransfer(id);
       } catch (error) {
-        appendDebugLog('Could not cancel transfer $id while clearing all: $error');
+        appendDebugLog(
+          'Could not cancel transfer $id while clearing all: $error',
+        );
       }
     }
     _dismissedTransferIds.addAll(snapshots.map((entry) => entry.id));
@@ -22828,7 +22880,9 @@ class MessengerController extends ChangeNotifier {
           final requestId = wrapper['pairingRequestId'];
           if (invitePayload is! String ||
               (requestId != null &&
-                  (requestId is! String || requestId.isEmpty || requestId.length > 128))) {
+                  (requestId is! String ||
+                      requestId.isEmpty ||
+                      requestId.length > 128))) {
             return;
           }
           payload =
@@ -23100,13 +23154,15 @@ class MessengerController extends ChangeNotifier {
           _syncCarrierPeers();
         }
       }
-      final matchesPendingRequest = pairingRequestId == null ||
+      final matchesPendingRequest =
+          pairingRequestId == null ||
           pairingRequestId == existing.pairingRequestId;
       if (updated != null &&
           pairingResponse == 'declined' &&
           (existing.pairingState == ContactPairingState.queued ||
               existing.pairingState == ContactPairingState.sending ||
-              existing.pairingState == ContactPairingState.awaitingAcceptance) &&
+              existing.pairingState ==
+                  ContactPairingState.awaitingAcceptance) &&
           matchesPendingRequest) {
         updated = updated.copyWith(
           pairingState: ContactPairingState.declined,
@@ -23122,7 +23178,8 @@ class MessengerController extends ChangeNotifier {
           pairingResponse == 'accepted' &&
           (existing.pairingState == ContactPairingState.queued ||
               existing.pairingState == ContactPairingState.sending ||
-              existing.pairingState == ContactPairingState.awaitingAcceptance) &&
+              existing.pairingState ==
+                  ContactPairingState.awaitingAcceptance) &&
           matchesPendingRequest) {
         updated = updated.copyWith(
           pairingState: ContactPairingState.accepted,
@@ -23171,23 +23228,25 @@ class MessengerController extends ChangeNotifier {
     final existingRequest = _snapshot.pendingContactRequests
         .where((entry) => entry.senderDeviceId == invite.deviceId)
         .firstOrNull;
-    final requestId = pairingRequestId ?? existingRequest?.id ?? envelope.messageId;
-    final pending = _snapshot.pendingContactRequests
-        .where(
-          (entry) =>
-              entry.receivedAt.isAfter(cutoff) &&
-              entry.senderDeviceId != invite.deviceId,
-        )
-        .toList(growable: true)
-      ..add(
-        PendingContactRequest(
-          id: requestId,
-          senderAccountId: invite.accountId,
-          senderDeviceId: invite.deviceId,
-          invitePayload: payload,
-          receivedAt: _now().toUtc(),
-        ),
-      );
+    final requestId =
+        pairingRequestId ?? existingRequest?.id ?? envelope.messageId;
+    final pending =
+        _snapshot.pendingContactRequests
+            .where(
+              (entry) =>
+                  entry.receivedAt.isAfter(cutoff) &&
+                  entry.senderDeviceId != invite.deviceId,
+            )
+            .toList(growable: true)
+          ..add(
+            PendingContactRequest(
+              id: requestId,
+              senderAccountId: invite.accountId,
+              senderDeviceId: invite.deviceId,
+              invitePayload: payload,
+              receivedAt: _now().toUtc(),
+            ),
+          );
     if (pending.length > _maxPendingContactRequests) {
       pending.removeRange(0, pending.length - _maxPendingContactRequests);
     }
@@ -23786,10 +23845,10 @@ class MessengerController extends ChangeNotifier {
       }
       if (!profileUpdate &&
           !_isAuthorizedGroupMembershipUpdate(
-        existing: existing,
-        incoming: incoming,
-        senderDeviceId: envelope.senderDeviceId,
-      )) {
+            existing: existing,
+            incoming: incoming,
+            senderDeviceId: envelope.senderDeviceId,
+          )) {
         return;
       }
     }
@@ -31626,9 +31685,10 @@ class MessengerController extends ChangeNotifier {
       (contact) => contact.canSendOutbound,
     )) {
       unawaited(
-        _sendReciprocalContactExchange(contact, recipientKnowsIdentity: true)
-            .then<void>((_) {})
-            .catchError((Object _) {}),
+        _sendReciprocalContactExchange(
+          contact,
+          recipientKnowsIdentity: true,
+        ).then<void>((_) {}).catchError((Object _) {}),
       );
     }
   }
@@ -32041,8 +32101,7 @@ class MessengerController extends ChangeNotifier {
   /// Controls (edits, deletes, reactions, cancels, call signals) leave the
   /// outbox once a transport accepts them. Keep the recent ones briefly so a
   /// peer reset can have them sent again on the new session.
-  final Map<String, List<(PendingAckDelivery, DateTime)>> _recentControls =
-      {};
+  final Map<String, List<(PendingAckDelivery, DateTime)>> _recentControls = {};
 
   void _rememberAcceptedControl(PendingAckDelivery entry) {
     if (entry.payload == null || _ratchet == null) return;

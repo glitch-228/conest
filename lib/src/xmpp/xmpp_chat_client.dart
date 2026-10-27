@@ -906,8 +906,10 @@ class XmppChatClient {
     final version = await _versionFor(chat);
     if (version == null) {
       if (mustEncrypt) {
-        throw StateError('This chat is encrypted and cannot be corrected '
-            'in the clear.');
+        throw StateError(
+          'This chat is encrypted and cannot be corrected '
+          'in the clear.',
+        );
       }
       return null;
     }

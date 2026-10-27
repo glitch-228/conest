@@ -238,10 +238,7 @@ abstract final class OmemoXml {
     required OmemoPayload payload,
   }) {
     final root = XmppElement('encrypted', xmlns: version.namespace);
-    final header = XmppElement(
-      'header',
-      attributes: {'sid': '$senderDevice'},
-    );
+    final header = XmppElement('header', attributes: {'sid': '$senderDevice'});
     if (version == OmemoVersion.legacy) {
       for (final key in keys) {
         header.add(
@@ -333,9 +330,10 @@ abstract final class OmemoXml {
       if (int.tryParse(key.attr('rid') ?? '') != ownDevice) return;
       if (key.text.length > maxPayloadBytes) return;
       blob = _decode(key.text);
-      keyExchange = const ['true', '1'].contains(
-        key.attr(version == OmemoVersion.legacy ? 'prekey' : 'kex'),
-      );
+      keyExchange = const [
+        'true',
+        '1',
+      ].contains(key.attr(version == OmemoVersion.legacy ? 'prekey' : 'kex'));
     }
 
     Uint8List? iv;

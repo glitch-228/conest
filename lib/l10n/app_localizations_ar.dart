@@ -5884,4 +5884,102 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'طلب محادثة';
+
+  @override
+  String get xmppEncOmemo2 => 'مشفّرة (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'OMEMO القديم (لم يُراجَع بعد)';
+
+  @override
+  String get xmppEncAuto => 'تُشفَّر إذا دعمتها جهة الاتصال';
+
+  @override
+  String get xmppEncRequired => 'مشفّرة دائمًا';
+
+  @override
+  String get xmppEncryptionMenu => 'التشفير والمفاتيح';
+
+  @override
+  String get xmppEncryptionTitle => 'التشفير';
+
+  @override
+  String get xmppEncryptionAuto => 'عندما تدعمه جهة الاتصال';
+
+  @override
+  String get xmppEncryptionOn => 'دائمًا (لا يُرسَل شيء بخلاف ذلك)';
+
+  @override
+  String get xmppEncryptionOff => 'أبدًا';
+
+  @override
+  String get xmppKeysTitle => 'مفاتيح التشفير';
+
+  @override
+  String get xmppKeysYours => 'مفتاحك';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'قارن هذه البصمة مع جهة الاتصال وجهًا لوجه أو عبر مكالمة تثق بها، أو دعها تمسح الرمز.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'أجهزة $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'لم يُعثر على أجهزة OMEMO لجهة الاتصال هذه.';
+
+  @override
+  String get xmppTrustBlind => 'غير مُتحقَّق منه';
+
+  @override
+  String get xmppTrustVerified => 'تم التحقق';
+
+  @override
+  String get xmppTrustRefused => 'مرفوض';
+
+  @override
+  String get xmppTrustVerify => 'وضع علامة تم التحقق';
+
+  @override
+  String get xmppTrustRefuse => 'رفض هذا الجهاز';
+
+  @override
+  String get xmppTrustAllow => 'السماح مجددًا';
+
+  @override
+  String get xmppKeysScan => 'امسح رمزهم';
+
+  @override
+  String get xmppKeysRefresh => 'تحقق من الأجهزة';
+
+  @override
+  String get xmppKeysForget => 'نسيان مفتاح هذا الجهاز';
+
+  @override
+  String get xmppKeysChanged =>
+      'تغيّر مفتاحه: لن يُرسَل إليه شيء حتى تنسى المفتاح القديم.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return 'تم التحقق من $count جهاز.';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'الرمز لا يطابق مفاتيح جهة الاتصال. لا تثق بها.';
+
+  @override
+  String get xmppUnreadable => 'تعذّر فك تشفير هذه الرسالة.';
+
+  @override
+  String get xmppUntrustedMsg => 'من جهاز رفضتَه.';
+
+  @override
+  String get xmppLegacySwitch => 'OMEMO القديم (تجريبي)';
+
+  @override
+  String get xmppLegacyHint =>
+      'محادثات مشفّرة مع تطبيقات أقدم مثل Conversations وDino وGajim. لم تُراجَع بعد، لذا لا تُوسَم هذه الرسائل بأنها مشفّرة.';
 }

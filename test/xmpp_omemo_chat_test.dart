@@ -251,26 +251,9 @@ void main() {
       () => bobLegacy.messages(alice.jid).isNotEmpty,
       reason: 'first legacy message',
     );
+    expect(bobLegacy.messages(alice.jid).single.text, 'legacy text');
     bobLegacy.omemo!.legacyEnabled = false;
-    final stanza = server.received
-        .where(
-          (s) => s.child('encrypted', OmemoVersion.legacy.namespace) != null,
-        )
-        .last;
-    final again = XmppElement(
-      'message',
-      attributes: {
-        'from': alice.jid,
-        'to': bobLegacy.jid,
-        'type': 'chat',
-        'id': 'again-1',
-      },
-      children: [
-        for (final child in stanza.children)
-          if (child.name != 'origin-id' && child.name != 'stanza-id') child,
-      ],
-    );
-    server.inject(again);
+    await alice.client.sendText(bobLegacy.jid, 'second legacy text');
     await _until(
       () => bobLegacy.messages(alice.jid).length == 2,
       reason: 'unreadable placeholder',

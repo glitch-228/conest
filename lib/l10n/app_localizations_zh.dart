@@ -5502,4 +5502,99 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get xmppRequestShort => '聊天请求';
+
+  @override
+  String get xmppEncOmemo2 => '已加密（OMEMO）';
+
+  @override
+  String get xmppEncLegacy => '旧版 OMEMO（尚未审查）';
+
+  @override
+  String get xmppEncAuto => '联系人支持时加密';
+
+  @override
+  String get xmppEncRequired => '始终加密';
+
+  @override
+  String get xmppEncryptionMenu => '加密与密钥';
+
+  @override
+  String get xmppEncryptionTitle => '加密';
+
+  @override
+  String get xmppEncryptionAuto => '联系人支持时';
+
+  @override
+  String get xmppEncryptionOn => '始终（否则不发送）';
+
+  @override
+  String get xmppEncryptionOff => '从不';
+
+  @override
+  String get xmppKeysTitle => '加密密钥';
+
+  @override
+  String get xmppKeysYours => '你的密钥';
+
+  @override
+  String get xmppKeysYoursHint => '与联系人当面或通过可信通话核对此指纹，或让对方扫描二维码。';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return '$name 的设备';
+  }
+
+  @override
+  String get xmppKeysNone => '未找到该联系人的 OMEMO 设备。';
+
+  @override
+  String get xmppTrustBlind => '未验证';
+
+  @override
+  String get xmppTrustVerified => '已验证';
+
+  @override
+  String get xmppTrustRefused => '已拒绝';
+
+  @override
+  String get xmppTrustVerify => '标记为已验证';
+
+  @override
+  String get xmppTrustRefuse => '拒绝此设备';
+
+  @override
+  String get xmppTrustAllow => '重新允许';
+
+  @override
+  String get xmppKeysScan => '扫描对方二维码';
+
+  @override
+  String get xmppKeysRefresh => '检查设备';
+
+  @override
+  String get xmppKeysForget => '忘记此设备的密钥';
+
+  @override
+  String get xmppKeysChanged => '其密钥已更改：在你忘记旧密钥前不会向其发送任何内容。';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return '已验证 $count 台设备。';
+  }
+
+  @override
+  String get xmppKeysScanMismatch => '二维码与该联系人的密钥不符。请勿信任。';
+
+  @override
+  String get xmppUnreadable => '无法解密此消息。';
+
+  @override
+  String get xmppUntrustedMsg => '来自你拒绝的设备。';
+
+  @override
+  String get xmppLegacySwitch => '旧版 OMEMO（实验性）';
+
+  @override
+  String get xmppLegacyHint =>
+      '与 Conversations、Dino、Gajim 等旧版应用加密聊天。尚未审查，因此这类消息不会标记为已加密。';
 }

@@ -5755,4 +5755,102 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get xmppRequestShort => 'Chat request';
+
+  @override
+  String get xmppEncOmemo2 => 'encrypted (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'legacy OMEMO (not reviewed yet)';
+
+  @override
+  String get xmppEncAuto => 'encrypted if the contact supports it';
+
+  @override
+  String get xmppEncRequired => 'always encrypted';
+
+  @override
+  String get xmppEncryptionMenu => 'Encryption and keys';
+
+  @override
+  String get xmppEncryptionTitle => 'Encryption';
+
+  @override
+  String get xmppEncryptionAuto => 'When the contact supports it';
+
+  @override
+  String get xmppEncryptionOn => 'Always (send nothing otherwise)';
+
+  @override
+  String get xmppEncryptionOff => 'Never';
+
+  @override
+  String get xmppKeysTitle => 'Encryption keys';
+
+  @override
+  String get xmppKeysYours => 'Your key';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'Compare this fingerprint with your contact, in person or on a call you trust, or let them scan the code.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'Devices of $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'No OMEMO devices found for this contact.';
+
+  @override
+  String get xmppTrustBlind => 'not verified';
+
+  @override
+  String get xmppTrustVerified => 'verified';
+
+  @override
+  String get xmppTrustRefused => 'refused';
+
+  @override
+  String get xmppTrustVerify => 'Mark as verified';
+
+  @override
+  String get xmppTrustRefuse => 'Refuse this device';
+
+  @override
+  String get xmppTrustAllow => 'Allow again';
+
+  @override
+  String get xmppKeysScan => 'Scan their code';
+
+  @override
+  String get xmppKeysRefresh => 'Check for devices';
+
+  @override
+  String get xmppKeysForget => 'Forget this device\'s key';
+
+  @override
+  String get xmppKeysChanged =>
+      'Its key changed: it gets nothing until you forget the old key.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return 'Verified $count device(s).';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'The code does not match this contact\'s keys. Do not trust them.';
+
+  @override
+  String get xmppUnreadable => 'This message could not be decrypted.';
+
+  @override
+  String get xmppUntrustedMsg => 'From a device you refused.';
+
+  @override
+  String get xmppLegacySwitch => 'Legacy OMEMO (experimental)';
+
+  @override
+  String get xmppLegacyHint =>
+      'Chat encrypted with older apps such as Conversations, Dino and Gajim. Not reviewed yet, so such messages are not marked as encrypted.';
 }
