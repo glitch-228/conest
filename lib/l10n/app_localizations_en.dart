@@ -5845,4 +5845,150 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get xmppLegacyHint =>
       'Chat encrypted with older apps such as Conversations, Dino and Gajim. Not reviewed yet, so such messages are not marked as encrypted.';
+
+  @override
+  String get routeXmppDescription =>
+      'Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.';
+
+  @override
+  String get xmppCarrierSubtitle =>
+      'Carry messages through an XMPP (Jabber) account';
+
+  @override
+  String get xmppCreatedAccount => 'Account made by Conest';
+
+  @override
+  String get xmppOwnAccount => 'Your own account';
+
+  @override
+  String get xmppChangeAccount => 'Change account';
+
+  @override
+  String get xmppServerField =>
+      'XMPP server (empty: the first one that answers here)';
+
+  @override
+  String get xmppUseOwnAccount => 'Use my own XMPP account';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'Conest signs in as an extra device; your other XMPP apps do not see its messages.';
+
+  @override
+  String get xmppAddressField => 'XMPP address (name@server)';
+
+  @override
+  String get xmppPasswordField => 'Password';
+
+  @override
+  String get xmppRetracted => 'Message retracted';
+
+  @override
+  String get xmppFile => 'File';
+
+  @override
+  String get xmppNewChat => 'New XMPP chat';
+
+  @override
+  String get xmppNewChatAddress => 'Address or xmpp: link';
+
+  @override
+  String get xmppGroupChat => 'Group chat';
+
+  @override
+  String get xmppNickname => 'Your nickname';
+
+  @override
+  String get xmppOpenChat => 'Open';
+
+  @override
+  String get xmppMetadataTitle => 'Some details stay in this file';
+
+  @override
+  String get xmppMetadataBody =>
+      'Conest could not remove all hidden details (such as location or device) from this file. Send it anyway?';
+
+  @override
+  String get xmppSendAnyway => 'Send anyway';
+
+  @override
+  String get xmppReply => 'Reply';
+
+  @override
+  String get xmppCopy => 'Copy';
+
+  @override
+  String get xmppEdit => 'Edit';
+
+  @override
+  String get xmppRetract => 'Retract';
+
+  @override
+  String get xmppChatGone => 'This chat is gone.';
+
+  @override
+  String get xmppNotEncrypted => 'not encrypted';
+
+  @override
+  String get xmppLeaveRoom => 'Leave group chat';
+
+  @override
+  String get xmppDeleteChat => 'Delete chat';
+
+  @override
+  String get xmppBlock => 'Block';
+
+  @override
+  String get xmppAccept => 'Accept';
+
+  @override
+  String get xmppRequest =>
+      'Someone not in your contacts wrote to you. Replies and read markers go out only once you accept.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'You were invited to this group chat. Join it?';
+
+  @override
+  String get xmppAttach => 'Attach a file';
+
+  @override
+  String get xmppMessageHint => 'Message';
+
+  @override
+  String get xmppEdited => 'edited';
+
+  @override
+  String get xmppChats => 'XMPP chats';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'Chat with anyone on XMPP (Jabber), beside your Conest chats';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'Use another account than the one Conest carries messages through';
+
+  @override
+  String get xmppConnected => 'connected';
+
+  @override
+  String get xmppConnecting => 'connecting';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'Use Conest as a $network client?';
+  }
+
+  @override
+  String get onbXmppInstead => 'Use as an XMPP client instead';
+
+  @override
+  String get xmppSignIn => 'Sign in to your XMPP account';
+
+  @override
+  String get xmppNoChats => 'No XMPP chats yet';
+
+  @override
+  String get xmppRequestShort => 'Chat request';
 }

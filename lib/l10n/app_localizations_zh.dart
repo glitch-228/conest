@@ -5594,4 +5594,142 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get xmppLegacyHint =>
       '与 Conversations、Dino、Gajim 等旧版应用加密聊天。尚未审查，因此这类消息不会标记为已加密。';
+
+  @override
+  String get routeXmppDescription =>
+      '由 XMPP 服务器传送，仍由 Conest 端到端加密；服务器能看到双方账号和时间。';
+
+  @override
+  String get xmppCarrierSubtitle => '通过 XMPP（Jabber）账号传送消息';
+
+  @override
+  String get xmppCreatedAccount => '由 Conest 创建的账号';
+
+  @override
+  String get xmppOwnAccount => '你自己的账号';
+
+  @override
+  String get xmppChangeAccount => '更换账号';
+
+  @override
+  String get xmppServerField => 'XMPP 服务器（留空：此处第一个响应的服务器）';
+
+  @override
+  String get xmppUseOwnAccount => '使用我自己的 XMPP 账号';
+
+  @override
+  String get xmppOwnAccountNote => 'Conest 以额外设备身份登录；你的其他 XMPP 应用看不到它的消息。';
+
+  @override
+  String get xmppAddressField => 'XMPP 地址（名称@服务器）';
+
+  @override
+  String get xmppPasswordField => '密码';
+
+  @override
+  String get xmppRetracted => '消息已撤回';
+
+  @override
+  String get xmppFile => '文件';
+
+  @override
+  String get xmppNewChat => '新的 XMPP 聊天';
+
+  @override
+  String get xmppNewChatAddress => '地址或 xmpp: 链接';
+
+  @override
+  String get xmppGroupChat => '群聊';
+
+  @override
+  String get xmppNickname => '你的昵称';
+
+  @override
+  String get xmppOpenChat => '打开';
+
+  @override
+  String get xmppMetadataTitle => '此文件中仍保留部分信息';
+
+  @override
+  String get xmppMetadataBody => 'Conest 无法移除此文件中的全部隐藏信息（如位置或设备）。仍要发送吗？';
+
+  @override
+  String get xmppSendAnyway => '仍然发送';
+
+  @override
+  String get xmppReply => '回复';
+
+  @override
+  String get xmppCopy => '复制';
+
+  @override
+  String get xmppEdit => '编辑';
+
+  @override
+  String get xmppRetract => '撤回';
+
+  @override
+  String get xmppChatGone => '此聊天已不存在。';
+
+  @override
+  String get xmppNotEncrypted => '未加密';
+
+  @override
+  String get xmppLeaveRoom => '退出群聊';
+
+  @override
+  String get xmppDeleteChat => '删除聊天';
+
+  @override
+  String get xmppBlock => '屏蔽';
+
+  @override
+  String get xmppAccept => '接受';
+
+  @override
+  String get xmppRequest => '不在你联系人中的人给你发了消息。接受之后才会发送回复和已读标记。';
+
+  @override
+  String get xmppRoomInvitation => '你被邀请加入此群聊。要加入吗？';
+
+  @override
+  String get xmppAttach => '附加文件';
+
+  @override
+  String get xmppMessageHint => '消息';
+
+  @override
+  String get xmppEdited => '已编辑';
+
+  @override
+  String get xmppChats => 'XMPP 聊天';
+
+  @override
+  String get xmppChatsSubtitle => '在 Conest 聊天旁与任何 XMPP（Jabber）用户聊天';
+
+  @override
+  String get xmppChatsOtherAccount => '使用 Conest 传送消息所用账号之外的另一个账号';
+
+  @override
+  String get xmppConnected => '已连接';
+
+  @override
+  String get xmppConnecting => '正在连接';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return '将 Conest 用作 $network 客户端？';
+  }
+
+  @override
+  String get onbXmppInstead => '改为用作 XMPP 客户端';
+
+  @override
+  String get xmppSignIn => '登录你的 XMPP 账号';
+
+  @override
+  String get xmppNoChats => '还没有 XMPP 聊天';
+
+  @override
+  String get xmppRequestShort => '聊天请求';
 }
