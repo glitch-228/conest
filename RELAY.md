@@ -124,6 +124,32 @@ The relay must be able to bind 443: run it as root through the supervisor's
 service, or give the binary the capability
 (`setcap cap_net_bind_service=+ep conest_relay`).
 
+## Borrowed handshake (play a real website)
+
+An alternative to the decoy on 443, for networks that only let through
+traffic that looks like a visit to a well-known site:
+
+```
+borrow-bind = 0.0.0.0:443
+borrow-site = www.example.com:443      (a real HTTPS site to play)
+borrow-sni = www.example.com           (optional; default: the site's host)
+public-host = relay.example.org        (so sessions can tell clients)
+```
+
+(Not together with `tls-bind` on the same port.) The relay forwards every
+connection to the real site, record by record: a browser, a scanner or a
+censor's probe gets that site's real certificate and pages. A Conest client
+that has pinned the relay's identity does the real handshake with the SNI
+set to the site, then adds one record only the relay recognises (an HMAC
+over the site's ServerHello random, keyed from a key agreement with the
+relay's identity key), and from there the relay's protocols run in records
+that look like TLS application data (ChaCha20-Poly1305, random padding).
+Clients learn the address inside an encrypted session and prefer it.
+
+Limits: the relay's IP address is not the site's (a censor that checks IP
+against SNI sees it), and the client's TLS hello is its library's, not a
+browser's. Pick a site that is large and popular in the censor's country.
+
 ## Rolling back
 
 `--legacy-threads` runs the old one-thread-per-connection server (v1 only:

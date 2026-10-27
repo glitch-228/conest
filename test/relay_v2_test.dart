@@ -638,4 +638,33 @@ void main() {
       expect(list.endpoints.last.path, isNull);
     });
   });
+
+  group('borrowed-handshake addresses', () {
+    test('an endpoint carries the site name, and refuses a bad one', () {
+      final endpoint = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: 'borrowed://relay.example.org/www.example.com',
+        port: 443,
+      );
+      expect(endpoint.protocol, PeerRouteProtocol.borrowed);
+      expect(endpoint.path, 'www.example.com');
+      expect(endpoint.label, isNot(contains('www.example.com')));
+      final back = PeerEndpoint.fromJson(endpoint.toJson());
+      expect(back.path, 'www.example.com');
+      expect(back.protocol, PeerRouteProtocol.borrowed);
+      for (final bad in ['', 'nodots', 'a b.com', '-x.com', 'x..com']) {
+        expect(
+          () => PeerEndpoint.normalized(
+            kind: PeerRouteKind.relay,
+            host: 'relay.example.org',
+            port: 443,
+            protocol: PeerRouteProtocol.borrowed,
+            path: bad,
+          ),
+          throwsArgumentError,
+          reason: bad,
+        );
+      }
+    });
+  });
 }

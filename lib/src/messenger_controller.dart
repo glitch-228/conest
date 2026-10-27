@@ -9286,9 +9286,9 @@ class MessengerController extends ChangeNotifier {
     final result = <PeerEndpoint>[];
     for (final spec in specs) {
       if (spec.protocol != null) {
-        // A hidden (wss) address needs its secret path.
-        if (spec.protocol == PeerRouteProtocol.wss &&
-            !isValidRelaySecretPath(spec.path)) {
+        // A hidden address needs its secret path or site name.
+        if (isHiddenRouteProtocol(spec.protocol!) &&
+            !isValidHiddenRoutePath(spec.protocol!, spec.path)) {
           continue;
         }
         result.add(
@@ -9297,14 +9297,14 @@ class MessengerController extends ChangeNotifier {
             host: spec.host,
             port: spec.port,
             protocol: spec.protocol!,
-            path: spec.protocol == PeerRouteProtocol.wss ? spec.path : null,
+            path: isHiddenRouteProtocol(spec.protocol!) ? spec.path : null,
           ),
         );
         continue;
       }
       for (final protocol in PeerRouteProtocol.values) {
         // Never guessed: a hidden address comes with its path.
-        if (protocol == PeerRouteProtocol.wss) continue;
+        if (isHiddenRouteProtocol(protocol)) continue;
         result.add(
           PeerEndpoint(
             kind: spec.kind,
@@ -11143,9 +11143,9 @@ class MessengerController extends ChangeNotifier {
     }
     validatePeerEndpointHostAndPort(parsed.host, parsed.port);
     if (parsed.hasExplicitProtocol) {
-      if (parsed.protocol == PeerRouteProtocol.wss &&
-          !isValidRelaySecretPath(parsed.path)) {
-        throw ArgumentError('A wss relay address needs its secret path.');
+      if (isHiddenRouteProtocol(parsed.protocol) &&
+          !isValidHiddenRoutePath(parsed.protocol, parsed.path)) {
+        throw ArgumentError('A hidden relay address needs its path or name.');
       }
       return <PeerEndpoint>[
         PeerEndpoint(
@@ -11153,7 +11153,7 @@ class MessengerController extends ChangeNotifier {
           host: parsed.host,
           port: parsed.port,
           protocol: parsed.protocol,
-          path: parsed.protocol == PeerRouteProtocol.wss ? parsed.path : null,
+          path: isHiddenRouteProtocol(parsed.protocol) ? parsed.path : null,
         ),
       ];
     }
@@ -29371,9 +29371,7 @@ class MessengerController extends ChangeNotifier {
     Duration? relayTimeout,
   }) async {
     _healthCallCount++;
-    if (route.protocol == PeerRouteProtocol.wss && route.path != null) {
-      RelayClient.registerWssPath(route.host, route.port, route.path!);
-    }
+    _registerHiddenRoute(route);
     final timeout = switch (route.kind) {
       PeerRouteKind.lan => lanTimeout ?? const Duration(milliseconds: 800),
       PeerRouteKind.directInternet =>
@@ -29393,6 +29391,7 @@ class MessengerController extends ChangeNotifier {
       stopwatch.stop();
       if (info.ok && route.kind == PeerRouteKind.relay) {
         _adoptHiddenRelayAddress(route);
+        _adoptBorrowedRelayAddress(route);
       }
       if (!info.ok) {
         throw StateError('Route health check failed.');
@@ -29570,12 +29569,67 @@ class MessengerController extends ChangeNotifier {
     unawaited(_saveSnapshotSilently(debounce: true));
   }
 
+  /// A configured relay that told its borrowed-handshake address inside a
+  /// session gets that address too, pinned to the same identity (M38-D).
+  /// It goes after the wss address, before the plain one.
+  void _adoptBorrowedRelayAddress(PeerEndpoint route) {
+    final me = identity;
+    final key = _pinnedIdentityKeyForRoute(route);
+    final borrowed = RelayClient.sessionInfoFor(
+      route.host,
+      route.port,
+    )?.borrowed;
+    if (me == null || key == null || borrowed == null) return;
+    if (!me.configuredRelays.any((relay) => relay.routeKey == route.routeKey)) {
+      return;
+    }
+    final PeerEndpoint address;
+    try {
+      address = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: borrowed.host,
+        port: borrowed.port,
+        protocol: PeerRouteProtocol.borrowed,
+        path: borrowed.sni,
+      );
+    } on ArgumentError {
+      return;
+    }
+    if (me.configuredRelays.any(
+      (relay) => relay.routeKey == address.routeKey,
+    )) {
+      return;
+    }
+    RelayClient.registerBorrowedSite(address.host, address.port, borrowed.sni);
+    final relays = [...me.configuredRelays];
+    final firstPlain = relays.indexWhere(
+      (relay) => !isHiddenRouteProtocol(relay.protocol),
+    );
+    relays.insert(firstPlain < 0 ? relays.length : firstPlain, address);
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(configuredRelays: relays),
+      pinnedRelayIdentityKeys: {
+        ..._snapshot.pinnedRelayIdentityKeys,
+        address.routeKey: key,
+      },
+    );
+    unawaited(_saveSnapshotSilently(debounce: true));
+  }
+
   /// Tells the relay client the secret paths of hidden (wss) relays.
   void _registerHiddenRelayPaths(IdentityRecord me) {
     for (final relay in me.configuredRelays) {
-      if (relay.protocol == PeerRouteProtocol.wss && relay.path != null) {
-        RelayClient.registerWssPath(relay.host, relay.port, relay.path!);
-      }
+      _registerHiddenRoute(relay);
+    }
+  }
+
+  void _registerHiddenRoute(PeerEndpoint route) {
+    final path = route.path;
+    if (path == null) return;
+    if (route.protocol == PeerRouteProtocol.wss) {
+      RelayClient.registerWssPath(route.host, route.port, path);
+    } else if (route.protocol == PeerRouteProtocol.borrowed) {
+      RelayClient.registerBorrowedSite(route.host, route.port, path);
     }
   }
 
@@ -31143,7 +31197,7 @@ class MessengerController extends ChangeNotifier {
   List<PeerEndpoint> _rankInviteRoutes(Iterable<PeerEndpoint> routes) {
     // A relay's hidden (wss) address is a secret: not handed around.
     final ranked = dedupePeerEndpoints(
-      routes.where((route) => route.protocol != PeerRouteProtocol.wss),
+      routes.where((route) => !isHiddenRouteProtocol(route.protocol)),
     );
     ranked.sort((left, right) {
       final leftHealth = _routeHealthTracker.healthMap[left.routeKey];
@@ -31176,6 +31230,7 @@ class MessengerController extends ChangeNotifier {
       PeerRouteProtocol.https => 2,
       PeerRouteProtocol.http => 3,
       PeerRouteProtocol.wss => 4,
+      PeerRouteProtocol.borrowed => 5,
     };
   }
 

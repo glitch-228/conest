@@ -180,6 +180,86 @@ void main() {
     expect(plain.envelopes.single.messageId, 'plain-1');
   });
 
+  test('the borrowed handshake carries sessions against a real site', () async {
+    // A real site: a TLS server (the test certificate) that says nothing.
+    SecurityContext.defaultContext.setTrustedCertificates(
+      'test/fixtures/relay_v2/tls/ca.pem',
+    );
+    final site = await SecureServerSocket.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+      SecurityContext()
+        ..useCertificateChain('test/fixtures/relay_v2/tls/cert.pem')
+        ..usePrivateKey('test/fixtures/relay_v2/tls/key.pem'),
+    );
+    site.listen((socket) => socket.listen((_) {}, onError: (_) {}));
+    addTearDown(site.close);
+    final reservation = await ServerSocket.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final borrowedPort = reservation.port;
+    await reservation.close();
+    final relay = await _startRelay(
+      extra: [
+        '--borrow-bind',
+        '127.0.0.1:$borrowedPort',
+        '--borrow-site',
+        '127.0.0.1:${site.port}',
+        '--borrow-sni',
+        'localhost',
+        '--public-host',
+        '127.0.0.1',
+      ],
+    );
+    final identity = await _pin(relay.port);
+    // The relay told its borrowed address inside a session.
+    final told = RelayClient.sessionInfoFor('127.0.0.1', relay.port)?.borrowed;
+    expect(told?.port, borrowedPort);
+    expect(told?.sni, 'localhost');
+    // Reaching it needs the site's certificate to be valid for "localhost"
+    // (the test certificate is) and the pinned identity.
+    RelayClient.registerBorrowedSite('127.0.0.1', borrowedPort, 'localhost');
+    const client = RelayClient();
+    final health = await client.inspectHealth(
+      host: '127.0.0.1',
+      port: borrowedPort,
+      protocol: PeerRouteProtocol.borrowed,
+      expectedIdentityPublicKeyBase64: identity,
+    );
+    expect(health.identityPublicKeyBase64, identity);
+    await client.storeEnvelope(
+      host: '127.0.0.1',
+      port: borrowedPort,
+      protocol: PeerRouteProtocol.borrowed,
+      recipientDeviceId: 'dev-borrowed',
+      envelope: _envelope('borrowed-1', 'dev-borrowed'),
+      expectedIdentityPublicKeyBase64: identity,
+    );
+    // Once a session is learned the same route runs sessions.
+    for (var attempt = 0; attempt < 20; attempt++) {
+      if (RelayClient.sessionInfoFor('127.0.0.1', borrowedPort)?.sessions ==
+          true) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await client.inspectHealth(
+        host: '127.0.0.1',
+        port: borrowedPort,
+        protocol: PeerRouteProtocol.borrowed,
+        expectedIdentityPublicKeyBase64: identity,
+      );
+    }
+    final batch = await client.fetchLeasedEnvelopes(
+      host: '127.0.0.1',
+      port: borrowedPort,
+      protocol: PeerRouteProtocol.borrowed,
+      recipientDeviceId: 'dev-borrowed',
+      expectedIdentityPublicKeyBase64: identity,
+    );
+    expect(batch.envelopes.single.messageId, 'borrowed-1');
+  });
+
   test('an owned mailbox takes only its owner\'s fetches, over a session, '
       'UDP and HTTP alike', () async {
     final relay = await _startRelay();

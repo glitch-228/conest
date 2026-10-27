@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'models.dart';
 import 'native_ed25519.dart';
+import 'relay_v2/borrowed_tls.dart';
 import 'relay_v2/noise_nk.dart';
 import 'relay_v2/session.dart';
 import 'relay_v2/udp_seal.dart';
@@ -88,6 +89,7 @@ class RelayV2Info {
     this.registration,
     this.hiddenAddress,
     this.udpSealed = false,
+    this.borrowed,
   });
 
   final String identityPublicKeyBase64;
@@ -112,6 +114,9 @@ class RelayV2Info {
 
   /// Whether the relay opens UDP datagrams sealed under its session key.
   final bool udpSealed;
+
+  /// The relay's borrowed-handshake address (M38-D), told inside a session.
+  final ({String host, int port, String sni})? borrowed;
 
   bool get sessions => noiseKey != null;
 }
@@ -249,6 +254,24 @@ class RelayClient {
     return hidden;
   }
 
+  static ({String host, int port, String sni})? _borrowedIn(Object? v2) {
+    if (v2 is! Map<String, dynamic>) return null;
+    final borrowed = v2['borrowed'];
+    if (borrowed is! Map<String, dynamic>) return null;
+    final host = borrowed['host'];
+    final port = borrowed['port'];
+    final sni = borrowed['sni'];
+    if (host is! String ||
+        port is! int ||
+        sni is! String ||
+        !isValidPeerEndpointHost(host) ||
+        !isValidPeerEndpointPort(port) ||
+        !isValidBorrowedSni(sni)) {
+      return null;
+    }
+    return (host: host, port: port, sni: sni);
+  }
+
   static String? _policyWord(Object? v2, String name, Set<String> allowed) {
     if (v2 is! Map<String, dynamic>) return null;
     final policy = v2['policy'];
@@ -353,6 +376,7 @@ class RelayClient {
     _authKeys.clear();
     _tokens.clear();
     _wssPaths.clear();
+    _borrowedSites.clear();
     await v2Pool.closeAll();
   }
 
@@ -655,11 +679,12 @@ class RelayClient {
       }
     }
     if ((protocol == PeerRouteProtocol.tcp ||
-            protocol == PeerRouteProtocol.wss) &&
+            isHiddenRouteProtocol(protocol)) &&
         _hasExpectedPin(expectedIdentityPublicKeyBase64)) {
       final viaSession = await _trySession(
         host: endpoint.host,
         port: endpoint.port,
+        protocol: protocol,
         timeout: timeout,
         request: request,
         expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64!,
@@ -720,13 +745,14 @@ class RelayClient {
         request: signedRequest,
         maxResponseBytes: maxResponseBytes,
       ),
-      PeerRouteProtocol.wss => _sendWssLine(
+      PeerRouteProtocol.wss || PeerRouteProtocol.borrowed => _sendWssLine(
         host: endpoint.host,
         port: endpoint.port,
         timeout: timeout,
         request: signedRequest,
         maxResponseBytes: maxResponseBytes,
         pinned: _hasExpectedPin(expectedIdentityPublicKeyBase64),
+        identity: expectedIdentityPublicKeyBase64,
       ),
     };
     return _verifyResponseSignature(
@@ -747,7 +773,7 @@ class RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) {
     if ((protocol != PeerRouteProtocol.tcp &&
-            protocol != PeerRouteProtocol.wss) ||
+            !isHiddenRouteProtocol(protocol)) ||
         !_hasExpectedPin(expectedIdentityPublicKeyBase64)) {
       return false;
     }
@@ -872,8 +898,26 @@ class RelayClient {
   }
 
   String _sessionKey(String host, int port, RelayV2Info known) =>
-      '${_wssPaths.containsKey('$host:$port') ? 'wss' : 'tcp'}:$host:$port:'
+      '${_wssPaths.containsKey('$host:$port')
+          ? 'wss'
+          : _borrowedSites.containsKey('$host:$port')
+          ? 'borrowed'
+          : 'tcp'}:$host:$port:'
       '${base64Encode(known.noiseKey!)}';
+
+  /// Borrowed-handshake relay addresses: the site they play, by host and
+  /// port (M38-D).
+  static final Map<String, String> _borrowedSites = {};
+
+  /// Tells the client that [host]:[port] plays the handshake of [sni].
+  static void registerBorrowedSite(String host, int port, String sni) {
+    final key = '$host:$port';
+    if (_borrowedSites[key] == sni) return;
+    if (_borrowedSites.length >= 64 && !_borrowedSites.containsKey(key)) {
+      _borrowedSites.remove(_borrowedSites.keys.first);
+    }
+    _borrowedSites[key] = sni;
+  }
 
   /// Hidden (wss) relay addresses: their secret paths, by host and port.
   static final Map<String, String> _wssPaths = {};
@@ -898,8 +942,25 @@ class RelayClient {
     int port,
     Duration timeout, {
     required bool pinned,
+    String? identity,
   }) async {
     final path = _wssPaths['$host:$port'];
+    final site = _borrowedSites['$host:$port'];
+    if (path == null && site != null) {
+      if (identity == null) {
+        throw StateError(
+          'A borrowed-handshake relay needs its pinned identity.',
+        );
+      }
+      // The site's own certificate is checked as for any website.
+      return BorrowedTlsChannel.connect(
+        host: host,
+        port: port,
+        sni: site,
+        relayIdentity: base64Decode(identity),
+        timeout: timeout,
+      );
+    }
     if (path == null) {
       return SocketRelayChannel.connect(host, port, timeout: timeout);
     }
@@ -922,7 +983,13 @@ class RelayClient {
       _sessionKey(host, port, known),
       () async => RelayV2Session.connect(
         // Sessions are only used with a pinned identity.
-        channel: await _channelTo(host, port, timeout, pinned: true),
+        channel: await _channelTo(
+          host,
+          port,
+          timeout,
+          pinned: true,
+          identity: known.identityPublicKeyBase64,
+        ),
         relayNoiseKey: known.noiseKey!,
         timeout: timeout,
       ),
@@ -938,11 +1005,19 @@ class RelayClient {
     required Map<String, dynamic> request,
     required int maxResponseBytes,
     required bool pinned,
+    String? identity,
   }) async {
-    if (!_wssPaths.containsKey('$host:$port')) {
+    if (!_wssPaths.containsKey('$host:$port') &&
+        !_borrowedSites.containsKey('$host:$port')) {
       throw StateError('The hidden relay address has no path.');
     }
-    final channel = await _channelTo(host, port, timeout, pinned: pinned);
+    final channel = await _channelTo(
+      host,
+      port,
+      timeout,
+      pinned: pinned,
+      identity: identity,
+    );
     try {
       channel.add(utf8.encode('${jsonEncode(request)}\n'));
       await channel.flush();
@@ -962,6 +1037,7 @@ class RelayClient {
   Future<_RelayCallResult?> _trySession({
     required String host,
     required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required Duration timeout,
     required Map<String, dynamic> request,
     required String expectedIdentityPublicKeyBase64,
@@ -982,6 +1058,7 @@ class RelayClient {
           inspectHealth(
                 host: host,
                 port: port,
+                protocol: protocol,
                 timeout: timeout,
                 expectedIdentityPublicKeyBase64:
                     expectedIdentityPublicKeyBase64,
@@ -1115,6 +1192,7 @@ class RelayClient {
           v2['udp_sealed'] == 1,
       tier1: _policyWord(v2, 'tier1', const {'open', 'registered', 'off'}),
       hiddenAddress: _hiddenAddressIn(v2),
+      borrowed: _borrowedIn(v2),
       registration: _policyWord(v2, 'registration', const {
         'open',
         'invite',

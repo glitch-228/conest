@@ -78,7 +78,32 @@ enum PeerRouteKind { lan, directInternet, relay }
 
 /// `wss`: a relay's hidden address, TLS and a WebSocket on a secret path
 /// ([PeerEndpoint.path]); relay v2 runs inside (M26).
-enum PeerRouteProtocol { tcp, udp, http, https, wss }
+///
+/// `borrowed`: a relay that plays a real site's TLS handshake (M38-D); the
+/// site's name ([PeerEndpoint.path]) goes in the SNI, and the relay's
+/// pinned identity is the only key needed.
+enum PeerRouteProtocol { tcp, udp, http, https, wss, borrowed }
+
+/// A hidden address kind (it carries a [PeerEndpoint.path]).
+bool isHiddenRouteProtocol(PeerRouteProtocol protocol) =>
+    protocol == PeerRouteProtocol.wss || protocol == PeerRouteProtocol.borrowed;
+
+/// Whether [path] suits a hidden [protocol]: a secret path for `wss`, a
+/// host name for `borrowed`.
+bool isValidHiddenRoutePath(PeerRouteProtocol protocol, String? path) =>
+    switch (protocol) {
+      PeerRouteProtocol.wss => isValidRelaySecretPath(path),
+      PeerRouteProtocol.borrowed => isValidBorrowedSni(path),
+      _ => false,
+    };
+
+/// The name a borrowed handshake puts in the SNI.
+bool isValidBorrowedSni(String? name) =>
+    name != null &&
+    name.length <= 253 &&
+    RegExp(
+      r'^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)+$',
+    ).hasMatch(name);
 
 class PeerEndpoint {
   const PeerEndpoint({
@@ -103,16 +128,16 @@ class PeerEndpoint {
     );
     validatePeerEndpointHostAndPort(parsed.host, parsed.port);
     final secretPath = parsed.path ?? path;
-    if (parsed.protocol == PeerRouteProtocol.wss &&
-        !isValidRelaySecretPath(secretPath)) {
-      throw ArgumentError('A wss relay address needs its secret path.');
+    if (isHiddenRouteProtocol(parsed.protocol) &&
+        !isValidHiddenRoutePath(parsed.protocol, secretPath)) {
+      throw ArgumentError('A hidden relay address needs its path or name.');
     }
     return PeerEndpoint(
       kind: kind,
       host: parsed.host,
       port: parsed.port,
       protocol: parsed.protocol,
-      path: parsed.protocol == PeerRouteProtocol.wss ? secretPath : null,
+      path: isHiddenRouteProtocol(parsed.protocol) ? secretPath : null,
     );
   }
 
@@ -206,6 +231,7 @@ PeerRouteProtocol peerRouteProtocolFromString(String? value) {
     'http' || 'conest+http' => PeerRouteProtocol.http,
     'https' || 'conest+https' => PeerRouteProtocol.https,
     'wss' || 'conest+wss' => PeerRouteProtocol.wss,
+    'borrowed' || 'conest+borrowed' => PeerRouteProtocol.borrowed,
     _ => PeerRouteProtocol.tcp,
   };
 }
@@ -234,6 +260,9 @@ ParsedPeerEndpointInput parsePeerEndpointInput({
       parsedHost = uri.host;
       if (parsedProtocol == PeerRouteProtocol.wss && uri.path.isNotEmpty) {
         parsedPath = uri.path;
+      }
+      if (parsedProtocol == PeerRouteProtocol.borrowed && uri.path.length > 1) {
+        parsedPath = uri.path.substring(1);
       }
       if (uri.hasPort) {
         parsedPort = uri.port;
@@ -286,7 +315,9 @@ bool _isExplicitRouteProtocolScheme(String scheme) {
     'conest+http' ||
     'conest+https' ||
     'wss' ||
-    'conest+wss' => true,
+    'conest+wss' ||
+    'borrowed' ||
+    'conest+borrowed' => true,
     _ => false,
   };
 }
@@ -294,7 +325,9 @@ bool _isExplicitRouteProtocolScheme(String scheme) {
 int? _defaultPortForProtocol(PeerRouteProtocol protocol) {
   return switch (protocol) {
     PeerRouteProtocol.http => 80,
-    PeerRouteProtocol.https || PeerRouteProtocol.wss => 443,
+    PeerRouteProtocol.https ||
+    PeerRouteProtocol.wss ||
+    PeerRouteProtocol.borrowed => 443,
     PeerRouteProtocol.tcp || PeerRouteProtocol.udp => null,
   };
 }
@@ -1895,6 +1928,7 @@ String _encodeCompactRoute(PeerEndpoint route) {
     PeerRouteProtocol.https => 's',
     // Not decoded (a hidden address is not handed around in invites).
     PeerRouteProtocol.wss => 'w',
+    PeerRouteProtocol.borrowed => 'b',
   };
   return '$kind$protocol${route.port.toRadixString(36)}:${Uri.encodeComponent(route.host)}';
 }
