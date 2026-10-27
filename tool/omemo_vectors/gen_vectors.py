@@ -18,10 +18,9 @@ Every random value is drawn from a scripted stream, so the output is
 reproducible. The Dart test replays the same draws per actor and must
 produce the same bytes; it also decrypts the reference's messages.
 
-NOTE: written without being able to run the reference code in the session
-that authored it (the code is external and was not executed there). If a
-detail of the reference API differs from what is assumed below, fix it here;
-the assertions on the way (every message decrypts on the reference side)
+NOTE: XEdDSA signing here comes from the pure-Python shim, not from the
+reference C library (libxeddsa). Everything else is the reference code.
+The assertions on the way (every message decrypts on the reference side)
 guard the output."""
 import asyncio
 import base64
@@ -123,6 +122,10 @@ async def scenario(name, mod, backend_cls):
     SCRIPT.actor = "setup"
     await bob.generate_pre_keys(1)
     bob_bundle = await bob.get_bundle("bob@example.org", 2222)
+    # Alice's own x3dh state (signed pre key, signature nonce) is made lazily;
+    # force it now so its draws land in "setup", which the Dart test does not
+    # replay (it restores Alice with an arbitrary signed pre key).
+    await alice.get_bundle("alice@example.org", 1111)
     alice_ed = xeddsa.seed_to_ed25519_pub(alice_seed)
 
     messages = []
@@ -250,9 +253,9 @@ async def scenario(name, mod, backend_cls):
     state = bob_storage.data[f"/{mod.NAMESPACE}/x3dh"]
 
     def secret_bytes(value):
-        """Stored secrets are base64 text (or lists of ints)."""
+        """x3dh stores bytes as latin-1 style text (one char per byte)."""
         if isinstance(value, str):
-            return base64.b64decode(value)
+            return bytes(map(ord, value))
         return bytes(value)
 
     spk_priv = secret_bytes(state["signed_pre_key"]["priv"])

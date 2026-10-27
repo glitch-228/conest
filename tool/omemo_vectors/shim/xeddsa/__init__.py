@@ -23,6 +23,12 @@ D = (-121665 * pow(121666, P - 2, P)) % P
 I = pow(2, (P - 1) // 4, P)
 
 
+Seed = bytes
+Priv = bytes
+Ed25519Pub = bytes
+Curve25519Pub = bytes
+
+
 class XEdDSAException(Exception):
     pass
 
@@ -96,7 +102,7 @@ def seed_to_priv(seed):
 
 
 def priv_to_ed25519_pub(priv):
-    return _encode(_mul(BASE, _le(priv)))
+    return _encode(_mul(BASE, _le(priv) % L))
 
 
 def seed_to_ed25519_pub(seed):
@@ -106,6 +112,7 @@ def seed_to_ed25519_pub(seed):
 
 
 def priv_to_curve25519_pub(priv):
+    # Like libsodium's crypto_scalarmult_curve25519_base: the scalar is clamped.
     return X25519PrivateKey.from_private_bytes(priv).public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
     )

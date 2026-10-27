@@ -13,9 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 /// python-twomemo): our implementation must read every message the
 /// reference wrote and, given the same random draws, write the same bytes.
 ///
-/// Until test/fixtures/omemo_vectors.json exists these tests are skipped,
-/// and legacy OMEMO is NOT checked against the reference: the app must not
-/// mark such chats as encrypted.
+/// XEdDSA signing in the vectors comes from the pure-Python shim in
+/// tool/omemo_vectors/shim, not from libxeddsa.
 Uint8List unhex(String text) => Uint8List.fromList([
   for (var i = 0; i < text.length; i += 2)
     int.parse(text.substring(i, i + 2), radix: 16),
