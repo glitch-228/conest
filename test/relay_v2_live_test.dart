@@ -207,7 +207,7 @@ void main() {
         '--borrow-site',
         '127.0.0.1:${site.port}',
         '--borrow-sni',
-        'localhost',
+        'relay.test',
         '--public-host',
         '127.0.0.1',
       ],
@@ -229,10 +229,10 @@ void main() {
     // The relay told its borrowed address inside a session.
     final told = RelayClient.sessionInfoFor('127.0.0.1', relay.port)?.borrowed;
     expect(told?.port, borrowedPort);
-    expect(told?.sni, 'localhost');
-    // Reaching it needs the site's certificate to be valid for "localhost"
-    // (the test certificate is) and the pinned identity.
-    RelayClient.registerBorrowedSite('127.0.0.1', borrowedPort, 'localhost');
+    expect(told?.sni, 'relay.test');
+    // Reaching it needs the site's certificate to be valid for "relay.test"
+    // (the test certificate has relay.test) and the pinned identity.
+    RelayClient.registerBorrowedSite('127.0.0.1', borrowedPort, 'relay.test');
     const client = RelayClient();
     final health = await client.inspectHealth(
       host: '127.0.0.1',
