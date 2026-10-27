@@ -20634,6 +20634,7 @@ void main() {
           contact: phone.contacts.single,
           bytes: bytes,
           fileName: 'from_phone.bin',
+          albumId: 'album-1',
         );
         final id = await waitForFile(
           alice,
@@ -20647,6 +20648,7 @@ void main() {
             .messagesFor(bobId)
             .firstWhere((m) => m.attachment?.id == id);
         expect(copy.outbound, isTrue);
+        expect(copy.albumId, 'album-1');
         expect(copy.senderDeviceId, phone.identity!.deviceId);
         expect(
           await File((await alice.attachmentCachePathFor(id))!).readAsBytes(),
@@ -21071,6 +21073,95 @@ void main() {
       expect(phone.unreadCountFor(bobId), 0);
       expect(phone.unreadGroupCountFor(group.groupId), 0);
       expect(aliceId, isNotEmpty);
+    });
+
+    test('a device linked later sees the files of old chats with their '
+        'details, and fetches one when the user accepts', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      final bytes = Uint8List.fromList(
+        List<int>.generate(150 * 1024, (i) => (i * 7) & 0xff),
+      );
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: bytes,
+        fileName: 'old_photo.bin',
+      );
+      String? sentId;
+      await _waitForIroh(
+        () {
+          unawaited(bob.pollNow());
+          unawaited(alice.pollNow());
+          sentId = alice
+              .messagesFor(bobId)
+              .where((m) => m.attachment?.fileName == 'old_photo.bin')
+              .firstOrNull
+              ?.attachment
+              ?.id;
+          return sentId != null && alice.attachmentAvailableLocally(sentId!);
+        },
+        reason: 'the file was not sent',
+        timeout: const Duration(seconds: 30),
+      );
+      await alice.sendAttachment(
+        contact: alice.savedMessagesContact!,
+        bytes: bytes,
+        fileName: 'saved_note.bin',
+      );
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => phone.linkCode != null && alice.linkCode != null,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      ChatMessage? old;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        unawaited(bob.pollNow());
+        old = phone
+            .messagesFor(bobId)
+            .where((m) => m.attachment?.fileName == 'old_photo.bin')
+            .firstOrNull;
+        return old != null &&
+            phone
+                .messagesFor(phone.identity!.deviceId)
+                .any((m) => m.attachment?.fileName == 'saved_note.bin');
+      }, reason: 'the files did not show in the history');
+      final id = old!.attachment!.id;
+      // Details only: nothing is fetched until the user says so.
+      expect(phone.attachmentAvailableLocally(id), isFalse);
+      expect(phone.attachmentAwaitingAcceptance(id), isTrue);
+      await phone.acceptIncomingAttachment(id);
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return phone.attachmentAvailableLocally(id);
+        },
+        reason: 'the accepted file did not come',
+        timeout: const Duration(seconds: 30),
+      );
+      expect(
+        await File((await phone.attachmentCachePathFor(id))!).readAsBytes(),
+        bytes,
+      );
     });
 
     test('history pages one device serves another are limited', () async {

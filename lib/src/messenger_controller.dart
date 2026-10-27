@@ -34907,8 +34907,7 @@ class MessengerController extends ChangeNotifier {
       final oldest = chat == 'saved' ? null : now.subtract(_historyWindow);
       final candidates = [
         for (final message in held)
-          if (message.attachment == null &&
-              message.groupFile == null &&
+          if (message.groupFile == null &&
               message.poll == null &&
               !message.deleted &&
               (oldest == null || message.createdAt.isAfter(oldest)) &&
@@ -35002,7 +35001,6 @@ class MessengerController extends ChangeNotifier {
     final own = {me.deviceId, for (final device in ownDevices) device.deviceId};
     if (message.id.isEmpty ||
         message.id.length > 160 ||
-        message.attachment != null ||
         message.groupFile != null ||
         message.poll != null ||
         _locallyDeletedMessageIds.contains(message.id)) {
@@ -35080,6 +35078,17 @@ class MessengerController extends ChangeNotifier {
       if (known.contains(message.id) || !_historyMessageFits(chat, message)) {
         continue;
       }
+      // A file in history is shown with its details; the bytes wait for the
+      // user (and only come if the other device still has the file).
+      final attached = message.attachment;
+      if (attached != null) {
+        try {
+          _validateIncomingAttachmentDescriptor(attached);
+        } catch (_) {
+          continue;
+        }
+        if (chat.startsWith('group:')) continue;
+      }
       final arrived = message.receivedAt ?? message.createdAt;
       imported.add(
         message.copyWith(receivedAt: arrived.isAfter(now) ? now : arrived),
@@ -35089,7 +35098,18 @@ class MessengerController extends ChangeNotifier {
       if (chat.startsWith('group:')) {
         _upsertGroupMessage(chat.substring(6), message);
       } else {
-        _upsertMessage(chat == 'saved' ? me.deviceId : chat, message);
+        final chatId = chat == 'saved' ? me.deviceId : chat;
+        _upsertMessage(chatId, message);
+        if (message.attachment != null) {
+          unawaited(
+            _fetchFileFromOwnDevice(
+              sender,
+              chatId,
+              message,
+              detailsOnly: true,
+            ).catchError((Object _) {}),
+          );
+        }
       }
     }
     _markHistoryRead(chat, imported);
