@@ -117,6 +117,8 @@ import 'storage.dart';
 import 'storage_capacity.dart';
 import 'tor_carrier.dart';
 import 'transport.dart';
+import 'transfer/gateway_election.dart';
+import 'transfer/own_device_sync_policy.dart';
 import 'transfer/route_striper.dart';
 import 'content_routing.dart';
 
@@ -33501,6 +33503,10 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     _replaceContactRecord(device.copyWith(inTouchAt: now));
+    // Back in touch after a while: what each holds is compared.
+    if (last != null && now.difference(last) >= const Duration(minutes: 5)) {
+      _sendSyncStatusTo(device.deviceId);
+    }
   }
 
   /// Sync from own devices that were unconfirmed, kept for when the user
@@ -33958,7 +33964,7 @@ class MessengerController extends ChangeNotifier {
         queued['type'] == event['type'] &&
         queued['chat'] == event['chat'] &&
         switch (event['type']) {
-          'read' || 'group_state' => true,
+          'read' || 'group_state' || 'digest' || 'reach' => true,
           'state' || 'group_message' => queued['id'] == event['id'],
           _ => false,
         };
@@ -34064,6 +34070,193 @@ class MessengerController extends ChangeNotifier {
     });
   }
 
+  // Sync between own devices (M33): speed policies, digests of what each
+  // device holds, and which device passes a contact's message on (M29d).
+
+  bool _fastSyncConfirmed = false;
+  final SyncPacer _syncPacer = SyncPacer();
+
+  /// The speed policy for syncing with this account's other devices.
+  OwnDeviceSyncPolicy get ownDeviceSyncPolicy => OwnDeviceSyncPolicy(
+    speed: _snapshot.identity?.connectivity.syncSpeed ?? SyncSpeed.steady,
+    fastConfirmed: _fastSyncConfirmed,
+  );
+
+  SyncConditions get _syncConditions {
+    final power = _energyPolicy.power;
+    return SyncConditions(
+      batteryPercent: power.hasBattery == false ? null : power.batteryPercent,
+      charging: power.charging == true || power.hasBattery == false,
+      batterySaver: power.batterySaver,
+      metered:
+          _networkCostClass == NetworkCostClass.metered ||
+          _networkCostClass == NetworkCostClass.roaming,
+    );
+  }
+
+  /// What syncing with own devices may use now.
+  SyncPermission get ownDeviceSyncPermission =>
+      ownDeviceSyncPolicy.permit(_syncConditions);
+
+  /// Chooses how fast to sync with own devices. Fast counts only when the
+  /// user confirmed it ([confirmFast]); it is asked again each time.
+  Future<void> setOwnDeviceSyncSpeed(
+    SyncSpeed speed, {
+    bool confirmFast = false,
+  }) async {
+    final me = _requireIdentity();
+    _fastSyncConfirmed = speed == SyncSpeed.fast && confirmFast;
+    await updateGlobalConnectivity(me.connectivity.copyWith(syncSpeed: speed));
+  }
+
+  /// The chats' ids in short, for the other devices to compare: recent
+  /// messages only, the same window on every device.
+  Map<String, ChatDigest> _chatDigests() {
+    final since = _now().toUtc().subtract(const Duration(days: 7));
+    final digests = <String, ChatDigest>{};
+    for (final chat in _historyChats) {
+      final held = _historyMessages(chat);
+      if (held == null) continue;
+      final ids = [
+        for (final message in held)
+          if (!message.deleted && message.createdAt.isAfter(since)) message,
+      ]..sort(_historyOrder);
+      if (ids.isEmpty) continue;
+      digests[chat] = ChatDigest.of(ids.take(200).map((m) => m.id));
+    }
+    return digests;
+  }
+
+  /// Tells [deviceId] what this device holds (digests), and which contacts
+  /// it hears (reach), when syncing is allowed.
+  void _sendSyncStatusTo(String deviceId) {
+    if (!ownDeviceSyncPermission.allowed) return;
+    final digests = _chatDigests();
+    if (digests.isNotEmpty) {
+      _syncToOwnDevices({
+        'type': 'digest',
+        'chats': {
+          for (final entry in digests.entries) entry.key: entry.value.toJson(),
+        },
+      }, only: deviceId);
+    }
+    _sendReach(only: deviceId);
+  }
+
+  @visibleForTesting
+  void sendSyncStatusForTesting(String deviceId) => _sendSyncStatusTo(deviceId);
+
+  /// The contacts' chats compared with [theirs]; those that differ are
+  /// asked for, a few at a time (history is limited as ever).
+  void _takeDigests(ContactRecord sender, Object? theirs) {
+    if (theirs is! Map || theirs.length > _maxHistoryChats) return;
+    if (!ownDeviceSyncPermission.allowed) return;
+    final mine = _chatDigests();
+    final parsed = <String, ChatDigest>{};
+    for (final entry in theirs.entries) {
+      final digest = ChatDigest.fromJson(entry.value);
+      if (entry.key is String && digest != null) {
+        parsed[entry.key as String] = digest;
+      }
+    }
+    final shown = _historyChats.toSet();
+    final ask = [
+      for (final chat in chatsToAsk(mine, parsed))
+        if (shown.contains(chat)) chat,
+    ];
+    if (ask.isEmpty) return;
+    final asked = _historyAsked.putIfAbsent(sender.deviceId, () => {});
+    final queue = _historyQueue.putIfAbsent(sender.deviceId, () => []);
+    for (final chat in ask) {
+      if (asked.contains(chat) || queue.contains(chat)) continue;
+      queue.add(chat);
+    }
+    _pumpHistory(sender.deviceId);
+  }
+
+  /// What each own device said it hears: the contacts' chats and how long
+  /// ago, as of when it said so.
+  final Map<String, (DateTime, Map<String, int>)> _ownReach = {};
+  DateTime? _reachSentAt;
+  static const int _maxReachContacts = 256;
+
+  /// Tells the other devices which contacts this one heard from lately.
+  void _sendReach({String? only}) {
+    final now = _now().toUtc();
+    final heard = <String, int>{};
+    for (final contact in _snapshot.contacts) {
+      if (contact.ownDevice ||
+          contact.isHiddenDevice ||
+          contact.isLinkedDevice ||
+          heard.length >= _maxReachContacts) {
+        continue;
+      }
+      final at = _reachability
+          .recordByDeviceId(contact.deviceId)
+          ?.lastAnySignalAt;
+      if (at == null) continue;
+      final ago = now.difference(at.toUtc());
+      if (ago <= RouteScore.reachWindow && !ago.isNegative) {
+        heard[contact.deviceId] = ago.inSeconds;
+      }
+    }
+    _reachSentAt = now;
+    _syncToOwnDevices({'type': 'reach', 'heard': heard}, only: only);
+  }
+
+  void _takeReach(ContactRecord sender, Object? heard) {
+    if (heard is! Map || heard.length > _maxReachContacts) return;
+    final report = <String, int>{
+      for (final entry in heard.entries)
+        if (entry.key is String &&
+            (entry.key as String).length <= 160 &&
+            entry.value is int &&
+            (entry.value as int) >= 0)
+          entry.key as String: entry.value as int,
+    };
+    final held = _ownReach[sender.deviceId];
+    final now = _now().toUtc();
+    if (held != null && held.$1.isAfter(now)) return;
+    if (_ownReach.length >= 16 && !_ownReach.containsKey(sender.deviceId)) {
+      return;
+    }
+    _ownReach[sender.deviceId] = (now, report);
+  }
+
+  /// How long a contact's message waits before it is passed on to [device]:
+  /// at once when [device] evidently cannot hear [contactId] (and this is
+  /// the best placed of those who can); else the energy mode's wait, for it
+  /// to say it has the message. Without a report from [device], the wait.
+  Duration _passOnDelayTo(ContactRecord device, String contactId) {
+    final report = _ownReach[device.deviceId];
+    final now = _now().toUtc();
+    if (report == null || now.difference(report.$1) > RouteScore.reachWindow) {
+      return _receivedSyncDelay;
+    }
+    final theirs = report.$2[contactId];
+    if (theirs != null &&
+        now.difference(report.$1) + Duration(seconds: theirs) <=
+            RouteScore.reachWindow) {
+      return _receivedSyncDelay;
+    }
+    // [device] cannot hear it: of the devices that can, the best placed
+    // sends first, the next a little later if it has not been told.
+    final me = _requireIdentity();
+    final scores = <String, RouteScore>{
+      me.deviceId: const RouteScore(heardAgo: Duration.zero),
+      for (final other in ownDevices)
+        if (other.deviceId != device.deviceId)
+          if (_ownReach[other.deviceId] case final r?)
+            if (r.$2[contactId] case final seconds?)
+              if (now.difference(r.$1) + Duration(seconds: seconds) <=
+                  RouteScore.reachWindow)
+                other.deviceId: RouteScore(
+                  heardAgo: now.difference(r.$1) + Duration(seconds: seconds),
+                ),
+    };
+    return passOnDelay(me.deviceId, rankGateways(contactId, scores));
+  }
+
   /// How long a message from a contact waits before it is passed on to
   /// this account's other devices: they usually get it from the contact
   /// themselves, and say so (seen) in the meantime.
@@ -34121,7 +34314,7 @@ class MessengerController extends ChangeNotifier {
           kind: PendingAckKind.accountSync,
           // The retry pass sends it once this is a first try's wait old.
           lastAttemptedAt: now
-              .add(_receivedSyncDelay)
+              .add(_passOnDelayTo(device, chatId))
               .subtract(_pendingMessageRetryDelay),
           attempts: 0,
           payload: QueuedEnvelopePayload(
@@ -34192,6 +34385,11 @@ class MessengerController extends ChangeNotifier {
     final ids = _seenToTell.take(_maxSeenIds).toList();
     _seenToTell.removeAll(ids);
     _syncToOwnDevices({'type': 'seen', 'ids': ids});
+    final reached = _reachSentAt;
+    if (reached == null ||
+        _now().toUtc().difference(reached) > const Duration(minutes: 2)) {
+      _sendReach();
+    }
     if (_seenToTell.isNotEmpty) {
       _seenTimer = Timer(const Duration(seconds: 1), _tellSeen);
     }
@@ -34872,6 +35070,19 @@ class MessengerController extends ChangeNotifier {
   /// hour's pages, it is told when to ask again.
   void _answerHistoryRequest(ContactRecord sender, Object? chats) {
     if (chats is! List) return;
+    // Paused, or held up by the battery: asked again later.
+    final permission = ownDeviceSyncPermission;
+    if (!permission.allowed) {
+      _syncToOwnDevices({
+        'type': 'history_wait',
+        'chats': [
+          for (final item in chats.take(32))
+            if (item is Map) item,
+        ],
+        'seconds': 300,
+      }, only: sender.deviceId);
+      return;
+    }
     final now = _now().toUtc();
     final served = (_historyPagesServed[sender.deviceId] ?? const [])
         .where((at) => now.difference(at) < const Duration(hours: 1))
@@ -34935,7 +35146,7 @@ class MessengerController extends ChangeNotifier {
         last = message;
       }
       served.add(now);
-      _syncToOwnDevices({
+      final pageEvent = <String, Object?>{
         'type': 'history_page',
         'chat': chat,
         'messages': page,
@@ -34945,7 +35156,16 @@ class MessengerController extends ChangeNotifier {
             'at': last.createdAt.toUtc().toIso8601String(),
             'id': last.id,
           },
-      }, only: sender.deviceId);
+      };
+      // At the pace the speed policy allows.
+      final wait = _syncPacer.reserve(chars, permission.bytesPerSecond);
+      if (wait <= Duration.zero) {
+        _syncToOwnDevices(pageEvent, only: sender.deviceId);
+      } else {
+        Timer(wait, () {
+          if (!_disposed) _syncToOwnDevices(pageEvent, only: sender.deviceId);
+        });
+      }
     }
     _historyPagesServed[sender.deviceId] = served;
     if (later.isNotEmpty) {
@@ -35205,6 +35425,14 @@ class MessengerController extends ChangeNotifier {
       if (event is! Map<String, dynamic>) continue;
       if (event['type'] == 'seen') {
         _dropQueuedReceived(sender.deviceId, event['ids']);
+        continue;
+      }
+      if (event['type'] == 'reach') {
+        _takeReach(sender, event['heard']);
+        continue;
+      }
+      if (event['type'] == 'digest') {
+        _takeDigests(sender, event['chats']);
         continue;
       }
       try {
@@ -36073,6 +36301,8 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.multiRouteMessagesV1,
       ApplicationCapability.routeProbeV1,
       ApplicationCapability.groupFileRelayV1,
+      ApplicationCapability.multiRouteBlocksV1,
+      ApplicationCapability.ownDeviceFilesV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,

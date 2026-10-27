@@ -78,6 +78,7 @@ import 'package:conest/src/email/carrier_mail.dart' show maxCarrierMailBytes;
 import 'package:conest/src/email/delta_content.dart';
 import 'package:conest/src/email/pgp.dart';
 import 'package:conest/src/content_routing.dart';
+import 'package:conest/src/transfer/own_device_sync_policy.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/network_history.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
@@ -20722,6 +20723,163 @@ void main() {
           bytes,
         );
       });
+
+      /// A phone that was off while Bob wrote to the laptop, and was not
+      /// told afterwards (what waited to be passed on is dropped).
+      Future<
+        (
+          MessengerController,
+          MessengerController,
+          MessengerController,
+          void Function(Duration),
+        )
+      >
+      phoneThatMissedOne() async {
+        final (alice, bob, phone, network, relay, advance) = await linkedPair();
+        final phoneId = phone.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        final saved = MessengerController.maxQueuedReceived;
+        MessengerController.maxQueuedReceived = 0;
+        addTearDown(() => MessengerController.maxQueuedReceived = saved);
+        relay.shouldFailStore = (_, _, _, _, envelope) =>
+            envelope.recipientDeviceId == phoneId;
+        final phoneIroh = phone.identity!.irohEndpointId!;
+        final blocked = [
+          for (final other in [alice, bob]) ...[
+            (other.identity!.irohEndpointId!, phoneIroh),
+            (phoneIroh, other.identity!.irohEndpointId!),
+          ],
+        ];
+        network.blockedPairs.addAll(blocked);
+        await bob.sendMessage(contact: bob.contacts.single, body: 'missed');
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice
+              .messagesFor(bob.identity!.deviceId)
+              .any((m) => m.body == 'missed');
+        }, reason: 'the laptop did not get it');
+        advance(const Duration(seconds: 30));
+        await alice.pollNow();
+        relay.shouldFailStore = null;
+        network.blockedPairs.removeAll(blocked);
+        for (var i = 0; i < 20; i++) {
+          await alice.pollNow();
+          await phone.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(
+          phone
+              .messagesFor(bob.identity!.deviceId)
+              .where((m) => m.body == 'missed'),
+          isEmpty,
+        );
+        expect(aliceId, isNotEmpty);
+        return (alice, bob, phone, advance);
+      }
+
+      test(
+        'devices compare what they hold and fetch what is missing',
+        () async {
+          final (alice, bob, phone, _) = await phoneThatMissedOne();
+          final bobId = bob.identity!.deviceId;
+          alice.sendSyncStatusForTesting(phone.identity!.deviceId);
+          await _waitForIroh(() {
+            unawaited(alice.pollNow());
+            unawaited(phone.pollNow());
+            return phone.messagesFor(bobId).any((m) => m.body == 'missed');
+          }, reason: 'the phone did not catch up from the digest');
+        },
+      );
+
+      test('a paused device answers no history, a steady one does', () async {
+        final (alice, bob, phone, advance) = await phoneThatMissedOne();
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        await alice.setOwnDeviceSyncSpeed(SyncSpeed.paused);
+        expect(alice.ownDeviceSyncPermission.allowed, isFalse);
+        phone.askHistoryForTesting(aliceId);
+        for (var i = 0; i < 30; i++) {
+          await alice.pollNow();
+          await phone.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(
+          phone.messagesFor(bobId).where((m) => m.body == 'missed'),
+          isEmpty,
+        );
+        await alice.setOwnDeviceSyncSpeed(SyncSpeed.steady);
+        advance(const Duration(minutes: 10));
+        phone.forgetHistoryAsksForTesting();
+        phone.askHistoryForTesting(aliceId);
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return phone.messagesFor(bobId).any((m) => m.body == 'missed');
+        }, reason: 'the steady laptop did not answer');
+      });
+
+      for (final hears in [false, true]) {
+        test(
+          hears
+              ? 'a device that can hear the contact is left to say it has '
+                    'the message first'
+              : 'a device that cannot hear the contact is told at once',
+          () async {
+            final (alice, bob, phone, network, relay, advance) =
+                await linkedPair();
+            final bobId = bob.identity!.deviceId;
+            final aliceId = alice.identity!.deviceId;
+            final phoneId = phone.identity!.deviceId;
+            if (hears) {
+              await bob.sendMessage(contact: bob.contacts.single, body: 'warm');
+              await _waitForIroh(() {
+                unawaited(alice.pollNow());
+                unawaited(phone.pollNow());
+                return phone.messagesFor(bobId).any((m) => m.body == 'warm');
+              }, reason: 'the phone did not hear Bob');
+            }
+            // Not heard for a while: out of reach.
+            if (!hears) advance(const Duration(minutes: 16));
+            phone.sendSyncStatusForTesting(aliceId);
+            for (var i = 0; i < 10; i++) {
+              await alice.pollNow();
+              await phone.pollNow();
+              await Future<void>.delayed(const Duration(milliseconds: 20));
+            }
+            relay.shouldFailStore = (_, _, _, _, envelope) =>
+                envelope.recipientDeviceId == phoneId &&
+                envelope.senderDeviceId == bobId;
+            network.blockedPairs
+              ..add((
+                bob.identity!.irohEndpointId!,
+                phone.identity!.irohEndpointId!,
+              ))
+              ..add((
+                phone.identity!.irohEndpointId!,
+                bob.identity!.irohEndpointId!,
+              ));
+            await bob.sendMessage(contact: bob.contacts.single, body: 'now');
+            // Shorter than any wait to hear that it has it.
+            for (var i = 0; i < 10; i++) {
+              await alice.pollNow();
+              await phone.pollNow();
+              advance(const Duration(milliseconds: 100));
+              await Future<void>.delayed(const Duration(milliseconds: 30));
+            }
+            bool phoneHas() =>
+                phone.messagesFor(bobId).any((m) => m.body == 'now');
+            expect(phoneHas(), !hears);
+            if (hears) {
+              advance(const Duration(seconds: 20));
+              await _waitForIroh(() {
+                unawaited(alice.pollNow());
+                unawaited(phone.pollNow());
+                return phoneHas();
+              }, reason: 'it was never passed on');
+            }
+          },
+        );
+      }
     });
 
     test('groups show on the account\'s other devices through the one that '

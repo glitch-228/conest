@@ -10,6 +10,7 @@ import 'group_file_manifest.dart';
 import 'feature_models.dart';
 import 'group_call/group_call_models.dart';
 import 'content_routing.dart';
+import 'transfer/own_device_sync_policy.dart' show SyncSpeed;
 import 'voice_settings.dart';
 import 'notification_rules.dart';
 
@@ -682,6 +683,7 @@ class GlobalConnectivityPreferences {
     this.irohTransferLimitEnabled = true,
     this.shareIdentifyingCarriersWithGroups = false,
     this.contentRefusals = ContentRefusals.none,
+    this.syncSpeed = SyncSpeed.steady,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -722,6 +724,9 @@ class GlobalConnectivityPreferences {
   /// What this device neither sends nor wants over each transport (told
   /// to contacts, who then send it another way).
   final ContentRefusals contentRefusals;
+
+  /// How fast this device syncs with the account's other devices.
+  final SyncSpeed syncSpeed;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -747,10 +752,12 @@ class GlobalConnectivityPreferences {
     bool? irohTransferLimitEnabled,
     bool? shareIdentifyingCarriersWithGroups,
     ContentRefusals? contentRefusals,
+    SyncSpeed? syncSpeed,
     Map<TransportKind, TransportPolicy>? transportPolicies,
   }) {
     return GlobalConnectivityPreferences(
       contentRefusals: contentRefusals ?? this.contentRefusals,
+      syncSpeed: syncSpeed ?? this.syncSpeed,
       shareIdentifyingCarriersWithGroups:
           shareIdentifyingCarriersWithGroups ??
           this.shareIdentifyingCarriersWithGroups,
@@ -781,6 +788,7 @@ class GlobalConnectivityPreferences {
     if (shareIdentifyingCarriersWithGroups)
       'shareIdentifyingCarriersWithGroups': true,
     if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
+    if (syncSpeed != SyncSpeed.steady) 'syncSpeed': syncSpeed.name,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -801,6 +809,10 @@ class GlobalConnectivityPreferences {
       shareIdentifyingCarriersWithGroups:
           json['shareIdentifyingCarriersWithGroups'] == true,
       contentRefusals: ContentRefusals.fromJson(json['contentRefusals']),
+      syncSpeed: SyncSpeed.values.firstWhere(
+        (value) => value.name == json['syncSpeed'],
+        orElse: () => SyncSpeed.steady,
+      ),
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])

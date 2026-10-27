@@ -1,3 +1,4 @@
+import 'package:conest/src/models.dart';
 import 'package:conest/src/transfer/own_device_sync_policy.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -133,5 +134,23 @@ void main() {
       'empty': ChatDigest.of([]),
     };
     expect(chatsToAsk(mine, theirs), ['y', 'w']);
+  });
+
+  test('the chosen speed is kept, and older vaults read as steady', () {
+    const prefs = GlobalConnectivityPreferences(syncSpeed: SyncSpeed.paused);
+    expect(
+      GlobalConnectivityPreferences.fromJson(prefs.toJson()).syncSpeed,
+      SyncSpeed.paused,
+    );
+    expect(
+      GlobalConnectivityPreferences.fromJson(
+        const GlobalConnectivityPreferences().toJson()..remove('syncSpeed'),
+      ).syncSpeed,
+      SyncSpeed.steady,
+    );
+    expect(
+      const GlobalConnectivityPreferences().toJson().containsKey('syncSpeed'),
+      isFalse,
+    );
   });
 }
