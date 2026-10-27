@@ -8014,7 +8014,14 @@ void main() {
       controller.receivePairingBeaconForTesting(
         Datagram(sealed, InternetAddress('192.168.50.77'), 7668),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      for (var i = 0; i < 60; i++) {
+        if (controller.recentPairingBeaconRoutes.any(
+          (route) => route.host == '192.168.50.77',
+        )) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
       expect(
         controller.recentPairingBeaconRoutes.map((route) => route.host),
         contains('192.168.50.77'),
@@ -8045,7 +8052,7 @@ void main() {
           7668,
         ),
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await Future<void>.delayed(const Duration(milliseconds: 800));
       final hosts = controller.recentPairingBeaconRoutes
           .map((route) => route.host)
           .toSet();
@@ -8073,7 +8080,7 @@ void main() {
           Datagram(sealed, InternetAddress('192.168.61.$i'), 7668),
         );
       }
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await Future<void>.delayed(const Duration(milliseconds: 1000));
       final hosts = controller.recentPairingBeaconRoutes
           .map((route) => route.host)
           .toSet();

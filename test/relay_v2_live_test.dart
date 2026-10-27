@@ -213,6 +213,19 @@ void main() {
       ],
     );
     final identity = await _pin(relay.port);
+    // The relay tells its borrowed address inside a session only: ask again
+    // now that sessions are known.
+    for (var attempt = 0; attempt < 10; attempt++) {
+      if (RelayClient.sessionInfoFor('127.0.0.1', relay.port)?.borrowed !=
+          null) {
+        break;
+      }
+      await const RelayClient().inspectHealth(
+        host: '127.0.0.1',
+        port: relay.port,
+        expectedIdentityPublicKeyBase64: identity,
+      );
+    }
     // The relay told its borrowed address inside a session.
     final told = RelayClient.sessionInfoFor('127.0.0.1', relay.port)?.borrowed;
     expect(told?.port, borrowedPort);
