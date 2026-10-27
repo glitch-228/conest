@@ -8918,8 +8918,10 @@ class MessengerController extends ChangeNotifier {
       }
       final peerId = session.peerDeviceIds.firstOrNull;
       final contact = peerId == null ? null : _contactByDeviceId(peerId);
-      if (contact == null ||
-          _messageById(peerId!, session.messageId) == null ||
+      if (peerId == null ||
+          contact == null ||
+          _messageById(session.chatDeviceId ?? peerId, session.messageId) ==
+              null ||
           session.attachment.fileHashBase64.isEmpty) {
         continue;
       }
@@ -9025,6 +9027,7 @@ class MessengerController extends ChangeNotifier {
           awaitingAcceptance: restoredAwaitingAcceptance,
           accepted: !restoredAwaitingAcceptance,
           receivedChunks: restoredSession.completedChunks,
+          chatDeviceId: session.chatDeviceId,
         );
         final legacyPaused =
             session.state == TransferState.paused &&
@@ -12772,6 +12775,8 @@ class MessengerController extends ChangeNotifier {
       _videoPosters[attachmentId] = poster;
     }
     _recordAttachmentCacheReference(attachmentId, keepOffline: true);
+    final saved = messageForAttachment(attachmentId);
+    if (saved != null) _syncSentMessage(me.deviceId, saved);
     await _persist('Saved.');
   }
 
@@ -16964,11 +16969,13 @@ class MessengerController extends ChangeNotifier {
       unawaited(_sendAttachmentCancel(contact, attachmentId));
     }
     _setTransferSessionState(attachmentId, TransferState.canceled);
-    _updateMessageState(
-      state.peerDeviceId,
-      state.messageId,
-      DeliveryState.canceled,
-    );
+    if (!state.fromOwnDevice) {
+      _updateMessageState(
+        state.peerDeviceId,
+        state.messageId,
+        DeliveryState.canceled,
+      );
+    }
     await _deleteAttachmentArtifacts(attachmentId);
     await _saveSnapshotSilently(notify: true);
   }
@@ -16987,11 +16994,13 @@ class MessengerController extends ChangeNotifier {
       if (inbound.isComplete) {
         inbound.finalizing = false;
         _setTransferSessionState(attachmentId, TransferState.reconnecting);
-        _updateMessageState(
-          inbound.peerDeviceId,
-          inbound.messageId,
-          DeliveryState.pending,
-        );
+        if (!inbound.fromOwnDevice) {
+          _updateMessageState(
+            inbound.peerDeviceId,
+            inbound.messageId,
+            DeliveryState.pending,
+          );
+        }
         appendDebugLog(
           'Retrying final verification and cache promotion for $attachmentId.',
         );
@@ -20760,6 +20769,29 @@ class MessengerController extends ChangeNotifier {
       route: _ingressRoute,
     );
     _upsertMessage(sender.deviceId, message);
+    await _startInboundAttachment(
+      sender: sender,
+      chatId: sender.deviceId,
+      message: message,
+      descriptor: descriptor,
+      posterBytes: posterBytes,
+      debugTest: debugTest,
+    );
+  }
+
+  /// Sets up receiving [descriptor]'s blocks from [sender] for [message] (in
+  /// the chat [chatId]; [fromOwnDevice] when [sender] is an own device of
+  /// this account that passed it on, [detailsOnly] to wait for the user).
+  Future<void> _startInboundAttachment({
+    required ContactRecord sender,
+    required String chatId,
+    required ChatMessage message,
+    required AttachmentDescriptor descriptor,
+    Uint8List? posterBytes,
+    DebugAttachmentTestSpec? debugTest,
+    bool fromOwnDevice = false,
+    bool detailsOnly = false,
+  }) async {
     // Decode + cache the video poster (if any) so the bubble can render
     // a thumbnail before the full bytes finish transferring.
     if (posterBytes != null) {
@@ -20770,14 +20802,15 @@ class MessengerController extends ChangeNotifier {
     final directAvailable = _hasUsableLargeDirectTransport(sender);
     final autoDownload =
         debugTest != null ||
-        (_snapshot.identity?.connectivity.autoDownloadPreset ??
-                AutoDownloadPreset.medium)
-            .allows(
+        (!detailsOnly &&
+            (_snapshot.identity?.connectivity.autoDownloadPreset ??
+                    AutoDownloadPreset.medium)
+                .allows(
               mimeType: descriptor.mimeType,
               sizeBytes: descriptor.sizeBytes,
               network: _networkCostClass,
               verifiedContact: sender.canSendOutbound,
-            );
+            ));
     final awaitingAcceptance =
         debugTest == null &&
         (!autoDownload || (requiresLan && !directAvailable));
@@ -20793,6 +20826,7 @@ class MessengerController extends ChangeNotifier {
       awaitingAcceptance: awaitingAcceptance || partialPath == null,
       accepted: !awaitingAcceptance && partialPath != null,
       debugTest: debugTest,
+      chatDeviceId: fromOwnDevice ? chatId : null,
     );
     _inboundAttachments[descriptor.id] = inboundState;
     _upsertTransferSession(
@@ -20819,6 +20853,7 @@ class MessengerController extends ChangeNotifier {
         requiresLan: requiresLan,
         lastError: preparation.error,
         storageReserveBlocked: preparation.reserveBlocked,
+        chatDeviceId: fromOwnDevice ? chatId : null,
       ),
     );
     await _saveSnapshotSilently(notify: false);
@@ -21175,15 +21210,28 @@ class MessengerController extends ChangeNotifier {
     // advertised one. Subsequent chunk responses can PUT directly to
     // their HTTP server instead of round-tripping the relay.
     _cachePeerLanDirectFromPayload(requester.deviceId, payload);
-    final state = _outboundAttachments[attachmentId];
-    if (state == null || state.peerDeviceId != requester.deviceId) {
+    final registered = _outboundAttachments[attachmentId];
+    final found = registered != null && registered.peerDeviceId == requester.deviceId
+        ? registered
+        // An own device of this account asking for a file in its chats.
+        : await _ownDeviceServingState(requester, attachmentId);
+    if (found == null) {
       // Sender no longer has this attachment (deleted, canceled, or never
       // existed across a reinstall) — proactively cancel so the receiver
-      // stops asking for chunks that will never arrive.
-      unawaited(_sendAttachmentCancel(requester, attachmentId));
+      // stops asking for chunks that will never arrive. (An own device is
+      // just not answered: it may have the file elsewhere.)
+      if (!requester.ownDevice) {
+        unawaited(_sendAttachmentCancel(requester, attachmentId));
+      }
       return;
     }
-    if (_messageById(state.peerDeviceId, state.messageId) == null) {
+    final state = found;
+    if (state.servesOwnDevice) {
+      if (_messageById(state.chatId, state.messageId) == null) {
+        _dropOwnDeviceServing(requester.deviceId, attachmentId);
+        return;
+      }
+    } else if (_messageById(state.peerDeviceId, state.messageId) == null) {
       // Parent message was locally deleted; tear down outbound state and
       // notify the receiver.
       _outboundRetryTimers.remove(attachmentId)?.cancel();
@@ -21201,7 +21249,21 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     bool stillActive() =>
-        identical(_outboundAttachments[attachmentId], state) && !state.paused;
+        identical(
+          state.servesOwnDevice
+              ? _ownServing[_ownServingKey(requester.deviceId, attachmentId)]
+              : _outboundAttachments[attachmentId],
+          state,
+        ) &&
+        !state.paused;
+    // A file served to an own device is not a transfer of this one: its
+    // state is not shown or changed by the serving.
+    void setSession(TransferState to, {String? error}) {
+      if (!state.servesOwnDevice) {
+        _setTransferSessionState(attachmentId, to, error: error);
+      }
+    }
+
     if (index < 0 || index >= state.descriptor.effectiveChunkCount) {
       return;
     }
@@ -21216,11 +21278,7 @@ class MessengerController extends ChangeNotifier {
         (state.lanOnly
             ? !_hasUsableLanDirectEndpoint(requester.deviceId)
             : !_hasUsableLargeDirectTransport(requester))) {
-      _setTransferSessionState(
-        attachmentId,
-        TransferState.waitingForLan,
-        error: 'Waiting for LAN or direct Iroh; relay use is not automatic.',
-      );
+      setSession(TransferState.waitingForLan, error: 'Waiting for LAN or direct Iroh; relay use is not automatic.');
       return;
     }
     final Uint8List chunkBytes;
@@ -21228,16 +21286,14 @@ class MessengerController extends ChangeNotifier {
       chunkBytes = await _readOutboundAttachmentChunk(state, index);
     } catch (error) {
       if (!stillActive()) return;
-      _setTransferSessionState(
-        attachmentId,
-        TransferState.failed,
-        error: error.toString(),
-      );
-      _updateMessageState(
-        state.peerDeviceId,
-        state.messageId,
-        DeliveryState.failed,
-      );
+      setSession(TransferState.failed, error: error.toString());
+      if (!state.servesOwnDevice) {
+        _updateMessageState(
+          state.peerDeviceId,
+          state.messageId,
+          DeliveryState.failed,
+        );
+      }
       return;
     }
     if (!stillActive()) return;
@@ -21297,13 +21353,18 @@ class MessengerController extends ChangeNotifier {
     void deliveredOn(OutboundDeliveryRoute route, MessageRoute counted) {
       if (delivered) return;
       delivered = true;
-      if (!_isActiveOutbound(state.peerDeviceId, attachmentId)) return;
+      if (!state.servesOwnDevice &&
+          !_isActiveOutbound(state.peerDeviceId, attachmentId)) {
+        return;
+      }
       if (index > state.highestChunkSent) state.highestChunkSent = index;
       state.lastChunkAt = DateTime.now().toUtc();
       state.consecutiveChunkFailures = 0;
       state.lastDeliveryRoute = route;
       _countServedBlock(state, index, counted);
-      _armOutboundStallTimer(requester, attachmentId: attachmentId);
+      if (!state.servesOwnDevice) {
+        _armOutboundStallTimer(requester, attachmentId: attachmentId);
+      }
       _notifyTransferProgress();
     }
 
@@ -21410,11 +21471,7 @@ class MessengerController extends ChangeNotifier {
           !irohUsable &&
           state.lanOnly &&
           state.descriptor.chunkSize > _attachmentChunkSize) {
-        _setTransferSessionState(
-          attachmentId,
-          TransferState.reconnecting,
-          error: 'Binary LAN block failed; retrying without losing progress.',
-        );
+        setSession(TransferState.reconnecting, error: 'Binary LAN block failed; retrying without losing progress.');
         // The peer explicitly advertised binary v1. A failed PUT is a
         // transient path failure, not evidence of protocol incompatibility;
         // the receiver's durable-range retry will request this same block.
@@ -21422,12 +21479,11 @@ class MessengerController extends ChangeNotifier {
       }
     }
     if (irohLimited) {
-      _waitForLanBecauseOfIrohLimit(attachmentId);
+      if (!state.servesOwnDevice) _waitForLanBecauseOfIrohLimit(attachmentId);
       return;
     }
     if (irohUsable && (state.requiresLan || irohOnly)) {
-      _setTransferSessionState(
-        attachmentId,
+      setSession(
         allowIrohRelay
             ? TransferState.reconnecting
             : TransferState.waitingForLan,
@@ -21438,13 +21494,8 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (state.descriptor.chunkSize > _attachmentChunkSize) {
-      _setTransferSessionState(
-        attachmentId,
-        TransferState.failed,
-        error:
-            'The peer does not support binary direct attachment blocks. '
-            'Update Conest on both devices and retry.',
-      );
+      setSession(TransferState.failed, error: 'The peer does not support binary direct attachment blocks. '
+            'Update Conest on both devices and retry.');
       return;
     }
     final chunk = AttachmentChunk(
@@ -21498,7 +21549,8 @@ class MessengerController extends ChangeNotifier {
       );
       if (ok) {
         _onLanDirectPutSuccess(requester.deviceId);
-        if (_isActiveOutbound(state.peerDeviceId, attachmentId)) {
+        if (state.servesOwnDevice ||
+            _isActiveOutbound(state.peerDeviceId, attachmentId)) {
           if (index > state.highestChunkSent) {
             state.highestChunkSent = index;
           }
@@ -21506,7 +21558,9 @@ class MessengerController extends ChangeNotifier {
           state.consecutiveChunkFailures = 0;
           state.lastDeliveryRoute = OutboundDeliveryRoute.lanDirect;
           _countServedBlock(state, index, MessageRoute.lanDirect);
-          _armOutboundStallTimer(requester, attachmentId: attachmentId);
+          if (!state.servesOwnDevice) {
+            _armOutboundStallTimer(requester, attachmentId: attachmentId);
+          }
           _notifyTransferProgress();
         }
         return;
@@ -21519,21 +21573,13 @@ class MessengerController extends ChangeNotifier {
       );
     }
     if (state.lanOnly) {
-      _setTransferSessionState(
-        attachmentId,
-        TransferState.waitingForLan,
-        error: 'LAN diagnostic is waiting for the peer LAN endpoint.',
-      );
+      setSession(TransferState.waitingForLan, error: 'LAN diagnostic is waiting for the peer LAN endpoint.');
       return;
     }
     if (state.requiresLan &&
         !allowLargeIrohRelay &&
         !_hasUsableLargeDirectTransport(requester)) {
-      _setTransferSessionState(
-        attachmentId,
-        TransferState.waitingForLan,
-        error: 'Direct delivery unavailable; relay use is not automatic.',
-      );
+      setSession(TransferState.waitingForLan, error: 'Direct delivery unavailable; relay use is not automatic.');
       return;
     }
     try {
@@ -21551,7 +21597,8 @@ class MessengerController extends ChangeNotifier {
       // Sender progress + stall-timer activity refresh. Only advance if
       // this is the active outbound for this contact (the receiver could
       // be re-requesting after a stale state).
-      if (_isActiveOutbound(state.peerDeviceId, attachmentId)) {
+      if (state.servesOwnDevice ||
+            _isActiveOutbound(state.peerDeviceId, attachmentId)) {
         if (index > state.highestChunkSent) {
           state.highestChunkSent = index;
         }
@@ -21575,7 +21622,9 @@ class MessengerController extends ChangeNotifier {
             deliveredVia.routeKey != preferredPrimaryKey) {
           state.lastRouteFallbackAt = DateTime.now().toUtc();
         }
-        _armOutboundStallTimer(requester, attachmentId: attachmentId);
+        if (!state.servesOwnDevice) {
+          _armOutboundStallTimer(requester, attachmentId: attachmentId);
+        }
         // Chunk acknowledgements are high-frequency data-plane updates. Keep
         // them on the transfer-only notifier so the conversation shell does
         // not rebuild once per block on the legacy envelope path.
@@ -21595,18 +21644,9 @@ class MessengerController extends ChangeNotifier {
         _notifyTransferProgress();
       }
       if (state.requiresLan && !allowLargeIrohRelay) {
-        _setTransferSessionState(
-          attachmentId,
-          TransferState.waitingForLan,
-          error:
-              'Direct route unavailable. Continue over Iroh relay or wait for direct.',
-        );
+        setSession(TransferState.waitingForLan, error: 'Direct route unavailable. Continue over Iroh relay or wait for direct.');
       } else {
-        _setTransferSessionState(
-          attachmentId,
-          TransferState.reconnecting,
-          error: 'Transfer route failed; retrying without losing progress.',
-        );
+        setSession(TransferState.reconnecting, error: 'Transfer route failed; retrying without losing progress.');
       }
     }
   }
@@ -21742,7 +21782,7 @@ class MessengerController extends ChangeNotifier {
     // the inbound state silently. The next chunk-request retry that the
     // sender's `_handleAttachmentChunkRequest` sees will trigger the
     // sender-side cancel echo too.
-    if (_messageById(state.peerDeviceId, state.messageId) == null) {
+    if (_messageById(state.chatId, state.messageId) == null) {
       state.retryTimer?.cancel();
       _inboundAttachments.remove(attachmentId);
       if (!hasActiveTransfer) _reschedulePolling();
@@ -21885,11 +21925,13 @@ class MessengerController extends ChangeNotifier {
         );
         await _deleteAttachmentArtifacts(attachmentId);
         _inboundAttachments.remove(attachmentId);
-        _updateMessageState(
-          sender.deviceId,
-          state.messageId,
-          DeliveryState.failed,
-        );
+        if (!state.fromOwnDevice) {
+          _updateMessageState(
+            sender.deviceId,
+            state.messageId,
+            DeliveryState.failed,
+          );
+        }
         unawaited(_sendAttachmentCancel(sender, attachmentId));
         notifyListeners();
         return;
@@ -21905,25 +21947,36 @@ class MessengerController extends ChangeNotifier {
       _inboundAttachments.remove(attachmentId);
       _removeTransferSession(attachmentId);
       if (!hasActiveTransfer) _reschedulePolling();
-      _updateMessageState(
-        sender.deviceId,
-        state.messageId,
-        DeliveryState.delivered,
-      );
-      for (final MapEntry(key: route, value: bytes)
-          in state.routeBytes.entries) {
-        _traceMessage(
+      // A file an own device passed on keeps the message's own state (what
+      // the contact did with it is that device's to say).
+      if (!state.fromOwnDevice) {
+        _updateMessageState(
           sender.deviceId,
           state.messageId,
-          RouteTrace(
-            route: route,
-            mark: MessageRouteMark.confirmed,
-            at: _now().toUtc(),
-            bytes: bytes,
-          ),
+          DeliveryState.delivered,
         );
+        for (final MapEntry(key: route, value: bytes)
+            in state.routeBytes.entries) {
+          _traceMessage(
+            sender.deviceId,
+            state.messageId,
+            RouteTrace(
+              route: route,
+              mark: MessageRouteMark.confirmed,
+              at: _now().toUtc(),
+              bytes: bytes,
+            ),
+          );
+        }
+        await _sendAttachmentComplete(sender, attachmentId);
+        // The account's other devices show it too (and fetch it from here).
+        if (state.debugTest == null) {
+          final received = _messageById(sender.deviceId, state.messageId);
+          if (received != null) _syncReceivedMessage(sender.deviceId, received);
+        }
+      } else {
+        _noteOwnDeviceFileFetched(state);
       }
-      await _sendAttachmentComplete(sender, attachmentId);
       if (state.debugTest != null) {
         Object? resultError;
         for (var attempt = 0; attempt < 3; attempt++) {
@@ -21975,11 +22028,13 @@ class MessengerController extends ChangeNotifier {
         TransferState.failed,
         error: detail,
       );
-      _updateMessageState(
-        sender.deviceId,
-        state.messageId,
-        DeliveryState.failed,
-      );
+      if (!state.fromOwnDevice) {
+        _updateMessageState(
+          sender.deviceId,
+          state.messageId,
+          DeliveryState.failed,
+        );
+      }
       notifyListeners();
     } finally {
       verificationHeartbeat.cancel();
@@ -22684,16 +22739,17 @@ class MessengerController extends ChangeNotifier {
       if (peerContact != null) _pumpOutboundQueue(peerContact);
     }
     if (inboundState != null) {
-      final parent = _messageById(
-        inboundState.peerDeviceId,
-        inboundState.messageId,
-      );
+      // An own device that cannot serve the file does not take the message
+      // away; it just stays without the file.
+      final parent = inboundState.fromOwnDevice
+          ? null
+          : _messageById(inboundState.chatId, inboundState.messageId);
       if (parent != null) {
         if (parent.body.isEmpty) {
-          _deleteMessage(inboundState.peerDeviceId, inboundState.messageId);
+          _deleteMessage(inboundState.chatId, inboundState.messageId);
         } else {
           _clearAttachmentOnMessage(
-            inboundState.peerDeviceId,
+            inboundState.chatId,
             inboundState.messageId,
           );
         }
@@ -33961,13 +34017,14 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  /// A text this device sent (or saved) shows on the account's other
-  /// devices too. Files, voice and groups follow later.
+  /// A message this device sent (or saved), a file with it, shows on the
+  /// account's other devices too. Groups follow later.
   void _syncSentMessage(String chatId, ChatMessage message) {
     final me = identity;
-    if (me == null || message.attachment != null || message.poll != null) {
-      return;
-    }
+    if (me == null || message.poll != null) return;
+    final attachment = _syncedAttachment(message);
+    // A file whose details are not final yet is told when they are.
+    if (message.attachment != null && attachment == null) return;
     final payload = _crypto.encodeDirectMessagePayload(message);
     if (payload.length > _maxSyncedPayloadChars) return;
     _syncToOwnDevices({
@@ -33977,6 +34034,7 @@ class MessengerController extends ChangeNotifier {
       'id': message.id,
       'createdAt': message.createdAt.toUtc().toIso8601String(),
       'payload': payload,
+      'attachment': ?attachment,
     });
   }
 
@@ -33990,14 +34048,18 @@ class MessengerController extends ChangeNotifier {
         EnergyMode.saver => const Duration(seconds: 15),
       };
 
-  /// A text a contact sent reaches this account's other devices too: queued
-  /// for each (kept across restarts), sent after [_receivedSyncDelay]
-  /// unless that device says it has it. Files, voice and groups follow.
+  /// A message a contact sent (a file with it, once here) reaches this
+  /// account's other devices too: queued for each (kept across restarts),
+  /// sent after [_receivedSyncDelay] unless that device says it has it.
+  /// Groups follow.
   void _syncReceivedMessage(String chatId, ChatMessage message) {
-    if (!conestActive ||
-        message.attachment != null ||
-        message.poll != null ||
-        message.outbound) {
+    if (!conestActive || message.poll != null || message.outbound) return;
+    final attachment = _syncedAttachment(message);
+    // A file is passed on once it is here (the others fetch it from this
+    // device), not while it is still coming.
+    if (message.attachment != null &&
+        (attachment == null ||
+            !_locallyAvailableAttachments.contains(message.attachment!.id))) {
       return;
     }
     final devices = ownDevices.where((device) => device.canSendOutbound);
@@ -34014,6 +34076,7 @@ class MessengerController extends ChangeNotifier {
           'from': message.senderDeviceId,
           'createdAt': message.createdAt.toUtc().toIso8601String(),
           'payload': payload,
+          'attachment': ?attachment,
         },
       ],
     });
@@ -34175,6 +34238,149 @@ class MessengerController extends ChangeNotifier {
         );
       }
     }
+  }
+
+  // Files through own devices (M29e P4): a file in a chat of this account
+  // shows on its other devices too. The event that tells them of the message
+  // carries the file's details (name, size, hash, key: what an offer to a
+  // contact carries); they fetch the blocks from the device that has the
+  // file, as from a contact, over whatever route they share. That device
+  // serves only this account's own, confirmed devices, only files that are
+  // in its chats, and does not count it as a transfer of its own.
+
+  /// What an event tells the account's other devices of a file.
+  Map<String, Object?>? _syncedAttachment(ChatMessage message) {
+    final descriptor = message.attachment;
+    if (descriptor == null || descriptor.fileHashBase64.isEmpty) return null;
+    return {
+      'descriptor': descriptor.toJson(),
+      if (message.albumId != null) 'albumId': message.albumId,
+    };
+  }
+
+  /// The file in an own device's event, checked as an offer from a contact
+  /// is. Null for no file; throws for one that is not right.
+  ({AttachmentDescriptor descriptor, String? albumId})? _syncedAttachmentIn(
+    Object? raw,
+  ) {
+    if (raw == null) return null;
+    final json = raw is Map<String, dynamic> ? raw : null;
+    final descriptorJson = json?['descriptor'];
+    if (descriptorJson is! Map<String, dynamic>) {
+      throw const FormatException('Not a file.');
+    }
+    final descriptor = _validateIncomingAttachmentDescriptor(
+      AttachmentDescriptor.fromJson(descriptorJson),
+    );
+    final album = json!['albumId'];
+    if (album != null &&
+        (album is! String ||
+            album.length > 160 ||
+            RegExp(r'[\x00-\x1f\x7f]').hasMatch(album))) {
+      throw const FormatException('Not an album.');
+    }
+    return (descriptor: descriptor, albumId: album as String?);
+  }
+
+  /// Serving states for own devices (at most this many; the oldest go).
+  final LinkedHashMap<String, _OutboundAttachmentState> _ownServing =
+      LinkedHashMap();
+  static const int _maxOwnServing = 32;
+
+  static String _ownServingKey(String deviceId, String attachmentId) =>
+      '$deviceId|$attachmentId';
+
+  void _dropOwnDeviceServing(String deviceId, String attachmentId) {
+    final state = _ownServing.remove(_ownServingKey(deviceId, attachmentId));
+    if (state != null) unawaited(state.closeFile());
+  }
+
+  /// What serves [attachmentId] to [requester] when it is one of this
+  /// account's own, confirmed devices and the file is in a chat here and on
+  /// disk; null otherwise.
+  Future<_OutboundAttachmentState?> _ownDeviceServingState(
+    ContactRecord requester,
+    String attachmentId,
+  ) async {
+    final me = identity;
+    if (me == null ||
+        !requester.ownDevice ||
+        !requester.canSendOutbound ||
+        isOwnDeviceUnconfirmed(requester) ||
+        accountDevices?.deviceFor(requester.deviceId) == null) {
+      return null;
+    }
+    final key = _ownServingKey(requester.deviceId, attachmentId);
+    final held = _ownServing.remove(key);
+    if (held != null) return _ownServing[key] = held;
+    final message = messageForAttachment(attachmentId);
+    final descriptor = message?.attachment;
+    final chat = peerDeviceIdForAttachment(attachmentId);
+    if (message == null ||
+        descriptor == null ||
+        chat == null ||
+        message.deleted) {
+      return null;
+    }
+    final path = await attachmentCachePathFor(attachmentId);
+    if (path == null) return null;
+    try {
+      if (await File(path).length() != descriptor.sizeBytes) return null;
+    } catch (_) {
+      return null;
+    }
+    // Asked meanwhile by the same device: keep the one that got in first.
+    final raced = _ownServing[key];
+    if (raced != null) return raced;
+    while (_ownServing.length >= _maxOwnServing) {
+      final oldest = _ownServing.keys.first;
+      unawaited(_ownServing.remove(oldest)!.closeFile());
+    }
+    return _ownServing[key] = _OutboundAttachmentState(
+      messageId: message.id,
+      peerDeviceId: requester.deviceId,
+      // Read as from a private copy: the size was checked just now, and
+      // the receiver checks the whole file's hash.
+      sourcePath: path,
+      sourceKind: TransferSourceKind.privateSpool,
+      descriptor: descriptor,
+      requiresLan: descriptor.sizeBytes > maxAttachmentSizeBytes,
+      chatDeviceId: chat,
+    );
+  }
+
+  /// [message] (in [chat]) came from [source], an own device, with a file:
+  /// fetch its blocks from [source] unless they are here or on their way.
+  /// [detailsOnly] leaves it to the user (history older than the sync).
+  Future<void> _fetchFileFromOwnDevice(
+    ContactRecord source,
+    String chat,
+    ChatMessage message, {
+    bool detailsOnly = false,
+  }) async {
+    final descriptor = message.attachment;
+    if (descriptor == null ||
+        _locallyAvailableAttachments.contains(descriptor.id) ||
+        _inboundAttachments.containsKey(descriptor.id) ||
+        _outboundAttachments.containsKey(descriptor.id)) {
+      return;
+    }
+    await _startInboundAttachment(
+      sender: source,
+      chatId: chat,
+      message: message,
+      descriptor: descriptor,
+      fromOwnDevice: true,
+      detailsOnly: detailsOnly,
+    );
+  }
+
+  /// The file [state] is now here, fetched from an own device.
+  void _noteOwnDeviceFileFetched(_InboundAttachmentState state) {
+    appendDebugLog(
+      'Got ${_boundedLogValue(state.descriptor.fileName)} from your '
+      '${_contactByDeviceId(state.peerDeviceId)?.deviceName ?? "other device"}.',
+    );
   }
 
   // Groups through a gateway (M29e, step 1): this account's other devices
@@ -35006,30 +35212,39 @@ class MessengerController extends ChangeNotifier {
             continue;
           }
           final text = _crypto.decodeDirectMessagePayload(payload);
+          final ({AttachmentDescriptor descriptor, String? albumId})? file;
+          try {
+            file = _syncedAttachmentIn(event['attachment']);
+          } catch (_) {
+            continue;
+          }
           final now = _now().toUtc();
           final sentAt =
               DateTime.tryParse(event['createdAt'] as String? ?? '')?.toUtc() ??
               envelope.createdAt.toUtc();
-          _upsertMessage(
-            chat,
-            ChatMessage(
-              id: id,
-              conversationId: _crypto.conversationIdFor(chat),
-              senderDeviceId: sender.deviceId,
-              recipientDeviceId: chat,
-              body: text.body,
-              outbound: true,
-              // Sent from there; its receipts arrive there and follow here.
-              state: chat == me.deviceId
-                  ? DeliveryState.delivered
-                  : DeliveryState.relayed,
-              createdAt: sentAt.isAfter(now) ? now : sentAt,
-              replyToMessageId: text.replyToMessageId,
-              replySnippet: text.replySnippet,
-              replySenderDeviceId: text.replySenderDeviceId,
-              replySenderDisplayName: text.replySenderDisplayName,
-            ),
+          final sentMessage = ChatMessage(
+            id: id,
+            conversationId: _crypto.conversationIdFor(chat),
+            senderDeviceId: sender.deviceId,
+            recipientDeviceId: chat,
+            body: text.body,
+            outbound: true,
+            // Sent from there; its receipts arrive there and follow here.
+            state: chat == me.deviceId
+                ? DeliveryState.delivered
+                : DeliveryState.relayed,
+            createdAt: sentAt.isAfter(now) ? now : sentAt,
+            replyToMessageId: text.replyToMessageId,
+            replySnippet: text.replySnippet,
+            replySenderDeviceId: text.replySenderDeviceId,
+            replySenderDisplayName: text.replySenderDisplayName,
+            attachment: file?.descriptor,
+            albumId: file?.albumId,
           );
+          _upsertMessage(chat, sentMessage);
+          if (file != null) {
+            await _fetchFileFromOwnDevice(sender, chat, sentMessage);
+          }
           changed = true;
           switch (_earlySyncStates.remove('$chat|$id')) {
             case 'read':
@@ -35062,6 +35277,12 @@ class MessengerController extends ChangeNotifier {
             continue;
           }
           final text = _crypto.decodeDirectMessagePayload(payload);
+          final ({AttachmentDescriptor descriptor, String? albumId})? file;
+          try {
+            file = _syncedAttachmentIn(event['attachment']);
+          } catch (_) {
+            continue;
+          }
           final now = _now().toUtc();
           final sentAt =
               DateTime.tryParse(event['createdAt'] as String? ?? '')?.toUtc() ??
@@ -35072,31 +35293,39 @@ class MessengerController extends ChangeNotifier {
               when createdAt.isBefore(revived)) {
             continue;
           }
-          _upsertMessage(
-            chat,
-            ChatMessage(
-              id: id,
-              conversationId: _crypto.conversationIdFor(chat),
-              senderDeviceId: from,
-              recipientDeviceId: me.deviceId,
-              body: text.body,
-              outbound: false,
-              state: DeliveryState.delivered,
-              createdAt: createdAt,
-              replyToMessageId: text.replyToMessageId,
-              replySnippet: text.replySnippet,
-              replySenderDeviceId: text.replySenderDeviceId,
-              replySenderDisplayName: text.replySenderDisplayName,
-              route: MessageRoute.viaOwnDevice,
-            ),
+          final receivedMessage = ChatMessage(
+            id: id,
+            conversationId: _crypto.conversationIdFor(chat),
+            senderDeviceId: from,
+            recipientDeviceId: me.deviceId,
+            body: text.body,
+            outbound: false,
+            state: DeliveryState.delivered,
+            createdAt: createdAt,
+            replyToMessageId: text.replyToMessageId,
+            replySnippet: text.replySnippet,
+            replySenderDeviceId: text.replySenderDeviceId,
+            replySenderDisplayName: text.replySenderDisplayName,
+            route: MessageRoute.viaOwnDevice,
+            attachment: file?.descriptor,
+            albumId: file?.albumId,
           );
+          _upsertMessage(chat, receivedMessage);
+          if (file != null) {
+            await _fetchFileFromOwnDevice(sender, chat, receivedMessage);
+          }
           await _applyDeferredDirectReactions(chat, id);
           changed = true;
           // Only what is new (not a backlog catching up) is announced.
           if (now.difference(createdAt) < const Duration(minutes: 10)) {
             final from = _contactByDeviceId(chat);
             if (from != null) {
-              _showInboundMessageNotification(contact: from, body: text.body);
+              _showInboundMessageNotification(
+                contact: from,
+                body: text.body.isNotEmpty
+                    ? text.body
+                    : file?.descriptor.fileName ?? '',
+              );
             }
           }
         case 'state':
@@ -37622,10 +37851,18 @@ class _OutboundAttachmentState {
     required this.descriptor,
     required this.requiresLan,
     this.lanOnly = false,
+    this.chatDeviceId,
   });
 
   final String messageId;
   final String peerDeviceId;
+
+  /// Set when this serves a file to an own device of the account: the chat
+  /// the message is in (the contact's, or Saved). Such a state is not part
+  /// of the send queue and has no transfer session.
+  final String? chatDeviceId;
+  bool get servesOwnDevice => chatDeviceId != null;
+  String get chatId => chatDeviceId ?? peerDeviceId;
   final String sourcePath;
   final TransferSourceKind sourceKind;
   final AttachmentDescriptor descriptor;
@@ -37803,10 +38040,19 @@ class _InboundAttachmentState {
     this.accepted = true,
     this.debugTest,
     Iterable<int> receivedChunks = const <int>[],
-  }) : received = <int>{...receivedChunks};
+    String? chatDeviceId,
+  }) : received = <int>{...receivedChunks},
+       _chatDeviceId = chatDeviceId;
 
   final String messageId;
   final String peerDeviceId;
+
+  /// The chat the message is in: [peerDeviceId], unless an own device of
+  /// this account passed the file on (then the blocks come from it, but the
+  /// message is in the contact's chat, or Saved).
+  final String? _chatDeviceId;
+  String get chatId => _chatDeviceId ?? peerDeviceId;
+  bool get fromOwnDevice => _chatDeviceId != null;
   final AttachmentDescriptor descriptor;
   final Set<int> received;
   String? partialPath;

@@ -4344,11 +4344,17 @@ class TransferSession {
     this.pausedByPeer = false,
     this.lastError,
     this.storageReserveBlocked = false,
+    this.chatDeviceId,
   });
 
   final String id;
   final AttachmentDescriptor attachment;
   final List<String> peerDeviceIds;
+
+  /// The chat (a contact's device id, or this device's own for Saved) the
+  /// message is in, when that is not the device the blocks come from: a
+  /// file that an own device of this account passed on. Null otherwise.
+  final String? chatDeviceId;
   final TransferState state;
   final List<int> completedChunks;
   final DateTime createdAt;
@@ -4407,6 +4413,7 @@ class TransferSession {
       storageReserveBlocked: clearLastError
           ? false
           : (storageReserveBlocked ?? this.storageReserveBlocked),
+      chatDeviceId: chatDeviceId,
     );
   }
 
@@ -4414,6 +4421,7 @@ class TransferSession {
     return {
       'id': id,
       'attachment': attachment.toJson(),
+      if (chatDeviceId != null) 'chatDeviceId': chatDeviceId,
       'peerDeviceIds': peerDeviceIds,
       'state': state.name,
       'completedRanges': _encodeChunkRanges(completedChunks),
@@ -4476,6 +4484,7 @@ class TransferSession {
       pausedByPeer: json['pausedByPeer'] as bool? ?? false,
       lastError: json['lastError'] as String?,
       storageReserveBlocked: json['storageReserveBlocked'] as bool? ?? false,
+      chatDeviceId: json['chatDeviceId'] as String?,
     );
   }
 }
