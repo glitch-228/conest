@@ -455,15 +455,33 @@ class PushToTalkKeyHandler {
   bool _handle(KeyEvent event) {
     final settings = controller.voiceSettings;
     final key = settings.pushToTalkKey;
-    if (key == null ||
-        settings.inputMode != VoiceInputMode.pushToTalk ||
-        event.logicalKey.keyId != key ||
+    if (key == null || event.logicalKey.keyId != key) return false;
+    // Letting go always counts, in a call or not.
+    if (event is KeyUpEvent) {
+      if (!controller.pushToTalkHeld) return false;
+      unawaited(controller.releasePushToTalk());
+      return true;
+    }
+    if (settings.inputMode != VoiceInputMode.pushToTalk ||
         !controller.callUsesMicrophone) {
       return false;
     }
+    // Typing: a printable key goes to the text field, not to the microphone.
+    if (event is KeyDownEvent &&
+        event.character != null &&
+        event.character!.trim().isNotEmpty &&
+        _typingInTextField()) {
+      return false;
+    }
     if (event is KeyDownEvent) unawaited(controller.setPushToTalkHeld(true));
-    if (event is KeyUpEvent) unawaited(controller.setPushToTalkHeld(false));
     return true;
+  }
+
+  /// Whether a text field has the focus (a text field's editing context).
+  static bool _typingInTextField() {
+    final focus = FocusManager.instance.primaryFocus;
+    return focus?.context?.findAncestorWidgetOfExactType<EditableText>() !=
+        null;
   }
 
   void attach() => HardwareKeyboard.instance.addHandler(_handle);

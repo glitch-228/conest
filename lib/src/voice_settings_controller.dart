@@ -89,6 +89,18 @@ extension VoiceSettingsController on MessengerController {
 
   bool get pushToTalkHeld => _pushToTalkHeld;
 
+  /// Lets go of push-to-talk (the key's release can be missed: the call
+  /// ended, the window lost the focus).
+  Future<void> releasePushToTalk() => setPushToTalkHeld(false);
+
+  /// A different call (or none) has the microphone: a hold from before
+  /// does not carry over, so the next call starts muted.
+  void _syncPushToTalkSession(Object? session) {
+    if (_pushToTalkSession == session) return;
+    _pushToTalkSession = session;
+    _pushToTalkHeld = false;
+  }
+
   /// Whether a call is sending this device's microphone (push-to-talk
   /// keys mean something only then).
   bool get callUsesMicrophone =>
@@ -159,8 +171,13 @@ extension VoiceSettingsController on MessengerController {
   }
 
   Future<void> stopMicrophoneTest() async {
-    if (!_microphoneTestOpen) return;
-    await _platformBridge.closeVoiceCallMedia();
+    // Never a call's audio: leaving the page must not end a call's sound.
+    if (!_microphoneTestOpen ||
+        _groupCallService?.mediaBusy == true ||
+        _voiceCallService?.mediaBusy == true) {
+      return;
+    }
+    await _platformBridge.closeMicrophoneTest();
     notifyListeners();
   }
 }
