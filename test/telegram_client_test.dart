@@ -6,7 +6,6 @@ import 'package:conest/src/telegram/telegram_api_keys.dart';
 import 'package:conest/src/telegram/telegram_client.dart';
 import 'package:conest/src/telegram/telegram_models.dart';
 import 'package:conest/src/telegram/telegram_mods.dart';
-import 'package:conest/src/telegram/telegram_bridge.dart';
 import 'package:conest/src/telegram/telegram_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
