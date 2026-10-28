@@ -61,6 +61,8 @@ pub(crate) struct RelayState {
     pub(crate) accounts: Arc<Mutex<crate::registration::Accounts>>,
     /// The key tokens are MACed with (kept in the database).
     pub(crate) token_secret: Arc<Vec<u8>>,
+    /// How many times the queue was read (tests watch for busy loops).
+    pub(crate) queue_reads: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl RelayState {
@@ -160,6 +162,7 @@ impl RelayState {
             owners: Arc::new(Mutex::new(crate::owners::Owners::default())),
             accounts: Arc::new(Mutex::new(crate::registration::Accounts::default())),
             token_secret: Arc::new(token_secret),
+            queue_reads: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         };
         state.load_owners()?;
         state.load_accounts()?;
@@ -589,6 +592,8 @@ impl RelayState {
         limit: usize,
         lease_ms: Option<u64>,
     ) -> Result<(Vec<Value>, Option<String>), String> {
+        self.queue_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let now = now_millis();
         let cutoff = now.saturating_sub(self.config.ttl.as_millis() as u64);
         let lease_id = lease_ms.map(|_| {
@@ -623,7 +628,7 @@ impl RelayState {
                 .prepare(
                     "SELECT id, envelope_json, kind FROM queue_entries
                       WHERE mailbox = ?1 AND lease_id IS NULL
-                      ORDER BY id LIMIT ?2",
+                      ORDER BY (kind IS 'pairing_announcement'), id LIMIT ?2",
                 )
                 .map_err(|error| format!("preparing relay fetch: {error}"))?;
             let selected = statement

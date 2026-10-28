@@ -359,8 +359,11 @@ async fn read_frames<R: AsyncRead + Unpin>(
     let mut header = [0_u8; 2];
     let mut record = vec![0_u8; MAX_RECORD];
     let mut plain = vec![0_u8; MAX_RECORD];
+    // Padding and pongs cost the sender nothing: only a real frame (a
+    // request, a ping) keeps the session alive.
+    let mut last_real = Instant::now();
     loop {
-        match timeout(idle, reader.read_exact(&mut header)).await {
+        match timeout_at(last_real + idle, reader.read_exact(&mut header)).await {
             Err(_) => return Err(timed_out("session idle")),
             Ok(Err(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
             Ok(Err(error)) => return Err(error),
@@ -379,6 +382,9 @@ async fn read_frames<R: AsyncRead + Unpin>(
         nonce += 1;
         decoder.push(&plain[..read]);
         while let Some(frame) = decoder.next_frame().map_err(invalid)? {
+            if frame.kind != frame_type::PAD && frame.kind != frame_type::PONG {
+                last_real = Instant::now();
+            }
             session.dispatch(frame).await?;
         }
     }
@@ -550,8 +556,11 @@ impl Session {
                     detached,
                     &self.state.identity,
                 );
-                // Inside a session only: the relay's hidden address.
-                if action == "health"
+                // Inside a session only, and only to one that has shown it
+                // is a user (a registered token, or a mailbox it proved):
+                // the hidden addresses are not for every anonymous caller.
+                let trusted = action == "health" && self.session_is_trusted(&payload);
+                if trusted
                     && let Some(hidden) = self.state.hidden_address()
                     && let Some(v2) = answer
                         .get_mut("stats")
@@ -561,7 +570,7 @@ impl Session {
                     v2.insert("hidden".to_owned(), Value::String(hidden));
                 }
                 // And the borrowed-handshake address (M38-D).
-                if action == "health"
+                if trusted
                     && let Some(borrowed) = self.state.borrowed_info()
                     && let Some(v2) = answer
                         .get_mut("stats")
@@ -573,6 +582,23 @@ impl Session {
                 answer
             }
         }
+    }
+
+    /// Whether this session has a valid registration token in [payload]'s
+    /// request, or has proved a mailbox.
+    fn session_is_trusted(&self, payload: &[u8]) -> bool {
+        if !self
+            .proved
+            .lock()
+            .expect("proved lock should not poison")
+            .is_empty()
+        {
+            return true;
+        }
+        serde_json::from_slice::<Value>(payload)
+            .ok()
+            .and_then(|request| request.get("token")?.as_str().map(str::to_owned))
+            .is_some_and(|token| self.state.valid_token(&token).is_some())
     }
 
     fn has_proved(&self, mailbox: &str) -> bool {
@@ -691,6 +717,19 @@ impl Session {
     async fn watch(self: Arc<Self>, stream: u32, mailbox: String, limit: usize, lease_ms: u64) {
         let mut pushed_pairing: VecDeque<String> = VecDeque::new();
         loop {
+            // Ownership can be claimed after the subscription began: from
+            // then on only the owner's session may keep leasing.
+            if self.state.owner_of(&mailbox).is_some() && !self.has_proved(&mailbox) {
+                let event = json!({
+                    "ok": false,
+                    "mailbox": mailbox,
+                    "error": "this mailbox needs its owner's signature",
+                });
+                let _ = self
+                    .send(frame_type::EVENT, stream, event.to_string().into_bytes())
+                    .await;
+                return;
+            }
             let observed = self.state.observe(&mailbox);
             let wanted = mailbox.clone();
             let taken = self
@@ -705,7 +744,14 @@ impl Session {
                     continue;
                 }
             };
-            let full = messages.len() >= limit;
+            // Pairing announcements are never leased: they come back every
+            // call, so they must not make a batch "full" (that would loop
+            // without waiting).
+            let leasable = messages
+                .iter()
+                .filter(|message| envelope_kind(message) != Some("pairing_announcement"))
+                .count();
+            let full = leasable >= limit;
             let mut fresh = Vec::with_capacity(messages.len());
             for message in messages {
                 if envelope_kind(&message) == Some("pairing_announcement") {
@@ -736,7 +782,7 @@ impl Session {
                     return;
                 }
             }
-            if full {
+            if full && !fresh.is_empty() {
                 continue;
             }
             self.state
@@ -1206,6 +1252,91 @@ pub(crate) mod tests {
             );
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn a_subscription_on_pairing_announcements_waits_instead_of_spinning() {
+        let relay = start_tokio(parity_config());
+        let announcement = |id: &str| {
+            let mut value = envelope(id);
+            value["kind"] = json!("pairing_announcement");
+            value["senderDeviceId"] = json!(format!("dev-{id}"));
+            value
+        };
+        for index in 0..3 {
+            relay
+                .state
+                .store(
+                    "pair-watch".to_owned(),
+                    announcement(&format!("pair-{index}")),
+                )
+                .expect("stored");
+        }
+        let mut client = TestClient::connect(relay.tcp, &relay_public(&relay.state));
+        client.request(
+            1,
+            &json!({"action": "subscribe", "mailboxes": ["pair-watch"], "limit": 1}),
+        );
+        let (_, started) = client.next_json();
+        assert_eq!(started["subscribed"], json!(["pair-watch"]));
+        // The announcements are pushed once each (limit 1 does not cut
+        // them off), and then the watcher waits.
+        std::thread::sleep(Duration::from_millis(1500));
+        let reads = relay
+            .state
+            .queue_reads
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(reads < 20, "the watcher spun: {reads} queue reads in 1.5 s");
+        // A real message behind the announcements still arrives.
+        let mut other = TestClient::connect(relay.tcp, &relay_public(&relay.state));
+        other.request(
+            1,
+            &json!({"action": "store", "recipient_device_id": "pair-watch", "envelope": envelope("real-1")}),
+        );
+        let _ = other.next_json();
+        let mut seen = false;
+        for _ in 0..8 {
+            let (_, event) = client.next_json();
+            if event["messages"]
+                .as_array()
+                .is_some_and(|all| all.iter().any(|m| m["messageId"] == "real-1"))
+            {
+                seen = true;
+                break;
+            }
+        }
+        assert!(seen, "the real message was starved by the announcements");
+    }
+
+    #[test]
+    fn padding_does_not_keep_a_session_alive() {
+        let mut config = parity_config();
+        config.ext.session_idle = Duration::from_secs(1);
+        let relay = start_tokio(config);
+        let mut client = TestClient::connect(relay.tcp, &relay_public(&relay.state));
+        // Padding every 200 ms for 2.5 s: past the idle limit.
+        for _ in 0..12 {
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                client.send(frame_type::PAD, 0, &[0_u8; 16]);
+            }));
+        }
+        client
+            .stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("timeout");
+        let mut chunk = [0_u8; 256];
+        let mut closed = false;
+        for _ in 0..20 {
+            match client.stream.read(&mut chunk) {
+                Ok(0) | Err(_) => {
+                    closed = true;
+                    break;
+                }
+                Ok(_) => {}
+            }
+        }
+        assert!(closed, "the session outlived its idle limit on padding");
     }
 
     #[test]

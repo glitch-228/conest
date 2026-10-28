@@ -667,4 +667,21 @@ void main() {
       }
     });
   });
+
+  test('a v1 mailbox proof also covers the lease and limit parameters', () {
+    expect(
+      RelayClient.v1ProofExtra('fetch', {'limit': 4, 'wait_ms': 100}),
+      '|4|100|',
+    );
+    expect(RelayClient.v1ProofExtra('fetch', {}), '|||');
+    expect(
+      RelayClient.v1ProofExtra('fetch_leased', {'limit': 2, 'lease_ms': 30000}),
+      '|2||30000',
+    );
+    expect(
+      RelayClient.v1ProofExtra('ack_lease', {'lease_id': 'abc'}),
+      'abc|||',
+    );
+    expect(RelayClient.v1ProofExtra('store', {'limit': 1}), '');
+  });
 }

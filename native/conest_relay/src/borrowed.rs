@@ -23,6 +23,16 @@
 //! stream (v2 sessions, v1 lines). Anyone without the key sees a TLS
 //! session with the real site.
 //!
+//! The key pair is the X25519 form of the relay's Ed25519 identity, not the
+//! separate session key v2 sessions use. That is deliberate: a client that
+//! has pinned the identity (all the app persists for a relay) needs nothing
+//! else to address a borrowed route that may be the only one reachable. The
+//! usual objection to reusing a signing key for key agreement is answered
+//! by what is done with it: only a domain-separated HMAC of the shared
+//! secret is ever exposed (the tag), never a raw DH output or a signature
+//! over attacker-chosen data, and the signing and agreement uses share no
+//! messages.
+//!
 //! What this does not hide: the relay's IP address is not the real site's
 //! (a censor that checks that sees it), and the ClientHello is the
 //! client's TLS library's, not a browser's.
@@ -56,6 +66,9 @@ const EPHEMERAL: usize = 32;
 const MAX_AUTH_RECORDS: usize = 8;
 /// A connection that never proves itself is the real site's, up to this.
 const FORWARD_LIMIT: Duration = Duration::from_secs(600);
+/// ...and closed when the client says nothing for this long, as a web
+/// server closes an idle connection.
+const IDLE_LIMIT: Duration = Duration::from_secs(120);
 const CONNECT_LIMIT: Duration = Duration::from_secs(10);
 
 /// The random of a HelloRetryRequest: not the session's ServerHello.
@@ -198,6 +211,7 @@ pub(crate) struct BorrowedLayer {
     site: String,
     secret: [u8; 32],
     public: [u8; 32],
+    idle: Duration,
 }
 
 impl BorrowedLayer {
@@ -208,7 +222,14 @@ impl BorrowedLayer {
             site,
             secret,
             public,
+            idle: IDLE_LIMIT,
         }
+    }
+
+    #[cfg(test)]
+    fn with_idle(mut self, idle: Duration) -> Self {
+        self.idle = idle;
+        self
     }
 }
 
@@ -216,6 +237,7 @@ impl OuterLayer for BorrowedLayer {
     fn open(&self, client: TcpStream, _deadline: Duration) -> Opened {
         let site = self.site.clone();
         let (secret, public) = (self.secret, self.public);
+        let idle = self.idle;
         Box::pin(async move {
             let upstream = match timeout(CONNECT_LIMIT, TcpStream::connect(&site)).await {
                 Ok(Ok(stream)) => stream,
@@ -223,7 +245,7 @@ impl OuterLayer for BorrowedLayer {
                 _ => return Ok(None),
             };
             let _ = upstream.set_nodelay(true);
-            run(client, upstream, secret, public).await
+            run(client, upstream, secret, public, idle).await
         })
     }
 }
@@ -233,6 +255,7 @@ async fn run(
     upstream: TcpStream,
     secret: [u8; 32],
     public: [u8; 32],
+    idle: Duration,
 ) -> std::io::Result<Option<BoxedStream>> {
     let (mut client_read, client_write) = client.into_split();
     let (mut up_read, mut up_write) = upstream.into_split();
@@ -299,8 +322,9 @@ async fn run(
     let mut raw = false;
     let mut application_records = 0_usize;
     loop {
+        let until = (started + FORWARD_LIMIT).min(Instant::now() + idle);
         let read = tokio::select! {
-            read = timeout_at(started + FORWARD_LIMIT, client_read.read(&mut chunk)) => read,
+            read = timeout_at(until, client_read.read(&mut chunk)) => read,
             _ = &mut down => return Ok(None),
         };
         let read = match read {
@@ -525,9 +549,18 @@ mod tests {
     }
 
     fn start_relay(site: &str) -> (SocketAddr, [u8; 32]) {
+        let (address, public, _) = start_relay_with(site, parity_config());
+        (address, public)
+    }
+
+    fn start_relay_with(
+        site: &str,
+        config: crate::config::RelayConfig,
+    ) -> (SocketAddr, [u8; 32], RelayState) {
         let identity = RelayIdentity::from_seed_bytes([7_u8; 32]);
         let (secret, public) = key_pair_from_seed(&[7_u8; 32]);
-        let state = RelayState::new(parity_config(), identity);
+        let state = RelayState::new(config, identity);
+        let kept = state.clone();
         let layer: Arc<dyn OuterLayer> =
             Arc::new(BorrowedLayer::new(site.to_owned(), secret, public));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -544,7 +577,7 @@ mod tests {
                 let _ = serve_outer(listener, layer, state).await;
             });
         });
-        (address, public)
+        (address, public, kept)
     }
 
     /// Reads TLS records from [stream] until [count] arrived.
@@ -726,6 +759,65 @@ mod tests {
         assert_eq!(
             named.borrowed_info().expect("info")["sni"],
             "cdn.example.com"
+        );
+    }
+
+    #[test]
+    fn an_idle_unproven_connection_is_closed_like_a_web_server_would() {
+        let (site, _) = start_site();
+        let identity = RelayIdentity::from_seed_bytes([7_u8; 32]);
+        let (secret, public) = key_pair_from_seed(&[7_u8; 32]);
+        let state = RelayState::new(parity_config(), identity);
+        let layer: Arc<dyn OuterLayer> =
+            Arc::new(BorrowedLayer::new(site, secret, public).with_idle(Duration::from_secs(1)));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        listener.set_nonblocking(true).expect("nonblocking");
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .expect("runtime");
+            runtime.block_on(async move {
+                let listener = TcpListener::from_std(listener).expect("listener");
+                let _ = serve_outer(listener, layer, state).await;
+            });
+        });
+        let mut stream = connect(address);
+        stream.write_all(&handshake_prefix()).expect("write");
+        read_records(&mut stream, 3);
+        let mut chunk = [0_u8; 64];
+        let started = std::time::Instant::now();
+        // Silence: the relay closes within a few seconds, not minutes.
+        assert_eq!(stream.read(&mut chunk).unwrap_or(0), 0);
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn a_tunnel_cannot_choose_its_own_address_with_x_forwarded_for() {
+        let (site, _) = start_site();
+        let mut config = parity_config();
+        config.trust_forwarded_for = true;
+        let (address, public, state) = start_relay_with(&site, config);
+        let mut stream = connect(address);
+        stream.write_all(&handshake_prefix()).expect("write");
+        read_records(&mut stream, 3);
+        let (auth, key) = marker(&public, &[1; 32]);
+        stream.write_all(&auth).expect("write");
+        read_records(&mut stream, 1);
+        let (c2s, s2c) = tunnel_keys(&key, &[1; 32]);
+        let request = b"GET /health HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 203.0.113.9\r\n\r\n";
+        stream
+            .write_all(&seal_record(&c2s, 0, request))
+            .expect("write");
+        let answer = read_records(&mut stream, 1).remove(0);
+        let text = open_record(&s2c, 0, &answer[HEADER..]).expect("opens");
+        assert!(String::from_utf8_lossy(&text).starts_with("HTTP/1.1 200"));
+        let buckets = state.rate_buckets.lock().unwrap();
+        assert!(
+            !buckets.contains_key("203.0.113.9"),
+            "the client's own X-Forwarded-For was believed"
         );
     }
 

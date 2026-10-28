@@ -81,6 +81,21 @@ const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 /// A decoy connection (proxied) lasts at most this long.
 const DECOY_LIMIT: Duration = Duration::from_secs(300);
 const MAX_DECOY_FILE: u64 = 8 * 1024 * 1024;
+/// nginx's defaults: 100 requests on a connection, 75 s idle.
+const DECOY_KEEPALIVE_REQUESTS: usize = 100;
+const DECOY_KEEPALIVE_IDLE: Duration = Duration::from_secs(75);
+
+/// When this relay's decoy "was last modified" (its start), for
+/// Last-Modified and ETag.
+fn decoy_epoch() -> u64 {
+    static START: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *START.get_or_init(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    })
+}
 
 fn invalid(what: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, what.into())
@@ -119,6 +134,7 @@ impl TlsLayer {
 }
 
 /// A parsed HTTP request head.
+#[derive(Clone)]
 pub(crate) struct Head {
     pub(crate) method: String,
     pub(crate) path: String,
@@ -532,26 +548,69 @@ where
         }
         Decoy::Builtin | Decoy::Dir(_) => {
             let dir = match decoy {
-                Decoy::Dir(dir) => Some(dir.as_path()),
+                Decoy::Dir(dir) => Some(dir.clone()),
                 _ => None,
             };
-            let (status, kind, body) = static_answer(head.as_ref(), dir);
-            let is_head = head.as_ref().is_some_and(|head| head.method == "HEAD");
-            let mut answer = format!(
-                "HTTP/1.1 {status} {}\r\nServer: nginx\r\nDate: {}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                reason(status),
-                http_date(SystemTime::now()),
-                body.len()
-            )
-            .into_bytes();
-            if !is_head {
-                answer.extend_from_slice(&body);
+            let mut head = head;
+            // As nginx does: keep the connection for more requests (75 s
+            // idle, 100 requests), unless the client or the request ends it.
+            for served in 1..=DECOY_KEEPALIVE_REQUESTS {
+                // Files are read off the async threads.
+                let (shown, wanted) = (head.clone(), dir.clone());
+                let Ok((status, kind, body)) = tokio::task::spawn_blocking(move || {
+                    static_answer(shown.as_ref(), wanted.as_deref())
+                })
+                .await
+                else {
+                    return;
+                };
+                let is_head = head.as_ref().is_some_and(|head| head.method == "HEAD");
+                let keep = served < DECOY_KEEPALIVE_REQUESTS
+                    && head.as_ref().is_some_and(|head| {
+                        (head.method == "GET" || head.method == "HEAD")
+                            && !head
+                                .header("connection")
+                                .is_some_and(|value| value.eq_ignore_ascii_case("close"))
+                    });
+                let validators = if status == 200 {
+                    let start = decoy_epoch();
+                    format!(
+                        "Last-Modified: {}\r\nETag: \"{:x}-{:x}\"\r\nAccept-Ranges: bytes\r\n",
+                        http_date(UNIX_EPOCH + Duration::from_secs(start)),
+                        start,
+                        body.len()
+                    )
+                } else {
+                    String::new()
+                };
+                let mut answer = format!(
+                    "HTTP/1.1 {status} {}\r\nServer: nginx\r\nDate: {}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n{validators}Connection: {}\r\n\r\n",
+                    reason(status),
+                    http_date(SystemTime::now()),
+                    body.len(),
+                    if keep { "keep-alive" } else { "close" }
+                )
+                .into_bytes();
+                if !is_head {
+                    answer.extend_from_slice(&body);
+                }
+                let written = timeout(Duration::from_secs(30), async {
+                    stream.write_all(&answer).await?;
+                    stream.flush().await
+                })
+                .await;
+                if !keep || !matches!(written, Ok(Ok(()))) {
+                    let _ = timeout(Duration::from_secs(5), stream.shutdown()).await;
+                    return;
+                }
+                let (end, next) =
+                    read_head(&mut stream, Instant::now() + DECOY_KEEPALIVE_IDLE).await;
+                head = end.and_then(|end| parse_head(&next[..end]));
+                if head.is_none() {
+                    let _ = timeout(Duration::from_secs(5), stream.shutdown()).await;
+                    return;
+                }
             }
-            let _ = timeout(Duration::from_secs(30), async {
-                stream.write_all(&answer).await?;
-                stream.shutdown().await
-            })
-            .await;
         }
     }
 }
@@ -583,7 +642,11 @@ pub(crate) async fn serve_outer(
         let Some(slot) = state.connection_slot(&peer) else {
             continue;
         };
-        let state = state.clone();
+        // Whatever arrives through a tunnel (TLS, a WebSocket, a borrowed
+        // handshake) was written by the client itself: its X-Forwarded-For
+        // is no proxy's word.
+        let mut state = state.clone();
+        state.config.trust_forwarded_for = false;
         let layer = Arc::clone(&layer);
         tokio::spawn(async move {
             let _permit = permit;
@@ -872,15 +935,59 @@ mod tests {
         // The built-in decoy: the secret path without an upgrade gets what
         // any unknown path gets.
         let (address, _) = start_tls(Decoy::Builtin);
-        let unknown = exchange(address, b"GET /nope HTTP/1.1\r\nHost: x\r\n\r\n");
+        let unknown = exchange(
+            address,
+            b"GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
         let secret = exchange(
             address,
-            format!("GET {SECRET} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes(),
+            format!("GET {SECRET} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
         );
         assert!(String::from_utf8_lossy(&unknown).starts_with("HTTP/1.1 404 Not Found"));
         assert_eq!(without_date(&unknown), without_date(&secret));
-        let front = exchange(address, b"GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        let front = exchange(
+            address,
+            b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
         assert!(String::from_utf8_lossy(&front).contains("Welcome to nginx!"));
+    }
+
+    #[test]
+    fn the_builtin_decoy_keeps_the_connection_like_nginx_and_closes_when_asked() {
+        let (address, _) = start_tls(Decoy::Builtin);
+        let mut tls = tls_client(address);
+        let mut answers = Vec::new();
+        for _ in 0..2 {
+            tls.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+                .expect("send");
+            // Read one answer by its Content-Length.
+            let mut head = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                tls.read_exact(&mut byte).expect("head");
+                head.push(byte[0]);
+            }
+            let text = String::from_utf8(head).expect("utf8");
+            let length: usize = text
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .expect("length")
+                .parse()
+                .expect("number");
+            let mut body = vec![0_u8; length];
+            tls.read_exact(&mut body).expect("body");
+            answers.push(text);
+        }
+        for text in &answers {
+            assert!(text.contains("Connection: keep-alive"), "{text}");
+            assert!(text.contains("ETag: \""), "{text}");
+            assert!(text.contains("Accept-Ranges: bytes"), "{text}");
+        }
+        tls.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .expect("send");
+        let mut rest = Vec::new();
+        let _ = tls.read_to_end(&mut rest);
+        assert!(String::from_utf8_lossy(&rest).contains("Connection: close"));
     }
 
     #[test]
@@ -919,7 +1026,21 @@ mod tests {
             relay.tcp,
             &crate::session::tests::relay_public(&relay.state),
         );
+        // An anonymous session is not told.
         client.request(1, &serde_json::json!({"action": "health"}));
+        let (_, anonymous) = client.next_json();
+        assert!(anonymous["stats"]["v2"].get("hidden").is_none(), "{anonymous}");
+        // One that proved a mailbox is.
+        let hash = client.handshake_hash.clone();
+        let proof = crate::owners::tests::prove(
+            &mut client,
+            3,
+            "dev-user",
+            &crate::owners::tests::owner_key(5),
+            &hash,
+        );
+        assert_eq!(proof["ok"], true, "{proof}");
+        client.request(5, &serde_json::json!({"action": "health"}));
         let (_, health) = client.next_json();
         assert_eq!(
             health["stats"]["v2"]["hidden"],

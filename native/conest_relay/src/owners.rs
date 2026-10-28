@@ -21,7 +21,7 @@
 //! takes is end-to-end encrypted). Claims are bounded per address and day,
 //! lapse after a while unused, and new clients claim on first use.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -41,6 +41,9 @@ const DAY_MILLIS: u64 = 24 * 60 * 60 * 1000;
 const AUTH_SKEW_MILLIS: u64 = 5 * 60 * 1000;
 /// v1 proof nonces remembered (each for twice the skew).
 const MAX_REMEMBERED_NONCES: usize = 200_000;
+/// ...of which one address group (an IPv6 /48, or an IPv4 address) may
+/// hold this many.
+const MAX_NONCES_PER_GROUP: usize = 2_048;
 
 #[derive(Debug, Clone)]
 pub(crate) struct OwnerEntry {
@@ -57,6 +60,11 @@ pub(crate) struct Owners {
     pub(crate) claims: HashMap<String, (u64, u32)>,
     /// v1 proof nonces seen, until when.
     pub(crate) nonces: HashMap<String, u64>,
+    /// The same nonces in the order they were remembered (all last the
+    /// same time, so the oldest expire first): (until, key, group).
+    pub(crate) nonce_order: VecDeque<(u64, String, String)>,
+    /// How many nonces each address group holds.
+    pub(crate) nonce_groups: HashMap<String, usize>,
 }
 
 fn today() -> u64 {
@@ -104,8 +112,39 @@ fn verify(key: &[u8; 32], message: &[u8], signature: &str) -> bool {
 }
 
 /// The message a v1 proof signs.
-pub(crate) fn v1_auth_message(action: &str, mailbox: &str, ts: u64, nonce: &str) -> Vec<u8> {
-    format!("{V1_AUTH_LABEL}|{action}|{mailbox}|{ts}|{nonce}").into_bytes()
+pub(crate) fn v1_auth_message(
+    action: &str,
+    mailbox: &str,
+    ts: u64,
+    nonce: &str,
+    extra: &str,
+) -> Vec<u8> {
+    format!("{V1_AUTH_LABEL}|{action}|{mailbox}|{ts}|{nonce}|{extra}").into_bytes()
+}
+
+/// The parameters a v1 proof also signs, so a captured proof cannot be
+/// reused with other leases or limits: `lease_id|limit|wait_ms|lease_ms`
+/// (empty where the request has none).
+pub(crate) fn v1_auth_extra(request: &RelayRequest) -> String {
+    let number = |value: Option<u64>| value.map(|v| v.to_string()).unwrap_or_default();
+    match request {
+        RelayRequest::Fetch { limit, wait_ms, .. } => {
+            format!("|{}|{}|", number(limit.map(|v| v as u64)), number(*wait_ms))
+        }
+        RelayRequest::FetchLeased {
+            limit,
+            wait_ms,
+            lease_ms,
+            ..
+        } => format!(
+            "|{}|{}|{}",
+            number(limit.map(|v| v as u64)),
+            number(*wait_ms),
+            number(*lease_ms)
+        ),
+        RelayRequest::AckLease { lease_id, .. } => format!("{lease_id}|||"),
+        RelayRequest::Store { .. } | RelayRequest::Health => String::new(),
+    }
 }
 
 /// The message a session proof signs.
@@ -304,14 +343,54 @@ impl RelayState {
             (None, Some(given)) => decode_key(given).ok_or("invalid mailbox key")?,
             (None, None) => return Err("a mailbox proof needs its key".to_owned()),
         };
-        self.check_v1_proof(&key, action, mailbox, auth, nonce)?;
+        self.check_v1_proof(&key, action, mailbox, auth, nonce, &v1_auth_extra(request))?;
+        let nonce = nonce.unwrap_or_default();
         if owner.is_none() {
             // Claimed now; past this address's claims, the request still
-            // runs as v1 would.
-            let _ = self.claim_mailbox(mailbox, key, source);
+            // runs as v1 would, and its proof is not remembered (it
+            // claimed nothing).
+            if self.claim_mailbox(mailbox, key, source).is_err() {
+                return Ok(());
+            }
         } else {
             self.touch_owner(mailbox);
         }
+        self.remember_nonce(mailbox, nonce, source)
+    }
+
+    /// Remembers a proof's nonce (only after the proof did its work), for
+    /// twice the skew: bounded in all and per address group, the oldest
+    /// expiring from the front of a time-ordered queue.
+    fn remember_nonce(&self, mailbox: &str, nonce: &str, source: &str) -> Result<(), String> {
+        let now = now_millis();
+        let group = peer_group(source);
+        let mut owners = self.owners.lock().expect("owner lock should not poison");
+        while let Some((until, _, _)) = owners.nonce_order.front() {
+            if *until > now {
+                break;
+            }
+            let (_, key, old_group) = owners.nonce_order.pop_front().expect("front exists");
+            owners.nonces.remove(&key);
+            if let Some(count) = owners.nonce_groups.get_mut(&old_group) {
+                *count -= 1;
+                if *count == 0 {
+                    owners.nonce_groups.remove(&old_group);
+                }
+            }
+        }
+        let seen = format!("{mailbox}|{nonce}");
+        if owners.nonces.contains_key(&seen) {
+            return Err("mailbox proof was used already".to_owned());
+        }
+        if owners.nonces.len() >= MAX_REMEMBERED_NONCES
+            || owners.nonce_groups.get(&group).copied().unwrap_or(0) >= MAX_NONCES_PER_GROUP
+        {
+            return Err("relay is busy; try again".to_owned());
+        }
+        let until = now + 2 * AUTH_SKEW_MILLIS;
+        owners.nonces.insert(seen.clone(), until);
+        owners.nonce_order.push_back((until, seen, group.clone()));
+        *owners.nonce_groups.entry(group).or_insert(0) += 1;
         Ok(())
     }
 
@@ -322,6 +401,7 @@ impl RelayState {
         mailbox: &str,
         auth: &Value,
         nonce: Option<&str>,
+        extra: &str,
     ) -> Result<(), String> {
         let nonce = nonce
             .filter(|nonce| !nonce.is_empty() && nonce.len() <= 64)
@@ -338,19 +418,19 @@ impl RelayState {
             .get("sig")
             .and_then(Value::as_str)
             .ok_or("a mailbox proof needs its signature")?;
-        if !verify(key, &v1_auth_message(action, mailbox, ts, nonce), signature) {
+        if !verify(
+            key,
+            &v1_auth_message(action, mailbox, ts, nonce, extra),
+            signature,
+        ) {
             return Err("mailbox proof does not verify".to_owned());
         }
-        let mut owners = self.owners.lock().expect("owner lock should not poison");
-        owners.nonces.retain(|_, until| *until > now);
-        let seen = format!("{mailbox}|{nonce}");
-        if owners.nonces.contains_key(&seen) {
+        // Seen already? (It is remembered once the proof has done its
+        // work: see [Self::remember_nonce].)
+        let owners = self.owners.lock().expect("owner lock should not poison");
+        if owners.nonces.contains_key(&format!("{mailbox}|{nonce}")) {
             return Err("mailbox proof was used already".to_owned());
         }
-        if owners.nonces.len() >= MAX_REMEMBERED_NONCES {
-            return Err("relay is busy; try again".to_owned());
-        }
-        owners.nonces.insert(seen, now + 2 * AUTH_SKEW_MILLIS);
         Ok(())
     }
 
@@ -396,7 +476,7 @@ pub(crate) const MAX_SESSION_MAILBOXES: usize = 64;
 pub(crate) type ProvedMailboxes = HashSet<String>;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::parity_tests::{parity_config, start_tokio};
     use crate::session::frame_type;
@@ -412,7 +492,7 @@ mod tests {
         )
     }
 
-    fn owner_key(seed: u8) -> SigningKey {
+    pub(crate) fn owner_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
     }
 
@@ -428,7 +508,13 @@ mod tests {
             request["lease_id"] = json!("AAAAAAAAAAAAAAAAAAAAAAAA");
         }
         if let Some(key) = key {
-            let signature = key.sign(&v1_auth_message(action, mailbox, ts, nonce));
+            let extra = match action {
+                "ack_lease" => "AAAAAAAAAAAAAAAAAAAAAAAA|||",
+                "fetch" => "|||",
+                "fetch_leased" => "|||",
+                _ => "",
+            };
+            let signature = key.sign(&v1_auth_message(action, mailbox, ts, nonce, extra));
             request["auth"] = json!({
                 "key": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
                 "ts": ts,
@@ -576,7 +662,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    fn prove(
+    pub(crate) fn prove(
         client: &mut TestClient,
         stream: u32,
         mailbox: &str,
@@ -638,5 +724,123 @@ mod tests {
         let (frame, answer) = second.next_json();
         assert_eq!(frame.kind, frame_type::EVENT);
         assert_eq!(answer["subscribed"], json!(["dev-s"]));
+    }
+
+    #[test]
+    fn a_subscription_loses_a_mailbox_claimed_after_it_began() {
+        let relay = start_tokio(parity_config());
+        let key = relay_public(&relay.state);
+        let mut watcher = TestClient::connect(relay.tcp, &key);
+        watcher.request(1, &json!({"action": "subscribe", "mailboxes": ["dev-late"], "lease_ms": 30000}));
+        let (_, started) = watcher.next_json();
+        assert_eq!(started["subscribed"], json!(["dev-late"]));
+        // The owner claims it afterwards, over another session.
+        let mut owner = TestClient::connect(relay.tcp, &key);
+        let hash = owner.handshake_hash.clone();
+        let answer = prove(&mut owner, 1, "dev-late", &owner_key(5), &hash);
+        assert_eq!(answer["ok"], true, "{answer}");
+        // A store wakes the watcher: it is told, and leases nothing.
+        owner.request(
+            3,
+            &json!({"action": "store", "recipient_device_id": "dev-late",
+                "envelope": {"kind": "direct_message", "messageId": "m-late",
+                "conversationId": "c", "senderAccountId": "a", "senderDeviceId": "s",
+                "recipientDeviceId": "dev-late", "createdAt": "2026-04-16T00:00:00.000Z",
+                "payloadBase64": "aGVsbG8="}}),
+        );
+        let _ = owner.next_json();
+        let (frame, event) = watcher.next_json();
+        assert_eq!(frame.kind, frame_type::EVENT);
+        assert_eq!(event["ok"], false, "{event}");
+        assert_eq!(event["error"], "this mailbox needs its owner's signature");
+        assert!(event.get("messages").is_none(), "{event}");
+        let leased: i64 = relay
+            .state
+            .database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM queue_entries WHERE lease_id IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(leased, 0, "the watcher leased the owner's message");
+    }
+
+    #[test]
+    fn a_proof_that_claimed_nothing_is_not_remembered() {
+        let mut config = parity_config();
+        config.ext.mailbox_claims_per_day = 1;
+        config.max_requests_per_minute = 100_000;
+        let state = RelayState::new(
+            config,
+            crate::identity::RelayIdentity::from_seed_bytes([7_u8; 32]),
+        );
+        let key = owner_key(3);
+        let now = now_millis();
+        let first = send(
+            &state,
+            &v1("fetch", "dev-x", Some(&key), "bm9uY2UtMQ==", now),
+            "198.51.100.7",
+        );
+        assert_eq!(first["ok"], true, "{first}");
+        // The address is out of claims: the request runs unowned, and the
+        // proof is not kept (it claimed nothing), so a retry is no replay.
+        let second = v1("fetch", "dev-y", Some(&key), "bm9uY2UtMg==", now);
+        for _ in 0..3 {
+            let answer = send(&state, &second, "198.51.100.7");
+            assert_eq!(answer["ok"], true, "{answer}");
+        }
+        assert!(state.owner_of("dev-y").is_none());
+        assert_eq!(state.owners.lock().unwrap().nonces.len(), 1);
+    }
+
+    #[test]
+    fn remembered_proofs_are_bounded_per_address_group_and_expire_in_order() {
+        let mut config = parity_config();
+        config.max_requests_per_minute = 1_000_000;
+        let state = RelayState::new(
+            config,
+            crate::identity::RelayIdentity::from_seed_bytes([7_u8; 32]),
+        );
+        let owner = owner_key(1);
+        state
+            .claim_mailbox("dev-o", owner.verifying_key().to_bytes(), "198.51.100.1")
+            .expect("claim");
+        let now = now_millis();
+        let mut busy = 0;
+        for index in 0..(MAX_NONCES_PER_GROUP + 20) {
+            let answer = send(
+                &state,
+                &v1("fetch", "dev-o", Some(&owner), &format!("n{index}"), now),
+                "198.51.100.1",
+            );
+            if answer["error"] == "relay is busy; try again" {
+                busy += 1;
+            }
+        }
+        assert_eq!(busy, 20, "the group's share is its cap");
+        // Another address is not held up by it.
+        let answer = send(
+            &state,
+            &v1("fetch", "dev-o", Some(&owner), "other", now),
+            "198.51.100.2",
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        // Expired proofs leave from the front of the queue.
+        {
+            let mut owners = state.owners.lock().unwrap();
+            for entry in owners.nonce_order.iter_mut() {
+                entry.0 = 1;
+            }
+        }
+        let answer = send(
+            &state,
+            &v1("fetch", "dev-o", Some(&owner), "fresh", now),
+            "198.51.100.1",
+        );
+        assert_eq!(answer["ok"], true, "{answer}");
+        assert!(state.owners.lock().unwrap().nonces.len() <= 2);
     }
 }

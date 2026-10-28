@@ -108,12 +108,25 @@ pub(crate) fn open_request(
     Some((request, keys))
 }
 
-/// The answer, sealed under [keys] with random padding.
-pub(crate) fn seal_response(keys: &ExchangeKeys, response: &[u8]) -> Option<Vec<u8>> {
+/// The answer, sealed under [keys] with random padding. [at_most]: the
+/// reply may not be longer than this (an answer to a request that has no
+/// cookie must not be bigger than the request, or it amplifies); the
+/// padding shrinks to fit, and no reply is sent if even the bare box does
+/// not.
+pub(crate) fn seal_response(
+    keys: &ExchangeKeys,
+    response: &[u8],
+    at_most: Option<usize>,
+) -> Option<Vec<u8>> {
     let mut rng = rand::thread_rng();
     let mut nonce = [0_u8; NONCE];
     rng.fill_bytes(&mut nonce);
-    let pad = rng.gen_range(0..=MAX_REPLY_PAD);
+    let bare = NONCE + 2 + response.len() + TAG;
+    let mut room = MAX_REPLY_PAD;
+    if let Some(limit) = at_most {
+        room = room.min(limit.checked_sub(bare)?);
+    }
+    let pad = rng.gen_range(0..=room);
     let sealed = cipher(&keys.response)
         .encrypt(
             Nonce::from_slice(&nonce),
@@ -128,6 +141,27 @@ pub(crate) fn seal_response(keys: &ExchangeKeys, response: &[u8]) -> Option<Vec<
     Some(out)
 }
 
+/// Key exchanges allowed per second in all, and per source a minute.
+const MAX_EXCHANGES_PER_SECOND: u64 = 2_000;
+
+fn allow_key_exchange(state: &RelayState, peer: SocketAddr) -> bool {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // (second, count): one window for the whole relay.
+    static WINDOW: AtomicU64 = AtomicU64::new(0);
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let second = crate::config::now_millis() / 1_000;
+    if WINDOW.swap(second, Ordering::AcqRel) != second {
+        COUNT.store(0, Ordering::Release);
+    }
+    if COUNT.fetch_add(1, Ordering::AcqRel) >= MAX_EXCHANGES_PER_SECOND {
+        return false;
+    }
+    // Per source, kept apart from every other budget; refusals here never
+    // ban (the source of a datagram can be forged).
+    let key = format!("udp-dh:{}", crate::limits::peer_key(peer.ip()));
+    state.allow_request_banning(&key, false)
+}
+
 /// What to send back for one datagram, sealed or cleartext as it came.
 /// `None`: nothing goes back (refused, invalid, or not even a request).
 pub(crate) fn answer_datagram(
@@ -135,6 +169,11 @@ pub(crate) fn answer_datagram(
     state: &RelayState,
     peer: SocketAddr,
 ) -> Option<Vec<u8>> {
+    // Key exchanges are the costly step on the one UDP thread: a source
+    // that asks too often, or all sources together, are not served.
+    if datagram.len() >= MIN_DATAGRAM && datagram[0] != b'{' && !allow_key_exchange(state, peer) {
+        return None;
+    }
     let sealed = open_request(datagram, &state.identity);
     let response: Value = match &sealed {
         // The wire length counts for the cookie and size rules.
@@ -145,8 +184,10 @@ pub(crate) fn answer_datagram(
         return None;
     }
     let bytes = serde_json::to_vec(&response).ok()?;
+    // A cookie request is answered only with a reply no longer than itself.
+    let at_most = (response["error"] == "udp cookie required").then_some(datagram.len());
     match sealed {
-        Some((_, keys)) => seal_response(&keys, &bytes),
+        Some((_, keys)) => seal_response(&keys, &bytes, at_most),
         None => Some(bytes),
     }
 }

@@ -350,10 +350,13 @@ pub(crate) fn prepare_request(
         .and_then(|value| value.as_str())
         .map(str::to_owned);
     let auth = parsed.get("auth").cloned();
+    // A bearer token is only ever honoured inside an encrypted session:
+    // over cleartext v1 (TCP, UDP, HTTP) anyone on the path could lift it.
     let token = parsed
         .get("token")
         .and_then(|value| value.as_str())
-        .map(str::to_owned);
+        .map(str::to_owned)
+        .filter(|_| session.is_some());
     let mut request: RelayRequest = match serde_json::from_value(parsed) {
         Ok(request) => request,
         Err(error) if datagram => return refuse(format!("invalid request: {error}")),

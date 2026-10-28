@@ -114,7 +114,13 @@ pub(crate) struct Accounts {
     pub(crate) registrations: HashMap<String, (u64, u32)>,
     /// Bytes stored per account this minute: (minute, bytes).
     pub(crate) usage: HashMap<[u8; 32], (u64, u64)>,
+    /// When the accounts were last read from the database (the operator's
+    /// `account remove` and `quota set` write there while the relay runs).
+    pub(crate) loaded_millis: u64,
 }
+
+/// How often a running relay re-reads its accounts.
+const ACCOUNTS_REFRESH_MILLIS: u64 = 5_000;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -269,17 +275,36 @@ impl RelayState {
                 Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?))
             })
             .map_err(|error| format!("reading accounts: {error}"))?;
+        let mut quotas = HashMap::new();
+        for row in rows {
+            let (key, quota) = row.map_err(|error| format!("reading an account: {error}"))?;
+            if let Ok(key) = <[u8; 32]>::try_from(key) {
+                quotas.insert(key, quota.max(0) as u64);
+            }
+        }
         let mut accounts = self
             .accounts
             .lock()
             .expect("account lock should not poison");
-        for row in rows {
-            let (key, quota) = row.map_err(|error| format!("reading an account: {error}"))?;
-            if let Ok(key) = <[u8; 32]>::try_from(key) {
-                accounts.quotas.insert(key, quota.max(0) as u64);
-            }
-        }
+        // Replaced, not merged: a removed account is gone.
+        accounts.quotas = quotas;
+        accounts.loaded_millis = now_millis();
         Ok(())
+    }
+
+    /// Re-reads the accounts when they were read more than a few seconds
+    /// ago, so the operator's removals and quotas apply without a restart.
+    fn refresh_accounts_if_due(&self) {
+        let due = {
+            let accounts = self
+                .accounts
+                .lock()
+                .expect("account lock should not poison");
+            now_millis().saturating_sub(accounts.loaded_millis) >= ACCOUNTS_REFRESH_MILLIS
+        };
+        if due {
+            let _ = self.load_accounts();
+        }
     }
 
     /// What health tells clients about who may use the relay.
@@ -296,6 +321,7 @@ impl RelayState {
         if token.expiry_millis <= now_millis() {
             return None;
         }
+        self.refresh_accounts_if_due();
         let accounts = self
             .accounts
             .lock()
@@ -391,8 +417,10 @@ impl RelayState {
             // Registered already: a refresh.
             Some(quota) => quota,
             None => {
-                self.admit_registration(request)?;
+                // The address's allowance first: an invite is used up only
+                // by a registration that goes through.
                 self.count_registration(source)?;
+                self.admit_registration(request)?;
                 let quota = self.config.ext.account_quota_bytes;
                 {
                     let database = self
@@ -868,6 +896,13 @@ mod tests {
             admin(&path, &["account".into(), "remove".into(), key]).expect("remove"),
             "removed 1 account(s)"
         );
+        // The running relay notices without a restart.
+        let token = refreshed["token"].as_str().expect("token").to_owned();
+        state.accounts.lock().unwrap().loaded_millis = 0;
+        assert!(
+            state.valid_token(&token).is_none(),
+            "a removed account's token still works"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -895,16 +930,95 @@ mod tests {
             )
             .expect("register");
         let token = answer["token"].as_str().expect("token").to_owned();
-        assert_eq!(store(&registered, Some(&token))["stored"], true);
-        assert_eq!(store(&registered, Some("v1.forged"))["ok"], false);
-        // About 250 bytes a store: the second goes past 400 a minute.
+        // Over cleartext v1 a token is not honoured (anyone on the path
+        // could lift it); the policy and quota are the session's.
         assert_eq!(
             store(&registered, Some(&token))["error"],
-            "account quota exceeded"
+            "this relay takes messages from registered accounts only"
+        );
+        assert!(registered.admit_store(Some(&token), 250).is_ok());
+        assert!(registered.admit_store(Some("v1.forged"), 1).is_err());
+        // About 250 bytes a store: the second goes past 400 a minute.
+        assert_eq!(
+            registered.admit_store(Some(&token), 250),
+            Err("account quota exceeded".to_owned())
         );
         // Open (the default): as before.
         let open = state_with(|_| {});
         assert_eq!(store(&open, None)["stored"], true);
+    }
+
+    #[test]
+    fn a_registered_account_stores_inside_a_session() {
+        let mut config = parity_config();
+        config.ext.tier1 = Tier1Policy::Registered;
+        config.ext.registration = RegistrationPolicy::Open;
+        let relay = start_tokio(config);
+        let mut client = TestClient::connect(relay.tcp, &relay_public(&relay.state));
+        let account = SigningKey::from_bytes(&[4_u8; 32]);
+        let hash = client.handshake_hash.clone();
+        client.request(1, &register_request(&account, &hash, json!({})));
+        let (_, answer) = client.next_json();
+        let token = answer["token"].as_str().expect("token").to_owned();
+        let envelope = json!({"kind": "direct_message", "messageId": "m-reg", "senderDeviceId": "dev-a"});
+        client.request(
+            3,
+            &json!({"action": "store", "recipient_device_id": "dev-r", "envelope": envelope}),
+        );
+        let (_, refused) = client.next_json();
+        assert_eq!(refused["ok"], false, "{refused}");
+        client.request(
+            5,
+            &json!({"action": "store", "recipient_device_id": "dev-r", "envelope": envelope, "token": token}),
+        );
+        let (_, stored) = client.next_json();
+        assert_eq!(stored["stored"], true, "{stored}");
+    }
+
+    #[test]
+    fn an_invite_is_not_used_up_by_a_registration_the_address_may_not_make() {
+        let path = std::env::temp_dir().join(format!(
+            "conest-invite-burn-{}-{}.sqlite3",
+            std::process::id(),
+            now_millis()
+        ));
+        let code = admin(
+            &path,
+            &[
+                "invite".into(),
+                "create".into(),
+                "--uses".into(),
+                "40".into(),
+            ],
+        )
+        .expect("invite");
+        let state = state_with(|config| {
+            config.database_path = path.clone();
+            config.ext.registration = RegistrationPolicy::Invite;
+        });
+        let hash = [9_u8; 32];
+        for seed in 0..REGISTRATIONS_PER_DAY as u8 {
+            let account = SigningKey::from_bytes(&[seed + 10; 32]);
+            state
+                .register(
+                    &register_request(&account, &hash, json!({"invite": code})),
+                    &hash,
+                    "198.51.100.1",
+                )
+                .expect("within the day's allowance");
+        }
+        let account = SigningKey::from_bytes(&[99_u8; 32]);
+        let refused = state
+            .register(
+                &register_request(&account, &hash, json!({"invite": code})),
+                &hash,
+                "198.51.100.1",
+            )
+            .unwrap_err();
+        assert!(refused.contains("used up for today"), "{refused}");
+        let listed = admin(&path, &["invite".into(), "list".into()]).expect("list");
+        assert!(listed.contains("uses_left=24"), "burned an invite: {listed}");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

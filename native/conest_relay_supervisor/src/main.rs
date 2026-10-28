@@ -36,7 +36,7 @@ fn run() -> Result<(), String> {
     if let Some(command) = env::args().nth(1)
         && matches!(command.as_str(), "invite" | "account" | "quota")
     {
-        let (binary, arguments) = admin_invocation(env::args().skip(1).collect());
+        let (binary, arguments) = admin_invocation(env::args().skip(1).collect())?;
         let status = Command::new(&binary)
             .args(&arguments)
             .status()
@@ -582,13 +582,32 @@ fn take_option(words: &mut Vec<String>, name: &str) -> Option<String> {
 /// The relay binary and arguments for an operator command (`invite create
 /// [--uses N] [--expires-days D]`, `invite list`, `account list`, `account
 /// remove KEY`, `quota set KEY BYTES`), run against the relay's database.
-fn admin_invocation(mut words: Vec<String>) -> (PathBuf, Vec<String>) {
+///
+/// The directories are never guessed relative to wherever the command is
+/// run from (that would open, or create, some other database): they come
+/// from `--data-dir`/`--bundle-dir`, the environment, or the installer's
+/// absolute defaults (Unix); they must be absolute paths.
+fn admin_invocation(mut words: Vec<String>) -> Result<(PathBuf, Vec<String>), String> {
+    let default = |unix: &str| {
+        if cfg!(unix) {
+            Some(unix.to_owned())
+        } else {
+            None
+        }
+    };
     let data_dir = take_option(&mut words, "--data-dir")
         .or_else(|| env::var("CONEST_RELAY_DATA_DIR").ok())
-        .unwrap_or_else(|| "conest-relay-data".to_owned());
+        .or_else(|| default("/var/lib/conest-relay"))
+        .ok_or("operator commands need --data-dir")?;
     let bundle_dir = take_option(&mut words, "--bundle-dir")
         .or_else(|| env::var("CONEST_RELAY_BUNDLE_DIR").ok())
-        .unwrap_or_else(|| "conest-relay-bundle".to_owned());
+        .or_else(|| default("/opt/conest-relay"))
+        .ok_or("operator commands need --bundle-dir")?;
+    for (name, dir) in [("--data-dir", &data_dir), ("--bundle-dir", &bundle_dir)] {
+        if !Path::new(dir).is_absolute() {
+            return Err(format!("{name} must be an absolute path (got {dir})"));
+        }
+    }
     let binary = PathBuf::from(bundle_dir).join(if cfg!(windows) {
         "conest_relay.exe"
     } else {
@@ -603,7 +622,7 @@ fn admin_invocation(mut words: Vec<String>) -> (PathBuf, Vec<String>) {
             .into_owned(),
     ];
     arguments.extend(words);
-    (binary, arguments)
+    Ok((binary, arguments))
 }
 
 fn spawn_relay(config: &Config) -> Result<Child, String> {
@@ -1147,12 +1166,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn operator_commands_refuse_relative_directories() {
+        let refused = admin_invocation(
+            ["invite", "list", "--data-dir", "data", "--bundle-dir", "/opt/b"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert!(refused.is_err());
+        let refused = admin_invocation(
+            ["invite", "list", "--data-dir", "/srv/d", "--bundle-dir", "./b"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert!(refused.is_err());
+    }
+
+    #[test]
     fn operator_commands_run_the_relay_admin_on_its_database() {
         let (binary, arguments) = admin_invocation(
             ["invite", "create", "--data-dir", "/srv/data", "--uses", "3", "--bundle-dir", "/opt/b"]
                 .map(str::to_owned)
                 .to_vec(),
-        );
+        )
+        .expect("absolute directories");
         assert_eq!(
             binary,
             PathBuf::from("/opt/b").join(if cfg!(windows) {

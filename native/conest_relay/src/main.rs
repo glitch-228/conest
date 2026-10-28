@@ -1595,4 +1595,43 @@ mod tests {
             assert_eq!(health["stats"]["v2"]["udp_sealed"], 1, "{health}");
         }
     }
+
+    #[test]
+    fn a_sealed_cookie_reply_is_never_longer_than_its_request() {
+        use crate::udp_sealed::client_for_tests::seal_request;
+        let state = test_state();
+        let peer: SocketAddr = "198.51.100.50:5000".parse().unwrap();
+        let health = json!({"action": "health"}).to_string();
+        for _ in 0..30 {
+            // The shortest request a cookie is given to: 128 bytes on the wire.
+            let pad = 128 - 62 - health.len();
+            let (datagram, _) = seal_request(&state.identity.noise_public, health.as_bytes(), pad);
+            assert_eq!(datagram.len(), 128);
+            let answer = crate::udp_sealed::answer_datagram(&datagram, &state, peer)
+                .expect("a cookie reply");
+            assert!(
+                answer.len() <= datagram.len(),
+                "{} byte reply to a {} byte request",
+                answer.len(),
+                datagram.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_source_asking_for_too_many_key_exchanges_is_not_served() {
+        use crate::udp_sealed::client_for_tests::seal_request;
+        let mut config = test_config();
+        config.max_requests_per_minute = 40;
+        let state = RelayState::new(config, test_identity());
+        let health = json!({"action": "health", "pad": "x".repeat(100)}).to_string();
+        let (datagram, _) = seal_request(&state.identity.noise_public, health.as_bytes(), 0);
+        let noisy: SocketAddr = "198.51.100.60:5000".parse().unwrap();
+        let answered = (0..200)
+            .filter(|_| crate::udp_sealed::answer_datagram(&datagram, &state, noisy).is_some())
+            .count();
+        assert!(answered <= 45, "{answered} of 200 were served");
+        let quiet: SocketAddr = "198.51.100.61:5000".parse().unwrap();
+        assert!(crate::udp_sealed::answer_datagram(&datagram, &state, quiet).is_some());
+    }
 }

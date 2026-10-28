@@ -119,17 +119,53 @@ impl RelayIdentity {
                 )
             })?;
         }
-        fs::write(path, seed)
-            .map_err(|error| format!("writing identity seed to {}: {error}", path.display()))?;
-        #[cfg(unix)]
+        // Created private from the first byte (not written and then
+        // chmod'd), and never over a file that appeared meanwhile.
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+            use std::io::Write;
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(path).map_err(|error| {
+                format!("creating identity seed at {}: {error}", path.display())
+            })?;
+            file.write_all(&seed).map_err(|error| {
+                format!("writing identity seed to {}: {error}", path.display())
+            })?;
+            file.sync_all().ok();
         }
         Ok(Self::from_seed_bytes(seed))
     }
 
     pub(crate) fn sign(&self, message: &[u8]) -> [u8; 64] {
         self.signing_key.sign(message).to_bytes()
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_identity_seed_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "conest-seed-{}-{}",
+            std::process::id(),
+            crate::config::now_millis()
+        ));
+        let mut config = crate::parity_tests::parity_config();
+        config.identity_seed_path = path.clone();
+        let first = RelayIdentity::load_or_generate(&config).expect("generated");
+        let mode = fs::metadata(&path).expect("file").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        // Loaded again: the same identity.
+        let second = RelayIdentity::load_or_generate(&config).expect("loaded");
+        assert_eq!(first.public_key_b64, second.public_key_b64);
+        let _ = fs::remove_file(&path);
     }
 }

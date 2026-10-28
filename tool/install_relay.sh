@@ -163,6 +163,19 @@ as_root() {
 cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 
+# A value that is safe to write into a root-run script or a config file:
+# plain path characters only.
+safe_value() {
+  case "$1" in
+  '' | *[!A-Za-z0-9._/@:+-]*) return 1 ;;
+  esac
+}
+
+# shq VALUE -> VALUE quoted for sh
+shq() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 valid_port() {
   case "$1" in
   '' | *[!0-9]*) return 1 ;;
@@ -315,11 +328,17 @@ if [ "$NO_HIDDEN" -eq 0 ]; then
     case "$DOMAIN" in
     *[!A-Za-z0-9.-]* | .* | *..*) die "not a domain name: $DOMAIN" ;;
     esac
+    safe_value "$DOMAIN" || die "not a usable domain name: $DOMAIN"
     LE_DIR="/etc/letsencrypt/live/$DOMAIN"
     if [ -z "$TLS_CERT" ] && as_root test -r "$LE_DIR/fullchain.pem"; then
       TLS_CERT="$LE_DIR/fullchain.pem"
       TLS_KEY="$LE_DIR/privkey.pem"
     fi
+    if [ -n "$TLS_CERT" ] || [ -n "$TLS_KEY" ]; then
+      safe_value "$TLS_CERT" && safe_value "$TLS_KEY" ||
+        die "the certificate and key paths may only use letters, digits and . _ / @ : + -"
+    fi
+    safe_value "$DATA_DIR" || die "the data directory may only use letters, digits and . _ / @ : + -"
     if [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] &&
       as_root test -r "$TLS_CERT" && as_root test -r "$TLS_KEY"; then
       HIDDEN=1
@@ -368,8 +387,8 @@ if [ "$HIDDEN" -eq 1 ]; then
     as_root tee /etc/letsencrypt/renewal-hooks/deploy/conest-relay.sh >/dev/null <<HOOK
 #!/bin/sh
 # Refresh the Conest relay's copy of the certificate and restart it.
-install -m 0600 -o "$CERT_OWNER" "$TLS_CERT" "$DATA_DIR/tls/fullchain.pem"
-install -m 0600 -o "$CERT_OWNER" "$TLS_KEY" "$DATA_DIR/tls/privkey.pem"
+install -m 0600 -o $(shq "$CERT_OWNER") $(shq "$TLS_CERT") $(shq "$DATA_DIR/tls/fullchain.pem")
+install -m 0600 -o $(shq "$CERT_OWNER") $(shq "$TLS_KEY") $(shq "$DATA_DIR/tls/privkey.pem")
 systemctl restart conest-relay.service
 HOOK
     as_root chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/conest-relay.sh
@@ -446,7 +465,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=$DATA_DIR
+ReadWritePaths=$DATA_DIR"
+  # The right to bind 443 only when the relay serves TLS there.
+  [ "$HIDDEN" -eq 1 ] && UNIT_USER="$UNIT_USER
 AmbientCapabilities=CAP_NET_BIND_SERVICE"
   as_root tee /etc/systemd/system/conest-relay.service >/dev/null <<EOF
 [Unit]
@@ -497,11 +518,16 @@ say "  Relay id:     $ID"
 say "  Identity key: $KEY"
 say ""
 if [ "$HIDDEN" -eq 1 ]; then
-  HIDDEN_URL="wss://$DOMAIN/$WS_PATH"
-  LINK="$LINK&wss=$(printf '%s' "$HIDDEN_URL" | sed 's#:#%3A#g; s#/#%2F#g')"
-  say "  Hidden:       $HIDDEN_URL"
-  say "                (secret: on 443 the relay looks like an ordinary web site;"
-  say "                 share this only with people who should use the relay)"
+  if [ -n "$WS_PATH" ]; then
+    HIDDEN_URL="wss://$DOMAIN/$WS_PATH"
+    LINK="$LINK&wss=$(printf '%s' "$HIDDEN_URL" | sed 's#:#%3A#g; s#/#%2F#g')"
+    say "  Hidden:       $HIDDEN_URL"
+    say "                (secret: on 443 the relay looks like an ordinary web site;"
+    say "                 share this only with people who should use the relay)"
+  else
+    say "  Hidden:       on 443; the relay made its own secret path (see its log:"
+    say "                journalctl -u conest-relay | grep 'WebSocket path')"
+  fi
 fi
 say "In Conest: Settings > Relays > Add from link, and paste:"
 say "  $LINK"

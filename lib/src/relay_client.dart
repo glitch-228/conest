@@ -194,15 +194,35 @@ class RelayClient {
 
   /// A v1 proof of owning [mailbox] for this request ([nonceBase64] is
   /// its nonce).
+  /// What a v1 proof signs besides the action, mailbox, time and nonce: the
+  /// request's lease and limit parameters (empty where it has none), so a
+  /// captured proof cannot be reused with others. Mirrors the relay's
+  /// `v1_auth_extra`.
+  @visibleForTesting
+  static String v1ProofExtra(String action, Map<String, dynamic> request) {
+    String field(String name) => '${request[name] ?? ''}';
+    return switch (action) {
+      'fetch' => '|${field('limit')}|${field('wait_ms')}|',
+      'fetch_leased' =>
+        '|${field('limit')}|${field('wait_ms')}|${field('lease_ms')}',
+      'ack_lease' => '${field('lease_id')}|||',
+      _ => '',
+    };
+  }
+
   static Future<Map<String, dynamic>> _v1MailboxProof(
     SimpleKeyPair key,
     String action,
     String mailbox,
     String nonceBase64,
+    Map<String, dynamic> request,
   ) async {
     final ts = DateTime.now().millisecondsSinceEpoch;
+    final extra = v1ProofExtra(action, request);
     final signature = await Ed25519().sign(
-      utf8.encode('conest-mailbox-auth-v1|$action|$mailbox|$ts|$nonceBase64'),
+      utf8.encode(
+        'conest-mailbox-auth-v1|$action|$mailbox|$ts|$nonceBase64|$extra',
+      ),
       keyPair: key,
     );
     return {
@@ -706,6 +726,7 @@ class RelayClient {
           action,
           mailbox,
           nonceBase64,
+          signedRequest,
         );
       }
     }
@@ -1107,7 +1128,12 @@ class RelayClient {
       }
     }
     final token = _tokens[expectedIdentityPublicKeyBase64];
-    final outgoing = request['action'] == 'store' && token != null
+    // The token goes with stores (tier 1) and with health (so the relay can
+    // tell a registered user from a passer-by before it says its hidden
+    // addresses).
+    final outgoing =
+        (request['action'] == 'store' || request['action'] == 'health') &&
+            token != null
         ? {...request, 'token': token}
         : request;
     final Map<String, dynamic> body;
