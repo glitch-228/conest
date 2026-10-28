@@ -264,7 +264,7 @@ mod tests {
         // 0.2 (stream 0) + 0.2 * 0.5 (stream 1).
         assert!(mixed.iter().all(|&s| (s - 0.3).abs() < 1e-6));
         // The level shows who speaks, whatever the volume.
-        assert_eq!(mixer.level(1), 0.2);
+        assert!((mixer.level(1) - 0.2).abs() < 1e-6);
         assert!(mixer.set_volume(1, 1.0));
         assert!(mixer.volumes.is_empty());
     }
