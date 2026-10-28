@@ -5754,7 +5754,7 @@ class MessengerController extends ChangeNotifier {
   /// or beside Conest while Online is on.
   bool get _telegramClientAllowed {
     if (_disposed) return false;
-    if (!conestActive) return false;
+    if (!conestActive) return appMode == AppMode.telegramOnly;
     return _snapshot.identity?.connectivity.onlineEnabled ?? true;
   }
 

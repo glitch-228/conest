@@ -6158,4 +6158,7 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get telegramLoadOlder => 'بارگذاری پیام‌های قدیمی‌تر';
+
+  @override
+  String get onbTelegramInstead => 'استفاده به‌عنوان کلاینت تلگرام';
 }

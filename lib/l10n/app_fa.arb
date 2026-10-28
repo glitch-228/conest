@@ -1623,5 +1623,6 @@
   "telegramPermEditOutgoing": "تغییر آنچه می‌فرستید",
   "telegramPermCommands": "افزودن دستورها",
   "telegramDownloads": "دانلودها",
-  "telegramLoadOlder": "بارگذاری پیام‌های قدیمی‌تر"
+  "telegramLoadOlder": "بارگذاری پیام‌های قدیمی‌تر",
+  "onbTelegramInstead": "استفاده به‌عنوان کلاینت تلگرام"
 }

@@ -6145,4 +6145,7 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get telegramLoadOlder => 'Muat pesan lebih lama';
+
+  @override
+  String get onbTelegramInstead => 'Pakai sebagai klien Telegram saja';
 }

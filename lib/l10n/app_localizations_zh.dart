@@ -5890,4 +5890,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get telegramLoadOlder => '加载更早的消息';
+
+  @override
+  String get onbTelegramInstead => '改用作 Telegram 客户端';
 }

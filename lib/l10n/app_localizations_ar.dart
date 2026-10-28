@@ -6285,4 +6285,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get telegramLoadOlder => 'تحميل رسائل أقدم';
+
+  @override
+  String get onbTelegramInstead => 'استخدمه كعميل تيليجرام بدلًا من ذلك';
 }

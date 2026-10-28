@@ -314,6 +314,35 @@ void _telegramControllerTests() {
       expect(engines.last.setParameters!['database_encryption_key'], key);
     });
 
+    test(
+      'Telegram-only mode keeps Conest dormant and the client running',
+      () async {
+        final dir = await tempDirectory();
+        final alice = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          telegramApiKeys: keys,
+          telegramDirectory: () async => dir,
+          tdEngineFactory: () => FakeTdEngine(loggedIn: true),
+        );
+        addTearDown(alice.dispose);
+        await alice.telegram.enable();
+        await until(() => alice.telegram.client?.auth == TgAuth.ready);
+        await alice.setAppMode(AppMode.telegramOnly);
+        expect(alice.conestActive, isFalse);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        // Still running: this mode is the client.
+        expect(alice.telegram.client?.auth, TgAuth.ready);
+        // Another client-only mode stops it; Conest mode with Online off too.
+        await alice.setAppMode(AppMode.xmppOnly);
+        await until(() => alice.telegram.client == null);
+        await alice.setAppMode(AppMode.telegramOnly);
+        await until(() => alice.telegram.client?.auth == TgAuth.ready);
+        await alice.setAppMode(AppMode.conest);
+        await until(() => alice.telegram.client?.auth == TgAuth.ready);
+      },
+    );
+
     test('mods are saved in the vault', () async {
       final vault = _MemoryVaultStore();
       Future<MessengerController> launch() => _createController(

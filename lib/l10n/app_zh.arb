@@ -1623,5 +1623,6 @@
   "telegramPermEditOutgoing": "修改你发送的内容",
   "telegramPermCommands": "添加命令",
   "telegramDownloads": "下载",
-  "telegramLoadOlder": "加载更早的消息"
+  "telegramLoadOlder": "加载更早的消息",
+  "onbTelegramInstead": "改用作 Telegram 客户端"
 }

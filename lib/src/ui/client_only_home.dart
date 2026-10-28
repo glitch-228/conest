@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../telegram/telegram_client.dart';
+
 import '../app_locales.dart';
 import '../conest_theme.dart';
 import '../messenger_controller.dart';
 import '../models.dart';
 import 'app_mode_selector.dart';
 import 'matrix_home_screen.dart';
+import 'telegram_chats_screen.dart';
+import 'telegram_client_panel.dart';
 import 'xmpp_chats_screen.dart';
 
 /// The home screen of a client-only mode (Conest dormant), or null in the
@@ -17,6 +21,10 @@ Widget? clientOnlyHome(MessengerController controller, ConestPalette palette) =>
         palette: palette,
       ),
       AppMode.xmppOnly => XmppHomeScreen(
+        controller: controller,
+        palette: palette,
+      ),
+      AppMode.telegramOnly => TelegramHomeScreen(
         controller: controller,
         palette: palette,
       ),
@@ -43,6 +51,15 @@ class ClientOnlyChoices extends StatelessWidget {
           icon: const Icon(Icons.chat_bubble_outline),
           label: Text(l10n.onbXmppInstead),
         ),
+        if (controller.telegram.supported) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const ValueKey('onboarding-telegram-only'),
+            onPressed: () => controller.setAppMode(AppMode.telegramOnly),
+            icon: const Icon(Icons.send_outlined),
+            label: Text(l10n.onbTelegramInstead),
+          ),
+        ],
       ],
     );
   }
@@ -155,6 +172,74 @@ class XmppHomeScreen extends StatelessWidget {
                             openXmppChat(context, controller, chat.jid),
                       ),
                   ],
+                ),
+        );
+      },
+    );
+  }
+}
+
+/// Telegram-only mode: the account's chats and nothing of Conest.
+class TelegramHomeScreen extends StatelessWidget {
+  const TelegramHomeScreen({
+    super.key,
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = l10nOf(context);
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final service = controller.telegram;
+        final client = service.client;
+        final ready = client?.auth == TgAuth.ready;
+        return Scaffold(
+          backgroundColor: palette.panel,
+          appBar: AppBar(
+            title: const Text('Telegram'),
+            actions: [
+              IconButton(
+                tooltip: l10n.tabSettings,
+                onPressed: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: Text(l10n.tabSettings)),
+                      body: ListView(
+                        padding: const EdgeInsets.all(20),
+                        children: [
+                          TelegramClientPanel(controller: controller),
+                          const SizedBox(height: 24),
+                          AppModeSelector(controller: controller),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                icon: const Icon(Icons.settings_outlined),
+              ),
+            ],
+          ),
+          body: ready
+              ? TelegramChatList(
+                  client: client!,
+                  open: (id) => openTelegramChat(context, controller, id),
+                )
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TelegramClientPanel(controller: controller),
+                      const SizedBox(height: 24),
+                      AppModeSelector(controller: controller),
+                    ],
+                  ),
                 ),
         );
       },

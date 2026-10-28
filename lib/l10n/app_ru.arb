@@ -1623,5 +1623,6 @@
   "telegramPermEditOutgoing": "менять отправляемое",
   "telegramPermCommands": "добавлять команды",
   "telegramDownloads": "Загрузки",
-  "telegramLoadOlder": "Загрузить более старые сообщения"
+  "telegramLoadOlder": "Загрузить более старые сообщения",
+  "onbTelegramInstead": "Использовать как клиент Telegram"
 }

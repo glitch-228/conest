@@ -6158,4 +6158,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get telegramLoadOlder => 'Load older messages';
+
+  @override
+  String get onbTelegramInstead => 'Use as a Telegram client instead';
 }

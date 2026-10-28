@@ -1623,5 +1623,6 @@
   "telegramPermEditOutgoing": "تغيير ما ترسله",
   "telegramPermCommands": "إضافة أوامر",
   "telegramDownloads": "التنزيلات",
-  "telegramLoadOlder": "تحميل رسائل أقدم"
+  "telegramLoadOlder": "تحميل رسائل أقدم",
+  "onbTelegramInstead": "استخدمه كعميل تيليجرام بدلًا من ذلك"
 }

@@ -1623,5 +1623,6 @@
   "telegramPermEditOutgoing": "mengubah yang Anda kirim",
   "telegramPermCommands": "menambah perintah",
   "telegramDownloads": "Unduhan",
-  "telegramLoadOlder": "Muat pesan lebih lama"
+  "telegramLoadOlder": "Muat pesan lebih lama",
+  "onbTelegramInstead": "Pakai sebagai klien Telegram saja"
 }

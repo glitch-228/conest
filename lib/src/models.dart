@@ -5154,6 +5154,9 @@ enum AppMode {
 
   /// A standalone XMPP client (M51): Conest stays dormant.
   xmppOnly,
+
+  /// A standalone Telegram client (M48): Conest stays dormant.
+  telegramOnly,
 }
 
 extension AppModeTraits on AppMode {

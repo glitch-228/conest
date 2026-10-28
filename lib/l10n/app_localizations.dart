@@ -9922,6 +9922,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Load older messages'**
   String get telegramLoadOlder;
+
+  /// Onboarding: use the app as a Telegram client instead.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as a Telegram client instead'**
+  String get onbTelegramInstead;
 }
 
 class _AppLocalizationsDelegate

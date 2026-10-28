@@ -9096,5 +9096,9 @@
   "telegramLoadOlder": "Load older messages",
   "@telegramLoadOlder": {
     "description": "Telegram client: load older messages."
+  },
+  "onbTelegramInstead": "Use as a Telegram client instead",
+  "@onbTelegramInstead": {
+    "description": "Onboarding: use the app as a Telegram client instead."
   }
 }
