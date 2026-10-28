@@ -64,13 +64,32 @@ typedef _ExecuteNative = Pointer<Utf8> Function(Pointer<Utf8>);
 /// (a closed one) are dropped.
 class TdRouter {
   final Map<int, void Function(Map<String, dynamic> object)> _clients = {};
+  final Map<int, void Function()> _lost = {};
 
-  void register(int clientId, void Function(Map<String, dynamic>) handler) =>
-      _clients[clientId] = handler;
+  /// [onLost] runs when the reader died under the client (its pending
+  /// requests cannot be answered any more).
+  void register(
+    int clientId,
+    void Function(Map<String, dynamic>) handler, {
+    void Function()? onLost,
+  }) {
+    _clients[clientId] = handler;
+    if (onLost != null) _lost[clientId] = onLost;
+  }
 
-  void unregister(int clientId) => _clients.remove(clientId);
+  void unregister(int clientId) {
+    _clients.remove(clientId);
+    _lost.remove(clientId);
+  }
 
   int get clients => _clients.length;
+
+  /// Tells every client its answers will not come.
+  void readerDied() {
+    for (final lost in _lost.values.toList()) {
+      lost();
+    }
+  }
 
   /// Hands one raw JSON object from `td_receive` to its client.
   void dispatch(String raw) {
@@ -87,31 +106,126 @@ class TdRouter {
   }
 }
 
-/// The process-wide reader of TDLib's queue: one isolate, started once,
-/// never stopped (killing an isolate blocked inside `td_receive` could free
-/// the string TDLib still owns, and TDLib forbids two receivers).
+/// A running reader: it ends by itself after [requestStop] (within one
+/// receive timeout) or if it crashes; [exited] completes either way.
+class TdReaderHandle {
+  TdReaderHandle({required this.exited, required this.requestStop});
+  final Future<void> exited;
+  final void Function() requestStop;
+}
+
+/// Keeps exactly one reader alive while any TDLib client exists: a dead
+/// reader is started again on the next request, and the reader is stopped
+/// (cleanly, never killed inside `td_receive`) when the last client closes,
+/// so a Telegram that is off costs no wake-ups.
+class TdReaderSupervisor {
+  TdReaderSupervisor(this._spawn, {this.onDied});
+
+  final Future<TdReaderHandle> Function() _spawn;
+
+  /// Called when a reader ends without being asked to.
+  final void Function()? onDied;
+
+  Future<void>? _starting;
+  TdReaderHandle? _handle;
+  Future<void>? _stopping;
+
+  bool get running => _handle != null;
+
+  /// Makes sure a reader runs; waits for one that is stopping first.
+  Future<void> ensure() async {
+    while (_stopping != null) {
+      await _stopping;
+    }
+    return _starting ??= _start();
+  }
+
+  Future<void> _start() async {
+    try {
+      final handle = await _spawn();
+      _handle = handle;
+      unawaited(
+        handle.exited.then((_) {
+          if (!identical(_handle, handle)) return;
+          final asked = _stopping != null;
+          _handle = null;
+          _starting = null;
+          if (!asked) onDied?.call();
+        }),
+      );
+    } catch (_) {
+      _starting = null;
+      rethrow;
+    }
+  }
+
+  /// Stops the reader when no client is left.
+  Future<void> stopIfIdle(int clients) {
+    final handle = _handle;
+    if (clients > 0 || handle == null || _stopping != null) {
+      return _stopping ?? Future.value();
+    }
+    final stopping = _stopping = () async {
+      handle.requestStop();
+      await handle.exited;
+    }();
+    return stopping.whenComplete(() {
+      _stopping = null;
+      if (identical(_handle, handle)) {
+        _handle = null;
+        _starting = null;
+      }
+    });
+  }
+}
+
+/// The process-wide reader of TDLib's queue.
 class _SharedTdReader {
   static final TdRouter router = TdRouter();
-  static Future<void>? _starting;
+  static String? _path;
 
-  static Future<void> ensure(String libraryPath) =>
-      _starting ??= _start(libraryPath);
+  static final TdReaderSupervisor supervisor = TdReaderSupervisor(
+    () => _spawnNative(_path!),
+    onDied: router.readerDied,
+  );
 
-  static Future<void> _start(String libraryPath) async {
+  static Future<void> ensure(String libraryPath) {
+    _path = libraryPath;
+    return supervisor.ensure();
+  }
+
+  static Future<TdReaderHandle> _spawnNative(String libraryPath) async {
     final port = ReceivePort();
     port.listen((message) {
       if (message is String) router.dispatch(message);
     });
-    try {
-      await Isolate.spawn(_readUpdates, (
-        libraryPath,
-        port.sendPort,
-      ), debugName: 'conest-tdlib');
-    } catch (_) {
-      _starting = null;
+    final exitPort = ReceivePort();
+    final stopFlag = calloc<Int32>();
+    final exited = Completer<void>();
+    exitPort.listen((_) {
+      if (!exited.isCompleted) exited.complete();
+      exitPort.close();
       port.close();
+      calloc.free(stopFlag);
+    });
+    try {
+      await Isolate.spawn(
+        _readUpdates,
+        (libraryPath, port.sendPort, stopFlag.address),
+        debugName: 'conest-tdlib',
+        onExit: exitPort.sendPort,
+        onError: exitPort.sendPort,
+      );
+    } catch (_) {
+      port.close();
+      exitPort.close();
+      calloc.free(stopFlag);
       rethrow;
     }
+    return TdReaderHandle(
+      exited: exited.future,
+      requestStop: () => stopFlag.value = 1,
+    );
   }
 }
 
@@ -124,7 +238,7 @@ class NativeTdEngine implements TdEngine {
       _clientId = library.lookupFunction<_CreateNative, _CreateDart>(
         'td_create_client_id',
       )() {
-    _SharedTdReader.router.register(_clientId, _onObject);
+    _SharedTdReader.router.register(_clientId, _onObject, onLost: _onLost);
     // Keep TDLib's own log (it can hold identifiers) off stderr.
     final execute = library.lookupFunction<_ExecuteNative, _ExecuteNative>(
       'td_execute',
@@ -138,6 +252,19 @@ class NativeTdEngine implements TdEngine {
     } finally {
       malloc.free(request);
     }
+  }
+
+  /// Whether libtdjson can be loaded here, without creating a client.
+  static bool isAvailable() {
+    for (final candidate in tdjsonLibraryCandidates()) {
+      try {
+        DynamicLibrary.open(candidate).lookup('td_create_client_id');
+        return true;
+      } catch (_) {
+        // Try the next location.
+      }
+    }
+    return false;
   }
 
   /// Null when libtdjson is not available (tests, builds without it).
@@ -165,6 +292,16 @@ class NativeTdEngine implements TdEngine {
 
   @override
   Stream<Map<String, dynamic>> get updates => _updates.stream;
+
+  /// The reader died: requests in flight will never be answered.
+  void _onLost() {
+    for (final completer in _pending.values.toList()) {
+      if (!completer.isCompleted) {
+        completer.completeError(const TdError(0, 'TDLib reader stopped'));
+      }
+    }
+    _pending.clear();
+  }
 
   void _onObject(Map<String, dynamic> object) {
     final extra = object['@extra'];
@@ -230,6 +367,9 @@ class NativeTdEngine implements TdEngine {
     }
     _closed = true;
     _SharedTdReader.router.unregister(_clientId);
+    unawaited(
+      _SharedTdReader.supervisor.stopIfIdle(_SharedTdReader.router.clients),
+    );
     for (final completer in _pending.values) {
       completer.completeError(const TdError(0, 'closed'));
     }
@@ -238,19 +378,25 @@ class NativeTdEngine implements TdEngine {
   }
 }
 
-/// Background isolate: blocks in `td_receive` and forwards each object.
-/// It is the only caller of `td_receive` in the process.
-void _readUpdates((String, SendPort) arguments) {
-  final (libraryPath, port) = arguments;
-  final library = DynamicLibrary.open(libraryPath);
-  final receive = library.lookupFunction<_ReceiveNative, _ReceiveDart>(
-    'td_receive',
-  );
-  while (true) {
-    final pointer = receive(1.0);
-    // TDLib owns this string until the next td_receive call; it is copied
-    // before that call.
-    if (pointer == nullptr) continue;
-    port.send(pointer.toDartString());
+/// Background isolate: blocks in `td_receive` and forwards each object. It
+/// is the only caller of `td_receive` in the process, and leaves when the
+/// shared stop flag is set (checked once per receive timeout).
+void _readUpdates((String, SendPort, int) arguments) {
+  final (libraryPath, port, flagAddress) = arguments;
+  final stop = Pointer<Int32>.fromAddress(flagAddress);
+  try {
+    final library = DynamicLibrary.open(libraryPath);
+    final receive = library.lookupFunction<_ReceiveNative, _ReceiveDart>(
+      'td_receive',
+    );
+    while (stop.value == 0) {
+      final pointer = receive(1.0);
+      // TDLib owns this string until the next td_receive call; it is copied
+      // before that call.
+      if (pointer == nullptr) continue;
+      port.send(pointer.toDartString());
+    }
+  } catch (_) {
+    // The supervisor sees the exit and starts a new reader when needed.
   }
 }
