@@ -287,7 +287,7 @@ class XmppOmemo {
   }
 
   /// Publishes the bundles again (after pre keys were spent or rotated).
-  Future<void> refreshBundles() async {
+  Future<void> refreshBundles() => _locked(() async {
     final engine = _engine;
     if (engine == null) return;
     if (await engine.maintainKeys()) {
@@ -296,7 +296,7 @@ class XmppOmemo {
         await _publishBundle(version);
       }
     }
-  }
+  });
 
   // ---- Looking up other devices -----------------------------------------
 
@@ -394,6 +394,13 @@ class XmppOmemo {
     for (final version in versions) {
       final ids = await devicesOf(jid, version, refresh: refresh);
       if (ids.isNotEmpty) return version;
+      // An OMEMO 2 list that reads empty while this device already has an
+      // OMEMO 2 session with them is a hiding server or a glitch, not a
+      // reason to fall back to the older, weaker format.
+      if (version == OmemoVersion.v2 &&
+          (_engine?.hasAnySession(version, jid) ?? false)) {
+        return version;
+      }
     }
     return null;
   }

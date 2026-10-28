@@ -232,12 +232,31 @@ void main() {
       await alice.client.sendText(bob.jid, 'first');
       await _until(() => bob.messages(alice.jid).isNotEmpty);
       expect(bob.messages(alice.jid).single.security, XmppSecurity.omemo2);
-      // A contact that only has legacy devices gets legacy, marked as such.
+      // A v2 list that goes missing after a v2 session exists is not a
+      // reason to drop to legacy: nothing is sent.
       server.pep[bob.jid]!.remove('urn:xmpp:omemo:2:devices');
       alice.omemo!.forgetLookups();
-      await alice.client.sendText(bob.jid, 'only legacy secret');
-      await _until(() => bob.messages(alice.jid).length == 2);
-      final legacy = bob.messages(alice.jid).last;
+      await expectLater(
+        alice.client.sendText(bob.jid, 'must not go legacy'),
+        throwsA(anyOf(isA<StateError>(), isA<OmemoNoRecipients>())),
+      );
+      expect(
+        server.received.where(
+          (stanza) =>
+              stanza.name == 'message' &&
+              stanza.attr('to') == bob.jid &&
+              stanza.child('encrypted', OmemoVersion.legacy.namespace) != null,
+        ),
+        isEmpty,
+      );
+      // A contact that only ever had legacy devices gets legacy, marked.
+      final bobby = await person('bobby', legacy: true);
+      server.pep[bobby.jid]!.remove('urn:xmpp:omemo:2:devices');
+      alice.client.startChat(bobby.jid);
+      bobby.client.startChat(alice.jid);
+      await alice.client.sendText(bobby.jid, 'only legacy secret');
+      await _until(() => bobby.messages(alice.jid).isNotEmpty);
+      final legacy = bobby.messages(alice.jid).last;
       expect(legacy.text, 'only legacy secret');
       expect(legacy.security, XmppSecurity.legacyOmemo);
       expect(everythingSent(), isNot(contains('only legacy secret')));
@@ -699,7 +718,7 @@ void main() {
       alice.omemo!.forgetLookups();
       await expectLater(
         alice.client.sendText(bob.jid, 'downgrade me'),
-        throwsA(isA<StateError>()),
+        throwsA(anyOf(isA<StateError>(), isA<OmemoNoRecipients>())),
       );
       expect(everythingSent(), isNot(contains('downgrade me')));
       // The user can still choose plain text.
