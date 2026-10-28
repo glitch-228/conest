@@ -3082,14 +3082,14 @@ class MessengerController extends ChangeNotifier {
 
       final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
       final preference = groupFilePreference(event.groupId, event.eventId);
-      if (!preference.accepted &&
-          manifest.sizeBytes >= GroupFileManifest.onlineAutoDownloadLimit) {
-        throw StateError(
-          'This group file requires an explicit download acceptance when it leaves LAN.',
-        );
-      }
+      // Leaving LAN (Iroh, relays, Tor) needs an explicit acceptance of a
+      // big file; LAN does not.
+      final needsAcceptance =
+          !preference.accepted &&
+          manifest.sizeBytes >= GroupFileManifest.onlineAutoDownloadLimit;
       Object? lastError;
       final irohUsable =
+          !needsAcceptance &&
           adapter != null &&
           _canUseIrohForContact(contact) &&
           _fileBlocksAllowed(contact, TransportKind.iroh, manifest.sizeBytes) &&
@@ -3197,6 +3197,11 @@ class MessengerController extends ChangeNotifier {
           stillActive: () => true,
         );
         if (sent) return;
+      }
+      if (needsAcceptance) {
+        throw StateError(
+          'This group file requires an explicit download acceptance when it leaves LAN.',
+        );
       }
       if (await _groupHistory.fileForPeer(
             event.groupId,

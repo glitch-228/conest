@@ -3859,6 +3859,78 @@ void main() {
   );
 
   test(
+    'a big group file (over the online limit) still reaches a member over LAN',
+    () async {
+      final relay = _FakeRelayClient();
+      final aliceLan = _InProcessLanDirectChannel(host: '192.168.63.10');
+      final bobLan = _InProcessLanDirectChannel(host: '192.168.63.11');
+      addTearDown(aliceLan.stop);
+      addTearDown(bobLan.stop);
+      final aliceRoot = await Directory.systemTemp.createTemp('conest_gfs_a-');
+      final bobRoot = await Directory.systemTemp.createTemp('conest_gfs_b-');
+      addTearDown(() async {
+        if (await aliceRoot.exists()) await aliceRoot.delete(recursive: true);
+        if (await bobRoot.exists()) await bobRoot.delete(recursive: true);
+      });
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.63.10'],
+        lanDirectChannel: aliceLan,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.63.11'],
+        lanDirectChannel: bobLan,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Striped',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.groups.isNotEmpty;
+      }, reason: 'group');
+      final content = Uint8List(50 * 1024 * 1024);
+      for (var i = 0; i < content.length; i += 4099) {
+        content[i] = i & 0xff;
+      }
+      final source = await File(
+        '${aliceRoot.path}/big.bin',
+      ).writeAsBytes(content);
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'big.bin',
+        mimeType: 'application/octet-stream',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      await _waitForIroh(
+        () {
+          unawaited(bob.pollNow());
+          unawaited(alice.pollNow());
+          return bob.groupFileSession(eventId)?.download.state ==
+              GroupFileDownloadState.complete;
+        },
+        reason: 'group file download',
+        timeout: const Duration(seconds: 90),
+      );
+      expect(await File(bob.groupFilePathFor(eventId)!).readAsBytes(), content);
+      expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried some');
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
     'file blocks follow the content refusals: a refused LAN carries none',
     () async {
       final network = _InProcessIrohNetwork();
