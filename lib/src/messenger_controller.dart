@@ -21316,6 +21316,11 @@ class MessengerController extends ChangeNotifier {
       chunkBytes = await _readOutboundAttachmentChunk(state, index);
     } catch (error) {
       if (!stillActive()) return;
+      if (state.servesOwnDevice) {
+        // The file is gone or changed: asked about again, it is looked for
+        // again.
+        _dropOwnDeviceServing(requester.deviceId, attachmentId);
+      }
       setSession(TransferState.failed, error: error.toString());
       if (!state.servesOwnDevice) {
         _updateMessageState(
@@ -34613,7 +34618,17 @@ class MessengerController extends ChangeNotifier {
     }
     final key = _ownServingKey(requester.deviceId, attachmentId);
     final held = _ownServing.remove(key);
-    if (held != null) return _ownServing[key] = held;
+    if (held != null) {
+      // Still the same file in the same place, in a message still here?
+      final kept = messageForAttachment(attachmentId);
+      final path = kept == null || kept.deleted
+          ? null
+          : await attachmentCachePathFor(attachmentId);
+      if (path != null && path == held.sourcePath) {
+        return _ownServing[key] = held;
+      }
+      unawaited(held.closeFile());
+    }
     final message = messageForAttachment(attachmentId);
     final descriptor = message?.attachment;
     final chat = peerDeviceIdForAttachment(attachmentId);

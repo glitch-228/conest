@@ -20816,6 +20816,33 @@ void main() {
         }, reason: 'Bob did not get the file');
       });
 
+      test('serving a file to an own device follows the file and the '
+          'message: both must still be there', () async {
+        final (alice, bob, phone, _, _, _) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        await phone.sendAttachment(
+          contact: phone.contacts.single,
+          bytes: await fileBytes(),
+          fileName: 'gone.bin',
+        );
+        final id = await waitForFile(
+          alice,
+          bobId,
+          'gone.bin',
+          alice,
+          phone,
+          bob,
+        );
+        expect(await phone.ownDeviceServesForTesting(aliceId, id), isTrue);
+        // Asked again: served from the same state.
+        expect(await phone.ownDeviceServesForTesting(aliceId, id), isTrue);
+        // The file leaves the disk: no longer served from a stale path.
+        final path = (await phone.attachmentCachePathFor(id))!;
+        await File(path).delete();
+        expect(await phone.ownDeviceServesForTesting(aliceId, id), isFalse);
+      });
+
       test('a file that reached only the laptop shows on the phone, '
           'fetched from the laptop', () async {
         final (alice, bob, phone, network, relay, advance) = await linkedPair();
