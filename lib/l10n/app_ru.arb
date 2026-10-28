@@ -1654,5 +1654,6 @@
   "xmppUnconfirmedMsg": "С нового устройства, которое вы не подтвердили.",
   "telegramPluginConfirmTitle": "Установить {name}?",
   "telegramPluginNoPermissions": "ничего (ничего не может)",
-  "telegramPluginInstallButton": "Установить"
+  "telegramPluginInstallButton": "Установить",
+  "xmppEditNotApplied": "Правка этого сообщения не применена: её нельзя проверить."
 }

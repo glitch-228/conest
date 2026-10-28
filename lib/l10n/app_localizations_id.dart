@@ -6247,4 +6247,8 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get telegramPluginInstallButton => 'Pasang';
+
+  @override
+  String get xmppEditNotApplied =>
+      'Suntingan pesan ini tidak diterapkan: tidak bisa diperiksa.';
 }

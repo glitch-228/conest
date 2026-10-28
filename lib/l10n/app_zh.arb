@@ -1654,5 +1654,6 @@
   "xmppUnconfirmedMsg": "来自你尚未确认的新设备。",
   "telegramPluginConfirmTitle": "安装 {name}？",
   "telegramPluginNoPermissions": "无（它什么也做不了）",
-  "telegramPluginInstallButton": "安装"
+  "telegramPluginInstallButton": "安装",
+  "xmppEditNotApplied": "此消息的修改未应用：无法验证。"
 }

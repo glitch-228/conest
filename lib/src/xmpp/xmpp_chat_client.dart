@@ -646,7 +646,11 @@ class XmppChatClient {
         _update(
           (chats) => chats.updateMessage(
             chatJid,
-            (m) => room ? m.stanzaId == target : m.id == target,
+            (m) =>
+                (room ? m.stanzaId == target : m.id == target) &&
+                // A reaction to an encrypted message must itself be
+                // encrypted (and authenticated), like a retraction.
+                (m.security == XmppSecurity.plain || _authenticated(security)),
             (m) {
               final next = <String, Set<String>>{
                 for (final MapEntry(:key, :value) in m.reactions.entries)
@@ -680,6 +684,20 @@ class XmppChatClient {
                 // encrypted: a server could forge a plain one.
                 (m.security == XmppSecurity.plain || _authenticated(security)),
             (m) => m.copyWith(text: boundedXmppText(body), editedAt: at),
+          ),
+        );
+        // A correction that cannot be trusted (plain, or legacy OMEMO, which
+        // cannot authenticate it) is not applied; the message says so.
+        _update(
+          (chats) => chats.updateMessage(
+            chatJid,
+            (m) =>
+                m.id == target &&
+                m.from == sender &&
+                !m.retracted &&
+                m.security != XmppSecurity.plain &&
+                !_authenticated(security),
+            (m) => m.copyWith(securityNote: xmppEditNotAppliedNote),
           ),
         );
       }

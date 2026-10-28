@@ -6380,4 +6380,8 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get telegramPluginInstallButton => 'تثبيت';
+
+  @override
+  String get xmppEditNotApplied =>
+      'لم يُطبَّق تعديل هذه الرسالة: تعذّر التحقق منه.';
 }

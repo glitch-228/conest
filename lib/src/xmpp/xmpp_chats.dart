@@ -1,5 +1,9 @@
 import 'dart:math';
 
+/// The note kept on a message whose correction was refused because it could
+/// not be authenticated.
+const String xmppEditNotAppliedNote = 'edit-not-applied';
+
 /// Where an outgoing XMPP message got to.
 enum XmppMessageState { sending, sent, delivered, read, failed }
 

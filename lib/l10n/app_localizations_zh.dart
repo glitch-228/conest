@@ -5984,4 +5984,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get telegramPluginInstallButton => '安装';
+
+  @override
+  String get xmppEditNotApplied => '此消息的修改未应用：无法验证。';
 }

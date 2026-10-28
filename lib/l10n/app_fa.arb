@@ -1654,5 +1654,6 @@
   "xmppUnconfirmedMsg": "از دستگاه جدیدی که تأیید نکرده‌اید.",
   "telegramPluginConfirmTitle": "{name} نصب شود؟",
   "telegramPluginNoPermissions": "هیچ (کاری نمی‌تواند بکند)",
-  "telegramPluginInstallButton": "نصب"
+  "telegramPluginInstallButton": "نصب",
+  "xmppEditNotApplied": "ویرایش این پیام اعمال نشد: قابل بررسی نبود."
 }

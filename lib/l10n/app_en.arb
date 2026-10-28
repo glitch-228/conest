@@ -9218,5 +9218,9 @@
   "telegramPluginInstallButton": "Install",
   "@telegramPluginInstallButton": {
     "description": "Telegram plugin: confirm install button."
+  },
+  "xmppEditNotApplied": "An edit of this message was not applied: it could not be checked.",
+  "@xmppEditNotApplied": {
+    "description": "XMPP: an edit of an encrypted message was ignored."
   }
 }

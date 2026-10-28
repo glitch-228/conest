@@ -353,6 +353,11 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 300));
       expect(bob.messages(alice.jid).single.text, 'original words');
+      // The refused edit is flagged on the message.
+      expect(
+        bob.messages(alice.jid).single.securityNote,
+        xmppEditNotAppliedNote,
+      );
       // The real, encrypted correction is accepted.
       await alice.client.correct(bob.jid, id, 'corrected words');
       await _until(
@@ -603,6 +608,19 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 300));
       expect(bob.messages(alice.jid).single.retracted, isFalse);
+      // A plain reaction to an encrypted message is not taken either.
+      server.inject(
+        plainEdit(alice.jid, bob.jid, 'x2', [
+          XmppElement(
+            'reactions',
+            xmlns: XmppNs.reactions,
+            attributes: {'id': id},
+            children: [XmppElement('reaction', text: '!')],
+          ),
+        ]),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(bob.messages(alice.jid).single.reactions, isEmpty);
       // A reaction travels encrypted, too.
       await bob.client.react(alice.jid, id, {'x'});
       await bob.client.sendText(alice.jid, 'so the reply path exists');

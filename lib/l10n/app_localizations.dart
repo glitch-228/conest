@@ -10090,6 +10090,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Install'**
   String get telegramPluginInstallButton;
+
+  /// XMPP: an edit of an encrypted message was ignored.
+  ///
+  /// In en, this message translates to:
+  /// **'An edit of this message was not applied: it could not be checked.'**
+  String get xmppEditNotApplied;
 }
 
 class _AppLocalizationsDelegate

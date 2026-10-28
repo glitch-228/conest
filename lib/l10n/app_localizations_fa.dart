@@ -6255,4 +6255,8 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get telegramPluginInstallButton => 'نصب';
+
+  @override
+  String get xmppEditNotApplied =>
+      'ویرایش این پیام اعمال نشد: قابل بررسی نبود.';
 }

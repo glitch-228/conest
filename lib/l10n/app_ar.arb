@@ -1654,5 +1654,6 @@
   "xmppUnconfirmedMsg": "من جهاز جديد لم تؤكده.",
   "telegramPluginConfirmTitle": "تثبيت {name}؟",
   "telegramPluginNoPermissions": "لا شيء (لا يستطيع فعل أي شيء)",
-  "telegramPluginInstallButton": "تثبيت"
+  "telegramPluginInstallButton": "تثبيت",
+  "xmppEditNotApplied": "لم يُطبَّق تعديل هذه الرسالة: تعذّر التحقق منه."
 }

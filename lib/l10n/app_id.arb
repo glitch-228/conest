@@ -1654,5 +1654,6 @@
   "xmppUnconfirmedMsg": "Dari perangkat baru yang belum Anda konfirmasi.",
   "telegramPluginConfirmTitle": "Pasang {name}?",
   "telegramPluginNoPermissions": "tidak ada (tidak bisa berbuat apa-apa)",
-  "telegramPluginInstallButton": "Pasang"
+  "telegramPluginInstallButton": "Pasang",
+  "xmppEditNotApplied": "Suntingan pesan ini tidak diterapkan: tidak bisa diperiksa."
 }

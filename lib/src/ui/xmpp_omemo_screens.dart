@@ -58,6 +58,9 @@ bool xmppShowsLock(XmppChat chat) =>
 /// What a message shows instead of (or beside) its text, if anything.
 String? xmppSecurityNote(BuildContext context, XmppChatMessage message) {
   final l10n = l10nOf(context);
+  if (message.securityNote == xmppEditNotAppliedNote) {
+    return l10n.xmppEditNotApplied;
+  }
   return switch (message.security) {
     XmppSecurity.unreadable => l10n.xmppUnreadable,
     XmppSecurity.untrusted => l10n.xmppUntrustedMsg,

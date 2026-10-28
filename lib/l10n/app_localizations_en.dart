@@ -6254,4 +6254,8 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get telegramPluginInstallButton => 'Install';
+
+  @override
+  String get xmppEditNotApplied =>
+      'An edit of this message was not applied: it could not be checked.';
 }

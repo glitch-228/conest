@@ -6383,4 +6383,8 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get telegramPluginInstallButton => 'Установить';
+
+  @override
+  String get xmppEditNotApplied =>
+      'Правка этого сообщения не применена: её нельзя проверить.';
 }
