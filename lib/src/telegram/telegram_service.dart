@@ -30,11 +30,16 @@ class TelegramService extends ChangeNotifier {
     this.readBridge,
     this.writeBridge,
     this.bridgeOut,
+    this.probe,
   }) : _engineFactory = engineFactory;
 
   /// Conest's own api_id and api_hash; null in builds without them.
   final TelegramApiKeys? keys;
   final TdEngine? Function() _engineFactory;
+
+  /// Whether TDLib can be loaded, asked without creating a client (a probe
+  /// client would stay registered with the reader).
+  final bool Function()? probe;
 
   /// Where TDLib keeps its database and files.
   final Future<Directory> Function() directory;
@@ -91,7 +96,9 @@ class TelegramService extends ChangeNotifier {
   /// TDLib. Without them the client is hidden.
   bool get supported {
     if (keys == null) return false;
-    return _engineAvailable ??= (_probe = _engineFactory()) != null;
+    return _engineAvailable ??= probe != null
+        ? probe!()
+        : (_probe = _engineFactory()) != null;
   }
 
   TelegramClient? get client => _client;
@@ -124,8 +131,20 @@ class TelegramService extends ChangeNotifier {
     return base64.encode(List.generate(32, (_) => random.nextInt(256)));
   }
 
+  Future<void> _serial = Future.value();
+
+  /// Runs start/stop/disable one after another: a new TDLib client must not
+  /// open the database while the old one is still closing.
+  Future<T> _locked<T>(Future<T> Function() action) {
+    final result = _serial.then((_) => action());
+    _serial = result.then<void>((_) {}, onError: (Object _) {});
+    return result;
+  }
+
   /// Starts the client if it is enabled and not running.
-  Future<void> start() async {
+  Future<void> start() => _locked(_start);
+
+  Future<void> _start() async {
     final account = readAccount();
     final keys = this.keys;
     if (_client != null || keys == null || account?['enabled'] != true) return;
@@ -153,7 +172,9 @@ class TelegramService extends ChangeNotifier {
 
   /// Stops the client but keeps the session (it signs in again at once on
   /// the next start).
-  Future<void> stop() async {
+  Future<void> stop() => _locked(_stop);
+
+  Future<void> _stop() async {
     final client = _client;
     if (client == null) return;
     _client = null;
@@ -169,7 +190,9 @@ class TelegramService extends ChangeNotifier {
 
   /// Signs out of Telegram, deletes TDLib's database and files here and
   /// forgets the key.
-  Future<void> disable() async {
+  Future<void> disable() => _locked(_disable);
+
+  Future<void> _disable() async {
     final client = _client;
     if (client != null && client.auth == TgAuth.ready) {
       try {
@@ -179,7 +202,7 @@ class TelegramService extends ChangeNotifier {
         log?.call('Telegram: log out failed: $error');
       }
     }
-    await stop();
+    await _stop();
     try {
       final root = await directory();
       final folder = Directory(p.join(root.path, 'telegram'));

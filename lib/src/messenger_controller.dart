@@ -608,6 +608,7 @@ class MessengerController extends ChangeNotifier {
        _telegramNetwork = telegramNetwork ?? const TelegramNetwork(),
        _discordNetwork = discordNetwork ?? const DiscordNetwork(),
        _telegramApiKeys = telegramApiKeys ?? TelegramApiKeys.fromEnvironment(),
+       _tdEngineIsDefault = tdEngineFactory == null,
        _tdEngineFactory = tdEngineFactory ?? NativeTdEngine.tryCreate,
        _telegramDirectoryProvider =
            telegramDirectory ?? path_provider.getApplicationSupportDirectory,
@@ -732,6 +733,7 @@ class MessengerController extends ChangeNotifier {
   final DiscordNetwork _discordNetwork;
   final TelegramApiKeys? _telegramApiKeys;
   final TdEngine? Function() _tdEngineFactory;
+  final bool _tdEngineIsDefault;
   final Future<Directory> Function() _telegramDirectoryProvider;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
@@ -5852,6 +5854,7 @@ class MessengerController extends ChangeNotifier {
   TelegramService get telegram => _telegramService ??= TelegramService(
     keys: _telegramApiKeys,
     engineFactory: _tdEngineFactory,
+    probe: _tdEngineIsDefault ? NativeTdEngine.isAvailable : null,
     directory: _telegramDirectoryProvider,
     readAccount: () => _snapshot.carrierAccounts['telegramClient'],
     writeAccount: _writeTelegramAccount,

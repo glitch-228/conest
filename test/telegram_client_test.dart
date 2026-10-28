@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -658,6 +659,65 @@ void main() {
     });
   });
 
+  group('stopping and starting', () {
+    test('a start during a close waits: one TDLib client at a time', () async {
+      var live = 0;
+      var maxLive = 0;
+      var created = 0;
+      final service = TelegramService(
+        keys: _keys,
+        engineFactory: () {
+          created++;
+          return _SlowCloseEngine(
+            onOpen: () {
+              live++;
+              if (live > maxLive) maxLive = live;
+            },
+            onClosed: () => live--,
+          );
+        },
+        directory: () async => Directory.systemTemp,
+        readAccount: () => {'enabled': true, 'dbKey': _dbKey},
+        writeAccount: (_) async {},
+        readMods: () => null,
+        writeMods: (_) {},
+      );
+      await service.start();
+      await until(() => service.client?.auth == TgAuth.ready);
+      // Online toggled off and on again in a blink, nobody awaiting.
+      unawaited(service.stop());
+      unawaited(service.start());
+      unawaited(service.stop());
+      unawaited(service.start());
+      await service.start();
+      await until(() => service.client?.auth == TgAuth.ready);
+      expect(maxLive, 1);
+      expect(created, greaterThanOrEqualTo(2));
+      expect(live, 1);
+      service.dispose();
+    });
+
+    test('probing support creates no client', () {
+      var created = 0;
+      final service = TelegramService(
+        keys: _keys,
+        engineFactory: () {
+          created++;
+          return FakeTdEngine();
+        },
+        probe: () => true,
+        directory: () async => Directory.systemTemp,
+        readAccount: () => null,
+        writeAccount: (_) async {},
+        readMods: () => null,
+        writeMods: (_) {},
+      );
+      addTearDown(service.dispose);
+      expect(service.supported, isTrue);
+      expect(created, 0);
+    });
+  });
+
   group('the bridge respects mods', () {
     test('messages hidden by the user are not relayed', () async {
       final engine = FakeTdEngine(loggedIn: true)
@@ -730,4 +790,26 @@ void main() {
       expect(counts.length, maxTelegramReactions);
     });
   });
+}
+
+/// A fake whose close takes a while, like TDLib closing its database.
+class _SlowCloseEngine extends FakeTdEngine {
+  _SlowCloseEngine({required this.onOpen, required this.onClosed})
+    : super(loggedIn: true) {
+    onOpen();
+  }
+
+  final void Function() onOpen;
+  final void Function() onClosed;
+  bool _counted = true;
+
+  @override
+  Future<void> close() async {
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await super.close();
+    if (_counted) {
+      _counted = false;
+      onClosed();
+    }
+  }
 }
