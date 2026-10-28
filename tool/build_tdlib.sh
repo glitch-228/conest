@@ -17,7 +17,10 @@ output=$(realpath -m "$2")
 
 cache_dir=${CONEST_TDLIB_CACHE:-$HOME/.cache/conest-tdlib}
 cached="$cache_dir/$target-$COMMIT"
-if [ -s "$cached" ]; then
+# A cached build is used only if it still matches the hash written when it
+# was built (a poisoned or damaged cache entry is rebuilt, not shipped).
+if [ -s "$cached" ] && [ -s "$cached.sha256" ] &&
+  (cd "$cache_dir" && sha256sum --check --status "$(basename "$cached").sha256"); then
   mkdir -p "$(dirname "$output")"
   cp "$cached" "$output"
   echo "Reused TDLib $VERSION for $target from $cached"
@@ -45,4 +48,5 @@ mkdir -p "$(dirname "$output")" "$cache_dir"
 cp "$work/build/libtdjson.so" "$output"
 strip --strip-unneeded "$output" || true
 cp "$output" "$cached"
+(cd "$cache_dir" && sha256sum "$(basename "$cached")" > "$(basename "$cached").sha256")
 echo "Built TDLib $VERSION for $target at $output"

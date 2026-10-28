@@ -19,10 +19,6 @@ env:
   # Must ship Dart >= 3.11.4 to match pubspec.yaml. Bump together with the
   # CI workflow when changing the toolchain.
   FLUTTER_VERSION: "3.41.9"
-  # Conest's own Telegram registration (my.telegram.org); empty until the
-  # secrets exist, and then the Telegram client stays hidden.
-  CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
-  CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
 
 jobs:
   prepare:
@@ -167,10 +163,6 @@ jobs:
             gperf \
             zlib1g-dev \
             libssl-dev
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/conest-tdlib
-          key: tdlib-${{ runner.os }}-${{ hashFiles('tool/build_tdlib.sh') }}
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -203,6 +195,9 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
       - name: Build Linux bundle
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter config --enable-linux-desktop
           flutter build linux --release \
@@ -212,8 +207,8 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
-            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
-            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH} \
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}" \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
       - name: Stage Linux bundle
         shell: bash
@@ -225,7 +220,9 @@ jobs:
           tool/build_lyrebird.sh linux-x64 "$stage/lyrebird"
           cp -a build/linux/x64/release/bundle/. "$stage/"
           # TDLib for the Telegram client (hidden without Conest's keys).
-          tool/build_tdlib.sh linux-x64 "$stage/lib/libtdjson.so"
+          # Always built here from the pinned source, never from a cache.
+          CONEST_TDLIB_CACHE="$RUNNER_TEMP/tdlib" \
+            tool/build_tdlib.sh linux-x64 "$stage/lib/libtdjson.so"
           # The Flutter engine ships with its debug sections.
           strip --strip-debug "$stage"/lib/*.so
           cp target/release/conest_updater "$stage/conest_updater"
@@ -282,6 +279,9 @@ jobs:
         run: flutter pub get
       - name: Build Windows bundle
         shell: bash
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter config --enable-windows-desktop
           flutter build windows --release \
@@ -291,8 +291,8 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
-            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
-            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH} \
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}" \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
       - name: Stage Windows bundle
         shell: bash
@@ -400,6 +400,9 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
       - name: Build APK
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter build apk --release \
             --target-platform android-arm64 \
@@ -409,8 +412,8 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
-            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
-            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH} \
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}" \
             --dart-define=CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${CONEST_RELEASE_MANIFEST_PUBLIC_KEY}
       - name: Stage APK
         shell: bash

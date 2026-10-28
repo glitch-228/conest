@@ -27,10 +27,6 @@ permissions:
 
 env:
   FLUTTER_VERSION: "3.41.9"
-  # Conest's own Telegram registration (my.telegram.org); empty until the
-  # secrets exist, and then the Telegram client stays hidden.
-  CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
-  CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
   DEBUG_TAG: debug-${{ github.run_number }}-${{ github.sha }}
 
 jobs:
@@ -523,6 +519,9 @@ jobs:
       - name: Build Tor's pluggable transports
         run: tool/build_lyrebird.sh android-arm64 build/app/lyrebirdJniLibs/arm64-v8a/liblyrebird.so
       - name: Build isolated debug APK
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter build apk --debug --target-platform android-arm64 \
             --dart-define=CONEST_BUILD_TAG=${DEBUG_TAG} \
@@ -531,8 +530,8 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
-            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
-            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH} \
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}" \
             --dart-define=CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME=true
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-debug.apk \
@@ -613,6 +612,9 @@ jobs:
             --target-dir build/linux/x64/profile/conest_native_target \
             transfer::tests
       - name: Build Linux debug bundle
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter config --enable-linux-desktop
           # Profile, not debug: compiled ahead of time like what users run,
@@ -626,8 +628,8 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
-            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
-            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}"
           tool/build_lyrebird.sh linux-x64 build/linux/x64/profile/bundle/lyrebird
           tool/build_tdlib.sh linux-x64 build/linux/x64/profile/bundle/lib/libtdjson.so
           mkdir -p dist-stage/conest-debug-linux-x64 dist
@@ -690,6 +692,9 @@ jobs:
       # (aws-lc, ring, zstd...) and both rebuilt them every run.
       - name: Build Windows debug bundle
         shell: bash
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter config --enable-windows-desktop
           # Profile, as on Linux: lab numbers from what users run.
@@ -700,8 +705,8 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
-            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
-            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}"
           tool/build_lyrebird.sh windows-x64 build/windows/x64/runner/Profile/lyrebird.exe
           mkdir -p dist-stage/conest-debug-windows-x64 dist
           cp -a build/windows/x64/runner/Profile/. dist-stage/conest-debug-windows-x64/
