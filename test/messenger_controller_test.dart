@@ -1561,12 +1561,14 @@ void main() {
     () async {
       final relay = _FakeRelayClient();
       final recorder = _RecordingPlatformBridge();
-      var clock = DateTime(2026, 10, 26, 23, 30);
+      // The real clock while pairing (it checks clock skew), then set
+      // hours of the same day and the next.
+      DateTime? clock;
       final alice = await _createController(
         relayClient: relay,
         displayName: 'Alice',
         platformBridge: recorder,
-        nowProvider: () => clock,
+        nowProvider: () => clock ?? DateTime.now(),
       );
       final bob = await _createController(
         relayClient: relay,
@@ -1586,12 +1588,14 @@ void main() {
       _ShowCall? shownFor(String text) =>
           recorder.shown.where((c) => c.body.endsWith(text)).firstOrNull;
 
+      final today = DateTime.now();
+      clock = DateTime(today.year, today.month, today.day, 23, 30);
       // Quiet hours (22:00 to 07:00): shown, without sound.
       await alice.updateQuietHours(const QuietHours(enabled: true));
       await bob.sendMessage(contact: bob.contacts.single, body: 'at night');
       await settle();
       expect(shownFor('at night')?.silent, isTrue);
-      clock = DateTime(2026, 10, 27, 12);
+      clock = DateTime(today.year, today.month, today.day + 1, 12);
       await bob.sendMessage(contact: bob.contacts.single, body: 'at noon');
       await settle();
       expect(shownFor('at noon')?.silent, isFalse);
