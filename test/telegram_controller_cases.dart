@@ -183,4 +183,156 @@ void _telegramControllerTests() {
       expect(alice.telegramBotConfig, isNull);
     });
   });
+
+  group('Telegram client', () {
+    final keys = TelegramApiKeys.parse(
+      '424242',
+      'abcdef0123456789abcdef0123456789',
+    );
+
+    Future<Directory> tempDirectory() async {
+      final dir = await Directory.systemTemp.createTemp('conest-tg-');
+      addTearDown(() => dir.delete(recursive: true));
+      return dir;
+    }
+
+    Future<void> until(bool Function() done) async {
+      for (var i = 0; i < 300 && !done(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(done(), isTrue);
+    }
+
+    test('is hidden without keys or without TDLib', () async {
+      final noKeys = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'A',
+        tdEngineFactory: () => FakeTdEngine(),
+      );
+      addTearDown(noKeys.dispose);
+      expect(noKeys.telegram.supported, isFalse);
+      await expectLater(noKeys.telegram.enable(), throwsStateError);
+      final noEngine = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'B',
+        telegramApiKeys: keys,
+      );
+      addTearDown(noEngine.dispose);
+      expect(noEngine.telegram.supported, isFalse);
+      expect(noEngine.telegram.enabled, isFalse);
+    });
+
+    test('signs in, survives a restart, follows Online, logs out', () async {
+      final dir = await tempDirectory();
+      final vault = _MemoryVaultStore();
+      final engines = <FakeTdEngine>[];
+      Future<MessengerController> launch({bool loggedIn = false}) async {
+        final controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          vaultStore: vault,
+          displayName: 'Alice',
+          telegramApiKeys: keys,
+          telegramDirectory: () async => dir,
+          tdEngineFactory: () {
+            final engine = FakeTdEngine(loggedIn: loggedIn)..addChat(10, 'Bob');
+            engines.add(engine);
+            return engine;
+          },
+        );
+        return controller;
+      }
+
+      final alice = await launch();
+      await alice.telegram.enable();
+      final client = alice.telegram.client!;
+      await until(() => client.auth == TgAuth.waitPhone);
+      final key = engines.last.setParameters!['database_encryption_key'];
+      expect((key as String).length, greaterThan(40));
+      expect(
+        engines.last.setParameters!['database_directory'],
+        startsWith(dir.path),
+      );
+      await client.submitPhone('+15550001');
+      await client.submitCode('12345');
+      await until(() => client.auth == TgAuth.ready);
+      await until(() => client.chats.containsKey(10));
+      alice.dispose();
+
+      // The next launch starts it again with the same database key.
+      final again = await launch(loggedIn: true);
+      addTearDown(again.dispose);
+      expect(again.telegram.enabled, isTrue);
+      await until(() => again.telegram.client?.auth == TgAuth.ready);
+      expect(engines.last.setParameters!['database_encryption_key'], key);
+
+      // Online off stops it; on starts it.
+      await again.updateGlobalConnectivity(
+        again.identity!.connectivity.copyWith(onlineEnabled: false),
+      );
+      await until(() => again.telegram.client == null);
+      expect(again.telegram.enabled, isTrue);
+      await again.updateGlobalConnectivity(
+        again.identity!.connectivity.copyWith(onlineEnabled: true),
+      );
+      await until(() => again.telegram.client?.auth == TgAuth.ready);
+
+      // Removing it logs out, deletes TDLib's files and forgets the key.
+      final files = Directory('${dir.path}/telegram/db')
+        ..createSync(recursive: true);
+      File('${files.path}/td.binlog').writeAsStringSync('x');
+      final engine = engines.last;
+      await again.telegram.disable();
+      expect(engine.requests.map((r) => r['@type']), contains('logOut'));
+      expect(Directory('${dir.path}/telegram').existsSync(), isFalse);
+      expect(again.telegram.enabled, isFalse);
+      expect(again.telegram.client, isNull);
+    });
+
+    test('turning it on again keeps the database key', () async {
+      final dir = await tempDirectory();
+      final engines = <FakeTdEngine>[];
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        telegramApiKeys: keys,
+        telegramDirectory: () async => dir,
+        tdEngineFactory: () {
+          final engine = FakeTdEngine();
+          engines.add(engine);
+          return engine;
+        },
+      );
+      addTearDown(alice.dispose);
+      await alice.telegram.enable();
+      await until(
+        () => engines.isNotEmpty && engines.last.setParameters != null,
+      );
+      final key = engines.last.setParameters!['database_encryption_key'];
+      await alice.telegram.stop();
+      await alice.telegram.enable();
+      await until(() => engines.last.setParameters != null);
+      expect(engines.last.setParameters!['database_encryption_key'], key);
+    });
+
+    test('mods are saved in the vault', () async {
+      final vault = _MemoryVaultStore();
+      Future<MessengerController> launch() => _createController(
+        relayClient: _FakeRelayClient(),
+        vaultStore: vault,
+        displayName: 'Alice',
+        telegramApiKeys: keys,
+        tdEngineFactory: () => FakeTdEngine(),
+      );
+      final alice = await launch();
+      alice.telegram.mods.hiddenWords = ['spam'];
+      alice.telegram.mods.install('{"id":"p","name":"P"}');
+      await alice.telegram.saveMods();
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      alice.dispose();
+      final again = await launch();
+      addTearDown(again.dispose);
+      expect(again.telegram.mods.hiddenWords, ['spam']);
+      expect(again.telegram.mods.plugins.single.id, 'p');
+    });
+  });
 }

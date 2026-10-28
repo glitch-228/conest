@@ -93,8 +93,11 @@ import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
+import 'telegram/td_engine.dart';
+import 'telegram/telegram_api_keys.dart';
 import 'telegram/telegram_bot_api.dart';
 import 'telegram/telegram_carrier.dart';
+import 'telegram/telegram_service.dart';
 import 'xmpp/xmpp_carrier.dart';
 import 'xmpp/xmpp_chat_client.dart';
 import 'xmpp/xmpp_chats.dart';
@@ -592,8 +595,15 @@ class MessengerController extends ChangeNotifier {
     EnergyPolicy? energyPolicy,
     XmppNetwork? xmppNetwork,
     TelegramNetwork? telegramNetwork,
+    TelegramApiKeys? telegramApiKeys,
+    TdEngine? Function()? tdEngineFactory,
+    Future<Directory> Function()? telegramDirectory,
   }) : _xmppNetwork = xmppNetwork ?? const XmppNetwork(),
        _telegramNetwork = telegramNetwork ?? const TelegramNetwork(),
+       _telegramApiKeys = telegramApiKeys ?? TelegramApiKeys.fromEnvironment(),
+       _tdEngineFactory = tdEngineFactory ?? NativeTdEngine.tryCreate,
+       _telegramDirectoryProvider =
+           telegramDirectory ?? path_provider.getApplicationSupportDirectory,
        _groupCallMediaOverride = groupCallMedia,
        _groupCallLinkPolicy = groupCallLinkPolicy,
        _vaultStore = vaultStore,
@@ -712,6 +722,9 @@ class MessengerController extends ChangeNotifier {
   bool _torApiResolved;
   final XmppNetwork _xmppNetwork;
   final TelegramNetwork _telegramNetwork;
+  final TelegramApiKeys? _telegramApiKeys;
+  final TdEngine? Function() _tdEngineFactory;
+  final Future<Directory> Function() _telegramDirectoryProvider;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -762,6 +775,7 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(appMode: mode);
     await _persist('App mode: ${mode.name}.');
     _syncXmppChats();
+    _syncTelegramClient();
     if (_snapshot.identity == null || wasActive == conestActive) return;
     if (conestActive) {
       await _startConestRuntime();
@@ -4653,6 +4667,7 @@ class MessengerController extends ChangeNotifier {
       _createMatrixTransport();
       unawaited(_restoreMatrixClient());
       _startXmppChats();
+      _syncTelegramClient();
       await VoiceMessageService.cleanupAbandonedRecordings();
       await _recoverScheduledMessageTransitions();
       await _retireBundledRelayRoutes();
@@ -5697,6 +5712,62 @@ class MessengerController extends ChangeNotifier {
     _telegramChannel = channel;
     await registerCarrierTransport(adapter, advertise: advertise);
   }
+
+  // Telegram client (M30): the user's own account through TDLib, beside
+  // Conest's chats or alone in Telegram-only mode. The session lives in
+  // TDLib's database on this device and is never copied elsewhere.
+
+  /// The Telegram client service; the client is hidden unless
+  /// [TelegramService.supported].
+  TelegramService get telegram => _telegramService ??= TelegramService(
+    keys: _telegramApiKeys,
+    engineFactory: _tdEngineFactory,
+    directory: _telegramDirectoryProvider,
+    readAccount: () => _snapshot.carrierAccounts['telegramClient'],
+    writeAccount: _writeTelegramAccount,
+    readMods: () => _snapshot.networkChats['telegramMods'],
+    writeMods: _writeTelegramMods,
+    languageCode: Platform.localeName.split(RegExp('[_-]')).first,
+    log: (line) => appendDebugLog(line),
+  )..addListener(notifyListeners);
+  TelegramService? _telegramService;
+
+  Future<void> _writeTelegramAccount(Map<String, Object?>? account) async {
+    final accounts = {..._snapshot.carrierAccounts};
+    if (account == null) {
+      accounts.remove('telegramClient');
+    } else {
+      accounts['telegramClient'] = account;
+    }
+    _snapshot = _snapshot.copyWith(carrierAccounts: accounts);
+    await _persist('Telegram client ${account == null ? 'removed' : 'on'}.');
+  }
+
+  void _writeTelegramMods(Map<String, Object?> mods) {
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'telegramMods': mods},
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
+  /// Whether the Telegram client may connect: alone in Telegram-only mode,
+  /// or beside Conest while Online is on.
+  bool get _telegramClientAllowed {
+    if (_disposed) return false;
+    if (!conestActive) return false;
+    return _snapshot.identity?.connectivity.onlineEnabled ?? true;
+  }
+
+  /// Starts or stops the Telegram client to match the mode and Online.
+  void _syncTelegramClient() {
+    if (!telegram.enabled) return;
+    if (_telegramClientAllowed) {
+      unawaited(telegram.start());
+    } else if (telegram.client != null) {
+      unawaited(telegram.stop());
+    }
+  }
+
 
   // XMPP chats (M51 B1): the account's chats beside Conest's, or alone in
   // XMPP-only mode. Its own connection and resource, so pausing the
@@ -11243,6 +11314,7 @@ class MessengerController extends ChangeNotifier {
     }
     await _applyGlobalConnectivityState();
     _syncXmppChats();
+    _syncTelegramClient();
     if ((matrixPolicyChanged && _snapshot.matrixSession != null) ||
         carrierPolicyChanged) {
       // Contacts learn whether to address this device over each carrier.
@@ -37684,6 +37756,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_closeBitchatIdentity());
     unawaited(_stopNostrDirect());
     unawaited(_stopXmppChats());
+    _telegramService?.dispose();
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());

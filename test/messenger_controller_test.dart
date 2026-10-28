@@ -124,6 +124,10 @@ import 'support/fake_rns_bus.dart';
 import 'support/fake_tor.dart';
 import 'support/fake_xmpp_server.dart';
 import 'support/fake_telegram_bots.dart';
+import 'package:conest/src/telegram/td_engine.dart';
+import 'package:conest/src/telegram/telegram_api_keys.dart';
+import 'package:conest/src/telegram/telegram_client.dart';
+import 'support/fake_td_engine.dart';
 import 'package:conest/src/telegram/telegram_bot_api.dart';
 import 'package:conest/src/telegram/telegram_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_carrier.dart';
@@ -1164,6 +1168,9 @@ Future<MessengerController> _createController({
   bool keepErrorHistory = false,
   XmppNetwork? xmppNetwork,
   TelegramNetwork? telegramNetwork,
+  TelegramApiKeys? telegramApiKeys,
+  TdEngine? Function()? tdEngineFactory,
+  Future<Directory> Function()? telegramDirectory,
 }) async {
   final controller = MessengerController(
     keepErrorHistory: keepErrorHistory,
@@ -1172,6 +1179,10 @@ Future<MessengerController> _createController({
     // No real Telegram is ever contacted from tests (an empty hub: every
     // token is refused).
     telegramNetwork: telegramNetwork ?? _unreachableTelegramNetwork,
+    // The Telegram client is off unless a test gives it keys and an engine.
+    telegramApiKeys: telegramApiKeys,
+    tdEngineFactory: tdEngineFactory ?? () => null,
+    telegramDirectory: telegramDirectory,
     energyPolicy: energyPolicy,
     torApi: torApi,
     bitchatConnector: bitchatConnector,
