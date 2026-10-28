@@ -36,6 +36,8 @@ use crate::v1::RelayRequest;
 
 pub(crate) const V1_AUTH_LABEL: &str = "conest-mailbox-auth-v1";
 pub(crate) const V2_AUTH_LABEL: &[u8] = b"conest-mailbox-auth-v2";
+/// What the device's long-term key signs to vouch for a mailbox's owner key.
+pub(crate) const DEVICE_VOUCH_LABEL: &[u8] = b"conest-mailbox-device-v1";
 const DAY_MILLIS: u64 = 24 * 60 * 60 * 1000;
 /// How far a v1 proof's time may be from the relay's.
 const AUTH_SKEW_MILLIS: u64 = 5 * 60 * 1000;
@@ -48,6 +50,10 @@ const MAX_NONCES_PER_GROUP: usize = 2_048;
 #[derive(Debug, Clone)]
 pub(crate) struct OwnerEntry {
     pub(crate) key: [u8; 32],
+    /// The device's long-term signing key, once the owner vouched for the
+    /// link inside a session (never learned over cleartext v1): what a
+    /// sender compares with the contact's key, without ever seeing it.
+    pub(crate) device_key: Option<[u8; 32]>,
     /// The day (since the epoch) it was last used.
     pub(crate) used_day: u64,
 }
@@ -178,6 +184,8 @@ impl RelayState {
                  );",
             )
             .map_err(|error| format!("initializing mailbox owners: {error}"))?;
+        // Older databases lack the column; adding it twice is harmless.
+        let _ = database.execute("ALTER TABLE mailbox_owners ADD COLUMN device_key BLOB", []);
         let lapsed = today().saturating_sub(self.config.ext.owner_idle_days);
         database
             .execute(
@@ -186,7 +194,7 @@ impl RelayState {
             )
             .map_err(|error| format!("dropping lapsed owners: {error}"))?;
         let mut statement = database
-            .prepare("SELECT mailbox, auth_key, used_day FROM mailbox_owners")
+            .prepare("SELECT mailbox, auth_key, used_day, device_key FROM mailbox_owners")
             .map_err(|error| format!("reading mailbox owners: {error}"))?;
         let rows = statement
             .query_map([], |row| {
@@ -194,18 +202,20 @@ impl RelayState {
                     row.get::<_, String>(0)?,
                     row.get::<_, Vec<u8>>(1)?,
                     row.get::<_, i64>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
                 ))
             })
             .map_err(|error| format!("reading mailbox owners: {error}"))?;
         let mut owners = self.owners.lock().expect("owner lock should not poison");
         for row in rows {
-            let (mailbox, key, used_day) =
+            let (mailbox, key, used_day, device_key) =
                 row.map_err(|error| format!("reading a mailbox owner: {error}"))?;
             if let Ok(key) = <[u8; 32]>::try_from(key) {
                 owners.by_mailbox.insert(
                     mailbox,
                     OwnerEntry {
                         key,
+                        device_key: device_key.and_then(|bytes| <[u8; 32]>::try_from(bytes).ok()),
                         used_day: used_day.max(0) as u64,
                     },
                 );
@@ -290,7 +300,14 @@ impl RelayState {
             counted.1 += 1;
             owners
                 .by_mailbox
-                .insert(mailbox.to_owned(), OwnerEntry { key, used_day: day });
+                .insert(
+                    mailbox.to_owned(),
+                    OwnerEntry {
+                        key,
+                        device_key: None,
+                        used_day: day,
+                    },
+                );
         }
         let database = self
             .database
@@ -463,6 +480,27 @@ impl RelayState {
         if !verify(&key, &v2_auth_message(handshake_hash, mailbox), signature) {
             return Err("mailbox proof does not verify".to_owned());
         }
+        // The device's long-term key vouching for this owner key (only
+        // ever sent inside a session): checked before anything changes.
+        let device_key = match (
+            request.get("device_key").and_then(Value::as_str),
+            request.get("device_sig").and_then(Value::as_str),
+        ) {
+            (Some(given), Some(signature)) => {
+                let device = decode_key(given).ok_or("invalid device key")?;
+                let mut message = DEVICE_VOUCH_LABEL.to_vec();
+                message.extend_from_slice(&(mailbox.len() as u16).to_be_bytes());
+                message.extend_from_slice(mailbox.as_bytes());
+                message.extend_from_slice(&key);
+                message.extend_from_slice(&self.identity.signing_key.verifying_key().to_bytes());
+                if !verify(&device, &message, signature) {
+                    return Err("device vouch does not verify".to_owned());
+                }
+                Some(device)
+            }
+            (None, None) => None,
+            _ => return Err("a device vouch needs its key and signature".to_owned()),
+        };
         match self.owner_of(mailbox) {
             Some(owner) if owner == key => self.touch_owner(mailbox),
             Some(_) => return Err("mailbox is claimed by another key".to_owned()),
@@ -470,7 +508,57 @@ impl RelayState {
                 self.claim_mailbox(mailbox, key, source)?;
             }
         }
+        if let Some(device) = device_key {
+            self.vouch_device(mailbox, device)?;
+        }
         Ok(mailbox.to_owned())
+    }
+
+    /// Records the device key behind [mailbox]'s owner key. The first
+    /// vouch wins; a different one later is refused.
+    fn vouch_device(&self, mailbox: &str, device: [u8; 32]) -> Result<(), String> {
+        {
+            let mut owners = self.owners.lock().expect("owner lock should not poison");
+            let Some(entry) = owners.by_mailbox.get_mut(mailbox) else {
+                return Ok(());
+            };
+            match entry.device_key {
+                Some(known) if known == device => return Ok(()),
+                Some(_) => return Err("mailbox is vouched for by another device key".to_owned()),
+                None => entry.device_key = Some(device),
+            }
+        }
+        let database = self
+            .database
+            .lock()
+            .expect("relay database lock should not poison");
+        database
+            .execute(
+                "UPDATE mailbox_owners SET device_key = ?1 WHERE mailbox = ?2",
+                params![device.to_vec(), mailbox],
+            )
+            .map_err(|error| format!("recording a device vouch: {error}"))?;
+        Ok(())
+    }
+
+    /// Answers a sender's "does this mailbox belong to [expected]'s
+    /// device?" without telling it any key: `matches`, `unclaimed` (nobody
+    /// vouched yet) or `other`.
+    pub(crate) fn vouch_status(&self, mailbox: &str, expected: Option<[u8; 32]>) -> &'static str {
+        let lapsed = today().saturating_sub(self.config.ext.owner_idle_days);
+        let owners = self.owners.lock().expect("owner lock should not poison");
+        match owners
+            .by_mailbox
+            .get(mailbox)
+            .filter(|entry| entry.used_day >= lapsed)
+        {
+            None => "unclaimed",
+            Some(entry) => match (entry.device_key, expected) {
+                (None, _) => "unclaimed",
+                (Some(known), Some(wanted)) if known == wanted => "matches",
+                _ => "other",
+            },
+        }
     }
 }
 
@@ -848,28 +936,72 @@ pub(crate) mod tests {
         assert!(state.owners.lock().unwrap().nonces.len() <= 2);
     }
 
+    fn prove_vouched(
+        client: &mut TestClient,
+        stream: u32,
+        mailbox: &str,
+        key: &SigningKey,
+        device: &SigningKey,
+        identity_public: &[u8; 32],
+    ) -> Value {
+        let hash = client.handshake_hash.clone();
+        let signature = key.sign(&v2_auth_message(&hash, mailbox));
+        let mut vouch = DEVICE_VOUCH_LABEL.to_vec();
+        vouch.extend_from_slice(&(mailbox.len() as u16).to_be_bytes());
+        vouch.extend_from_slice(mailbox.as_bytes());
+        vouch.extend_from_slice(&key.verifying_key().to_bytes());
+        vouch.extend_from_slice(identity_public);
+        client.request(
+            stream,
+            &json!({
+                "action": "mailbox_auth",
+                "mailbox": mailbox,
+                "auth_key": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+                "signature": BASE64_STANDARD.encode(signature.to_bytes()),
+                "device_key": BASE64_STANDARD.encode(device.verifying_key().to_bytes()),
+                "device_sig": BASE64_STANDARD.encode(device.sign(&vouch).to_bytes()),
+            }),
+        );
+        client.next_json().1
+    }
+
     #[test]
-    fn anyone_may_ask_who_owns_a_mailbox() {
-        let state = state();
-        let none = send(
-            &state,
-            &json!({"action": "mailbox_owner", "recipient_device_id": "dev-q"}),
-            "198.51.100.3",
-        );
-        assert_eq!(none["ok"], true, "{none}");
-        assert!(none.get("owner").is_none(), "{none}");
-        let owner = owner_key(4);
-        state
-            .claim_mailbox("dev-q", owner.verifying_key().to_bytes(), "198.51.100.1")
-            .expect("claim");
-        let answer = send(
-            &state,
-            &json!({"action": "mailbox_owner", "recipient_device_id": "dev-q"}),
-            "198.51.100.3",
-        );
-        assert_eq!(
-            answer["owner"],
-            BASE64_STANDARD.encode(owner.verifying_key().to_bytes())
-        );
+    fn senders_ask_whether_a_mailbox_is_vouched_for_without_being_told_a_key() {
+        let relay = start_tokio(parity_config());
+        let key = relay_public(&relay.state);
+        let identity_public = relay.state.identity.signing_key.verifying_key().to_bytes();
+        let device = owner_key(40);
+        let ask = |client: &mut TestClient, stream: u32, expected: Option<&SigningKey>| {
+            let mut request = json!({"action": "mailbox_owner", "recipient_device_id": "dev-q"});
+            if let Some(expected) = expected {
+                request["expected_key"] =
+                    json!(BASE64_STANDARD.encode(expected.verifying_key().to_bytes()));
+            }
+            client.request(stream, &request);
+            client.next_json().1
+        };
+        let mut asker = TestClient::connect(relay.tcp, &key);
+        assert_eq!(ask(&mut asker, 1, Some(&device))["vouch"], "unclaimed");
+        // The device claims with a derived key and vouches for it.
+        let mut owner = TestClient::connect(relay.tcp, &key);
+        let answer = prove_vouched(&mut owner, 1, "dev-q", &owner_key(4), &device, &identity_public);
+        assert_eq!(answer["ok"], true, "{answer}");
+        let matches = ask(&mut asker, 3, Some(&device));
+        assert_eq!(matches["vouch"], "matches", "{matches}");
+        assert!(!matches.to_string().contains(&BASE64_STANDARD.encode(device.verifying_key().to_bytes())));
+        assert_eq!(ask(&mut asker, 5, Some(&owner_key(41)))["vouch"], "other");
+        assert_eq!(ask(&mut asker, 7, None)["vouch"], "other");
+        // A second vouch from another device key is refused.
+        let mut thief = TestClient::connect(relay.tcp, &key);
+        let refused = prove_vouched(&mut thief, 1, "dev-q", &owner_key(4), &owner_key(42), &identity_public);
+        assert_eq!(refused["error"], "mailbox is vouched for by another device key");
+        // A vouch that does not verify (signed for another relay) is refused.
+        let mut forged = TestClient::connect(relay.tcp, &key);
+        let refused = prove_vouched(&mut forged, 1, "dev-z", &owner_key(5), &device, &[9_u8; 32]);
+        assert_eq!(refused["error"], "device vouch does not verify");
+        // Over cleartext v1 nothing is told.
+        let line = json!({"action": "mailbox_owner", "recipient_device_id": "dev-q"}).to_string();
+        let v1 = crate::v1::handle_request_bytes(line.as_bytes(), line.len(), &relay.state, "198.51.100.3");
+        assert_eq!(v1["error"], "mailbox_owner needs an encrypted session");
     }
 }

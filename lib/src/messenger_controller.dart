@@ -29538,7 +29538,8 @@ class MessengerController extends ChangeNotifier {
       port: relay.port,
       expectedIdentityPublicKeyBase64: key,
       accountSecret: base64Decode(
-        me.signingPrivateKeyBase64 ?? me.privateKeyBase64,
+        me.signingPrivateKeyBase64 ??
+            (throw StateError('This installation has no signing key.')),
       ),
       invite: invite,
       password: password,
@@ -29686,10 +29687,11 @@ class MessengerController extends ChangeNotifier {
     // Relays that keep mailbox owners get this device's proof, and those
     // that take registered accounts only, its token (M26).
     if (identity case final me?) {
-      RelayClient.registerMailboxSecret(
-        me.deviceId,
-        base64Decode(me.signingPrivateKeyBase64 ?? me.privateKeyBase64),
-      );
+      // Only the Ed25519 signing seed is ever used for this (the other
+      // private key is an X25519 one, not to be used as a signing seed).
+      if (me.signingPrivateKeyBase64 case final seed?) {
+        RelayClient.registerMailboxSecret(me.deviceId, base64Decode(seed));
+      }
       RelayClient.setRelayTokens(_snapshot.relayTokens);
       _refreshRelayTokenIfDue(route);
       _syncCircumvention();
@@ -29764,22 +29766,22 @@ class MessengerController extends ChangeNotifier {
   }
 
   /// "Contacts vouch" (M26): on a relay that keeps mailbox owners, the
-  /// recipient's mailbox must belong to the signing key this device knows
-  /// for the contact. A stranger who claimed it first (the relay cannot
-  /// tell the device id's real holder) makes the relay refused for this
-  /// contact: mail left there would be the squatter's to read or drop.
-  /// Unclaimed mailboxes, relays that keep no owners, and contacts whose
-  /// key is unknown pass; an unanswered query passes too (it is asked
-  /// again after an hour).
+  /// recipient's mailbox must be vouched for by the signing key this device
+  /// knows for them (a contact's, or a group member's). The relay answers
+  /// `matches`, `unclaimed` or `other` and never tells a key; `other` means
+  /// a stranger claimed the mailbox first, and the relay is not used for
+  /// this recipient (mail left there would be the squatter's to drop).
+  /// Relays without owners or sessions, recipients whose key is unknown,
+  /// and unanswered questions pass. `matches` is remembered for an hour,
+  /// `unclaimed` for five minutes (a squatter may come later).
   Future<void> _checkMailboxVouched(
     PeerEndpoint route,
     String recipientDeviceId,
     String? relayKey,
   ) async {
     if (route.kind != PeerRouteKind.relay || relayKey == null) return;
-    final contact = _contactByDeviceId(recipientDeviceId);
-    final expected = contact?.signingPublicKeyBase64;
-    if (expected == null || expected.isEmpty) return;
+    final expected = _signingKeyKnownFor(recipientDeviceId);
+    if (expected == null) return;
     if (RelayClient.sessionInfoFor(route.host, route.port)?.mailboxAuth !=
         true) {
       return;
@@ -29787,35 +29789,59 @@ class MessengerController extends ChangeNotifier {
     final cacheKey = '${route.routeKey}|$recipientDeviceId';
     final now = DateTime.now();
     final seen = _mailboxVouched[cacheKey];
-    if (seen != null && now.difference(seen.at) < const Duration(hours: 1)) {
+    if (seen != null && now.difference(seen.at) < seen.keep) {
       if (!seen.ok) throw StateError(_squattedMessage(route));
       return;
     }
-    final String? owner;
+    final String? word;
     try {
-      owner = await _relayClient.mailboxOwner(
+      word = await _relayClient.mailboxVouch(
         host: route.host,
         port: route.port,
-        protocol: route.protocol,
         recipientDeviceId: recipientDeviceId,
+        expectedSigningKeyBase64: expected,
         expectedIdentityPublicKeyBase64: relayKey,
       );
     } on Object {
       return;
     }
-    final ok = owner == null || owner == expected;
+    if (word == null) return;
+    final ok = word != 'other';
     if (_mailboxVouched.length >= 256) {
       _mailboxVouched.remove(_mailboxVouched.keys.first);
     }
-    _mailboxVouched[cacheKey] = (ok: ok, at: now);
+    _mailboxVouched[cacheKey] = (
+      ok: ok,
+      at: now,
+      keep: word == 'unclaimed'
+          ? const Duration(minutes: 5)
+          : const Duration(hours: 1),
+    );
     if (!ok) throw StateError(_squattedMessage(route));
   }
 
-  String _squattedMessage(PeerEndpoint route) =>
-      'The recipient\'s mailbox on ${route.label} belongs to another key; '
-      'not using this relay for them.';
+  /// The signing key known for [deviceId]: a contact's, else a group
+  /// member's who is not a contact.
+  String? _signingKeyKnownFor(String deviceId) {
+    final contactKey = _contactByDeviceId(deviceId)?.signingPublicKeyBase64;
+    if (contactKey != null && contactKey.isNotEmpty) return contactKey;
+    for (final group in _snapshot.groups) {
+      for (final member in group.memberProfiles) {
+        if (member.deviceId == deviceId &&
+            member.signingPublicKeyBase64?.isNotEmpty == true) {
+          return member.signingPublicKeyBase64;
+        }
+      }
+    }
+    return null;
+  }
 
-  final Map<String, ({bool ok, DateTime at})> _mailboxVouched = {};
+  String _squattedMessage(PeerEndpoint route) =>
+      'The recipient\'s mailbox on ${route.label} is vouched for by another '
+      'key; not using this relay for them.';
+
+  final Map<String, ({bool ok, DateTime at, Duration keep})> _mailboxVouched =
+      {};
 
   @visibleForTesting
   Future<void> setContactSigningKeyForTesting(
@@ -38535,18 +38561,18 @@ class _ScoringRelayClient implements RelayClient {
   }
 
   @override
-  Future<String?> mailboxOwner({
+  Future<String?> mailboxVouch({
     required String host,
     required int port,
-    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String recipientDeviceId,
+    required String expectedSigningKeyBase64,
     Duration timeout = const Duration(seconds: 4),
-    String? expectedIdentityPublicKeyBase64,
-  }) => inner.mailboxOwner(
+    required String expectedIdentityPublicKeyBase64,
+  }) => inner.mailboxVouch(
     host: host,
     port: port,
-    protocol: protocol,
     recipientDeviceId: recipientDeviceId,
+    expectedSigningKeyBase64: expectedSigningKeyBase64,
     timeout: timeout,
     expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
   );

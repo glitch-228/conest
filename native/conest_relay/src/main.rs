@@ -621,7 +621,7 @@ mod tests {
             nonce_echo: None,
             signature: None,
             lease_id: response.lease_id.clone(),
-            owner: response.owner.clone(),
+            vouch: response.vouch.clone(),
         };
         // The two None fields are already cleared; assigning again is a no-op
         // and reminds the reader why this clone exists.

@@ -280,6 +280,10 @@ pub(crate) struct Session {
     out: mpsc::Sender<Frame>,
     streams: Mutex<HashMap<u32, AbortHandle>>,
     subscriptions: AtomicUsize,
+    /// Set once the session shows it is a real user: it proved a mailbox
+    /// that was owned before it came, or it received mail for one it
+    /// proved. (Claiming a fresh id with a throwaway key proves nothing.)
+    trusted: std::sync::atomic::AtomicBool,
     /// Mailboxes whose owner proved itself on this session.
     proved: Mutex<ProvedMailboxes>,
 }
@@ -305,6 +309,7 @@ where
         out,
         streams: Mutex::new(HashMap::new()),
         subscriptions: AtomicUsize::new(0),
+        trusted: std::sync::atomic::AtomicBool::new(false),
         proved: Mutex::new(ProvedMailboxes::new()),
     });
     let result = read_frames(&mut reader, &transport, &session).await;
@@ -556,6 +561,22 @@ impl Session {
                     detached,
                     &self.state.identity,
                 );
+                // Mail that reached a mailbox this session proved makes it a
+                // user too.
+                if !self.trusted.load(Ordering::Acquire)
+                    && answer["messages"].as_array().is_some_and(|all| !all.is_empty())
+                    && serde_json::from_slice::<Value>(&payload)
+                        .ok()
+                        .and_then(|request| {
+                            request
+                                .get("recipient_device_id")
+                                .and_then(Value::as_str)
+                                .map(|mailbox| self.has_proved(mailbox))
+                        })
+                        .unwrap_or(false)
+                {
+                    self.trusted.store(true, Ordering::Release);
+                }
                 // Inside a session only, and only to one that has shown it
                 // is a user (a registered token, or a mailbox it proved):
                 // the hidden addresses are not for every anonymous caller.
@@ -594,14 +615,9 @@ impl Session {
     }
 
     /// Whether this session has a valid registration token in [payload]'s
-    /// request, or has proved a mailbox.
+    /// request, or showed itself a user (see [Session::trusted]).
     fn session_is_trusted(&self, payload: &[u8]) -> bool {
-        if !self
-            .proved
-            .lock()
-            .expect("proved lock should not poison")
-            .is_empty()
-        {
+        if self.trusted.load(Ordering::Acquire) {
             return true;
         }
         serde_json::from_slice::<Value>(payload)
@@ -636,11 +652,16 @@ impl Session {
         {
             return error_json("too many mailboxes on one session");
         }
+        let mailbox_text = request.get("mailbox").and_then(Value::as_str);
+        let owned_before = mailbox_text.is_some_and(|mailbox| self.state.owner_of(mailbox).is_some());
         match self
             .state
             .authorize_session(&request, &self.handshake_hash, &self.peer)
         {
             Ok(mailbox) => {
+                if owned_before {
+                    self.trusted.store(true, Ordering::Release);
+                }
                 self.proved
                     .lock()
                     .expect("proved lock should not poison")
@@ -777,6 +798,9 @@ impl Session {
                 fresh.push(message);
             }
             if !fresh.is_empty() {
+                if self.has_proved(&mailbox) {
+                    self.trusted.store(true, Ordering::Release);
+                }
                 let event = json!({
                     "ok": true,
                     "mailbox": mailbox,
@@ -1288,8 +1312,8 @@ pub(crate) mod tests {
         );
         let (_, started) = client.next_json();
         assert_eq!(started["subscribed"], json!(["pair-watch"]));
-        // The announcements are pushed once each (limit 1 does not cut
-        // them off), and then the watcher waits.
+        // The announcements stay queued (they are never leased) and are
+        // pushed once each; then the watcher waits instead of re-reading.
         std::thread::sleep(Duration::from_millis(1500));
         let reads = relay
             .state

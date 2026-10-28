@@ -75,7 +75,20 @@ pub(crate) struct TlsLayer {
     decoy: Decoy,
 }
 
-pub(crate) const TLS_CERT_LABEL: &[u8] = b"conest-relay-tls-cert-v1";
+pub(crate) const TLS_CERT_LABEL: &[u8] = b"conest-relay-tls-cert-v2";
+/// How long a signed certificate hash is good for.
+const TLS_CERT_VALID_MILLIS: u64 = 24 * 60 * 60 * 1000;
+
+/// What the identity signs for a certificate: the name it is served under,
+/// when the statement ends, and the certificate's SHA-256.
+pub(crate) fn tls_cert_message(host: &str, expires_millis: u64, hash: &[u8]) -> Vec<u8> {
+    let mut message = TLS_CERT_LABEL.to_vec();
+    message.extend_from_slice(&(host.len() as u16).to_be_bytes());
+    message.extend_from_slice(host.as_bytes());
+    message.extend_from_slice(&expires_millis.to_be_bytes());
+    message.extend_from_slice(hash);
+    message
+}
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_WS_FRAME: usize = 2 * 1024 * 1024;
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -85,6 +98,16 @@ const MAX_DECOY_FILE: u64 = 8 * 1024 * 1024;
 /// nginx's defaults: 100 requests on a connection, 75 s idle.
 const DECOY_KEEPALIVE_REQUESTS: usize = 100;
 const DECOY_KEEPALIVE_IDLE: Duration = Duration::from_secs(75);
+/// ...and a connection never lasts longer than this in all.
+const DECOY_KEEPALIVE_TOTAL: Duration = Duration::from_secs(600);
+
+/// The length of the request head at the start of [bytes], if complete.
+fn head_len(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|end| end + 4)
+}
 
 /// When this relay's decoy "was last modified" (its start), for
 /// Last-Modified and ETag.
@@ -184,7 +207,15 @@ async fn read_head<S: AsyncRead + Unpin>(
     stream: &mut S,
     deadline: Instant,
 ) -> (Option<usize>, Vec<u8>) {
-    let mut buffer = Vec::with_capacity(4096);
+    read_head_from(stream, deadline, Vec::with_capacity(4096)).await
+}
+
+/// [read_head] continuing from bytes already read (a pipelined request).
+async fn read_head_from<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    deadline: Instant,
+    mut buffer: Vec<u8>,
+) -> (Option<usize>, Vec<u8>) {
     let mut chunk = [0_u8; 4096];
     loop {
         if let Some(end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
@@ -553,6 +584,11 @@ where
                 _ => None,
             };
             let mut head = head;
+            let mut pipelined: Vec<u8> = read
+                .get(head_len(&read).unwrap_or(read.len())..)
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default();
+            let connection_ends = Instant::now() + DECOY_KEEPALIVE_TOTAL;
             // As nginx does: keep the connection for more requests (75 s
             // idle, 100 requests), unless the client or the request ends it.
             for served in 1..=DECOY_KEEPALIVE_REQUESTS {
@@ -567,6 +603,7 @@ where
                 };
                 let is_head = head.as_ref().is_some_and(|head| head.method == "HEAD");
                 let keep = served < DECOY_KEEPALIVE_REQUESTS
+                    && Instant::now() < connection_ends
                     && head.as_ref().is_some_and(|head| {
                         (head.method == "GET" || head.method == "HEAD")
                             && !head
@@ -604,9 +641,12 @@ where
                     let _ = timeout(Duration::from_secs(5), stream.shutdown()).await;
                     return;
                 }
+                let idle_until = (Instant::now() + DECOY_KEEPALIVE_IDLE).min(connection_ends);
                 let (end, next) =
-                    read_head(&mut stream, Instant::now() + DECOY_KEEPALIVE_IDLE).await;
+                    read_head_from(&mut stream, idle_until, std::mem::take(&mut pipelined))
+                        .await;
                 head = end.and_then(|end| parse_head(&next[..end]));
+                pipelined = end.map(|end| next[end..].to_vec()).unwrap_or_default();
                 if head.is_none() {
                     let _ = timeout(Duration::from_secs(5), stream.shutdown()).await;
                     return;
@@ -693,10 +733,13 @@ impl RelayState {
         let path = self.config.ext.tls_cert.as_ref()?;
         let leaf = CertificateDer::pem_file_iter(path).ok()?.next()?.ok()?;
         let hash: [u8; 32] = sha2::Sha256::digest(leaf.as_ref()).into();
-        let mut message = TLS_CERT_LABEL.to_vec();
-        message.extend_from_slice(&hash);
+        let host = self.config.ext.public_host.clone()?;
+        let expires = crate::config::now_millis() + TLS_CERT_VALID_MILLIS;
+        let message = tls_cert_message(&host, expires, &hash);
         Some(serde_json::json!({
             "sha256": BASE64_STANDARD.encode(hash),
+            "host": host,
+            "expires": expires,
             "sig": BASE64_STANDARD.encode(self.identity.sign(&message)),
         }))
     }
@@ -1009,6 +1052,21 @@ mod tests {
     }
 
     #[test]
+    fn pipelined_requests_to_the_decoy_are_all_answered() {
+        let (address, _) = start_tls(Decoy::Builtin);
+        let mut tls = tls_client(address);
+        tls.write_all(
+            b"GET / HTTP/1.1\r\nHost: x\r\n\r\nGET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        )
+        .expect("send");
+        let mut all = Vec::new();
+        let _ = tls.read_to_end(&mut all);
+        let text = String::from_utf8_lossy(&all);
+        assert!(text.contains("200 OK"), "{text}");
+        assert!(text.contains("404 Not Found"), "the second request was dropped: {text}");
+    }
+
+    #[test]
     fn a_decoy_directory_serves_its_files_and_nothing_outside() {
         let dir =
             std::env::temp_dir().join(format!("conest-decoy-{}", crate::config::now_millis()));
@@ -1048,17 +1106,37 @@ mod tests {
         client.request(1, &serde_json::json!({"action": "health"}));
         let (_, anonymous) = client.next_json();
         assert!(anonymous["stats"]["v2"].get("hidden").is_none(), "{anonymous}");
-        // One that proved a mailbox is.
+        // Claiming a fresh id with a throwaway key proves nothing.
         let hash = client.handshake_hash.clone();
-        let proof = crate::owners::tests::prove(
+        let fresh = crate::owners::tests::prove(
             &mut client,
             3,
+            "dev-fresh",
+            &crate::owners::tests::owner_key(6),
+            &hash,
+        );
+        assert_eq!(fresh["ok"], true, "{fresh}");
+        client.request(5, &serde_json::json!({"action": "health"}));
+        let (_, still) = client.next_json();
+        assert!(still["stats"]["v2"].get("hidden").is_none(), "{still}");
+        // One that proves a mailbox owned before it came is told.
+        relay
+            .state
+            .claim_mailbox(
+                "dev-user",
+                crate::owners::tests::owner_key(5).verifying_key().to_bytes(),
+                "198.51.100.9",
+            )
+            .expect("claimed earlier");
+        let proof = crate::owners::tests::prove(
+            &mut client,
+            7,
             "dev-user",
             &crate::owners::tests::owner_key(5),
             &hash,
         );
         assert_eq!(proof["ok"], true, "{proof}");
-        client.request(5, &serde_json::json!({"action": "health"}));
+        client.request(9, &serde_json::json!({"action": "health"}));
         let (_, health) = client.next_json();
         assert_eq!(
             health["stats"]["v2"]["hidden"],
@@ -1069,8 +1147,13 @@ mod tests {
         let hash = BASE64_STANDARD
             .decode(cert["sha256"].as_str().expect("hash"))
             .expect("base64");
-        let mut message = TLS_CERT_LABEL.to_vec();
-        message.extend_from_slice(&hash);
+        let message = tls_cert_message(
+            cert["host"].as_str().expect("host"),
+            cert["expires"].as_u64().expect("expires"),
+            &hash,
+        );
+        assert_eq!(cert["host"], "relay.test");
+        assert!(cert["expires"].as_u64().unwrap() > crate::config::now_millis());
         let signature: [u8; 64] = BASE64_STANDARD
             .decode(cert["sig"].as_str().expect("sig"))
             .expect("base64")

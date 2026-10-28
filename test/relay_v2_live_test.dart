@@ -210,20 +210,22 @@ void main() {
         'relay.test',
         '--public-host',
         '127.0.0.1',
+        '--registration',
+        'open',
       ],
     );
     final identity = await _pin(relay.port);
     // The relay tells its borrowed address inside a session only: ask again
     // now that sessions are known.
-    // ...and only to a session that has proved a mailbox (or registered):
-    // this one does, with a fetch of its own mailbox.
-    RelayClient.registerMailboxSecret('dev-trusted', List<int>.filled(32, 11));
-    await const RelayClient().fetchEnvelopes(
+    // ...and only to a registered user (or one that proved a mailbox owned
+    // before it came): this one registers.
+    final token = await const RelayClient().register(
       host: '127.0.0.1',
       port: relay.port,
-      recipientDeviceId: 'dev-trusted',
       expectedIdentityPublicKeyBase64: identity,
+      accountSecret: List<int>.filled(32, 11),
     );
+    RelayClient.setRelayTokens({identity: token});
     for (var attempt = 0; attempt < 10; attempt++) {
       if (RelayClient.sessionInfoFor('127.0.0.1', relay.port)?.borrowed !=
           null) {

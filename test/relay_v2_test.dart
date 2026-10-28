@@ -594,7 +594,11 @@ void main() {
         reason: 'the path went to an unverified server',
       );
       // A different certificate's hash does not do either.
-      RelayClient.debugRegisterTlsCert(identity, List<int>.filled(32, 7));
+      RelayClient.debugRegisterTlsCert(
+        identity,
+        '127.0.0.1',
+        List<int>.filled(32, 7),
+      );
       await expectLater(
         client.inspectHealth(
           host: '127.0.0.1',
@@ -615,7 +619,27 @@ void main() {
             .split('-----END CERTIFICATE-----')[0]
             .replaceAll(RegExp(r'\s'), ''),
       );
-      RelayClient.debugRegisterTlsCert(identity, sha256.convert(der).bytes);
+      // ...for another name: still not.
+      RelayClient.debugRegisterTlsCert(
+        identity,
+        'other.example',
+        sha256.convert(der).bytes,
+      );
+      await expectLater(
+        client.inspectHealth(
+          host: '127.0.0.1',
+          port: front.port,
+          protocol: PeerRouteProtocol.wss,
+          expectedIdentityPublicKeyBase64: identity,
+        ),
+        throwsA(anything),
+      );
+      expect(seenPaths, isEmpty);
+      RelayClient.debugRegisterTlsCert(
+        identity,
+        '127.0.0.1',
+        sha256.convert(der).bytes,
+      );
       final health = await client.inspectHealth(
         host: '127.0.0.1',
         port: front.port,

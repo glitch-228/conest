@@ -144,6 +144,39 @@ pub(crate) fn seal_response(
 /// Key exchanges allowed per second in all, and per source a minute.
 const MAX_EXCHANGES_PER_SECOND: u64 = 2_000;
 
+/// Sources that completed an exchange with a valid cookie lately: they
+/// skip the relay-wide cap (a flood of cookie-less datagrams cannot starve
+/// them), still under their own per-source budget. A source address on UDP
+/// can be forged, so this is a courtesy, not an identity: a forger who
+/// spends a victim's per-source budget only slows the victim's UDP polls
+/// (clients fall back to other routes), and cannot get anything but a
+/// cookie-sized reply sent to the victim.
+static GOOD_SOURCES: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
+const MAX_GOOD_SOURCES: usize = 4096;
+const GOOD_SOURCE_MILLIS: u64 = 120_000;
+
+fn note_good_source(peer: SocketAddr) {
+    let now = crate::config::now_millis();
+    let key = crate::limits::peer_key(peer.ip());
+    let mut good = GOOD_SOURCES.lock().expect("good sources lock");
+    good.retain(|(_, until)| *until > now);
+    if let Some(entry) = good.iter_mut().find(|(known, _)| *known == key) {
+        entry.1 = now + GOOD_SOURCE_MILLIS;
+    } else if good.len() < MAX_GOOD_SOURCES {
+        good.push((key, now + GOOD_SOURCE_MILLIS));
+    }
+}
+
+fn is_good_source(peer: SocketAddr) -> bool {
+    let now = crate::config::now_millis();
+    let key = crate::limits::peer_key(peer.ip());
+    GOOD_SOURCES
+        .lock()
+        .expect("good sources lock")
+        .iter()
+        .any(|(known, until)| *known == key && *until > now)
+}
+
 fn allow_key_exchange(state: &RelayState, peer: SocketAddr) -> bool {
     use std::sync::atomic::{AtomicU64, Ordering};
     // (second, count): one window for the whole relay.
@@ -153,7 +186,7 @@ fn allow_key_exchange(state: &RelayState, peer: SocketAddr) -> bool {
     if WINDOW.swap(second, Ordering::AcqRel) != second {
         COUNT.store(0, Ordering::Release);
     }
-    if COUNT.fetch_add(1, Ordering::AcqRel) >= MAX_EXCHANGES_PER_SECOND {
+    if COUNT.fetch_add(1, Ordering::AcqRel) >= MAX_EXCHANGES_PER_SECOND && !is_good_source(peer) {
         return false;
     }
     // Per source, kept apart from every other budget; refusals here never
@@ -182,6 +215,10 @@ pub(crate) fn answer_datagram(
     };
     if response.is_null() {
         return None;
+    }
+    // A request that carried a valid cookie got more than a cookie reply.
+    if sealed.is_some() && response["error"] != "udp cookie required" {
+        note_good_source(peer);
     }
     let bytes = serde_json::to_vec(&response).ok()?;
     // A cookie request is answered only with a reply no longer than itself.

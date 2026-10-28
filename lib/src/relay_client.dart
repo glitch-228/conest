@@ -151,11 +151,12 @@ class RelayClient {
   };
 
   /// Lets this app prove it owns [mailbox] (its device id) on relays that
-  /// keep owners, with the device's own long-term signing key ([secret] is
-  /// its Ed25519 seed). That key is the one every contact knows from the
-  /// invite, so a contact can check who owns a mailbox on a relay (see
-  /// [mailboxOwner]) and avoid one a stranger squatted on. (The price: a
-  /// relay can link this device's mailboxes across relays that collude.)
+  /// keep owners: per relay, an Ed25519 key derived from [secret] (the
+  /// device's long-term signing seed), so relays cannot link the keys, and
+  /// the key that crosses the network in a cleartext v1 proof is never the
+  /// device's long-term one. The link to the long-term key is vouched for
+  /// inside a session only (see [_proveMailbox]), which is what lets a
+  /// sender ask [mailboxVouch] who stands behind a mailbox.
   static void registerMailboxSecret(String mailbox, List<int> secret) {
     final known = _mailboxSecrets[mailbox];
     if (known != null && _sameBytes(known, secret)) return;
@@ -185,7 +186,11 @@ class RelayClient {
     final cacheKey = '$relayIdentity|$mailbox';
     final cached = _authKeys[cacheKey];
     if (cached != null) return cached;
-    final pair = await Ed25519().newKeyPairFromSeed(secret);
+    final seed = await Hmac.sha256().calculateMac(
+      utf8.encode('conest-relay-mailbox-auth-v1|$relayIdentity|$mailbox'),
+      secretKey: SecretKey(secret),
+    );
+    final pair = await Ed25519().newKeyPairFromSeed(seed.bytes);
     if (_authKeys.length >= 64) _authKeys.remove(_authKeys.keys.first);
     return _authKeys[cacheKey] = pair;
   }
@@ -246,11 +251,26 @@ class RelayClient {
       ...session.handshakeHash,
       ...utf8.encode(mailbox),
     ], keyPair: key);
+    final authKey = (await key.extractPublicKey()).bytes;
+    // The device's long-term key vouches for this owner key, bound to the
+    // mailbox and to this relay (it is only ever sent inside a session).
+    final seed = _mailboxSecrets[mailbox]!;
+    final device = await Ed25519().newKeyPairFromSeed(seed);
+    final vouch = await Ed25519().sign([
+      ...utf8.encode('conest-mailbox-device-v1'),
+      (mailbox.length >> 8) & 0xff,
+      mailbox.length & 0xff,
+      ...utf8.encode(mailbox),
+      ...authKey,
+      ...base64Decode(relayIdentity),
+    ], keyPair: device);
     final answer = await session.request({
       'action': 'mailbox_auth',
       'mailbox': mailbox,
-      'auth_key': base64Encode((await key.extractPublicKey()).bytes),
+      'auth_key': base64Encode(authKey),
       'signature': base64Encode(signature.bytes),
+      'device_key': base64Encode((await device.extractPublicKey()).bytes),
+      'device_sig': base64Encode(vouch.bytes),
     }, timeout: timeout);
     if (answer['ok'] != true) {
       throw StateError(answer['error'] as String? ?? 'Mailbox proof refused.');
@@ -297,16 +317,35 @@ class RelayClient {
     try {
       final hash = base64Decode(cert['sha256'] as String);
       final signature = base64Decode(cert['sig'] as String);
-      if (hash.length != 32) return;
+      final host = cert['host'] as String;
+      final expires = cert['expires'] as int;
+      if (hash.length != 32 ||
+          host.isEmpty ||
+          host.length > 253 ||
+          expires <= DateTime.now().millisecondsSinceEpoch) {
+        return;
+      }
+      // Signed over the name it is served under and the end of its
+      // validity, so an old or foreign statement cannot be replayed.
+      final hostBytes = utf8.encode(host);
+      final expiry = ByteData(8)..setUint64(0, expires);
       if (await verifyEd25519Signature(
         publicKey: base64Decode(identity),
-        message: [...utf8.encode('conest-relay-tls-cert-v1'), ...hash],
+        message: [
+          ...utf8.encode('conest-relay-tls-cert-v2'),
+          (hostBytes.length >> 8) & 0xff,
+          hostBytes.length & 0xff,
+          ...hostBytes,
+          ...expiry.buffer.asUint8List(),
+          ...hash,
+        ],
         signature: signature,
       )) {
-        if (_tlsCerts.length >= 64 && !_tlsCerts.containsKey(identity)) {
+        final key = '$identity|$host';
+        if (_tlsCerts.length >= 64 && !_tlsCerts.containsKey(key)) {
           _tlsCerts.remove(_tlsCerts.keys.first);
         }
-        _tlsCerts[identity] = hash;
+        _tlsCerts[key] = hash;
       }
     } on Object {
       // Not a certificate hash we can use.
@@ -518,32 +557,42 @@ class RelayClient {
     return _decodeEnvelopes(result.body);
   }
 
-  /// The key (base64) that owns [recipientDeviceId]'s mailbox on the relay,
-  /// or null when nobody does (or the relay does not keep owners). A
-  /// sender compares it with the signing key it knows for the contact: a
-  /// squatter's key means this relay is not to be trusted with that
-  /// contact's mail.
-  Future<String?> mailboxOwner({
+  /// Whether the relay says [recipientDeviceId]'s mailbox is vouched for by
+  /// [expectedSigningKeyBase64] (the contact's signing key): `matches`,
+  /// `unclaimed` (nobody vouched yet) or `other`. The relay tells no key,
+  /// and the question goes only inside a v2 session: null when there is
+  /// none (nothing is sent in the clear), or when the relay does not know
+  /// the question.
+  Future<String?> mailboxVouch({
     required String host,
     required int port,
-    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String recipientDeviceId,
+    required String expectedSigningKeyBase64,
     Duration timeout = const Duration(seconds: 4),
-    String? expectedIdentityPublicKeyBase64,
+    required String expectedIdentityPublicKeyBase64,
   }) async {
-    final result = await _sendRequest(
-      host: host,
-      port: port,
-      protocol: protocol,
-      timeout: timeout,
-      request: {
-        'action': 'mailbox_owner',
-        'recipient_device_id': recipientDeviceId,
-      },
-      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    final endpoint = _validateEndpoint(host: host, port: port);
+    final known = _knownSessions(
+      endpoint.host,
+      endpoint.port,
+      expectedIdentityPublicKeyBase64,
     );
-    final owner = result.body['owner'];
-    return owner is String && owner.length <= 64 ? owner : null;
+    if (known == null) return null;
+    final session = await _sessionFor(
+      endpoint.host,
+      endpoint.port,
+      known,
+      timeout,
+    );
+    final answer = await session.request({
+      'action': 'mailbox_owner',
+      'recipient_device_id': recipientDeviceId,
+      'expected_key': expectedSigningKeyBase64,
+    }, timeout: timeout);
+    final word = answer['vouch'];
+    return word == 'matches' || word == 'unclaimed' || word == 'other'
+        ? word as String
+        : null;
   }
 
   /// Durable relay fetch. Unlike the legacy destructive fetch, returned
@@ -998,8 +1047,11 @@ class RelayClient {
   /// Teaches the client a certificate hash for [identity] (tests; the
   /// client learns it from a trusted session's health answer).
   @visibleForTesting
-  static void debugRegisterTlsCert(String identity, List<int> sha256) =>
-      _tlsCerts[identity] = sha256;
+  static void debugRegisterTlsCert(
+    String identity,
+    String host,
+    List<int> sha256,
+  ) => _tlsCerts['$identity|$host'] = sha256;
 
   /// Borrowed-handshake relay addresses: the site they play, by host and
   /// port (M38-D).
@@ -1064,7 +1116,7 @@ class RelayClient {
       host: host,
       port: port,
       path: path,
-      pinnedCertSha256: identity == null ? null : _tlsCerts[identity],
+      pinnedCertSha256: identity == null ? null : _tlsCerts['$identity|$host'],
       timeout: timeout,
     );
   }

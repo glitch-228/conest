@@ -460,18 +460,22 @@ class _HangingLocalRelayNode extends LocalRelayNode {
 }
 
 class _OwnerFakeRelayClient extends _FakeRelayClient {
-  /// Who owns every mailbox on this relay (null: nobody).
-  String? owner;
+  /// What the relay answers about every mailbox: matches, unclaimed, other.
+  String vouch = 'unclaimed';
+  int asked = 0;
 
   @override
-  Future<String?> mailboxOwner({
+  Future<String?> mailboxVouch({
     required String host,
     required int port,
-    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String recipientDeviceId,
+    required String expectedSigningKeyBase64,
     Duration timeout = const Duration(seconds: 4),
-    String? expectedIdentityPublicKeyBase64,
-  }) async => owner;
+    required String expectedIdentityPublicKeyBase64,
+  }) async {
+    asked++;
+    return vouch;
+  }
 }
 
 class _FakeRelayClient extends RelayClient {
@@ -12592,8 +12596,8 @@ void main() {
     await alice.acceptContactPairingForTesting(alice.contacts.single.deviceId);
     await alice.setContactSigningKeyForTesting('dev-bob', bobKey);
     final contact = alice.contacts.single;
-    // A squatter owns Bob's mailbox on the relay.
-    relay.owner = base64Encode(List<int>.filled(32, 9));
+    // A squatter stands behind Bob's mailbox on the relay.
+    relay.vouch = 'other';
     // Pinned and known to keep owners, as a real health answer leaves it.
     final identityKey = base64Encode(List<int>.filled(32, 3));
     RelayClient.debugMarkKeepsOwners(
@@ -12609,7 +12613,7 @@ void main() {
     }
     expect(relay.storeAttempts, isEmpty, reason: 'sent to a squatted mailbox');
     // The right owner, or none: the relay is used.
-    relay.owner = bobKey;
+    relay.vouch = 'matches';
     alice.forgetMailboxVouchingForTesting();
     await alice.sendMessage(contact: contact, body: 'hello again');
     expect(relay.storeAttempts, isNotEmpty);

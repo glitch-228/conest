@@ -324,7 +324,7 @@ void main() {
       expect(systemAsked, 1);
     });
 
-    test('LAN and tailnet names go to the system resolver, private answers '
+    test('LAN names go to the system resolver, private answers '
         'included', () async {
       final lan = InternetAddress('192.168.1.20');
       final resolver = DohResolver(
@@ -332,12 +332,29 @@ void main() {
         transport: (_, _, _) async => throw StateError('DoH must not be asked'),
         systemLookup: (_) async => [lan],
       );
-      for (final name in ['nas', 'printer.lan', 'box.ts.net', 'x.local']) {
+      for (final name in ['nas', 'printer.lan', 'x.local']) {
         expect(await resolver.resolve(name, systemFallback: false), [
           lan,
         ], reason: name);
       }
     });
+
+    test(
+      'a tailnet name is a public one: it goes through private DNS',
+      () async {
+        var dohAsked = 0;
+        final resolver = DohResolver(
+          endpoints: [Uri.parse('https://a.test/dns-query')],
+          transport: (endpoint, query, timeout) async {
+            dohAsked++;
+            return _answer(query, _queryType(query) == 1 ? [good] : []);
+          },
+          systemLookup: (_) async => [sinkhole],
+        );
+        expect(await resolver.resolve('box.ts.net'), [good]);
+        expect(dohAsked, greaterThan(0));
+      },
+    );
 
     test('the UDP path resolves through the same circumvention', () async {
       final circumvention = Circumvention(

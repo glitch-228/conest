@@ -81,18 +81,22 @@ then cannot fetch there (what is taken stays end-to-end encrypted).
 
 A relay cannot tell who really holds a device id, so the first claim wins
 (as above). What a stranger can do with that is squat: claim a mailbox
-before its device does. To make that visible, a device claims its mailbox
-with its own long-term signing key (the key every contact has from its
-invite, and nothing derived), and anyone may ask who owns a mailbox
-(`{"action":"mailbox_owner","recipient_device_id":"..."}`; the answer's
-`owner` is the key, or absent). Before the app leaves a contact's message
-on a relay that keeps owners, it asks, and a mailbox owned by any key other
-than the contact's signing key means that relay is not used for that
-contact. A squatter can still make a relay useless for a contact, but
-cannot read their mail, and the sender moves on to another route. Old
-devices that never claim stay unclaimed with the old behaviour. Residual:
-someone holding the device's signing key can claim; the cost of using the
-signing key is that colluding relays can link one device's mailboxes.
+before its device does. To make that visible without exposing the device,
+a device claims with a key derived for this relay (unlinkable across
+relays, and the only key a cleartext v1 proof ever carries) and, inside an
+encrypted session only, adds a vouch: its long-term signing key signs
+(mailbox, owner key, this relay's identity). The relay keeps that device
+key and never tells it. A sender asks, inside a session,
+`{"action":"mailbox_owner","recipient_device_id":"..","expected_key":".."}`
+with the contact's (or group member's) signing key and gets `matches`,
+`unclaimed` or `other`. `other` means a stranger got there first: the app
+does not leave that recipient's mail on that relay. `unclaimed` is asked
+again after five minutes. A squatter can still make one relay useless for
+one recipient, but cannot read their mail. Old devices that never vouch
+stay unclaimed with the old behaviour. Residual: someone who holds the
+device's signing key can vouch; and the relay cannot check that the device
+id belongs to the key it was vouched with, only that nobody else vouched
+first.
 
 ## TLS on 443 with a decoy site
 

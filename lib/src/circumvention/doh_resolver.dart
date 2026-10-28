@@ -51,9 +51,11 @@ class DohResolver {
   /// [systemFallback]: when no DoH resolver answers, the system resolver
   /// may (off under "always": the user asked for names that never go
   /// through the local resolver). Names that cannot be public ones (no dot,
-  /// `.local`, `.lan`, `.internal`, `.home.arpa`, `.ts.net`) always use the
-  /// system resolver, since no public resolver knows them (LAN, Tailscale
-  /// and split-horizon hosts keep working, private answers included). For
+  /// `.local`, `.lan`, `.internal`, `.home.arpa`) always use the system
+  /// resolver, since no public resolver knows them (LAN and split-horizon
+  /// hosts keep working, private answers included; a tailnet name is a
+  /// public-suffix name and goes through private DNS like any other, while
+  /// a literal address needs no lookup). For
   /// any other name a private answer is a sinkhole's, and is refused.
   Future<List<InternetAddress>> resolve(
     String host, {
@@ -126,8 +128,7 @@ class DohResolver {
       name.endsWith('.local') ||
       name.endsWith('.lan') ||
       name.endsWith('.internal') ||
-      name.endsWith('.home.arpa') ||
-      name.endsWith('.ts.net');
+      name.endsWith('.home.arpa');
 
   static Future<List<int>> _httpTransport(
     Uri endpoint,

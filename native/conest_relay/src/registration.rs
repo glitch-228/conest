@@ -263,6 +263,13 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 impl RelayState {
     /// Loads accounts at startup.
     pub(crate) fn load_accounts(&self) -> Result<(), String> {
+        // The accounts lock is held across the read and the replacement: a
+        // registration that lands in between cannot be lost (it inserts into
+        // the database first, and only then into the map).
+        let mut accounts = self
+            .accounts
+            .lock()
+            .expect("account lock should not poison");
         let database = self
             .database
             .lock()
@@ -282,10 +289,6 @@ impl RelayState {
                 quotas.insert(key, quota.max(0) as u64);
             }
         }
-        let mut accounts = self
-            .accounts
-            .lock()
-            .expect("account lock should not poison");
         // Replaced, not merged: a removed account is gone.
         accounts.quotas = quotas;
         accounts.loaded_millis = now_millis();

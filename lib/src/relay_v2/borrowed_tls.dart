@@ -154,11 +154,18 @@ class BorrowedTlsChannel implements RelayByteChannel {
           );
         }, onError: fail),
       );
-      final plain = await Socket.connect(
-        InternetAddress.loopbackIPv4,
-        tap.port,
-        timeout: timeout,
-      );
+      final Socket plain;
+      try {
+        plain = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          tap.port,
+          timeout: timeout,
+        );
+      } catch (_) {
+        // Nobody will connect: release the tap's waiting accept.
+        if (!plainPort.isCompleted) plainPort.complete(-1);
+        rethrow;
+      }
       plainPort.complete(plain.port);
       // The handshake is the TLS library's own; an unusable certificate
       // stops it here, before the marker is ever sent.

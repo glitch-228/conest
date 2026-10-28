@@ -281,9 +281,25 @@ class RelayV2Session {
     );
   }
 
+  /// Bytes of events held for paused subscriptions before reading stops.
+  static const int _pausedBytesLimit = 4 * 1024 * 1024;
+  int _pausedBytes = 0;
+  Completer<void>? _resumeGate;
+
+  void _subscriptionResumed() {
+    if (_subscriptions.values.any((controller) => controller.isPaused)) return;
+    _pausedBytes = 0;
+    final gate = _resumeGate;
+    _resumeGate = null;
+    if (gate != null && !gate.isCompleted) gate.complete();
+  }
+
   Future<void> _readLoop() async {
     try {
       while (!_closed) {
+        final gate = _resumeGate;
+        if (gate != null) await gate.future;
+        if (_closed) break;
         final header = await _reader.readExact(2);
         final length = (header[0] << 8) | header[1];
         if (length < relayV2Tag) {
@@ -347,7 +363,19 @@ class RelayV2Session {
       case RelayV2FrameType.event:
         final body = _json(frame.payload);
         final subscription = _subscriptions[frame.stream];
-        if (subscription != null && body != null) subscription.add(body);
+        if (subscription != null && body != null) {
+          subscription.add(body);
+          // A consumer that has paused its subscription lets events pile up
+          // in memory; past a small bound the whole session stops reading
+          // (and the socket with it) until it resumes. Answers to small
+          // requests (an acknowledgement) still come through meanwhile.
+          if (subscription.isPaused) {
+            _pausedBytes += frame.payload.length;
+            if (_pausedBytes > _pausedBytesLimit) {
+              _resumeGate ??= Completer<void>();
+            }
+          }
+        }
       case RelayV2FrameType.ping:
         unawaited(
           _send(
@@ -482,7 +510,10 @@ class RelayV2Session {
           }
         });
       },
+      onResume: _subscriptionResumed,
       onCancel: () {
+        // A cancelled subscription holds nothing back.
+        Timer.run(_subscriptionResumed);
         if (id != 0 && _subscriptions.remove(id) != null && !_closed) {
           unawaited(
             _send(

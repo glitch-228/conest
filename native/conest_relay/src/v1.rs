@@ -48,6 +48,8 @@ pub(crate) enum RelayRequest {
     /// known signing key before trusting this relay with the contact's mail).
     MailboxOwner {
         recipient_device_id: String,
+        /// The contact's signing key (base64) the sender expects.
+        expected_key: Option<String>,
     },
     Health,
 }
@@ -87,9 +89,9 @@ pub(crate) struct RelayResponse {
     pub(crate) signature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) lease_id: Option<String>,
-    /// `mailbox_owner`: the key that owns the mailbox (base64), if any.
+    /// `mailbox_owner`: `matches`, `unclaimed` or `other` (no key is told).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) owner: Option<String>,
+    pub(crate) vouch: Option<String>,
 }
 
 impl RelayResponse {
@@ -103,7 +105,7 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id: None,
-            owner: None,
+            vouch: None,
         }
     }
 
@@ -117,7 +119,7 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id: None,
-            owner: None,
+            vouch: None,
         }
     }
 
@@ -131,7 +133,7 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id: None,
-            owner: None,
+            vouch: None,
         }
     }
 
@@ -145,14 +147,14 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id: None,
-            owner: None,
+            vouch: None,
         }
     }
 
-    /// The answer to `mailbox_owner`: the owner's key, or none.
-    pub(crate) fn owner(key: Option<[u8; 32]>) -> Self {
+    /// The answer to `mailbox_owner`.
+    pub(crate) fn vouch(word: &str) -> Self {
         let mut response = Self::ok(None);
-        response.owner = key.map(|key| BASE64_STANDARD.encode(key));
+        response.vouch = Some(word.to_owned());
         response
     }
 
@@ -166,7 +168,7 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id,
-            owner: None,
+            vouch: None,
         }
     }
 }
@@ -390,6 +392,10 @@ pub(crate) fn prepare_request(
             ));
         }
     };
+    // Who vouches for a mailbox is told inside a session only.
+    if matches!(request, RelayRequest::MailboxOwner { .. }) && session.is_none() {
+        return refuse("mailbox_owner needs an encrypted session".to_owned());
+    }
     // Over UDP every request first needs the cookie only a client at that
     // address receives (what it changes is counted to that address, and
     // what answers at length cannot be aimed elsewhere). The cookie itself
@@ -585,7 +591,14 @@ pub(crate) fn handle_request_for(
         },
         RelayRequest::MailboxOwner {
             recipient_device_id,
-        } => RelayResponse::owner(state.owner_of(&recipient_device_id)),
+            expected_key,
+        } => {
+            let expected = expected_key
+                .as_deref()
+                .and_then(|text| BASE64_STANDARD.decode(text).ok())
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok());
+            RelayResponse::vouch(state.vouch_status(&recipient_device_id, expected))
+        }
         RelayRequest::Health => RelayResponse::ok(Some(state.stats())),
     }
 }
