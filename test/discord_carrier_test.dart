@@ -2,7 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:conest/src/carrier.dart';
 import 'package:conest/src/discord/discord_api.dart';
+import 'package:conest/src/telegram/telegram_carrier.dart';
+import 'package:conest/src/transport_models.dart';
 import 'package:conest/src/discord/discord_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -48,7 +51,37 @@ Future<void> until(bool Function() done) async {
   expect(done(), isTrue);
 }
 
+class _PlainSealer implements CarrierSealer {
+  @override
+  bool acceptsSender(TransportKind kind, String sender) => true;
+
+  @override
+  Future<({String peerDeviceId, Uint8List envelope})?> open(
+    TransportKind kind,
+    String sender,
+    Uint8List sealed,
+  ) async => (peerDeviceId: sender, envelope: sealed);
+
+  @override
+  Future<Uint8List> seal(
+    TransportKind kind,
+    String peerDeviceId,
+    Uint8List envelope,
+  ) async => envelope;
+}
+
 void main() {
+  test('the adapter does not claim store and forward', () {
+    final adapter = createDiscordCarrierAdapter(sealer: _PlainSealer());
+    expect(adapter.capabilities.supportsStoreForward, isFalse);
+    expect(
+      createTelegramCarrierAdapter(
+        sealer: _PlainSealer(),
+      ).capabilities.supportsStoreForward,
+      isTrue,
+    );
+  });
+
   late FakeDiscord hub;
   late FakeDiscordAccount aliceBot;
   late FakeDiscordAccount bobBot;

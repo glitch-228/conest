@@ -393,8 +393,10 @@ class DiscordCarrierChannel
   }
 }
 
-/// A Discord bot carrier adapter. Store and forward: the channel keeps the
-/// messages for a bot that is away.
+/// A Discord bot carrier adapter. Not store and forward: the channel keeps
+/// its history, but a bot that starts again looks from "now", so frames sent
+/// while it was away are never read. The sender is told only that Discord
+/// took the frame, and the usual retries cover an absent peer.
 CarrierTransportAdapter createDiscordCarrierAdapter({
   required CarrierSealer sealer,
   DateTime Function()? now,
@@ -402,6 +404,7 @@ CarrierTransportAdapter createDiscordCarrierAdapter({
   kind: TransportKind.discord,
   sealer: sealer,
   framing: discordFraming,
+  path: TransportPathKind.relayed,
   sendAttemptTimeout: const Duration(seconds: 120),
   isValidAddress: isValidDiscordCarrierAddress,
   now: now,
