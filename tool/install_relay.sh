@@ -335,8 +335,9 @@ if [ "$NO_HIDDEN" -eq 0 ]; then
       TLS_KEY="$LE_DIR/privkey.pem"
     fi
     if [ -n "$TLS_CERT" ] || [ -n "$TLS_KEY" ]; then
-      safe_value "$TLS_CERT" && safe_value "$TLS_KEY" ||
+      if ! safe_value "$TLS_CERT" || ! safe_value "$TLS_KEY"; then
         die "the certificate and key paths may only use letters, digits and . _ / @ : + -"
+      fi
     fi
     safe_value "$DATA_DIR" || die "the data directory may only use letters, digits and . _ / @ : + -"
     if [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] &&
