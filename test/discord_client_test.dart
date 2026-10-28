@@ -118,6 +118,56 @@ void main() {
     expect(hub.calls.where((e) => e.contains('/channels/$dm/')), isEmpty);
   });
 
+  test(
+    'others\' edits, deletions and reactions show up in the open channel',
+    () async {
+      final c = client();
+      await c.start();
+      await c.loadMessages(general);
+      final stop = c.watch(general);
+      addTearDown(stop);
+      final hello = hub.channels[general]!.firstWhere(
+        (m) => m['content'] == 'hello everyone',
+      );
+      hello['content'] = 'hello, edited';
+      hello['edited_timestamp'] = '2026-10-28T12:00:00+00:00';
+      await until(
+        () => c
+            .messagesOf(general)
+            .any((m) => m.text == 'hello, edited' && m.edited),
+      );
+      hello['reactions'] = [
+        {
+          'emoji': {'name': '🎉'},
+          'count': 2,
+        },
+      ];
+      await until(
+        () => c.messagesOf(general).any((m) => m.reactions['🎉'] == 2),
+      );
+      hub.channels[general]!.remove(hello);
+      await until(() => !c.messagesOf(general).any((m) => m.id == hello['id']));
+      // Mine is still there.
+      expect(c.messagesOf(general).any((m) => m.text == 'mine'), isTrue);
+    },
+  );
+
+  test('one failed look does not stop watching', () async {
+    final c = client();
+    await c.start();
+    await c.loadMessages(general);
+    final stop = c.watch(general);
+    addTearDown(stop);
+    me.failNext
+      ..add(const DiscordException('/x', 403, 'Missing Access'))
+      ..add(const DiscordException('/x', 500, 'oops'));
+    hub.post(general, friend, 'after the errors');
+    await until(
+      () => c.messagesOf(general).any((m) => m.text == 'after the errors'),
+    );
+    expect(c.error, isNull);
+  });
+
   test('sending, editing, reacting and deleting happen on request', () async {
     final c = client();
     await c.start();

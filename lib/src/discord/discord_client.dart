@@ -307,34 +307,61 @@ class DiscordClient extends ChangeNotifier {
     var failures = 0;
     while (!_closed && (_polling[channelId] ?? 0) > 0) {
       try {
-        final list = _messages[channelId];
+        // The newest page again, not only what is after the last message:
+        // edits, deletions and reactions by others show up in it.
         final found = await api.call(
           'GET',
           '/channels/$channelId/messages',
-          query: {
-            'limit': '50',
-            if (list != null && list.isNotEmpty) 'after': list.last.id,
-          },
+          query: {'limit': '50'},
         );
         failures = 0;
-        if (found is List && found.isNotEmpty) _merge(channelId, found);
+        if (found is List) _refreshWindow(channelId, found);
         await _wait(pollInterval);
       } on DiscordException catch (e) {
-        if (e.unauthorized || e.forbidden) {
+        failures++;
+        // Losing access for good is not one bad answer: give up only after
+        // several in a row.
+        if ((e.unauthorized || e.forbidden) && failures >= 3) {
           error = e.toString();
           notifyListeners();
           return;
         }
-        failures++;
         await _wait(
           e.retryAfter != null
               ? Duration(milliseconds: (e.retryAfter! * 1000).ceil())
               : pollInterval * (1 << (failures > 4 ? 4 : failures)),
         );
       } catch (_) {
-        return;
+        failures++;
+        await _wait(pollInterval * (1 << (failures > 4 ? 4 : failures)));
       }
     }
+  }
+
+  /// Merges the newest page [found] and drops the messages inside its time
+  /// span that Discord no longer lists (deleted by someone).
+  void _refreshWindow(String channelId, List found) {
+    final ids = <String>{};
+    BigInt? oldest;
+    for (final json in found.take(100)) {
+      final message = DcMessage.parse(json);
+      if (message == null || message.channelId != channelId) continue;
+      ids.add(message.id);
+      final n = BigInt.tryParse(message.id);
+      if (n != null && (oldest == null || n < oldest)) oldest = n;
+    }
+    final list = _messages[channelId];
+    if (list != null && oldest != null) {
+      // A page shorter than asked reaches back to the first message.
+      final wholeChannel = found.length < 50;
+      list.removeWhere((m) {
+        final n = BigInt.tryParse(m.id);
+        return n != null &&
+            (wholeChannel || n >= oldest!) &&
+            !ids.contains(m.id);
+      });
+    }
+    _merge(channelId, found);
   }
 
   // Everything below happens only because the user did it.
