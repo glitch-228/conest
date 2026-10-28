@@ -1651,5 +1651,8 @@
   "telegramBridgeReadOnly": "此处只读。请在装有 Telegram 的设备上回复。",
   "xmppEncOmemo2Unverified": "已加密，未验证 (OMEMO)",
   "xmppTrustPending": "新设备，未确认",
-  "xmppUnconfirmedMsg": "来自你尚未确认的新设备。"
+  "xmppUnconfirmedMsg": "来自你尚未确认的新设备。",
+  "telegramPluginConfirmTitle": "安装 {name}？",
+  "telegramPluginNoPermissions": "无（它什么也做不了）",
+  "telegramPluginInstallButton": "安装"
 }

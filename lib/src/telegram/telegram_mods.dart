@@ -50,6 +50,33 @@ class TelegramRulePlugin implements TelegramPlugin {
     required this.commands,
   });
 
+  /// Names a plugin may not take: the commands people type to bots (and
+  /// Telegram's own), which must reach the bot unchanged.
+  static const Set<String> reservedCommands = {
+    'start',
+    'help',
+    'settings',
+    'stop',
+    'cancel',
+    'menu',
+    'stats',
+    'cmd',
+    'language',
+    'lang',
+    'privacy',
+    'terms',
+    'login',
+    'logout',
+    'unsubscribe',
+    'subscribe',
+    'ban',
+    'unban',
+    'kick',
+    'mute',
+    'unmute',
+    'pin',
+  };
+
   static const int maxRules = 100;
   static const int maxRuleChars = 200;
   static const int maxJsonChars = 64 * 1024;
@@ -136,6 +163,7 @@ class TelegramRulePlugin implements TelegramPlugin {
             final insert = text('insert');
             if (command != null &&
                 RegExp(r'^[a-z0-9_]{1,32}$').hasMatch(command) &&
+                !reservedCommands.contains(command) &&
                 insert != null &&
                 permissions.contains(TelegramPermission.commands)) {
               commands[command] = insert;

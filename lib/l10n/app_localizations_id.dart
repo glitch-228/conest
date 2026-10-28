@@ -6235,4 +6235,16 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get telegramBridgeReadOnly =>
       'Hanya baca di sini. Balas di Telegram pada perangkat yang memilikinya.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return 'Pasang $name?';
+  }
+
+  @override
+  String get telegramPluginNoPermissions =>
+      'tidak ada (tidak bisa berbuat apa-apa)';
+
+  @override
+  String get telegramPluginInstallButton => 'Pasang';
 }

@@ -409,6 +409,44 @@ void _telegramControllerTests() {
       }
     }
 
+    testWidgets(
+      'a plugin is installed only after the user sees its permissions',
+      (tester) async {
+        final (controller, _) = await start(tester, loggedIn: true);
+        await tester.runAsync(controller.telegram.enable);
+        await tester.pumpWidget(
+          MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: TelegramModsScreen(controller: controller),
+          ),
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('telegram-plugin-source')),
+          '{"id":"tidy","name":"Tidy","permissions":["editOutgoing"],'
+          '"rules":[{"do":"replace","from":"a","to":"b"}]}',
+        );
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('telegram-plugin-install')),
+        );
+        await tester.tap(find.byKey(const ValueKey('telegram-plugin-install')));
+        await tester.pumpAndSettle();
+        expect(find.text('Install Tidy?'), findsOneWidget);
+        expect(find.textContaining('change what you send'), findsOneWidget);
+        expect(controller.telegram.mods.plugins, isEmpty);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        expect(controller.telegram.mods.plugins, isEmpty);
+        await tester.tap(find.byKey(const ValueKey('telegram-plugin-install')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('telegram-plugin-confirm')));
+        await tester.pumpAndSettle();
+        expect(controller.telegram.mods.plugins.single.id, 'tidy');
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 2));
+      },
+    );
+
     testWidgets('the panel signs in step by step', (tester) async {
       final (controller, _) = await start(tester);
       await tester.pumpWidget(

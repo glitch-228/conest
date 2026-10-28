@@ -68,6 +68,8 @@ class TelegramService extends ChangeNotifier {
 
   void _relay(TelegramClient client, TgMessage message, TgChat chat) {
     if (_batcher == null || !bridge.any) return;
+    // What the user hid with mods stays hidden everywhere.
+    if (mods.hidden(message)) return;
     final event = bridgeEventFor(
       message: message,
       chat: chat,

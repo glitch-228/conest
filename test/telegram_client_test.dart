@@ -1,10 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:conest/src/telegram/td_engine.dart';
 import 'package:conest/src/telegram/telegram_api_keys.dart';
 import 'package:conest/src/telegram/telegram_client.dart';
 import 'package:conest/src/telegram/telegram_models.dart';
 import 'package:conest/src/telegram/telegram_mods.dart';
+import 'package:conest/src/telegram/telegram_bridge.dart';
+import 'package:conest/src/telegram/telegram_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_td_engine.dart';
@@ -591,6 +594,20 @@ void main() {
       expect(mods.hidden(message), isTrue);
     });
 
+    test('a plugin cannot take over commands people send to bots', () {
+      final mods = TelegramMods();
+      mods.install(
+        '{"id":"p","name":"P","permissions":["commands"],"rules":['
+        '{"do":"command","name":"start","insert":"EVIL"},'
+        '{"do":"command","name":"Help","insert":"EVIL"},'
+        '{"do":"command","name":"shrug","insert":"ok"}]}',
+      );
+      final plugin = mods.plugins.single as TelegramRulePlugin;
+      expect(plugin.commands.keys, ['shrug']);
+      expect(mods.outgoing('/start'), '/start');
+      expect(mods.outgoing('/start@some_bot x'), '/start@some_bot x');
+    });
+
     test('malformed or oversized plugins are refused', () {
       final mods = TelegramMods();
       expect(mods.install('not json'), isFalse);
@@ -639,6 +656,53 @@ void main() {
     test('translation uses Telegram, into the chosen language', () async {
       final (client, _) = await signedIn(mods: TelegramMods(translateTo: 'de'));
       expect(await client.translate('hello'), '[de] hello');
+    });
+  });
+
+  group('the bridge respects mods', () {
+    test('messages hidden by the user are not relayed', () async {
+      final engine = FakeTdEngine(loggedIn: true)
+        ..addChat(10, 'Alice', order: 300);
+      final relayed = <Map<String, Object?>>[];
+      Map<String, Object?>? mods;
+      Map<String, Object?>? bridge = {
+        'saved': false,
+        'chats': [10],
+      };
+      final service = TelegramService(
+        keys: _keys,
+        engineFactory: () => engine,
+        directory: () async => Directory.systemTemp,
+        readAccount: () => {'enabled': true, 'dbKey': _dbKey},
+        writeAccount: (_) async {},
+        readMods: () =>
+            mods ??
+            {
+              'hidden': ['secret'],
+            },
+        writeMods: (m) => mods = m,
+        readBridge: () => bridge,
+        writeBridge: (b) => bridge = b,
+        bridgeOut: relayed.add,
+      );
+      await service.start();
+      await until(() => service.client?.auth == TgAuth.ready);
+      await until(() => service.client!.chats.containsKey(10));
+      engine.emit({
+        '@type': 'updateNewMessage',
+        'message': FakeTdEngine.message(id: 1, chatId: 10, text: 'a secret'),
+      });
+      engine.emit({
+        '@type': 'updateNewMessage',
+        'message': FakeTdEngine.message(id: 2, chatId: 10, text: 'fine'),
+      });
+      await pump(50);
+      service.dispose();
+      final texts = [
+        for (final batch in relayed)
+          for (final item in batch['items'] as List) (item as Map)['text'],
+      ];
+      expect(texts, ['fine']);
     });
   });
 

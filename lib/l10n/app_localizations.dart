@@ -10072,6 +10072,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Read only here. Answer in Telegram on the device that has it.'**
   String get telegramBridgeReadOnly;
+
+  /// Telegram plugin: ask before installing.
+  ///
+  /// In en, this message translates to:
+  /// **'Install {name}?'**
+  String telegramPluginConfirmTitle(String name);
+
+  /// Telegram plugin: it asks for no permissions.
+  ///
+  /// In en, this message translates to:
+  /// **'nothing (it can do nothing)'**
+  String get telegramPluginNoPermissions;
+
+  /// Telegram plugin: confirm install button.
+  ///
+  /// In en, this message translates to:
+  /// **'Install'**
+  String get telegramPluginInstallButton;
 }
 
 class _AppLocalizationsDelegate

@@ -6243,4 +6243,15 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get telegramBridgeReadOnly =>
       'Read only here. Answer in Telegram on the device that has it.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return 'Install $name?';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => 'nothing (it can do nothing)';
+
+  @override
+  String get telegramPluginInstallButton => 'Install';
 }

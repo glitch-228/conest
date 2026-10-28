@@ -9201,5 +9201,22 @@
   "telegramBridgeReadOnly": "Read only here. Answer in Telegram on the device that has it.",
   "@telegramBridgeReadOnly": {
     "description": "Telegram bridge: relayed chats cannot be answered here."
+  },
+  "telegramPluginConfirmTitle": "Install {name}?",
+  "@telegramPluginConfirmTitle": {
+    "description": "Telegram plugin: ask before installing.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "telegramPluginNoPermissions": "nothing (it can do nothing)",
+  "@telegramPluginNoPermissions": {
+    "description": "Telegram plugin: it asks for no permissions."
+  },
+  "telegramPluginInstallButton": "Install",
+  "@telegramPluginInstallButton": {
+    "description": "Telegram plugin: confirm install button."
   }
 }

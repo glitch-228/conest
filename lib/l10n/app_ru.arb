@@ -1651,5 +1651,8 @@
   "telegramBridgeReadOnly": "Только чтение. Отвечайте в Telegram на устройстве, где он есть.",
   "xmppEncOmemo2Unverified": "зашифровано, не проверено (OMEMO)",
   "xmppTrustPending": "новое устройство, не подтверждено",
-  "xmppUnconfirmedMsg": "С нового устройства, которое вы не подтвердили."
+  "xmppUnconfirmedMsg": "С нового устройства, которое вы не подтвердили.",
+  "telegramPluginConfirmTitle": "Установить {name}?",
+  "telegramPluginNoPermissions": "ничего (ничего не может)",
+  "telegramPluginInstallButton": "Установить"
 }

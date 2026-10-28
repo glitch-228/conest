@@ -6372,4 +6372,15 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get telegramBridgeReadOnly =>
       'Только чтение. Отвечайте в Telegram на устройстве, где он есть.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return 'Установить $name?';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => 'ничего (ничего не может)';
+
+  @override
+  String get telegramPluginInstallButton => 'Установить';
 }

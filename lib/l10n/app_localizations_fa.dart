@@ -6244,4 +6244,15 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get telegramBridgeReadOnly =>
       'اینجا فقط‌خواندنی است. در تلگرام روی دستگاهی که دارد پاسخ دهید.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return '$name نصب شود؟';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => 'هیچ (کاری نمی‌تواند بکند)';
+
+  @override
+  String get telegramPluginInstallButton => 'نصب';
 }

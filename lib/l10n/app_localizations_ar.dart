@@ -6369,4 +6369,15 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get telegramBridgeReadOnly =>
       'للقراءة فقط هنا. أجب في تيليجرام على الجهاز الذي يملكه.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return 'تثبيت $name؟';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => 'لا شيء (لا يستطيع فعل أي شيء)';
+
+  @override
+  String get telegramPluginInstallButton => 'تثبيت';
 }

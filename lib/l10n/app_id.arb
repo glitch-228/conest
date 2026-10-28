@@ -1651,5 +1651,8 @@
   "telegramBridgeReadOnly": "Hanya baca di sini. Balas di Telegram pada perangkat yang memilikinya.",
   "xmppEncOmemo2Unverified": "terenkripsi, belum diverifikasi (OMEMO)",
   "xmppTrustPending": "perangkat baru, belum dikonfirmasi",
-  "xmppUnconfirmedMsg": "Dari perangkat baru yang belum Anda konfirmasi."
+  "xmppUnconfirmedMsg": "Dari perangkat baru yang belum Anda konfirmasi.",
+  "telegramPluginConfirmTitle": "Pasang {name}?",
+  "telegramPluginNoPermissions": "tidak ada (tidak bisa berbuat apa-apa)",
+  "telegramPluginInstallButton": "Pasang"
 }

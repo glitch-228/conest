@@ -328,6 +328,44 @@ class _TelegramModsScreenState extends State<TelegramModsScreen> {
     widget.controller.telegram.client?.refresh();
   }
 
+  /// Shows what the plugin may do and installs it only if the user agrees.
+  Future<void> _installPlugin() async {
+    final l10n = l10nOf(context);
+    final plugin = TelegramRulePlugin.parse(_plugin.text);
+    if (plugin == null) {
+      setState(() => _pluginError = l10n.telegramPluginBad);
+      return;
+    }
+    final permissions = plugin.permissions.isEmpty
+        ? l10n.telegramPluginNoPermissions
+        : _permissions(plugin);
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.telegramPluginConfirmTitle(plugin.name)),
+        content: Text(l10n.telegramPluginPermissions(permissions)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.actionCancel),
+          ),
+          FilledButton(
+            key: const ValueKey('telegram-plugin-confirm'),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(l10n.telegramPluginInstallButton),
+          ),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    final ok = _mods.install(_plugin.text);
+    setState(() {
+      _pluginError = ok ? null : l10n.telegramPluginBad;
+      if (ok) _plugin.clear();
+    });
+    if (ok) await _save();
+  }
+
   String _permissions(TelegramPlugin plugin) {
     final l10n = l10nOf(context);
     return [
@@ -408,14 +446,7 @@ class _TelegramModsScreenState extends State<TelegramModsScreen> {
             alignment: AlignmentDirectional.centerStart,
             child: TextButton(
               key: const ValueKey('telegram-plugin-install'),
-              onPressed: () {
-                final ok = _mods.install(_plugin.text);
-                setState(() {
-                  _pluginError = ok ? null : l10n.telegramPluginBad;
-                  if (ok) _plugin.clear();
-                });
-                if (ok) _save();
-              },
+              onPressed: _installPlugin,
               child: Text(l10n.actionSave),
             ),
           ),

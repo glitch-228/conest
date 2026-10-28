@@ -1651,5 +1651,8 @@
   "telegramBridgeReadOnly": "للقراءة فقط هنا. أجب في تيليجرام على الجهاز الذي يملكه.",
   "xmppEncOmemo2Unverified": "مشفّر، غير موثّق (OMEMO)",
   "xmppTrustPending": "جهاز جديد، غير مؤكَّد",
-  "xmppUnconfirmedMsg": "من جهاز جديد لم تؤكده."
+  "xmppUnconfirmedMsg": "من جهاز جديد لم تؤكده.",
+  "telegramPluginConfirmTitle": "تثبيت {name}؟",
+  "telegramPluginNoPermissions": "لا شيء (لا يستطيع فعل أي شيء)",
+  "telegramPluginInstallButton": "تثبيت"
 }

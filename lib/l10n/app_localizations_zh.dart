@@ -5973,4 +5973,15 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get telegramBridgeReadOnly => '此处只读。请在装有 Telegram 的设备上回复。';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return '安装 $name？';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => '无（它什么也做不了）';
+
+  @override
+  String get telegramPluginInstallButton => '安装';
 }

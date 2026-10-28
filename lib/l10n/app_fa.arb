@@ -1651,5 +1651,8 @@
   "telegramBridgeReadOnly": "اینجا فقط‌خواندنی است. در تلگرام روی دستگاهی که دارد پاسخ دهید.",
   "xmppEncOmemo2Unverified": "رمزنگاری‌شده، تأییدنشده (OMEMO)",
   "xmppTrustPending": "دستگاه جدید، تأییدنشده",
-  "xmppUnconfirmedMsg": "از دستگاه جدیدی که تأیید نکرده‌اید."
+  "xmppUnconfirmedMsg": "از دستگاه جدیدی که تأیید نکرده‌اید.",
+  "telegramPluginConfirmTitle": "{name} نصب شود؟",
+  "telegramPluginNoPermissions": "هیچ (کاری نمی‌تواند بکند)",
+  "telegramPluginInstallButton": "نصب"
 }
