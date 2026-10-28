@@ -6316,8 +6316,9 @@ void main() {
     bool carrierControls = false,
     bool probeBootstrap = false,
     bool probeAuthorization = false,
+    bool relayed = false,
   }) async {
-    final network = _InProcessIrohNetwork();
+    final network = _InProcessIrohNetwork(relayed: relayed);
     final carrierNetwork = _FakeCarrierNetwork();
     final relay = _FakeRelayClient();
     final media = <FakeCallMedia>[];
@@ -6746,6 +6747,11 @@ void main() {
   test(
     'group-only members join encrypted voice calls over Iroh',
     () => groupOnlyVoiceCall(),
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+  test(
+    'group-only members hear each other through the Iroh relay',
+    () => groupOnlyVoiceCall(relayed: true),
     timeout: const Timeout(Duration(minutes: 3)),
   );
   test(

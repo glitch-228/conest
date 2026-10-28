@@ -322,11 +322,36 @@ class IrohTransportAdapter implements IrohCallMediaAdapter {
     _status = null;
   }
 
+  Future<void> _datagramTail = Future<void>.value();
+  int _datagramsQueued = 0;
+  static const int _maxQueuedDatagrams = 16;
+
+  /// The native media worker takes one datagram at a time and refuses an
+  /// overlapping one. A group call sends one frame to every member in the
+  /// same instant, so without this queue every member after the first lost
+  /// every frame. At most [_maxQueuedDatagrams] wait; the rest are dropped.
+  Future<T> _serializeDatagram<T>(Future<T> Function() job) {
+    if (_datagramsQueued >= _maxQueuedDatagrams) {
+      return Future<T>.error(StateError('Iroh media sends backed up.'));
+    }
+    _datagramsQueued++;
+    final result = _datagramTail.then((_) => job()).whenComplete(() {
+      _datagramsQueued--;
+    });
+    _datagramTail = result.then<void>((_) {}, onError: (Object _) {});
+    return result;
+  }
+
   @override
   Future<DeliveryReceipt> sendCallDatagram({
     required TransportPeer peer,
     required Uint8List bytes,
-  }) async {
+  }) => _serializeDatagram(() => _sendCallDatagramNow(peer, bytes));
+
+  Future<DeliveryReceipt> _sendCallDatagramNow(
+    TransportPeer peer,
+    Uint8List bytes,
+  ) async {
     final endpoint = peer.transportIdentity;
     final bridge = _bridge;
     if (_status == null ||

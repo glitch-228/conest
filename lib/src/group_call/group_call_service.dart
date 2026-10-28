@@ -1266,9 +1266,9 @@ class GroupCallService {
                   release();
                   GroupCallRoom._count(room.framesSent, peer);
                 },
-                onError: (Object _) {
+                onError: (Object error) {
                   release();
-                  room.noteFrameTrouble(peer, 'send failed');
+                  room.noteFrameTrouble(peer, _sendFailure(error));
                 },
               ),
         );
@@ -1276,6 +1276,18 @@ class GroupCallService {
         release();
       }
     }
+  }
+
+  /// A short, secret-free reason for a failed send: the message of the
+  /// error a transport raised on purpose, else just the kind of error.
+  static String _sendFailure(Object error) {
+    final text = error is StateError
+        ? error.message.toString()
+        : error is TimeoutException
+        ? 'timed out'
+        : error.runtimeType.toString();
+    final clean = text.replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+    return 'send failed: ${clean.length > 60 ? clean.substring(0, 60) : clean}';
   }
 
   Future<void> receiveDatagram(
