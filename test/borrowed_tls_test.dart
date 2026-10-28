@@ -110,6 +110,33 @@ void main() {
     },
   );
 
+  test(
+    'an answer that arrives with the end of the connection is not lost',
+    () async {
+      final site = await _Site.start();
+      final relay = await BorrowedRelayStub.start(
+        siteHost: '127.0.0.1',
+        sitePort: site.server.port,
+        seed: seed,
+      );
+      relay.closeAfterEcho = true;
+      addTearDown(() async {
+        await relay.close();
+        await site.server.close();
+      });
+      final channel = await BorrowedTlsChannel.connect(
+        host: '127.0.0.1',
+        port: relay.port,
+        sni: 'localhost',
+        relayIdentity: relay.identityPublic,
+        onBadCertificate: (_) => true,
+      );
+      final first = channel.input.first.timeout(const Duration(seconds: 5));
+      channel.add(utf8.encode('ping'));
+      expect(utf8.decode(await first), 'gnip');
+    },
+  );
+
   test('someone without the marker talks to the real site', () async {
     final site = await _Site.start();
     final relay = await BorrowedRelayStub.start(

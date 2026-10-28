@@ -21,10 +21,8 @@ class FakeNostrRelays {
   );
 
   /// Connections open to all relays right now.
-  int get openConnections => _relays.values.fold(
-    0,
-    (sum, relay) => sum + relay.openConnections,
-  );
+  int get openConnections =>
+      _relays.values.fold(0, (sum, relay) => sum + relay.openConnections);
 
   /// Relays not created with [relay] refuse connections.
   Future<NostrSocket> connect(Uri url) async {

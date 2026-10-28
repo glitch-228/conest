@@ -272,8 +272,9 @@ class BorrowedTlsChannel implements RelayByteChannel {
     }
 
     final done = Completer<void>();
+    var localChain = Future<void>.value();
     local.listen(
-      (chunk) async {
+      (chunk) => localChain = localChain.then((_) async {
         if (cut) return;
         fromLocal.add(chunk);
         try {
@@ -301,7 +302,7 @@ class BorrowedTlsChannel implements RelayByteChannel {
         } catch (error) {
           if (!ready.isCompleted) ready.completeError(error);
         }
-      },
+      }),
       onError: (_) {},
       onDone: () {
         if (!done.isCompleted) done.complete();
@@ -309,8 +310,11 @@ class BorrowedTlsChannel implements RelayByteChannel {
       cancelOnError: true,
     );
 
+    // Chunks are handled one after the other (opening a box is async): the
+    // end of the stream must not overtake the last records.
+    var remoteChain = Future<void>.value();
     _remoteSubscription = remote.listen(
-      (chunk) async {
+      (chunk) => remoteChain = remoteChain.then((_) async {
         try {
           if (!cut) {
             // Before the cut: the real site's records to the TLS library.
@@ -350,17 +354,17 @@ class BorrowedTlsChannel implements RelayByteChannel {
           if (!ready.isCompleted) ready.completeError(error);
           _fail(error);
         }
-      },
+      }),
       onError: (Object error) {
         if (!ready.isCompleted) ready.completeError(error);
         _fail(error);
       },
-      onDone: () {
+      onDone: () => remoteChain = remoteChain.then((_) {
         if (!ready.isCompleted) {
           ready.completeError(const SocketException('Relay closed.'));
         }
         _fail(const SocketException('Relay connection closed.'));
-      },
+      }),
       cancelOnError: true,
     );
     await done.future.timeout(const Duration(days: 1), onTimeout: () {});

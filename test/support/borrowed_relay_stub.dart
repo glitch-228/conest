@@ -21,6 +21,10 @@ class BorrowedRelayStub {
   /// Records the site was sent, per connection.
   final List<BytesBuilder> siteReceived = [];
 
+  /// Close the connection right after the first answer (as a relay does
+  /// after one v1 line).
+  bool closeAfterEcho = false;
+
   int get port => _server.port;
 
   static final _x25519 = X25519();
@@ -196,6 +200,7 @@ class BorrowedRelayStub {
             nonce: _nonce(sendCounter++),
           );
           client.add(_record([...box.cipherText, ...box.mac.bytes]));
+          if (closeAfterEcho) await client.close();
         }
       });
     }, onDone: site.destroy);
