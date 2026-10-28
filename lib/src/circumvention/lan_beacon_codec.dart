@@ -45,9 +45,13 @@ class LanBeaconCodec {
       ..[0] = json.length >> 8
       ..[1] = json.length & 0xff
       ..setRange(2, 2 + json.length, json);
+    // Never `{` first: that is how receivers tell the old cleartext form.
     final nonce = Uint8List.fromList(
       List<int>.generate(_nonceBytes, (_) => _random.nextInt(256)),
     );
+    while (nonce[0] == 0x7b) {
+      nonce[0] = _random.nextInt(256);
+    }
     final box = await _aead.encrypt(
       framed,
       secretKey: await _secretKey(),

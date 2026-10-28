@@ -199,7 +199,9 @@ class FragmentingProxy {
       var first = input.current;
       String host;
       int port;
-      final dial = _dials.remove(client.remotePort);
+      final dial = client.remoteAddress.isLoopback
+          ? _dials.remove(client.remotePort)
+          : null;
       if (dial != null) {
         host = dial.host;
         port = dial.port;
@@ -227,7 +229,10 @@ class FragmentingProxy {
         final authorized = lines.any(
           (line) =>
               line.toLowerCase().startsWith('proxy-authorization:') &&
-              line.substring(line.indexOf(':') + 1).trim() == authorization,
+              constantTimeEquals(
+                line.substring(line.indexOf(':') + 1).trim(),
+                authorization,
+              ),
         );
         if (request.length < 2 || request[0] != 'CONNECT' || !authorized) {
           client.add(
@@ -336,3 +341,13 @@ Future<List<InternetAddress>> systemResolve(String host) async {
 /// The resolver the proxy uses when DoH is on.
 Future<List<InternetAddress>> Function(String) dohResolve(DohResolver doh) =>
     doh.resolve;
+
+/// Equality that takes the same time wherever the strings differ.
+bool constantTimeEquals(String a, String b) {
+  var difference = a.length ^ b.length;
+  final length = a.length < b.length ? a.length : b.length;
+  for (var index = 0; index < length; index++) {
+    difference |= a.codeUnitAt(index) ^ b.codeUnitAt(index);
+  }
+  return difference == 0;
+}

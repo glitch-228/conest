@@ -426,6 +426,12 @@ void main() {
       );
     });
 
+    test('a sealed beacon never starts with the cleartext marker', () async {
+      for (var i = 0; i < 3000; i++) {
+        expect((await LanBeaconCodec.seal(beacon))[0], isNot(0x7b));
+      }
+    });
+
     test('quiet discovery follows the network like the other measures', () {
       final circumvention = Circumvention(
         resolver: DohResolver(endpoints: const []),
@@ -450,6 +456,13 @@ void main() {
       );
       expect(back.quietLan, CircumventionPolicy.always);
     });
+  });
+
+  test('token comparison is exact', () {
+    expect(constantTimeEquals('abc', 'abc'), isTrue);
+    expect(constantTimeEquals('abc', 'abd'), isFalse);
+    expect(constantTimeEquals('abc', 'abcd'), isFalse);
+    expect(constantTimeEquals('', ''), isTrue);
   });
 
   group('when circumvention is on', () {

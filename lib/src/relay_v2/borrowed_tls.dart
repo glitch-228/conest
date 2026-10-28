@@ -122,6 +122,7 @@ class BorrowedTlsChannel implements RelayByteChannel {
     final ready = Completer<void>();
     SecureSocket? tls;
     Socket? local;
+    final plainPort = Completer<int>();
     void fail(Object error) {
       if (!ready.isCompleted) ready.completeError(error);
     }
@@ -137,7 +138,14 @@ class BorrowedTlsChannel implements RelayByteChannel {
       }
       channel._remote = remote;
       unawaited(
-        tap.first.then((accepted) {
+        tap.first.then((accepted) async {
+          // Only our own dial: another process on this machine that raced
+          // the loopback port is turned away.
+          if (accepted.remotePort != await plainPort.future) {
+            accepted.destroy();
+            fail(const SocketException('Unexpected loopback connection.'));
+            return;
+          }
           local = accepted;
           unawaited(
             channel
@@ -151,6 +159,7 @@ class BorrowedTlsChannel implements RelayByteChannel {
         tap.port,
         timeout: timeout,
       );
+      plainPort.complete(plain.port);
       // The handshake is the TLS library's own; an unusable certificate
       // stops it here, before the marker is ever sent.
       final secure = SecureSocket.secure(
