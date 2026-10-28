@@ -10872,21 +10872,10 @@ class MessengerController extends ChangeNotifier {
     final refusalsChanged =
         me.connectivity.contentRefusals != prefs.contentRefusals;
     // The settings shared with own devices: a change here is told to them.
-    final sharedBefore = _sharedSettingsOf(me.connectivity);
-    final sharedNow = _sharedSettingsOf(prefs);
-    final tellSettings =
-        prefs.shareSettings &&
-        !_applyingSharedSettings &&
-        (!me.connectivity.shareSettings || !mapEquals(sharedBefore, sharedNow));
+    final tellSettings = _sharedSettingsChanged(me.connectivity, prefs);
     if (tellSettings) prefs = prefs.copyWith(settingsChangedAt: _now().toUtc());
     _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: prefs));
-    if (tellSettings) {
-      _syncToOwnDevices({
-        'type': 'settings',
-        'at': prefs.settingsChangedAt!.toIso8601String(),
-        'values': sharedNow,
-      });
-    }
+    if (tellSettings) _tellSharedSettings(prefs);
     if (restartNative) {
       await _stopTransportRegistry();
     }
@@ -10955,27 +10944,27 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> updateIrohTransferLimitEnabled(bool enabled) async {
     final me = _requireIdentity();
-    _snapshot = _snapshot.copyWith(
-      identity: me.copyWith(
-        connectivity: me.connectivity.copyWith(
-          irohTransferLimitEnabled: enabled,
-        ),
-      ),
-    );
+    var next = me.connectivity.copyWith(irohTransferLimitEnabled: enabled);
+    final tell = _sharedSettingsChanged(me.connectivity, next);
+    if (tell) next = next.copyWith(settingsChangedAt: _now().toUtc());
+    _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: next));
+    if (tell) _tellSharedSettings(next);
     await _saveSnapshotSilently();
-    if (!enabled) {
-      for (final state in _inboundAttachments.values.toList()) {
-        if (!state.accepted || state.finalizing) continue;
-        final peer = _contactByDeviceId(state.peerDeviceId);
-        if (peer == null) continue;
-        state.requestedInFlight.clear();
-        _scheduleAttachmentRetry(state.descriptor.id);
-        _startInboundRequestWindow(state, peer);
-      }
-      for (final state in _outboundAttachments.values.toList()) {
-        final peer = _contactByDeviceId(state.peerDeviceId);
-        if (peer != null) _pumpOutboundQueue(peer);
-      }
+    if (!enabled) _resumeTransfersAfterIrohLimitLifted();
+  }
+
+  void _resumeTransfersAfterIrohLimitLifted() {
+    for (final state in _inboundAttachments.values.toList()) {
+      if (!state.accepted || state.finalizing) continue;
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer == null) continue;
+      state.requestedInFlight.clear();
+      _scheduleAttachmentRetry(state.descriptor.id);
+      _startInboundRequestWindow(state, peer);
+    }
+    for (final state in _outboundAttachments.values.toList()) {
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer != null) _pumpOutboundQueue(peer);
     }
   }
 
@@ -10999,11 +10988,11 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> updateStorageReserveEnabled(bool enabled) async {
     final me = _requireIdentity();
-    _snapshot = _snapshot.copyWith(
-      identity: me.copyWith(
-        connectivity: me.connectivity.copyWith(storageReserveEnabled: enabled),
-      ),
-    );
+    var next = me.connectivity.copyWith(storageReserveEnabled: enabled);
+    final tell = _sharedSettingsChanged(me.connectivity, next);
+    if (tell) next = next.copyWith(settingsChangedAt: _now().toUtc());
+    _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: next));
+    if (tell) _tellSharedSettings(next);
     await _persist(
       enabled
           ? '10% free-space reserve enabled.'
@@ -34137,6 +34126,29 @@ class MessengerController extends ChangeNotifier {
   };
 
   bool _applyingSharedSettings = false;
+  String? _lastSharedSettingsNotice;
+
+  @visibleForTesting
+  String? get lastSharedSettingsNoticeForTesting => _lastSharedSettingsNotice;
+
+  /// Whether going from [before] to [after] is a change to tell the other
+  /// devices of (they share, and a shared setting changed or sharing began).
+  bool _sharedSettingsChanged(
+    GlobalConnectivityPreferences before,
+    GlobalConnectivityPreferences after,
+  ) =>
+      after.shareSettings &&
+      !_applyingSharedSettings &&
+      (!before.shareSettings ||
+          !mapEquals(_sharedSettingsOf(before), _sharedSettingsOf(after)));
+
+  void _tellSharedSettings(GlobalConnectivityPreferences prefs) {
+    _syncToOwnDevices({
+      'type': 'settings',
+      'at': prefs.settingsChangedAt!.toIso8601String(),
+      'values': _sharedSettingsOf(prefs),
+    });
+  }
 
   /// Settings another own device shared: taken when this device shares too,
   /// the change is newer than the last one here, and every value is one of
@@ -34172,11 +34184,25 @@ class MessengerController extends ChangeNotifier {
     if (values['irohTransferLimitEnabled'] case final bool value) {
       next = next.copyWith(irohTransferLimitEnabled: value);
     }
+    final limitLifted =
+        me.connectivity.irohTransferLimitEnabled &&
+        !next.irohTransferLimitEnabled;
+    final changed = !mapEquals(
+      _sharedSettingsOf(me.connectivity),
+      _sharedSettingsOf(next),
+    );
     _applyingSharedSettings = true;
     try {
       await updateGlobalConnectivity(next.copyWith(settingsChangedAt: when));
     } finally {
       _applyingSharedSettings = false;
+    }
+    if (limitLifted) _resumeTransfersAfterIrohLimitLifted();
+    if (changed) {
+      _lastSharedSettingsNotice =
+          'Settings were changed from your other device '
+          '${sender.deviceName ?? sender.alias}.';
+      _setTransientStatus(_lastSharedSettingsNotice!);
     }
   }
 

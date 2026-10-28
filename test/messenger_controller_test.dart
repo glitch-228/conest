@@ -21089,14 +21089,29 @@ void main() {
         await alice.updateGlobalConnectivity(
           alice.identity!.connectivity.copyWith(
             autoDownloadPreset: AutoDownloadPreset.high,
-            storageReserveEnabled: false,
           ),
         );
         await settle(
           () => presetOf(phone) == AutoDownloadPreset.high,
           'the phone did not take the change',
         );
-        expect(phone.identity!.connectivity.storageReserveEnabled, isFalse);
+        // The dedicated toggles are shared too, and the user is told.
+        advance(const Duration(minutes: 1));
+        await alice.updateStorageReserveEnabled(false);
+        await settle(
+          () => !phone.identity!.connectivity.storageReserveEnabled,
+          'the phone did not take the storage reserve',
+        );
+        expect(
+          phone.lastSharedSettingsNoticeForTesting,
+          contains('Settings were changed'),
+        );
+        advance(const Duration(minutes: 1));
+        await alice.updateIrohTransferLimitEnabled(false);
+        await settle(
+          () => !phone.identity!.connectivity.irohTransferLimitEnabled,
+          'the phone did not take the Iroh limit',
+        );
         // And back, from the phone.
         advance(const Duration(minutes: 1));
         await phone.updateGlobalConnectivity(
