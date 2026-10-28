@@ -47,16 +47,35 @@ class DohResolver {
   static const int _maxCache = 256;
 
   /// The addresses of [host] (an address itself is returned as it is).
-  Future<List<InternetAddress>> resolve(String host) async {
+  ///
+  /// [systemFallback]: when no DoH resolver answers, the system resolver
+  /// may (off under "always": the user asked for names that never go
+  /// through the local resolver). Names that cannot be public ones (no dot,
+  /// `.local`, `.lan`, `.internal`, `.home.arpa`, `.ts.net`) always use the
+  /// system resolver, since no public resolver knows them (LAN, Tailscale
+  /// and split-horizon hosts keep working, private answers included). For
+  /// any other name a private answer is a sinkhole's, and is refused.
+  Future<List<InternetAddress>> resolve(
+    String host, {
+    bool systemFallback = true,
+  }) async {
     final literal = InternetAddress.tryParse(host);
     if (literal != null) return [literal];
     final name = host.toLowerCase();
+    if (_isLocalName(name)) {
+      final local = await _systemLookup(name);
+      if (local.isEmpty) throw SocketException('No address for $host.');
+      return local;
+    }
     final cached = _cache[name];
     if (cached != null && DateTime.now().isBefore(cached.until)) {
       return cached.addresses;
     }
     var addresses = await _overHttps(name);
     if (addresses.isEmpty) {
+      if (!systemFallback) {
+        throw SocketException('No private-DNS answer for $host.');
+      }
       final system = await _systemLookup(name);
       addresses = system.where((address) => !looksPoisoned(address)).toList();
       if (addresses.isEmpty) {
@@ -101,6 +120,14 @@ class DohResolver {
     if (endpoints.isEmpty) return const [];
     return done.future.timeout(timeout, onTimeout: () => const []);
   }
+
+  static bool _isLocalName(String name) =>
+      !name.contains('.') ||
+      name.endsWith('.local') ||
+      name.endsWith('.lan') ||
+      name.endsWith('.internal') ||
+      name.endsWith('.home.arpa') ||
+      name.endsWith('.ts.net');
 
   static Future<List<int>> _httpTransport(
     Uri endpoint,

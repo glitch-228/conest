@@ -1660,7 +1660,9 @@ class RelayClient {
       requestBytes = datagram;
       sealedReply = reply;
     }
-    final addresses = await InternetAddress.lookup(host).timeout(timeout);
+    final addresses = await Circumvention.instance
+        .resolve(host)
+        .timeout(timeout);
     if (addresses.isEmpty) {
       throw StateError('No address found for UDP relay host $host.');
     }

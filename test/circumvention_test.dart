@@ -305,6 +305,52 @@ void main() {
       },
     );
 
+    test('under "always" the system resolver is never asked', () async {
+      var systemAsked = 0;
+      final resolver = DohResolver(
+        endpoints: [Uri.parse('https://a.test/dns-query')],
+        transport: (_, _, _) async => throw const SocketException('blocked'),
+        systemLookup: (_) async {
+          systemAsked++;
+          return [good];
+        },
+      );
+      await expectLater(
+        resolver.resolve('fine.example', systemFallback: false),
+        throwsA(isA<SocketException>()),
+      );
+      expect(systemAsked, 0);
+      expect(await resolver.resolve('fine.example'), [good]);
+      expect(systemAsked, 1);
+    });
+
+    test('LAN and tailnet names go to the system resolver, private answers '
+        'included', () async {
+      final lan = InternetAddress('192.168.1.20');
+      final resolver = DohResolver(
+        endpoints: [Uri.parse('https://a.test/dns-query')],
+        transport: (_, _, _) async => throw StateError('DoH must not be asked'),
+        systemLookup: (_) async => [lan],
+      );
+      for (final name in ['nas', 'printer.lan', 'box.ts.net', 'x.local']) {
+        expect(await resolver.resolve(name, systemFallback: false), [
+          lan,
+        ], reason: name);
+      }
+    });
+
+    test('the UDP path resolves through the same circumvention', () async {
+      final circumvention = Circumvention(
+        resolver: DohResolver(
+          endpoints: [Uri.parse('https://a.test/dns-query')],
+          transport: (endpoint, query, timeout) async =>
+              _answer(query, _queryType(query) == 1 ? [good] : []),
+          systemLookup: (_) async => [sinkhole],
+        ),
+      )..update(blockedHere: true);
+      expect(await circumvention.resolve('relay.example'), [good]);
+    });
+
     test('a poisoned DoH answer loses to a good one', () async {
       final resolver = DohResolver(
         endpoints: [

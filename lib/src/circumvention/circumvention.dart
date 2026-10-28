@@ -125,8 +125,18 @@ class Circumvention {
     }
   }
 
-  Future<List<InternetAddress>> _resolve(String host) async {
-    if (privateDnsActive) return _doh.resolve(host);
+  Future<List<InternetAddress>> _resolve(String host) => resolve(host);
+
+  /// The addresses of [host]: over DoH while private DNS is in use (the
+  /// system resolver only as a fallback under "automatic", never under
+  /// "always"), otherwise the system's.
+  Future<List<InternetAddress>> resolve(String host) async {
+    if (privateDnsActive) {
+      return _doh.resolve(
+        host,
+        systemFallback: preferences.privateDns != CircumventionPolicy.always,
+      );
+    }
     return systemResolve(host);
   }
 
@@ -189,7 +199,7 @@ class Circumvention {
     if (!privateDnsActive) {
       return Socket.connect(host, port, timeout: timeout);
     }
-    final addresses = await _doh.resolve(host);
+    final addresses = await resolve(host);
     Object? lastError;
     for (final address in addresses.take(3)) {
       try {
