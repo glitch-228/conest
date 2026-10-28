@@ -218,7 +218,7 @@ class TelegramCarrierChannel
           return;
         }
         failures++;
-        _set(TelegramCarrierState.failed, error.toString());
+        _set(TelegramCarrierState.failed, _scrub(error));
         await _wait(
           error.retryAfter != null
               ? Duration(seconds: min(error.retryAfter!, 120))
@@ -227,11 +227,15 @@ class TelegramCarrierChannel
       } catch (error) {
         if (!_running) return;
         failures++;
-        _set(TelegramCarrierState.failed, error.toString());
+        _set(TelegramCarrierState.failed, _scrub(error));
         await _wait(_backoff(failures));
       }
     }
   }
+
+  /// An error's text without the bot token (URLs in I/O errors hold it).
+  String _scrub(Object error) =>
+      error.toString().replaceAll(config.token, '***');
 
   Duration _backoff(int failures) {
     final base = retryDelay.inMilliseconds * (1 << min(failures - 1, 5));
@@ -282,8 +286,17 @@ class TelegramCarrierChannel
       try {
         await _sendOne(address, text);
         done.complete();
+      } on TelegramBotException catch (error) {
+        done.completeError(
+          TelegramBotException(
+            error.method,
+            error.code,
+            error.description.replaceAll(config.token, '***'),
+            retryAfter: error.retryAfter,
+          ),
+        );
       } catch (error) {
-        done.completeError(error);
+        done.completeError(StateError(_scrub(error)));
       } finally {
         _queued--;
       }

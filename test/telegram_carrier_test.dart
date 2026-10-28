@@ -240,6 +240,60 @@ void main() {
     expect(TelegramBotConfig.fromJson({'token': 'x'}), isNull);
   });
 
+  test('an I/O error that quotes the token never shows it', () async {
+    const token = '123456:TOKEN_TOKEN_TOKEN_TOKEN_TOKEN_00';
+    final api = _ThrowingApi(
+      HttpException(
+        'Connection closed',
+        uri: Uri.parse('https://api.telegram.org/bot$token/getUpdates'),
+      ),
+    );
+    final channel = TelegramCarrierChannel(
+      config: const TelegramBotConfig(
+        token: token,
+        username: 'bob_conest_bot',
+        botId: 123456,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      retryDelay: const Duration(milliseconds: 5),
+      sendSpacing: Duration.zero,
+      wait: (_) => Future<void>.delayed(const Duration(milliseconds: 5)),
+    )..start();
+    addTearDown(channel.stop);
+    await until(() => channel.state == TelegramCarrierState.failed);
+    expect(channel.lastError, isNotNull);
+    expect(channel.lastError, isNot(contains('TOKEN_TOKEN')));
+    Object? sendError;
+    try {
+      await channel.sendFrame('alice_conest_bot', Uint8List(2));
+    } catch (error) {
+      sendError = error;
+    }
+    expect(sendError, isNotNull);
+    expect('$sendError', isNot(contains('TOKEN_TOKEN')));
+  });
+
+  test('the HTTP client scrubs the token from I/O errors', () async {
+    const token = '123456:TOKEN_TOKEN_TOKEN_TOKEN_TOKEN_00';
+    final raw = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(raw.close);
+    raw.listen((socket) {
+      socket.add(utf8.encode('GARBAGE\r\n\r\n'));
+      socket.close();
+    });
+    final api = HttpTelegramBotApi(
+      token,
+      apiRoot: Uri.parse('http://127.0.0.1:${raw.port}'),
+    );
+    try {
+      await api.call('getMe');
+      fail('should throw');
+    } on TelegramBotException catch (error) {
+      expect(error.toString(), isNot(contains('TOKEN_TOKEN')));
+    }
+  });
+
   group('the HTTP Bot API', () {
     late HttpServer server;
     late List<String> paths;
@@ -301,4 +355,19 @@ void main() {
       }
     });
   });
+}
+
+class _ThrowingApi implements TelegramBotApi {
+  _ThrowingApi(this.error);
+  final Object error;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> parameters = const {},
+    Duration timeout = const Duration(seconds: 30),
+  ]) async => throw error;
+
+  @override
+  void close() {}
 }

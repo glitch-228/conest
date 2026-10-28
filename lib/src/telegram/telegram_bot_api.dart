@@ -82,6 +82,16 @@ class HttpTelegramBotApi implements TelegramBotApi {
       throw TelegramBotException(method, 0, error.message);
     } on HandshakeException {
       throw TelegramBotException(method, 0, 'TLS handshake failed');
+    } on TelegramBotException {
+      rethrow;
+    } catch (error) {
+      // Other I/O errors (HttpException, FormatException, ...) can quote the
+      // URL, which holds the token.
+      throw TelegramBotException(
+        method,
+        0,
+        error.toString().replaceAll(token, '***'),
+      );
     }
   }
 
