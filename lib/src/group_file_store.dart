@@ -22,6 +22,10 @@ class GroupFileStore {
   Future<void> _tail = Future.value();
   int _queuedWrites = 0;
 
+  /// Writes waiting at most: the four pieces of a download window and the
+  /// pieces asked of a second provider (hedged) alongside them.
+  static const int maxQueuedWrites = 8;
+
   Future<T> _serialize<T>(Future<T> Function() action) {
     final result = _tail.then((_) => action());
     _tail = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
@@ -37,7 +41,7 @@ class GroupFileStore {
     if (bytes.length != manifest.lengthOf(index)) {
       return Future.error(const FormatException('Invalid group piece length.'));
     }
-    if (_queuedWrites >= 4) {
+    if (_queuedWrites >= maxQueuedWrites) {
       return Future.error(StateError('Group file write queue is full.'));
     }
     _queuedWrites++;

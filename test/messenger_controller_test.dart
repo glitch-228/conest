@@ -3935,6 +3935,77 @@ void main() {
   });
 
   test(
+    'a file whose only route is refused waits for another instead of failing',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final side in [alice, bob]) {
+        await side.updateGlobalConnectivity(_irohOnlyConnectivity);
+      }
+      await _pairControllers(alice, bob);
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(
+          contentRefusals: const ContentRefusals().withRefused(
+            TransportKind.iroh,
+            ContentClass.fileMedium,
+            true,
+          ),
+        ),
+      );
+      final sourceRoot = await Directory.systemTemp.createTemp('conest-wait-');
+      addTearDown(() => sourceRoot.delete(recursive: true));
+      final bytes = Uint8List(12 * 1024 * 1024);
+      final file = await File('${sourceRoot.path}/w.bin').writeAsBytes(bytes);
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'w',
+          fileName: 'w.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: bytes.length,
+          filePath: file.path,
+        ),
+      );
+      final bobId = bob.identity!.deviceId;
+      for (var i = 0; i < 150; i++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        final incoming = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment != null)
+            .firstOrNull;
+        if (incoming != null &&
+            bob.attachmentAwaitingAcceptance(incoming.attachment!.id)) {
+          await bob.acceptIncomingAttachment(incoming.attachment!.id);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final sent = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.attachment?.fileName == 'w.bin');
+      expect(sent.state, isNot(DeliveryState.failed));
+      final session = alice.transferSnapshots.where(
+        (t) => t.id == sent.attachment!.id,
+      );
+      expect(session, isNotEmpty);
+      expect(session.single.phase, isNot(TransferPhase.failed));
+    },
+    timeout: const Timeout(Duration(minutes: 1)),
+  );
+
+  test(
     'a big group file (over the online limit) still reaches a member over LAN',
     () async {
       final relay = _FakeRelayClient();
@@ -20841,6 +20912,50 @@ void main() {
         final path = (await phone.attachmentCachePathFor(id))!;
         await File(path).delete();
         expect(await phone.ownDeviceServesForTesting(aliceId, id), isFalse);
+      });
+
+      test('a reach report is bounded, and digests leave out what history '
+          'does not carry and are not recomputed at once', () async {
+        final (alice, bob, phone, _, _, advance) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        final phoneId = phone.identity!.deviceId;
+        await phone.sendAccountSyncForTesting(aliceId, {
+          'type': 'reach',
+          'heard': {bobId: 1 << 62, 'other': 30},
+        });
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice.ownReachForTesting(phoneId) != null;
+        }, reason: 'the report did not come');
+        expect(alice.ownReachForTesting(phoneId), {'other': 30});
+        // A group file is not in the digest; a text is, and not at once.
+        final group = await alice.createGroup(
+          title: 'G',
+          members: [alice.contacts.single],
+        );
+        final root = await Directory.systemTemp.createTemp('conest-dg-');
+        addTearDown(() => root.delete(recursive: true));
+        final file = await File('${root.path}/f.bin').writeAsBytes([1, 2, 3]);
+        await alice.publishGroupFile(
+          groupId: group.groupId,
+          path: file.path,
+          fileName: 'f.bin',
+          mimeType: 'application/octet-stream',
+        );
+        final first = alice.chatDigestsForTesting();
+        expect(first.containsKey('group:${group.groupId}'), isFalse);
+        await alice.sendGroupMessage(groupId: group.groupId, body: 'hello');
+        expect(
+          alice.chatDigestsForTesting().containsKey('group:${group.groupId}'),
+          isFalse,
+          reason: 'not recomputed within a few seconds',
+        );
+        advance(const Duration(seconds: 30));
+        expect(
+          alice.chatDigestsForTesting().containsKey('group:${group.groupId}'),
+          isTrue,
+        );
       });
 
       test('a file that reached only the laptop shows on the phone, '

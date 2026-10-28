@@ -20823,7 +20823,12 @@ class MessengerController extends ChangeNotifier {
                   mimeType: descriptor.mimeType,
                   sizeBytes: descriptor.sizeBytes,
                   network: _networkCostClass,
-                  verifiedContact: sender.canSendOutbound,
+                  // A file an own device passed on counts by who sent it first.
+                  verifiedContact: fromOwnDevice
+                      ? (chatId == identity?.deviceId ||
+                            (_contactByDeviceId(chatId)?.canSendOutbound ??
+                                false))
+                      : sender.canSendOutbound,
                 ));
     final awaitingAcceptance =
         debugTest == null &&
@@ -20901,8 +20906,9 @@ class MessengerController extends ChangeNotifier {
   }
 
   AttachmentDescriptor _validateIncomingAttachmentDescriptor(
-    AttachmentDescriptor descriptor,
-  ) {
+    AttachmentDescriptor descriptor, {
+    bool allowOld = false,
+  }) {
     final now = _now().toUtc();
     final createdAt = descriptor.createdAt.toUtc();
     final safeFileName = sanitizeAttachmentFileName(descriptor.fileName);
@@ -20926,7 +20932,8 @@ class MessengerController extends ChangeNotifier {
         descriptor.fileName != safeFileName ||
         !isValidAttachmentMimeType(descriptor.mimeType) ||
         createdAt.isAfter(now.add(const Duration(days: 1))) ||
-        createdAt.isBefore(now.subtract(const Duration(days: 30)))) {
+        (!allowOld &&
+            createdAt.isBefore(now.subtract(const Duration(days: 30))))) {
       throw const FormatException('Attachment descriptor is out of range.');
     }
     if (descriptor.sizeBytes > maxAttachmentSizeBytes &&
@@ -21519,6 +21526,25 @@ class MessengerController extends ChangeNotifier {
         error: allowIrohRelay
             ? 'Iroh path failed; retrying the verified block.'
             : 'Direct Iroh is unavailable; waiting without using a relay.',
+      );
+      return;
+    }
+    // Blocks this size go only by LAN or Iroh: when the user's refusals
+    // close one of them, wait for the other instead of failing.
+    if (state.descriptor.chunkSize > _attachmentChunkSize &&
+        (!_fileBlocksAllowed(
+              requester,
+              TransportKind.iroh,
+              state.descriptor.sizeBytes,
+            ) ||
+            !_fileBlocksAllowed(
+              requester,
+              TransportKind.lan,
+              state.descriptor.sizeBytes,
+            ))) {
+      setSession(
+        TransferState.waitingForLan,
+        error: 'Waiting for a route this file may use.',
       );
       return;
     }
@@ -34220,20 +34246,35 @@ class MessengerController extends ChangeNotifier {
   /// The chats' ids in short, for the other devices to compare: recent
   /// messages only, the same window on every device.
   Map<String, ChatDigest> _chatDigests() {
+    final at = _now();
+    final cached = _digestCache;
+    if (cached != null &&
+        at.difference(cached.$1).abs() < const Duration(seconds: 20)) {
+      return cached.$2;
+    }
     final since = _now().toUtc().subtract(const Duration(days: 7));
     final digests = <String, ChatDigest>{};
     for (final chat in _historyChats) {
       final held = _historyMessages(chat);
       if (held == null) continue;
+      // What history carries, no more (polls and group files it does not).
       final ids = [
         for (final message in held)
-          if (!message.deleted && message.createdAt.isAfter(since)) message,
+          if (!message.deleted &&
+              message.poll == null &&
+              message.groupFile == null &&
+              message.createdAt.isAfter(since))
+            message,
       ]..sort(_historyOrder);
       if (ids.isEmpty) continue;
       digests[chat] = ChatDigest.of(ids.take(200).map((m) => m.id));
     }
+    _digestCache = (at, digests);
     return digests;
   }
+
+  /// The last digests and when they were made (not recomputed within 20 s).
+  (DateTime, Map<String, ChatDigest>)? _digestCache;
 
   /// Tells [deviceId] what this device holds (digests), and which contacts
   /// it hears (reach), when syncing is allowed.
@@ -34312,6 +34353,13 @@ class MessengerController extends ChangeNotifier {
     _syncToOwnDevices({'type': 'reach', 'heard': heard}, only: only);
   }
 
+  @visibleForTesting
+  Map<String, int>? ownReachForTesting(String deviceId) =>
+      _ownReach[deviceId]?.$2;
+
+  @visibleForTesting
+  Map<String, ChatDigest> chatDigestsForTesting() => _chatDigests();
+
   void _takeReach(ContactRecord sender, Object? heard) {
     if (heard is! Map || heard.length > _maxReachContacts) return;
     final report = <String, int>{
@@ -34319,7 +34367,8 @@ class MessengerController extends ChangeNotifier {
         if (entry.key is String &&
             (entry.key as String).length <= 160 &&
             entry.value is int &&
-            (entry.value as int) >= 0)
+            (entry.value as int) >= 0 &&
+            (entry.value as int) <= 24 * 3600)
           entry.key as String: entry.value as int,
     };
     final held = _ownReach[sender.deviceId];
@@ -35421,7 +35470,11 @@ class MessengerController extends ChangeNotifier {
       final attached = message.attachment;
       if (attached != null) {
         try {
-          _validateIncomingAttachmentDescriptor(attached);
+          // Saved keeps everything, however old.
+          _validateIncomingAttachmentDescriptor(
+            attached,
+            allowOld: chat == 'saved',
+          );
         } catch (_) {
           continue;
         }
