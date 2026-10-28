@@ -281,8 +281,8 @@ pub(crate) struct Session {
     streams: Mutex<HashMap<u32, AbortHandle>>,
     subscriptions: AtomicUsize,
     /// Set once the session shows it is a real user: it proved a mailbox
-    /// that was owned before it came, or it received mail for one it
-    /// proved. (Claiming a fresh id with a throwaway key proves nothing.)
+    /// whose claim is days old (not a throwaway one; mail stored to one's own
+    /// mailbox proves nothing). (Claiming a fresh id with a throwaway key proves nothing.)
     trusted: std::sync::atomic::AtomicBool,
     /// Mailboxes whose owner proved itself on this session.
     proved: Mutex<ProvedMailboxes>,
@@ -561,22 +561,6 @@ impl Session {
                     detached,
                     &self.state.identity,
                 );
-                // Mail that reached a mailbox this session proved makes it a
-                // user too.
-                if !self.trusted.load(Ordering::Acquire)
-                    && answer["messages"].as_array().is_some_and(|all| !all.is_empty())
-                    && serde_json::from_slice::<Value>(&payload)
-                        .ok()
-                        .and_then(|request| {
-                            request
-                                .get("recipient_device_id")
-                                .and_then(Value::as_str)
-                                .map(|mailbox| self.has_proved(mailbox))
-                        })
-                        .unwrap_or(false)
-                {
-                    self.trusted.store(true, Ordering::Release);
-                }
                 // Inside a session only, and only to one that has shown it
                 // is a user (a registered token, or a mailbox it proved):
                 // the hidden addresses are not for every anonymous caller.
@@ -653,7 +637,8 @@ impl Session {
             return error_json("too many mailboxes on one session");
         }
         let mailbox_text = request.get("mailbox").and_then(Value::as_str);
-        let owned_before = mailbox_text.is_some_and(|mailbox| self.state.owner_of(mailbox).is_some());
+        let owned_before =
+            mailbox_text.is_some_and(|mailbox| self.state.owner_is_established(mailbox));
         match self
             .state
             .authorize_session(&request, &self.handshake_hash, &self.peer)
@@ -798,9 +783,6 @@ impl Session {
                 fresh.push(message);
             }
             if !fresh.is_empty() {
-                if self.has_proved(&mailbox) {
-                    self.trusted.store(true, Ordering::Release);
-                }
                 let event = json!({
                     "ok": true,
                     "mailbox": mailbox,

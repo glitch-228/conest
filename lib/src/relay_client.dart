@@ -559,7 +559,8 @@ class RelayClient {
 
   /// Whether the relay says [recipientDeviceId]'s mailbox is vouched for by
   /// [expectedSigningKeyBase64] (the contact's signing key): `matches`,
-  /// `unclaimed` (nobody vouched yet) or `other`. The relay tells no key,
+  /// `unclaimed` (nobody claimed it), `unvouched` (claimed, but nobody
+  /// vouched for the claim, past a short grace) or `other`. The relay tells no key,
   /// and the question goes only inside a v2 session: null when there is
   /// none (nothing is sent in the clear), or when the relay does not know
   /// the question.
@@ -590,7 +591,10 @@ class RelayClient {
       'expected_key': expectedSigningKeyBase64,
     }, timeout: timeout);
     final word = answer['vouch'];
-    return word == 'matches' || word == 'unclaimed' || word == 'other'
+    return word == 'matches' ||
+            word == 'unclaimed' ||
+            word == 'unvouched' ||
+            word == 'other'
         ? word as String
         : null;
   }

@@ -98,6 +98,30 @@ device's signing key can vouch; and the relay cannot check that the device
 id belongs to the key it was vouched with, only that nobody else vouched
 first.
 
+Details worth knowing:
+
+- A claim nobody vouched for (an old client's, or a stranger's claim over
+  v1) is provisional. For ten minutes after the claim, `mailbox_owner`
+  answers `unclaimed` (the real owner may still vouch); after that it
+  answers `unvouched`, and senders treat it like `other`. A session that
+  vouches takes a provisional mailbox over; a vouched claim is never taken
+  over. Old devices that never vouch are therefore avoided by new senders
+  on relays that keep owners, until they update.
+- `mailbox_owner` without `expected_key` still tells whether the mailbox
+  is claimed (`other`/`unvouched` versus `unclaimed`): existence is not a
+  secret here, only the keys are.
+- The hidden and borrowed addresses (and the certificate statement) are
+  told only to registered accounts and to sessions that prove a mailbox
+  claimed at least three days ago. The signed certificate statement needs
+  `public-host`; a borrowed-only relay without it signs none (its clients
+  validate the borrowed site's certificate the ordinary way, which needs
+  no statement).
+- Private DNS does not bypass the resolver for `.ts.net` names: a tailnet
+  name is a public-suffix name, so with private DNS on it is looked up
+  over DoH like any other (use the tailnet address, or switch private DNS
+  off, to reach a tailnet relay). Single-label, `.local`, `.lan`,
+  `.internal` and `.home.arpa` names always use the system resolver.
+
 ## TLS on 443 with a decoy site
 
 ```

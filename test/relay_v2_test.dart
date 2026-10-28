@@ -239,6 +239,50 @@ void main() {
       expect(refused['ok'], isFalse);
     });
 
+    test('a paused subscription is cut off when it piles up; the session '
+        'keeps answering', () async {
+      final (_, port, identity) = await _startRelay();
+      await const RelayClient().inspectHealth(
+        host: '127.0.0.1',
+        port: port,
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      final noiseKey = RelayClient.sessionInfoFor('127.0.0.1', port)!.noiseKey!;
+      final saved = RelayV2Session.pausedBytesLimit;
+      RelayV2Session.pausedBytesLimit = 2000;
+      addTearDown(() => RelayV2Session.pausedBytesLimit = saved);
+      final session = await RelayV2Session.connect(
+        channel: await SocketRelayChannel.connect('127.0.0.1', port),
+        relayNoiseKey: noiseKey,
+      );
+      addTearDown(session.close);
+      final errors = <Object>[];
+      final subscription = session
+          .subscribe({
+            'action': 'subscribe',
+            'mailboxes': ['dev-slow'],
+          })
+          .listen((_) {}, onError: errors.add);
+      addTearDown(subscription.cancel);
+      subscription.pause();
+      for (var index = 0; index < 12; index++) {
+        final answer = await session.request({
+          'action': 'store',
+          'recipient_device_id': 'dev-slow',
+          'envelope': _envelope('slow$index', recipient: 'dev-slow').toJson(),
+        });
+        // Requests keep being answered while the consumer is paused.
+        expect(answer['stored'], isTrue);
+      }
+      // The consumer wakes up: it finds itself cut off.
+      subscription.resume();
+      for (var tries = 0; tries < 50 && errors.isEmpty; tries++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(errors, isNotEmpty, reason: 'the slow consumer was not cut off');
+      expect(session.isClosed, isFalse);
+    });
+
     test('a session against the wrong key fails', () async {
       final (_, port, _) = await _startRelay();
       final wrong = await X25519().newKeyPairFromSeed(List<int>.filled(32, 9));

@@ -29806,7 +29806,9 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (word == null) return;
-    final ok = word != 'other';
+    // A claim nobody vouched for ('unvouched') is as untrustworthy as one
+    // vouched for by another key.
+    final ok = word == 'matches' || word == 'unclaimed';
     if (_mailboxVouched.length >= 256) {
       _mailboxVouched.remove(_mailboxVouched.keys.first);
     }

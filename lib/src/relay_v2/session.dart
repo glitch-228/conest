@@ -5,6 +5,8 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'frames.dart';
 import 'noise_nk.dart';
 
@@ -281,25 +283,31 @@ class RelayV2Session {
     );
   }
 
-  /// Bytes of events held for paused subscriptions before reading stops.
-  static const int _pausedBytesLimit = 4 * 1024 * 1024;
-  int _pausedBytes = 0;
-  Completer<void>? _resumeGate;
+  /// Bytes of events one paused subscription may hold before it is cut off.
+  @visibleForTesting
+  static int pausedBytesLimit = 4 * 1024 * 1024;
+  final Map<int, int> _heldBytes = {};
 
-  void _subscriptionResumed() {
-    if (_subscriptions.values.any((controller) => controller.isPaused)) return;
-    _pausedBytes = 0;
-    final gate = _resumeGate;
-    _resumeGate = null;
-    if (gate != null && !gate.isCompleted) gate.complete();
+  void _cutOff(int stream, StreamController<Map<String, dynamic>> controller) {
+    _heldBytes.remove(stream);
+    if (_subscriptions.remove(stream) == null) return;
+    controller
+      ..addError(const RelayV2Unavailable('Subscription consumer too slow.'))
+      ..close();
+    if (!_closed) {
+      unawaited(
+        _send(
+          RelayV2FrameType.cancel,
+          stream,
+          const [],
+        ).catchError((Object _) {}),
+      );
+    }
   }
 
   Future<void> _readLoop() async {
     try {
       while (!_closed) {
-        final gate = _resumeGate;
-        if (gate != null) await gate.future;
-        if (_closed) break;
         final header = await _reader.readExact(2);
         final length = (header[0] << 8) | header[1];
         if (length < relayV2Tag) {
@@ -365,15 +373,15 @@ class RelayV2Session {
         final subscription = _subscriptions[frame.stream];
         if (subscription != null && body != null) {
           subscription.add(body);
-          // A consumer that has paused its subscription lets events pile up
-          // in memory; past a small bound the whole session stops reading
-          // (and the socket with it) until it resumes. Answers to small
-          // requests (an acknowledgement) still come through meanwhile.
+          // The session always keeps reading (answers, pongs, other
+          // subscriptions must not wait on one slow consumer). A consumer
+          // that has paused its subscription and lets events pile up past
+          // a bound is cut off with an error instead: it resubscribes, and
+          // the relay redelivers what was never acknowledged.
           if (subscription.isPaused) {
-            _pausedBytes += frame.payload.length;
-            if (_pausedBytes > _pausedBytesLimit) {
-              _resumeGate ??= Completer<void>();
-            }
+            final held = (_heldBytes[frame.stream] ?? 0) + frame.payload.length;
+            _heldBytes[frame.stream] = held;
+            if (held > pausedBytesLimit) _cutOff(frame.stream, subscription);
           }
         }
       case RelayV2FrameType.ping:
@@ -510,10 +518,9 @@ class RelayV2Session {
           }
         });
       },
-      onResume: _subscriptionResumed,
+      onResume: () => _heldBytes.remove(id),
       onCancel: () {
-        // A cancelled subscription holds nothing back.
-        Timer.run(_subscriptionResumed);
+        _heldBytes.remove(id);
         if (id != 0 && _subscriptions.remove(id) != null && !_closed) {
           unawaited(
             _send(

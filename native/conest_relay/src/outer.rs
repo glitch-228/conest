@@ -1119,7 +1119,8 @@ mod tests {
         client.request(5, &serde_json::json!({"action": "health"}));
         let (_, still) = client.next_json();
         assert!(still["stats"]["v2"].get("hidden").is_none(), "{still}");
-        // One that proves a mailbox owned before it came is told.
+        // One that proves a mailbox claimed days ago is told (a claim of
+        // minutes ago is not enough).
         relay
             .state
             .claim_mailbox(
@@ -1128,6 +1129,26 @@ mod tests {
                 "198.51.100.9",
             )
             .expect("claimed earlier");
+        let young = crate::owners::tests::prove(
+            &mut client,
+            6,
+            "dev-user",
+            &crate::owners::tests::owner_key(5),
+            &hash,
+        );
+        assert_eq!(young["ok"], true, "{young}");
+        client.request(8, &serde_json::json!({"action": "health"}));
+        let (_, untrusted) = client.next_json();
+        assert!(untrusted["stats"]["v2"].get("hidden").is_none(), "{untrusted}");
+        relay
+            .state
+            .owners
+            .lock()
+            .unwrap()
+            .by_mailbox
+            .get_mut("dev-user")
+            .unwrap()
+            .claimed_millis -= 4 * 24 * 60 * 60 * 1000;
         let proof = crate::owners::tests::prove(
             &mut client,
             7,

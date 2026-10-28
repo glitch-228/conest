@@ -151,19 +151,24 @@ const MAX_EXCHANGES_PER_SECOND: u64 = 2_000;
 /// spends a victim's per-source budget only slows the victim's UDP polls
 /// (clients fall back to other routes), and cannot get anything but a
 /// cookie-sized reply sent to the victim.
-static GOOD_SOURCES: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
+static GOOD_SOURCES: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> =
+    std::sync::Mutex::new(None);
 const MAX_GOOD_SOURCES: usize = 4096;
 const GOOD_SOURCE_MILLIS: u64 = 120_000;
+/// Key exchanges a second for sources with a valid cookie, kept apart from
+/// (and larger than) the cap for everyone else: still a hard bound.
+const MAX_GOOD_EXCHANGES_PER_SECOND: u64 = 8_000;
 
 fn note_good_source(peer: SocketAddr) {
     let now = crate::config::now_millis();
     let key = crate::limits::peer_key(peer.ip());
-    let mut good = GOOD_SOURCES.lock().expect("good sources lock");
-    good.retain(|(_, until)| *until > now);
-    if let Some(entry) = good.iter_mut().find(|(known, _)| *known == key) {
-        entry.1 = now + GOOD_SOURCE_MILLIS;
-    } else if good.len() < MAX_GOOD_SOURCES {
-        good.push((key, now + GOOD_SOURCE_MILLIS));
+    let mut guard = GOOD_SOURCES.lock().expect("good sources lock");
+    let good = guard.get_or_insert_with(Default::default);
+    if good.len() >= MAX_GOOD_SOURCES && !good.contains_key(&key) {
+        good.retain(|_, until| *until > now);
+    }
+    if good.len() < MAX_GOOD_SOURCES || good.contains_key(&key) {
+        good.insert(key, now + GOOD_SOURCE_MILLIS);
     }
 }
 
@@ -173,20 +178,38 @@ fn is_good_source(peer: SocketAddr) -> bool {
     GOOD_SOURCES
         .lock()
         .expect("good sources lock")
-        .iter()
-        .any(|(known, until)| *known == key && *until > now)
+        .as_ref()
+        .and_then(|good| good.get(&key))
+        .is_some_and(|until| *until > now)
+}
+
+/// A fixed-window counter: true while fewer than [limit] were counted in
+/// the current second.
+fn within(
+    window: &std::sync::atomic::AtomicU64,
+    count: &std::sync::atomic::AtomicU64,
+    limit: u64,
+) -> bool {
+    use std::sync::atomic::Ordering;
+    let second = crate::config::now_millis() / 1_000;
+    if window.swap(second, Ordering::AcqRel) != second {
+        count.store(0, Ordering::Release);
+    }
+    count.fetch_add(1, Ordering::AcqRel) < limit
 }
 
 fn allow_key_exchange(state: &RelayState, peer: SocketAddr) -> bool {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    // (second, count): one window for the whole relay.
+    use std::sync::atomic::AtomicU64;
     static WINDOW: AtomicU64 = AtomicU64::new(0);
     static COUNT: AtomicU64 = AtomicU64::new(0);
-    let second = crate::config::now_millis() / 1_000;
-    if WINDOW.swap(second, Ordering::AcqRel) != second {
-        COUNT.store(0, Ordering::Release);
-    }
-    if COUNT.fetch_add(1, Ordering::AcqRel) >= MAX_EXCHANGES_PER_SECOND && !is_good_source(peer) {
+    static GOOD_WINDOW: AtomicU64 = AtomicU64::new(0);
+    static GOOD_COUNT: AtomicU64 = AtomicU64::new(0);
+    let allowed = if is_good_source(peer) {
+        within(&GOOD_WINDOW, &GOOD_COUNT, MAX_GOOD_EXCHANGES_PER_SECOND)
+    } else {
+        within(&WINDOW, &COUNT, MAX_EXCHANGES_PER_SECOND)
+    };
+    if !allowed {
         return false;
     }
     // Per source, kept apart from every other budget; refusals here never
