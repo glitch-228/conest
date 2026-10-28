@@ -381,7 +381,18 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /// This exported activity is also started by other apps, and an intent
+    /// replayed from the recents list: neither may answer a call or
+    /// control transfers; only the notification's own intents do.
+    private fun launchedFromHistory(intent: Intent?): Boolean =
+        intent != null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+
     private fun dispatchTransferControl(intent: Intent?) {
+        if (launchedFromHistory(intent)) {
+            intent?.removeExtra(ConestBackgroundService.EXTRA_CALL_ANSWER)
+            intent?.removeExtra(ConestBackgroundService.EXTRA_TRANSFER_CONTROL)
+            return
+        }
         dispatchCallAnswer(intent)
         val action = intent?.getStringExtra(ConestBackgroundService.EXTRA_TRANSFER_CONTROL)
             ?: return
@@ -396,6 +407,10 @@ class MainActivity : FlutterActivity() {
             return
         }
         intent.removeExtra(ConestBackgroundService.EXTRA_CALL_ANSWER)
+        val token = intent.getStringExtra(ConestBackgroundService.EXTRA_CALL_ANSWER_TOKEN)
+        intent.removeExtra(ConestBackgroundService.EXTRA_CALL_ANSWER_TOKEN)
+        // Only the token of the call ringing now answers it.
+        if (!ConestBackgroundService.consumeRingToken(token)) return
         systemChannel?.invokeMethod(
             "notificationAction",
             mapOf(
@@ -499,6 +514,7 @@ class MainActivity : FlutterActivity() {
             result.error("missing_audio_handle", "Native voice audio handle is missing.", null)
             return
         }
+        val test = call.argument<Boolean>("test") == true
         try {
             ConestBackgroundService.requestVoiceCallMedia(handle)
             ConestSystem.startConestForegroundService(
@@ -506,6 +522,7 @@ class MainActivity : FlutterActivity() {
                 Intent(this, ConestBackgroundService::class.java).apply {
                     action = ConestBackgroundService.ACTION_START_CALL_AUDIO
                     putExtra(ConestBackgroundService.EXTRA_CALL_AUDIO_HANDLE, handle)
+                    putExtra(ConestBackgroundService.EXTRA_CALL_AUDIO_TEST, test)
                 }
             )
             result.success(true)
