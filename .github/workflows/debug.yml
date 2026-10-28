@@ -27,6 +27,10 @@ permissions:
 
 env:
   FLUTTER_VERSION: "3.41.9"
+  # Conest's own Telegram registration (my.telegram.org); empty until the
+  # secrets exist, and then the Telegram client stays hidden.
+  CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+  CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
   DEBUG_TAG: debug-${{ github.run_number }}-${{ github.sha }}
 
 jobs:
@@ -527,6 +531,8 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
+            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
+            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH} \
             --dart-define=CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME=true
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-debug.apk \
@@ -550,7 +556,11 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake clang pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev libasound2-dev libdbus-1-dev
+          sudo apt-get install -y ninja-build cmake clang pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev libasound2-dev libdbus-1-dev gperf zlib1g-dev libssl-dev
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-tdlib
+          key: tdlib-${{ runner.os }}-${{ hashFiles('tool/build_tdlib.sh') }}
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -615,8 +625,11 @@ jobs:
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
-            --dart-define=CONEST_MATRIX=true
+            --dart-define=CONEST_MATRIX=true \
+            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
+            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}
           tool/build_lyrebird.sh linux-x64 build/linux/x64/profile/bundle/lyrebird
+          tool/build_tdlib.sh linux-x64 build/linux/x64/profile/bundle/lib/libtdjson.so
           mkdir -p dist-stage/conest-debug-linux-x64 dist
           cp -a build/linux/x64/profile/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
@@ -686,7 +699,9 @@ jobs:
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
-            --dart-define=CONEST_MATRIX=true
+            --dart-define=CONEST_MATRIX=true \
+            --dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID} \
+            --dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}
           tool/build_lyrebird.sh windows-x64 build/windows/x64/runner/Profile/lyrebird.exe
           mkdir -p dist-stage/conest-debug-windows-x64 dist
           cp -a build/windows/x64/runner/Profile/. dist-stage/conest-debug-windows-x64/
