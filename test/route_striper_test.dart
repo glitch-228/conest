@@ -56,8 +56,12 @@ void main() {
     now = now.add(const Duration(milliseconds: 1));
     striper.succeeded(second); // Iroh turns out fast: 1 MB/s → 1000 B/ms.
     expect(striper.speedOf('iroh'), closeTo(1e6, 1));
-    // Both measured or busy: plain shares from here.
-    expect(striper.order(['lan', 'iroh']).first, 'lan');
+    // LAN is still unmeasured: it does not go ahead of an idle Iroh.
+    expect(striper.order(['lan', 'iroh']).first, 'iroh');
+    now = now.add(const Duration(milliseconds: 1));
+    striper.succeeded(first);
+    // Both measured (LAN 0.5 MB/s, Iroh 1 MB/s): plain shares from here.
+    expect(striper.order(['lan', 'iroh']).first, 'iroh');
   });
 
   test('a failed route rests and the other takes the next blocks', () {
@@ -158,4 +162,49 @@ void main() {
     expect(striper.mayHedge(1000), isFalse);
     expect(striper.mayHedge(1000, probing: true), isTrue);
   });
+
+  test(
+    'an unmeasured route never goes ahead of an idle one that delivered',
+    () {
+      var now = DateTime.utc(2026);
+      final striper = RouteStriper<String>(
+        now: () => now,
+        priorBytesPerSecond: {'lan': 0.5e6, 'iroh': 50e6},
+      );
+      final lease = striper.begin('lan', 100000);
+      now = now.add(const Duration(milliseconds: 200));
+      striper.succeeded(lease);
+      expect(striper.order(['iroh', 'lan']).first, 'lan');
+    },
+  );
+
+  test('a hedge on a route being probed does not use the hedging budget', () {
+    final striper = RouteStriper<String>();
+    striper.begin('a', 1000, hedge: true, probing: true);
+    striper.succeeded(striper.begin('a', 1000000));
+    // 1000 bytes of probing would have been over 0.1% of sent bytes.
+    expect(striper.mayHedge(50000), isTrue);
+  });
+
+  test(
+    'a late route is not counted on, and delivery within a time is known',
+    () {
+      var now = DateTime.utc(2026);
+      final striper = RouteStriper<String>(now: () => now);
+      striper.succeeded(striper.begin('lan', 1000));
+      now = now.add(const Duration(seconds: 1));
+      expect(
+        striper.deliveredWithin('lan', const Duration(minutes: 3)),
+        isTrue,
+      );
+      striper.noteLate('lan');
+      expect(striper.isLate('lan'), isTrue);
+      now = now.add(const Duration(minutes: 4));
+      expect(striper.isLate('lan'), isFalse);
+      expect(
+        striper.deliveredWithin('lan', const Duration(minutes: 3)),
+        isFalse,
+      );
+    },
+  );
 }

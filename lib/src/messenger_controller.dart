@@ -20835,7 +20835,8 @@ class MessengerController extends ChangeNotifier {
                   network: _networkCostClass,
                   // A file an own device passed on counts by who sent it first.
                   verifiedContact: fromOwnDevice
-                      ? (chatId == identity?.deviceId ||
+                      ? (message.outbound ||
+                            chatId == identity?.deviceId ||
                             (_contactByDeviceId(chatId)?.canSendOutbound ??
                                 false))
                       : sender.canSendOutbound,
@@ -21126,8 +21127,14 @@ class MessengerController extends ChangeNotifier {
   /// shares the work only on direct paths.
   bool _lanProvenFor(String peerDeviceId) {
     final striper = _blockStriperFor(peerDeviceId);
-    return !striper.unmeasured(_BlockRoute.lanBinary) &&
-        !striper.isResting(_BlockRoute.lanBinary);
+    // Delivered lately (the peer may have changed network since), and no
+    // block of late.
+    return striper.deliveredWithin(
+          _BlockRoute.lanBinary,
+          const Duration(minutes: 3),
+        ) &&
+        !striper.isResting(_BlockRoute.lanBinary) &&
+        !striper.isLate(_BlockRoute.lanBinary);
   }
 
   RouteStriper<_BlockRoute> _blockStriperFor(String peerDeviceId) {
@@ -21139,6 +21146,7 @@ class MessengerController extends ChangeNotifier {
     return _blockStripers[peerDeviceId] =
         striper ??
         RouteStriper<_BlockRoute>(
+          now: _now,
           priorBytesPerSecond: const {
             _BlockRoute.lanBinary: 8 * 1024 * 1024,
             _BlockRoute.iroh: 1024 * 1024,
@@ -21156,8 +21164,12 @@ class MessengerController extends ChangeNotifier {
     required Future<bool> Function(_BlockRoute route) send,
     required bool Function() stillActive,
   }) async {
-    Future<bool> attempt(_BlockRoute route, {bool hedge = false}) {
-      final lease = striper.begin(route, bytes, hedge: hedge);
+    Future<bool> attempt(
+      _BlockRoute route, {
+      bool hedge = false,
+      bool probe = false,
+    }) {
+      final lease = striper.begin(route, bytes, hedge: hedge, probing: probe);
       return send(route).then(
         (ok) {
           ok ? striper.succeeded(lease) : striper.failed(lease);
@@ -21188,7 +21200,13 @@ class MessengerController extends ChangeNotifier {
         if (await primary) return true;
         continue;
       }
-      final hedged = attempt(backup, hedge: true);
+      // The primary is late: not counted on until a block lands on it.
+      striper.noteLate(route);
+      final hedged = attempt(
+        backup,
+        hedge: true,
+        probe: striper.unmeasured(backup),
+      );
       if (await _firstTrue([primary, hedged])) return true;
       i++; // Both tried.
     }
@@ -21546,6 +21564,16 @@ class MessengerController extends ChangeNotifier {
         error: allowIrohRelay
             ? 'Iroh path failed; retrying the verified block.'
             : 'Direct Iroh is unavailable; waiting without using a relay.',
+      );
+      return;
+    }
+    // Every route tried and none took the block: a path problem, not a peer
+    // without binary blocks.
+    if (routes.isNotEmpty &&
+        state.descriptor.chunkSize > _attachmentChunkSize) {
+      setSession(
+        TransferState.reconnecting,
+        error: 'Routes failed; retrying the verified block.',
       );
       return;
     }
@@ -34687,11 +34715,14 @@ class MessengerController extends ChangeNotifier {
   final LinkedHashMap<String, _OutboundAttachmentState> _ownServing =
       LinkedHashMap();
   static const int _maxOwnServing = 32;
+  final Map<String, DateTime> _ownServingCheckedAt = {};
+  static const Duration _ownServingRecheck = Duration(seconds: 5);
 
   static String _ownServingKey(String deviceId, String attachmentId) =>
       '$deviceId|$attachmentId';
 
   void _dropOwnDeviceServing(String deviceId, String attachmentId) {
+    _ownServingCheckedAt.remove(_ownServingKey(deviceId, attachmentId));
     final state = _ownServing.remove(_ownServingKey(deviceId, attachmentId));
     if (state != null) unawaited(state.closeFile());
   }
@@ -34712,15 +34743,28 @@ class MessengerController extends ChangeNotifier {
       return null;
     }
     final key = _ownServingKey(requester.deviceId, attachmentId);
-    final held = _ownServing.remove(key);
+    final held = _ownServing[key];
     if (held != null) {
+      // Seen to be right a few seconds ago: no new look per block.
+      final checked = _ownServingCheckedAt[key];
+      final now = _now();
+      if (checked != null &&
+          now.difference(checked).abs() < _ownServingRecheck) {
+        return held;
+      }
       // Still the same file in the same place, in a message still here?
+      // (Checked while it stays in place, so blocks in flight stay valid.)
       final kept = messageForAttachment(attachmentId);
       final path = kept == null || kept.deleted
           ? null
           : await attachmentCachePathFor(attachmentId);
       if (path != null && path == held.sourcePath) {
-        return _ownServing[key] = held;
+        _ownServingCheckedAt[key] = now;
+        return identical(_ownServing[key], held) ? held : _ownServing[key];
+      }
+      if (identical(_ownServing[key], held)) {
+        _ownServing.remove(key);
+        _ownServingCheckedAt.remove(key);
       }
       unawaited(held.closeFile());
     }
@@ -34745,8 +34789,10 @@ class MessengerController extends ChangeNotifier {
     if (raced != null) return raced;
     while (_ownServing.length >= _maxOwnServing) {
       final oldest = _ownServing.keys.first;
+      _ownServingCheckedAt.remove(oldest);
       unawaited(_ownServing.remove(oldest)!.closeFile());
     }
+    _ownServingCheckedAt[key] = _now();
     return _ownServing[key] = _OutboundAttachmentState(
       messageId: message.id,
       peerDeviceId: requester.deviceId,
@@ -34785,6 +34831,10 @@ class MessengerController extends ChangeNotifier {
       detailsOnly: detailsOnly,
     );
   }
+
+  @visibleForTesting
+  bool ownServingHeldForTesting(String deviceId, String attachmentId) =>
+      _ownServing.containsKey(_ownServingKey(deviceId, attachmentId));
 
   @visibleForTesting
   Future<bool> ownDeviceServesForTesting(
@@ -37246,6 +37296,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   void _upsertMessage(String peerDeviceId, ChatMessage message) {
+    _digestCache = null;
     final conversations = List<ConversationRecord>.from(
       _snapshot.conversations,
     );
@@ -37276,6 +37327,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   void _upsertGroupMessage(String groupId, ChatMessage message) {
+    _digestCache = null;
     final conversations = List<ConversationRecord>.from(
       _snapshot.conversations,
     );
@@ -37667,6 +37719,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   void _deleteMessage(String peerDeviceId, String messageId) {
+    _digestCache = null;
     if (messageId.isEmpty) {
       return;
     }

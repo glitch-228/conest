@@ -24,6 +24,7 @@ class RouteStriper<R> {
   static const _defaultPrior = 1024.0 * 1024; // 1 MB/s until measured.
   static const _restAfterFailure = Duration(seconds: 5);
   static const _maxRest = Duration(minutes: 5);
+  static const _lateFor = Duration(minutes: 2);
   static const _minHedgeDelay = Duration(seconds: 3);
 
   final Map<R, _RouteState> _routes = {};
@@ -69,9 +70,31 @@ class RouteStriper<R> {
       if (rest != 0) return rest;
       final first = (probe(a) ? 0 : 1).compareTo(probe(b) ? 0 : 1);
       if (first != 0) return first;
+      // Whatever its guessed speed, a route not measured never goes ahead
+      // of an idle route that has delivered.
+      bool idleMeasured(R r) =>
+          _state(r).samples > 0 && _state(r).inFlight == 0;
+      final idle = (idleMeasured(a) ? 0 : 1).compareTo(idleMeasured(b) ? 0 : 1);
+      if (idle != 0 && (_state(a).samples == 0 || _state(b).samples == 0)) {
+        return idle;
+      }
       return score(b).compareTo(score(a));
     });
     return routes;
+  }
+
+  /// A block on [route] was late, so it is not to be counted on for a
+  /// while (it may have lost its path).
+  void noteLate(R route) {
+    _state(route).lateUntil = _now().add(_lateFor);
+  }
+
+  bool isLate(R route) => _state(route).lateUntil?.isAfter(_now()) == true;
+
+  /// Whether [route] delivered a block in the last [within].
+  bool deliveredWithin(R route, Duration within) {
+    final at = _state(route).lastSuccessAt;
+    return at != null && _now().difference(at) <= within;
   }
 
   /// Whether [route] failed lately and is resting.
@@ -82,12 +105,17 @@ class RouteStriper<R> {
   bool unmeasured(R route) => _state(route).samples == 0;
 
   /// A block of [bytes] starts on [route].
-  StripeLease<R> begin(R route, int bytes, {bool hedge = false}) {
+  StripeLease<R> begin(
+    R route,
+    int bytes, {
+    bool hedge = false,
+    bool probing = false,
+  }) {
     final state = _state(route);
     state.inFlight++;
     if (hedge) {
       _hedgesInFlight++;
-      _hedgedBytes += bytes;
+      if (!probing) _hedgedBytes += bytes;
     }
     return StripeLease._(route, bytes, _now(), hedge);
   }
@@ -111,6 +139,8 @@ class RouteStriper<R> {
         );
     }
     state.restingUntil = null;
+    state.lateUntil = null;
+    state.lastSuccessAt = _now();
     state.failures = 0;
     _sentBytes += lease.bytes;
   }
@@ -173,6 +203,8 @@ class _RouteState {
   int samples = 0;
   int inFlight = 0;
   int failures = 0;
+  DateTime? lateUntil;
+  DateTime? lastSuccessAt;
   DateTime? restingUntil;
   final List<double> blockSeconds = [];
 }

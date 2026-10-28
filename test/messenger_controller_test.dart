@@ -4034,6 +4034,79 @@ void main() {
     timeout: const Timeout(Duration(minutes: 1)),
   );
 
+  test('when LAN and Iroh both fail for a file, it keeps retrying instead of '
+      'failing as if the peer lacked binary blocks', () async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    final aliceLan = _InProcessLanDirectChannel(host: '192.168.65.10');
+    final bobLan = _InProcessLanDirectChannel(host: '192.168.65.11');
+    addTearDown(aliceLan.stop);
+    addTearDown(bobLan.stop);
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      lanAddresses: const ['192.168.65.10'],
+      lanDirectChannel: aliceLan,
+      transportRegistryFactory: network.registry,
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      lanAddresses: const ['192.168.65.11'],
+      lanDirectChannel: bobLan,
+      transportRegistryFactory: network.registry,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    for (final side in [alice, bob]) {
+      await side.updateGlobalConnectivity(
+        _irohOnlyConnectivity.copyWith(lanEnabled: true),
+      );
+    }
+    await _pairControllers(alice, bob);
+    final root = await Directory.systemTemp.createTemp('conest-bothfail-');
+    addTearDown(() => root.delete(recursive: true));
+    final bytes = Uint8List(10 * 1024 * 1024);
+    final file = await File('${root.path}/b.bin').writeAsBytes(bytes);
+    // Peer moved networks: nothing reaches it any more.
+    aliceLan.blockPutOverride = () async => false;
+    network.blockedPairs
+      ..add((alice.identity!.irohEndpointId!, bob.identity!.irohEndpointId!))
+      ..add((bob.identity!.irohEndpointId!, alice.identity!.irohEndpointId!));
+    await alice.sendAttachmentSource(
+      contact: alice.contacts.single,
+      source: StagedAttachment(
+        id: 'b',
+        fileName: 'b.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: bytes.length,
+        filePath: file.path,
+      ),
+    );
+    for (var i = 0; i < 100; i++) {
+      await bob.pollNow();
+      await alice.pollNow();
+      final incoming = bob
+          .messagesFor(alice.identity!.deviceId)
+          .where((m) => m.attachment != null)
+          .firstOrNull;
+      if (incoming != null &&
+          bob.attachmentAwaitingAcceptance(incoming.attachment!.id)) {
+        await bob.acceptIncomingAttachment(incoming.attachment!.id);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+    final sent = alice
+        .messagesFor(bob.identity!.deviceId)
+        .singleWhere((m) => m.attachment?.fileName == 'b.bin');
+    final phase = alice.transferSnapshots
+        .where((t) => t.id == sent.attachment!.id)
+        .map((t) => t.phase)
+        .firstOrNull;
+    expect(phase, isNot(TransferPhase.failed));
+    expect(sent.state, isNot(DeliveryState.failed));
+  }, timeout: const Timeout(Duration(minutes: 1)));
+
   test(
     'a big group file (over the online limit) still reaches a member over LAN',
     () async {
@@ -21012,7 +21085,7 @@ void main() {
 
       test('serving a file to an own device follows the file and the '
           'message: both must still be there', () async {
-        final (alice, bob, phone, _, _, _) = await linkedPair();
+        final (alice, bob, phone, _, _, advance) = await linkedPair();
         final bobId = bob.identity!.deviceId;
         final aliceId = alice.identity!.deviceId;
         await phone.sendAttachment(
@@ -21032,8 +21105,14 @@ void main() {
         // Asked again: served from the same state.
         expect(await phone.ownDeviceServesForTesting(aliceId, id), isTrue);
         // The file leaves the disk: no longer served from a stale path.
+        // Blocks in flight see the entry stay while it is being checked.
+        advance(const Duration(seconds: 6));
+        final checking = phone.ownDeviceServesForTesting(aliceId, id);
+        expect(phone.ownServingHeldForTesting(aliceId, id), isTrue);
+        expect(await checking, isTrue);
         final path = (await phone.attachmentCachePathFor(id))!;
         await File(path).delete();
+        advance(const Duration(seconds: 6));
         expect(await phone.ownDeviceServesForTesting(aliceId, id), isFalse);
       });
 
@@ -21069,15 +21148,11 @@ void main() {
         final first = alice.chatDigestsForTesting();
         expect(first.containsKey('group:${group.groupId}'), isFalse);
         await alice.sendGroupMessage(groupId: group.groupId, body: 'hello');
-        expect(
-          alice.chatDigestsForTesting().containsKey('group:${group.groupId}'),
-          isFalse,
-          reason: 'not recomputed within a few seconds',
-        );
-        advance(const Duration(seconds: 30));
+        // (A message arrived: the cached digests are dropped.)
         expect(
           alice.chatDigestsForTesting().containsKey('group:${group.groupId}'),
           isTrue,
+          reason: 'a new message makes the digests current again',
         );
       });
 
