@@ -3858,6 +3858,82 @@ void main() {
     timeout: const Timeout(Duration(minutes: 2)),
   );
 
+  test('while LAN works, a file does not use an Iroh relay path', () async {
+    final network = _InProcessIrohNetwork(relayed: true);
+    final relay = _FakeRelayClient();
+    final aliceLan = _InProcessLanDirectChannel(host: '192.168.64.10');
+    final bobLan = _InProcessLanDirectChannel(host: '192.168.64.11');
+    addTearDown(aliceLan.stop);
+    addTearDown(bobLan.stop);
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      lanAddresses: const ['192.168.64.10'],
+      lanDirectChannel: aliceLan,
+      transportRegistryFactory: network.registry,
+      debugBuildId: 'debug-norelay',
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      lanAddresses: const ['192.168.64.11'],
+      lanDirectChannel: bobLan,
+      transportRegistryFactory: network.registry,
+      debugBuildId: 'debug-norelay',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    for (final side in [alice, bob]) {
+      await side.updateGlobalConnectivity(
+        _irohOnlyConnectivity.copyWith(lanEnabled: true),
+      );
+    }
+    await _pairControllers(alice, bob);
+    // The ordinary send path (the debug battle test pins LAN only).
+    final bytes = Uint8List(24 * 1024 * 1024);
+    for (var i = 0; i < bytes.length; i += 4099) {
+      bytes[i] = i & 0xff;
+    }
+    final sourceRoot = await Directory.systemTemp.createTemp('conest-striped-');
+    addTearDown(() => sourceRoot.delete(recursive: true));
+    final sourceFile = File('${sourceRoot.path}/striped.bin');
+    await sourceFile.writeAsBytes(bytes);
+    await alice.sendAttachmentSource(
+      contact: alice.contacts.single,
+      source: StagedAttachment(
+        id: 'striped-source',
+        fileName: 'striped.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: bytes.length,
+        filePath: sourceFile.path,
+      ),
+    );
+    ChatMessage? received;
+    for (var step = 0; step < 3000; step++) {
+      received = bob
+          .messagesFor(alice.identity!.deviceId)
+          .where((m) => m.attachment?.fileName == 'striped.bin')
+          .firstOrNull;
+      if (received != null) {
+        if (bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+          await bob.acceptIncomingAttachment(received.attachment!.id);
+        }
+        if (bob.attachmentAvailableLocally(received.attachment!.id)) break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(received, isNotNull);
+    final cache = await bob.attachmentCachePathFor(received!.attachment!.id);
+    expect(cache, isNotNull);
+    expect(await File(cache!).readAsBytes(), bytes);
+    expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried it');
+    expect(
+      network.attachmentRanges,
+      0,
+      reason: 'no block took an Iroh relay path while LAN worked',
+    );
+  });
+
   test(
     'a big group file (over the online limit) still reaches a member over LAN',
     () async {

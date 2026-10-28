@@ -3131,7 +3131,8 @@ class MessengerController extends ChangeNotifier {
       }
 
       Future<bool> sendOnIroh() async {
-        final peer = _transportPeerForContact(contact, allowRelay: true);
+        // While LAN works, only direct Iroh paths share the work.
+        final peer = _transportPeerForContact(contact, allowRelay: !lanUsable);
         for (final route in await adapter!.discoverRoutes(peer)) {
           if (!route.permitsPayload(bytes.length)) continue;
           if (await _groupHistory.fileForPeer(
@@ -21159,6 +21160,7 @@ class MessengerController extends ChangeNotifier {
     for (var i = 0; i < order.length; i++) {
       if (!stillActive()) return false;
       final route = order[i];
+      final probing = striper.unmeasured(route);
       final primary = attempt(route);
       final backup = i + 1 < order.length ? order[i + 1] : null;
       if (backup == null) return primary;
@@ -21168,7 +21170,7 @@ class MessengerController extends ChangeNotifier {
       ]);
       if (outcome == 1) return true;
       if (outcome == 0) continue;
-      if (!stillActive() || !striper.mayHedge(bytes)) {
+      if (!stillActive() || !striper.mayHedge(bytes, probing: probing)) {
         if (await primary) return true;
         continue;
       }
@@ -21453,7 +21455,9 @@ class MessengerController extends ChangeNotifier {
             bytes: packedChunk,
             sha256Base64: base64Encode(digestBytes),
           ),
-          allowRelay: allowIrohRelay,
+          // While LAN works, Iroh shares the file only on a direct path;
+          // the relay stays the fallback when nothing else carries a block.
+          allowRelay: allowIrohRelay && !lanUsable,
         );
         if (receipt != null) {
           appendDebugLog(

@@ -23,6 +23,7 @@ class RouteStriper<R> {
 
   static const _defaultPrior = 1024.0 * 1024; // 1 MB/s until measured.
   static const _restAfterFailure = Duration(seconds: 5);
+  static const _maxRest = Duration(minutes: 5);
   static const _minHedgeDelay = Duration(seconds: 3);
 
   final Map<R, _RouteState> _routes = {};
@@ -42,26 +43,39 @@ class RouteStriper<R> {
   /// last, then by speed shared with the blocks already in flight on it.
   List<R> order(Iterable<R> available) {
     final now = _now();
+    final routes = available.toSet().toList();
     double score(R route) {
       final state = _state(route);
       return state.bytesPerSecond / (state.inFlight + 1);
     }
 
     bool resting(R route) => _state(route).restingUntil?.isAfter(now) == true;
-    // A route not measured yet gets one block (when it has none), so its
-    // speed is learned rather than guessed.
+    // A route known to work, and not resting.
+    final working = routes
+        .where((r) => _state(r).samples > 0 && !resting(r))
+        .toList();
+    // A route not measured yet gets one block, so its speed is learned
+    // rather than guessed: when nothing is known to work, or when every
+    // route known to work is busy. Never ahead of an idle working route,
+    // and a route that failed rests longer each time (see [failed]).
+    final workingAllBusy = working.every((r) => _state(r).inFlight > 0);
     bool probe(R route) =>
-        _state(route).samples == 0 && _state(route).inFlight == 0;
-    final routes = available.toSet().toList()
-      ..sort((a, b) {
-        final rest = (resting(a) ? 1 : 0).compareTo(resting(b) ? 1 : 0);
-        if (rest != 0) return rest;
-        final first = (probe(a) ? 0 : 1).compareTo(probe(b) ? 0 : 1);
-        if (first != 0) return first;
-        return score(b).compareTo(score(a));
-      });
+        _state(route).samples == 0 &&
+        _state(route).inFlight == 0 &&
+        !resting(route) &&
+        (working.isEmpty || workingAllBusy);
+    routes.sort((a, b) {
+      final rest = (resting(a) ? 1 : 0).compareTo(resting(b) ? 1 : 0);
+      if (rest != 0) return rest;
+      final first = (probe(a) ? 0 : 1).compareTo(probe(b) ? 0 : 1);
+      if (first != 0) return first;
+      return score(b).compareTo(score(a));
+    });
     return routes;
   }
+
+  /// Whether [route] has not delivered a block yet (its speed is a guess).
+  bool unmeasured(R route) => _state(route).samples == 0;
 
   /// A block of [bytes] starts on [route].
   StripeLease<R> begin(R route, int bytes, {bool hedge = false}) {
@@ -93,13 +107,18 @@ class RouteStriper<R> {
         );
     }
     state.restingUntil = null;
+    state.failures = 0;
     _sentBytes += lease.bytes;
   }
 
-  /// The block did not go on [route]: it rests for a few seconds.
+  /// The block did not go on [route]: it rests, for 5 s the first time and
+  /// twice as long for each failure in a row (to 5 minutes).
   void failed(StripeLease<R> lease) {
     if (!_end(lease)) return;
-    _state(lease.route).restingUntil = _now().add(_restAfterFailure);
+    final state = _state(lease.route);
+    state.failures = state.failures < 16 ? state.failures + 1 : 16;
+    final rest = _restAfterFailure * (1 << (state.failures - 1).clamp(0, 6));
+    state.restingUntil = _now().add(rest > _maxRest ? _maxRest : rest);
   }
 
   bool _end(StripeLease<R> lease) {
@@ -122,10 +141,12 @@ class RouteStriper<R> {
     return delay > _minHedgeDelay ? delay : _minHedgeDelay;
   }
 
-  /// Whether a block of [bytes] may be sent once more on another route.
-  bool mayHedge(int bytes) =>
+  /// Whether a block of [bytes] may be sent once more on another route. A
+  /// block on a route not measured yet ([probing]) may always be, within the
+  /// number in flight: it would otherwise wait out a route that may be dead.
+  bool mayHedge(int bytes, {bool probing = false}) =>
       _hedgesInFlight < maxHedgesInFlight &&
-      _hedgedBytes + bytes <= (_sentBytes + bytes) * maxHedgeShare;
+      (probing || _hedgedBytes + bytes <= (_sentBytes + bytes) * maxHedgeShare);
 }
 
 class StripeLease<R> {
@@ -142,6 +163,7 @@ class _RouteState {
   double bytesPerSecond;
   int samples = 0;
   int inFlight = 0;
+  int failures = 0;
   DateTime? restingUntil;
   final List<double> blockSeconds = [];
 }

@@ -117,4 +117,45 @@ void main() {
     striper.failed(lease);
     expect(striper.order(['iroh', 'lan']).first, 'lan');
   });
+
+  test('a failing unmeasured route is not tried ahead of a working one, '
+      'and rests longer each time', () {
+    var now = DateTime.utc(2026);
+    final striper = RouteStriper<String>(
+      now: () => now,
+      priorBytesPerSecond: {'lan': 10e6, 'iroh': 1e6},
+    );
+    // LAN is measured and idle; Iroh was never measured.
+    final lan = striper.begin('lan', 1000);
+    now = now.add(const Duration(microseconds: 100));
+    striper.succeeded(lan);
+    expect(striper.order(['iroh', 'lan']).first, 'lan');
+    // LAN busy: Iroh is probed once, and fails.
+    final busy = striper.begin('lan', 1000);
+    expect(striper.order(['lan', 'iroh']).first, 'iroh');
+    final probe = striper.begin('iroh', 1000);
+    striper.failed(probe);
+    expect(striper.order(['lan', 'iroh']).first, 'lan');
+    expect(striper.unmeasured('iroh'), isTrue);
+    // After the first rest it is probed again (LAN still busy) and fails
+    // again: now it rests twice as long.
+    now = now.add(const Duration(seconds: 6));
+    expect(striper.order(['lan', 'iroh']).first, 'iroh');
+    striper.failed(striper.begin('iroh', 1000));
+    now = now.add(const Duration(seconds: 6));
+    expect(striper.order(['lan', 'iroh']).first, 'lan');
+    now = now.add(const Duration(seconds: 6));
+    expect(striper.order(['lan', 'iroh']).first, 'iroh');
+    striper.succeeded(busy);
+    // With LAN idle, a dead unmeasured route never goes first.
+    striper.failed(striper.begin('iroh', 1000));
+    now = now.add(const Duration(minutes: 6));
+    expect(striper.order(['lan', 'iroh']).first, 'lan');
+  });
+
+  test('a block on a route being probed may be hedged beyond the budget', () {
+    final striper = RouteStriper<String>();
+    expect(striper.mayHedge(1000), isFalse);
+    expect(striper.mayHedge(1000, probing: true), isTrue);
+  });
 }
