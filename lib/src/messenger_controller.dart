@@ -21196,17 +21196,16 @@ class MessengerController extends ChangeNotifier {
       ]);
       if (outcome == 1) return true;
       if (outcome == 0) continue;
-      if (!stillActive() || !striper.mayHedge(bytes, probing: probing)) {
+      // The primary is late: not counted on until a block lands on it
+      // (also when no hedge may go, so a relay fallback is not held up).
+      striper.noteLate(route);
+      // One rule for the budget, whichever of the two is unmeasured.
+      final probe = probing || striper.unmeasured(backup);
+      if (!stillActive() || !striper.mayHedge(bytes, probing: probe)) {
         if (await primary) return true;
         continue;
       }
-      // The primary is late: not counted on until a block lands on it.
-      striper.noteLate(route);
-      final hedged = attempt(
-        backup,
-        hedge: true,
-        probe: striper.unmeasured(backup),
-      );
+      final hedged = attempt(backup, hedge: true, probe: probe);
       if (await _firstTrue([primary, hedged])) return true;
       i++; // Both tried.
     }
@@ -21569,7 +21568,10 @@ class MessengerController extends ChangeNotifier {
     }
     // Every route tried and none took the block: a path problem, not a peer
     // without binary blocks.
-    if (routes.isNotEmpty &&
+    // What the peer said it takes, not which routes are usable right now
+    // (a LAN endpoint demoted after a network change empties [routes]).
+    if (((binaryLanEndpoint?.binaryBlockVersion ?? 0) >= 1 ||
+            irohBinarySupported) &&
         state.descriptor.chunkSize > _attachmentChunkSize) {
       setSession(
         TransferState.reconnecting,
