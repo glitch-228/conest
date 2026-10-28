@@ -5789,7 +5789,9 @@ class MessengerController extends ChangeNotifier {
       pollInterval: _discordNetwork.pollInterval,
       slowdown: () =>
           (_appInForeground ? 1 : 3) *
-          (_energyPolicy.modeFor(_networkCostClass) == EnergyMode.saver ? 2 : 1),
+          (_energyPolicy.modeFor(_networkCostClass) == EnergyMode.saver
+              ? 2
+              : 1),
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
       log: (line) => appendDebugLog(line),
