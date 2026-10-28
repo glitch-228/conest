@@ -139,6 +139,85 @@ void main() {
     expect(alice.channel.lastError, contains('channel'));
   });
 
+  test(
+    'idle polling backs off, resets on activity and obeys the slowdown',
+    () async {
+      final waits = <Duration>[];
+      var factor = 1;
+      final bob = DiscordCarrierChannel(
+        config: DiscordBotConfig(
+          token: bobBot.token,
+          botId: bobBot.id,
+          username: 'b',
+          channelId: channel,
+        ),
+        api: hub.network.api(bobBot.token, DiscordAuth.bot),
+        onFrame: (_, _) {},
+        pollInterval: const Duration(milliseconds: 10),
+        maxIdleInterval: const Duration(milliseconds: 80),
+        slowdown: () => factor,
+        wait: (delay) async {
+          waits.add(delay);
+          await Future<void>.delayed(const Duration(milliseconds: 2));
+        },
+      )..start();
+      addTearDown(bob.stop);
+      await until(() => waits.length >= 10);
+      expect(waits.first, const Duration(milliseconds: 10));
+      expect(
+        waits.reduce((a, b) => a > b ? a : b),
+        const Duration(milliseconds: 80),
+      );
+      expect(waits.where((w) => w > const Duration(milliseconds: 80)), isEmpty);
+      // A frame brings the fast pace back.
+      final mark = waits.length;
+      hub.post(channel, aliceBot, '<@${bobBot.id}> ${base64.encode([1])}');
+      await until(
+        () =>
+            waits.skip(mark).any((w) => w == const Duration(milliseconds: 10)),
+      );
+      // Background or battery saver: slower again, but bounded.
+      factor = 3;
+      final mark2 = waits.length;
+      await until(() => waits.length >= mark2 + 6);
+      expect(
+        waits
+            .skip(mark2 + 3)
+            .every((w) => w >= const Duration(milliseconds: 30)),
+        isTrue,
+      );
+      expect(
+        waits.skip(mark2).every((w) => w <= const Duration(milliseconds: 160)),
+        isTrue,
+      );
+    },
+  );
+
+  test('the slowdown stretches every look', () async {
+    final waits = <Duration>[];
+    final bob = DiscordCarrierChannel(
+      config: DiscordBotConfig(
+        token: bobBot.token,
+        botId: bobBot.id,
+        username: 'b',
+        channelId: channel,
+      ),
+      api: hub.network.api(bobBot.token, DiscordAuth.bot),
+      onFrame: (_, _) {},
+      pollInterval: const Duration(milliseconds: 10),
+      maxIdleInterval: const Duration(milliseconds: 80),
+      slowdown: () => 4,
+      wait: (delay) async {
+        waits.add(delay);
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      },
+    )..start();
+    addTearDown(bob.stop);
+    await until(() => waits.length >= 5);
+    expect(waits.every((w) => w >= const Duration(milliseconds: 40)), isTrue);
+    expect(waits.every((w) => w <= const Duration(milliseconds: 160)), isTrue);
+  });
+
   test('a rate limit waits the time Discord names, then sends', () async {
     final alice = _Side(hub, aliceBot, channel);
     final bob = _Side(hub, bobBot, channel);
@@ -176,12 +255,7 @@ void main() {
     final alice = _Side(hub, aliceBot, channel);
     alice.channel.start();
     addTearDown(alice.channel.stop);
-    for (final bad in [
-      'someone',
-      '123|456',
-      bobBot.id,
-      '${bobBot.id}|abc',
-    ]) {
+    for (final bad in ['someone', '123|456', bobBot.id, '${bobBot.id}|abc']) {
       expect(
         () => alice.channel.sendFrame(bad, Uint8List(1)),
         throwsArgumentError,

@@ -145,6 +145,8 @@ class DiscordCarrierChannel
     this.onStatusChanged,
     this.log,
     this.pollInterval = const Duration(seconds: 4),
+    this.maxIdleInterval = const Duration(seconds: 60),
+    this.slowdown,
     this.retryDelay = const Duration(seconds: 5),
     this.sendSpacing = const Duration(milliseconds: 700),
     Future<void> Function(Duration delay)? wait,
@@ -155,7 +157,17 @@ class DiscordCarrierChannel
   final void Function(String sender, Uint8List frame) onFrame;
   final void Function()? onStatusChanged;
   final void Function(String line)? log;
+
+  /// The fastest look: right after activity.
   final Duration pollInterval;
+
+  /// The slowest look: after a long quiet spell.
+  final Duration maxIdleInterval;
+
+  /// Extra factor from the device (battery saver, app in the background);
+  /// 1 for none.
+  final int Function()? slowdown;
+  Duration _idle = Duration.zero;
   final Duration retryDelay;
   final Duration sendSpacing;
   final Future<void> Function(Duration delay) _wait;
@@ -219,6 +231,7 @@ class DiscordCarrierChannel
         if (!_running) return;
         failures = 0;
         _set(DiscordCarrierState.connected);
+        var delivered = 0;
         if (result is List) {
           // Newest first; handle oldest first.
           final messages = result.whereType<Map>().take(100).toList().reversed;
@@ -229,11 +242,11 @@ class DiscordCarrierChannel
             }
             // The very first look only finds where "now" is: older frames
             // were for an earlier run and are in the sender's retry queue.
-            if (!first) _onMessage(message);
+            if (!first && _onMessage(message)) delivered++;
           }
         }
         first = false;
-        await _wait(pollInterval);
+        await _wait(_nextLook(gotFrames: delivered > 0));
       } on DiscordException catch (error) {
         if (!_running) return;
         if (error.unauthorized || error.forbidden || error.code == 404) {
@@ -274,27 +287,47 @@ class DiscordCarrierChannel
     );
   }
 
-  void _onMessage(Map message) {
+  /// The wait before the next look: short while frames flow, longer and
+  /// longer (up to [maxIdleInterval]) while nothing happens, and longer
+  /// again when the device asks to save energy.
+  Duration _nextLook({required bool gotFrames}) {
+    if (gotFrames || _recentSend) {
+      _idle = Duration.zero;
+      _recentSend = false;
+    } else {
+      final next = _idle == Duration.zero ? pollInterval : _idle * 3 ~/ 2;
+      _idle = next > maxIdleInterval ? maxIdleInterval : next;
+    }
+    final base = _idle == Duration.zero ? pollInterval : _idle;
+    final factor = (slowdown?.call() ?? 1).clamp(1, 20);
+    final wait = base * factor;
+    return wait > maxIdleInterval * 2 ? maxIdleInterval * 2 : wait;
+  }
+
+  bool _recentSend = false;
+
+  bool _onMessage(Map message) {
     final author = message['author'];
     final content = message['content'];
-    if (author is! Map || content is! String) return;
+    if (author is! Map || content is! String) return false;
     final sender = author['id'];
     if (author['bot'] != true || sender is! String || !isDiscordId(sender)) {
-      return;
+      return false;
     }
-    if (sender == config.botId) return;
+    if (sender == config.botId) return false;
     final prefix = '<@${config.botId}> ';
-    if (!content.startsWith(prefix)) return;
+    if (!content.startsWith(prefix)) return false;
     final text = content.substring(prefix.length).trim();
-    if (text.isEmpty || text.length > _maxFrameChars) return;
-    if (!_base64Text.hasMatch(text)) return;
+    if (text.isEmpty || text.length > _maxFrameChars) return false;
+    if (!_base64Text.hasMatch(text)) return false;
     final Uint8List frame;
     try {
       frame = base64.decode(text);
     } on FormatException {
-      return;
+      return false;
     }
     onFrame(sender, frame);
+    return true;
   }
 
   @override
@@ -305,6 +338,7 @@ class DiscordCarrierChannel
     if (target.botId == config.botId) throw ArgumentError('That is this bot.');
     if (_queued >= 64) throw StateError('Discord sending is backed up.');
     _queued++;
+    _recentSend = true;
     final text = '<@${target.botId}> ${base64.encode(frame)}';
     final done = Completer<void>();
     _sendQueue = _sendQueue.then((_) async {
