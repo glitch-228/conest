@@ -58,15 +58,73 @@ typedef _ReceiveNative = Pointer<Utf8> Function(Double);
 typedef _ReceiveDart = Pointer<Utf8> Function(double);
 typedef _ExecuteNative = Pointer<Utf8> Function(Pointer<Utf8>);
 
+/// Routes the objects TDLib returns to the client they belong to, by
+/// `@client_id`. TDLib has one receive queue per process, so exactly one
+/// reader serves every client; objects for a client nobody holds any more
+/// (a closed one) are dropped.
+class TdRouter {
+  final Map<int, void Function(Map<String, dynamic> object)> _clients = {};
+
+  void register(int clientId, void Function(Map<String, dynamic>) handler) =>
+      _clients[clientId] = handler;
+
+  void unregister(int clientId) => _clients.remove(clientId);
+
+  int get clients => _clients.length;
+
+  /// Hands one raw JSON object from `td_receive` to its client.
+  void dispatch(String raw) {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } on FormatException {
+      return;
+    }
+    if (decoded is! Map<String, dynamic>) return;
+    final id = decoded['@client_id'];
+    if (id is! int) return;
+    _clients[id]?.call(decoded);
+  }
+}
+
+/// The process-wide reader of TDLib's queue: one isolate, started once,
+/// never stopped (killing an isolate blocked inside `td_receive` could free
+/// the string TDLib still owns, and TDLib forbids two receivers).
+class _SharedTdReader {
+  static final TdRouter router = TdRouter();
+  static Future<void>? _starting;
+
+  static Future<void> ensure(String libraryPath) =>
+      _starting ??= _start(libraryPath);
+
+  static Future<void> _start(String libraryPath) async {
+    final port = ReceivePort();
+    port.listen((message) {
+      if (message is String) router.dispatch(message);
+    });
+    try {
+      await Isolate.spawn(_readUpdates, (
+        libraryPath,
+        port.sendPort,
+      ), debugName: 'conest-tdlib');
+    } catch (_) {
+      _starting = null;
+      port.close();
+      rethrow;
+    }
+  }
+}
+
 /// The real TDLib through `libtdjson`, built in CI and shipped next to the
-/// app. A background isolate blocks in `td_receive`; nothing here blocks the
-/// UI isolate.
+/// app. A shared background isolate blocks in `td_receive`; nothing here
+/// blocks the UI isolate.
 class NativeTdEngine implements TdEngine {
   NativeTdEngine._(this._libraryPath, DynamicLibrary library)
     : _send = library.lookupFunction<_SendNative, _SendDart>('td_send'),
       _clientId = library.lookupFunction<_CreateNative, _CreateDart>(
         'td_create_client_id',
       )() {
+    _SharedTdReader.router.register(_clientId, _onObject);
     // Keep TDLib's own log (it can hold identifiers) off stderr.
     final execute = library.lookupFunction<_ExecuteNative, _ExecuteNative>(
       'td_execute',
@@ -102,37 +160,26 @@ class NativeTdEngine implements TdEngine {
   final _pending = <String, Completer<Map<String, dynamic>>>{};
   final _updates = StreamController<Map<String, dynamic>>.broadcast();
   final _random = Random.secure();
-  ReceivePort? _port;
-  Isolate? _reader;
+  bool _closed = false;
+  final _closedUpdate = Completer<void>();
 
   @override
   Stream<Map<String, dynamic>> get updates => _updates.stream;
 
-  Future<void> _ensureReader() async {
-    if (_reader != null) return;
-    final port = ReceivePort();
-    _port = port;
-    port.listen((message) {
-      if (message is! String) return;
-      final Object? decoded;
-      try {
-        decoded = jsonDecode(message);
-      } on FormatException {
-        return;
-      }
-      if (decoded is! Map<String, dynamic>) return;
-      final extra = decoded['@extra'];
-      if (extra is String && _pending.containsKey(extra)) {
-        _pending.remove(extra)!.complete(decoded);
-      } else {
-        _updates.add(decoded);
-      }
-    });
-    _reader = await Isolate.spawn(_readUpdates, (
-      _libraryPath,
-      _clientId,
-      port.sendPort,
-    ), debugName: 'conest-tdlib');
+  void _onObject(Map<String, dynamic> object) {
+    final extra = object['@extra'];
+    if (extra is String && _pending.containsKey(extra)) {
+      _pending.remove(extra)!.complete(object);
+      return;
+    }
+    if (object['@type'] == 'updateAuthorizationState' &&
+        object['authorization_state'] is Map &&
+        (object['authorization_state'] as Map)['@type'] ==
+            'authorizationStateClosed' &&
+        !_closedUpdate.isCompleted) {
+      _closedUpdate.complete();
+    }
+    if (!_updates.isClosed) _updates.add(object);
   }
 
   @override
@@ -140,7 +187,8 @@ class NativeTdEngine implements TdEngine {
     Map<String, Object?> request, {
     Duration timeout = const Duration(seconds: 60),
   }) async {
-    await _ensureReader();
+    if (_closed) throw const TdError(500, 'closed');
+    await _SharedTdReader.ensure(_libraryPath);
     final extra = List<int>.generate(
       12,
       (_) => _random.nextInt(256),
@@ -171,15 +219,17 @@ class NativeTdEngine implements TdEngine {
 
   @override
   Future<void> close() async {
+    if (_closed) return;
     try {
       await send({'@type': 'close'}, timeout: const Duration(seconds: 10));
+      // The client is gone for good only once TDLib says so; its database
+      // is then safe to open again.
+      await _closedUpdate.future.timeout(const Duration(seconds: 15));
     } catch (_) {
       // Closing is best effort.
     }
-    _reader?.kill(priority: Isolate.immediate);
-    _reader = null;
-    _port?.close();
-    _port = null;
+    _closed = true;
+    _SharedTdReader.router.unregister(_clientId);
     for (final completer in _pending.values) {
       completer.completeError(const TdError(0, 'closed'));
     }
@@ -189,15 +239,17 @@ class NativeTdEngine implements TdEngine {
 }
 
 /// Background isolate: blocks in `td_receive` and forwards each object.
-void _readUpdates((String, int, SendPort) arguments) {
-  final (libraryPath, _, port) = arguments;
+/// It is the only caller of `td_receive` in the process.
+void _readUpdates((String, SendPort) arguments) {
+  final (libraryPath, port) = arguments;
   final library = DynamicLibrary.open(libraryPath);
   final receive = library.lookupFunction<_ReceiveNative, _ReceiveDart>(
     'td_receive',
   );
   while (true) {
     final pointer = receive(1.0);
-    // TDLib owns this string until the next td_receive call.
+    // TDLib owns this string until the next td_receive call; it is copied
+    // before that call.
     if (pointer == nullptr) continue;
     port.send(pointer.toDartString());
   }
