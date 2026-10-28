@@ -44,6 +44,11 @@ pub(crate) enum RelayRequest {
         recipient_device_id: String,
         lease_id: String,
     },
+    /// Who owns a mailbox (a sender checks that against the recipient's
+    /// known signing key before trusting this relay with the contact's mail).
+    MailboxOwner {
+        recipient_device_id: String,
+    },
     Health,
 }
 
@@ -82,6 +87,9 @@ pub(crate) struct RelayResponse {
     pub(crate) signature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) lease_id: Option<String>,
+    /// `mailbox_owner`: the key that owns the mailbox (base64), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) owner: Option<String>,
 }
 
 impl RelayResponse {
@@ -95,6 +103,7 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id: None,
+            owner: None,
         }
     }
 
@@ -108,6 +117,7 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id: None,
+            owner: None,
         }
     }
 
@@ -121,6 +131,7 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id: None,
+            owner: None,
         }
     }
 
@@ -134,7 +145,15 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id: None,
+            owner: None,
         }
+    }
+
+    /// The answer to `mailbox_owner`: the owner's key, or none.
+    pub(crate) fn owner(key: Option<[u8; 32]>) -> Self {
+        let mut response = Self::ok(None);
+        response.owner = key.map(|key| BASE64_STANDARD.encode(key));
+        response
     }
 
     pub(crate) fn leased(messages: Vec<Value>, lease_id: Option<String>) -> Self {
@@ -147,6 +166,7 @@ impl RelayResponse {
             nonce_echo: None,
             signature: None,
             lease_id,
+            owner: None,
         }
     }
 }
@@ -563,6 +583,9 @@ pub(crate) fn handle_request_for(
             Ok(()) => RelayResponse::ok(None),
             Err(error) => RelayResponse::error(error),
         },
+        RelayRequest::MailboxOwner {
+            recipient_device_id,
+        } => RelayResponse::owner(state.owner_of(&recipient_device_id)),
         RelayRequest::Health => RelayResponse::ok(Some(state.stats())),
     }
 }

@@ -86,7 +86,9 @@ pub(crate) fn owned_mailbox_of(request: &RelayRequest) -> Option<&str> {
             recipient_device_id,
             ..
         } => Some(recipient_device_id),
-        RelayRequest::Store { .. } | RelayRequest::Health => None,
+        RelayRequest::Store { .. }
+        | RelayRequest::MailboxOwner { .. }
+        | RelayRequest::Health => None,
     }
 }
 
@@ -143,7 +145,9 @@ pub(crate) fn v1_auth_extra(request: &RelayRequest) -> String {
             number(*lease_ms)
         ),
         RelayRequest::AckLease { lease_id, .. } => format!("{lease_id}|||"),
-        RelayRequest::Store { .. } | RelayRequest::Health => String::new(),
+        RelayRequest::Store { .. }
+        | RelayRequest::MailboxOwner { .. }
+        | RelayRequest::Health => String::new(),
     }
 }
 
@@ -842,5 +846,30 @@ pub(crate) mod tests {
         );
         assert_eq!(answer["ok"], true, "{answer}");
         assert!(state.owners.lock().unwrap().nonces.len() <= 2);
+    }
+
+    #[test]
+    fn anyone_may_ask_who_owns_a_mailbox() {
+        let state = state();
+        let none = send(
+            &state,
+            &json!({"action": "mailbox_owner", "recipient_device_id": "dev-q"}),
+            "198.51.100.3",
+        );
+        assert_eq!(none["ok"], true, "{none}");
+        assert!(none.get("owner").is_none(), "{none}");
+        let owner = owner_key(4);
+        state
+            .claim_mailbox("dev-q", owner.verifying_key().to_bytes(), "198.51.100.1")
+            .expect("claim");
+        let answer = send(
+            &state,
+            &json!({"action": "mailbox_owner", "recipient_device_id": "dev-q"}),
+            "198.51.100.3",
+        );
+        assert_eq!(
+            answer["owner"],
+            BASE64_STANDARD.encode(owner.verifying_key().to_bytes())
+        );
     }
 }

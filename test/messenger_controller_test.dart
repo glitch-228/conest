@@ -459,6 +459,21 @@ class _HangingLocalRelayNode extends LocalRelayNode {
   }
 }
 
+class _OwnerFakeRelayClient extends _FakeRelayClient {
+  /// Who owns every mailbox on this relay (null: nobody).
+  String? owner;
+
+  @override
+  Future<String?> mailboxOwner({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async => owner;
+}
+
 class _FakeRelayClient extends RelayClient {
   _FakeRelayClient({
     Set<String>? failingHosts,
@@ -12537,6 +12552,67 @@ void main() {
       (route) => route.protocol == PeerRouteProtocol.wss,
     );
     expect(alice.pinnedRelayIdentityKeys[wss.routeKey], key);
+  });
+
+  test('a relay whose mailbox for a contact belongs to another key is not '
+      'used for that contact', () async {
+    final relay = _OwnerFakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      lanAddresses: const <String>[],
+    );
+    addTearDown(alice.dispose);
+    final bobKey = base64Encode(List<int>.filled(32, 5));
+    final invite = ContactInvite(
+      version: 2,
+      accountId: 'acc-bob',
+      deviceId: 'dev-bob',
+      displayName: 'Bob',
+      bio: 'test peer',
+      pairingNonce: 'bob-nonce',
+      pairingEpochMs: 1760000000000,
+      relayCapable: true,
+      publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+      signingPublicKeyBase64: bobKey,
+      routeHints: const <PeerEndpoint>[
+        PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: 'relay.example',
+          port: defaultRelayPort,
+        ),
+      ],
+    );
+    final payload = invite.encodePayload();
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: payload,
+      codephrase: currentPairingCodeSnapshotForPayload(payload).codephrase,
+    );
+    await alice.acceptContactPairingForTesting(alice.contacts.single.deviceId);
+    await alice.setContactSigningKeyForTesting('dev-bob', bobKey);
+    final contact = alice.contacts.single;
+    // A squatter owns Bob's mailbox on the relay.
+    relay.owner = base64Encode(List<int>.filled(32, 9));
+    // Pinned and known to keep owners, as a real health answer leaves it.
+    final identityKey = base64Encode(List<int>.filled(32, 3));
+    RelayClient.debugMarkKeepsOwners(
+      'relay.example',
+      defaultRelayPort,
+      identityKey,
+    );
+    relay.storeAttempts.clear();
+    try {
+      await alice.sendMessage(contact: contact, body: 'hi');
+    } on Object {
+      // No other route: the send fails or queues.
+    }
+    expect(relay.storeAttempts, isEmpty, reason: 'sent to a squatted mailbox');
+    // The right owner, or none: the relay is used.
+    relay.owner = bobKey;
+    alice.forgetMailboxVouchingForTesting();
+    await alice.sendMessage(contact: contact, body: 'hello again');
+    expect(relay.storeAttempts, isNotEmpty);
   });
 
   test('what a network cuts is remembered, judged blocked there, and kept '

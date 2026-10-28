@@ -151,9 +151,11 @@ class RelayClient {
   };
 
   /// Lets this app prove it owns [mailbox] (its device id) on relays that
-  /// keep owners: per relay, an Ed25519 key derived from [secret] (the
-  /// device's private signing key), so relays cannot link the keys and no
-  /// new key needs storing.
+  /// keep owners, with the device's own long-term signing key ([secret] is
+  /// its Ed25519 seed). That key is the one every contact knows from the
+  /// invite, so a contact can check who owns a mailbox on a relay (see
+  /// [mailboxOwner]) and avoid one a stranger squatted on. (The price: a
+  /// relay can link this device's mailboxes across relays that collude.)
   static void registerMailboxSecret(String mailbox, List<int> secret) {
     final known = _mailboxSecrets[mailbox];
     if (known != null && _sameBytes(known, secret)) return;
@@ -183,11 +185,7 @@ class RelayClient {
     final cacheKey = '$relayIdentity|$mailbox';
     final cached = _authKeys[cacheKey];
     if (cached != null) return cached;
-    final seed = await Hmac.sha256().calculateMac(
-      utf8.encode('conest-relay-mailbox-auth-v1|$relayIdentity|$mailbox'),
-      secretKey: SecretKey(secret),
-    );
-    final pair = await Ed25519().newKeyPairFromSeed(seed.bytes);
+    final pair = await Ed25519().newKeyPairFromSeed(secret);
     if (_authKeys.length >= 64) _authKeys.remove(_authKeys.keys.first);
     return _authKeys[cacheKey] = pair;
   }
@@ -424,6 +422,17 @@ class RelayClient {
     await v2Pool.closeAll();
   }
 
+  /// Marks [host]:[port] as a relay that keeps mailbox owners (tests).
+  @visibleForTesting
+  static void debugMarkKeepsOwners(String host, int port, String identity) {
+    _v2Known['$host:$port'] = RelayV2Info(
+      identityPublicKeyBase64: identity,
+      noiseKey: null,
+      learnedAt: DateTime.now(),
+      mailboxAuth: true,
+    );
+  }
+
   /// What is known about [host]:[port]'s sessions (tests, diagnostics).
   static RelayV2Info? sessionInfoFor(String host, int port) =>
       _v2Known['$host:$port'];
@@ -507,6 +516,34 @@ class RelayClient {
       expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
     return _decodeEnvelopes(result.body);
+  }
+
+  /// The key (base64) that owns [recipientDeviceId]'s mailbox on the relay,
+  /// or null when nobody does (or the relay does not keep owners). A
+  /// sender compares it with the signing key it knows for the contact: a
+  /// squatter's key means this relay is not to be trusted with that
+  /// contact's mail.
+  Future<String?> mailboxOwner({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    final result = await _sendRequest(
+      host: host,
+      port: port,
+      protocol: protocol,
+      timeout: timeout,
+      request: {
+        'action': 'mailbox_owner',
+        'recipient_device_id': recipientDeviceId,
+      },
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+    final owner = result.body['owner'];
+    return owner is String && owner.length <= 64 ? owner : null;
   }
 
   /// Durable relay fetch. Unlike the legacy destructive fetch, returned

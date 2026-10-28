@@ -77,6 +77,23 @@ lapse after `owner-idle-days` (60) unused. Someone who knows a device id
 could claim it first on a relay that device has not used yet; the device
 then cannot fetch there (what is taken stays end-to-end encrypted).
 
+### Contacts vouch
+
+A relay cannot tell who really holds a device id, so the first claim wins
+(as above). What a stranger can do with that is squat: claim a mailbox
+before its device does. To make that visible, a device claims its mailbox
+with its own long-term signing key (the key every contact has from its
+invite, and nothing derived), and anyone may ask who owns a mailbox
+(`{"action":"mailbox_owner","recipient_device_id":"..."}`; the answer's
+`owner` is the key, or absent). Before the app leaves a contact's message
+on a relay that keeps owners, it asks, and a mailbox owned by any key other
+than the contact's signing key means that relay is not used for that
+contact. A squatter can still make a relay useless for a contact, but
+cannot read their mail, and the sender moves on to another route. Old
+devices that never claim stay unclaimed with the old behaviour. Residual:
+someone holding the device's signing key can claim; the cost of using the
+signing key is that colluding relays can link one device's mailboxes.
+
 ## TLS on 443 with a decoy site
 
 ```

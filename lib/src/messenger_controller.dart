@@ -29726,6 +29726,7 @@ class MessengerController extends ChangeNotifier {
       }
       try {
         final expectedRelayKey = await _requireOperationalRelayPin(route);
+        await _checkMailboxVouched(route, recipientDeviceId, expectedRelayKey);
         _storeCallCount++;
         final stopwatch = Stopwatch()..start();
         final stored = await _relayClient.storeEnvelope(
@@ -29761,6 +29762,77 @@ class MessengerController extends ChangeNotifier {
     }
     throw lastError ?? StateError('No reachable route for recipient.');
   }
+
+  /// "Contacts vouch" (M26): on a relay that keeps mailbox owners, the
+  /// recipient's mailbox must belong to the signing key this device knows
+  /// for the contact. A stranger who claimed it first (the relay cannot
+  /// tell the device id's real holder) makes the relay refused for this
+  /// contact: mail left there would be the squatter's to read or drop.
+  /// Unclaimed mailboxes, relays that keep no owners, and contacts whose
+  /// key is unknown pass; an unanswered query passes too (it is asked
+  /// again after an hour).
+  Future<void> _checkMailboxVouched(
+    PeerEndpoint route,
+    String recipientDeviceId,
+    String? relayKey,
+  ) async {
+    if (route.kind != PeerRouteKind.relay || relayKey == null) return;
+    final contact = _contactByDeviceId(recipientDeviceId);
+    final expected = contact?.signingPublicKeyBase64;
+    if (expected == null || expected.isEmpty) return;
+    if (RelayClient.sessionInfoFor(route.host, route.port)?.mailboxAuth !=
+        true) {
+      return;
+    }
+    final cacheKey = '${route.routeKey}|$recipientDeviceId';
+    final now = DateTime.now();
+    final seen = _mailboxVouched[cacheKey];
+    if (seen != null && now.difference(seen.at) < const Duration(hours: 1)) {
+      if (!seen.ok) throw StateError(_squattedMessage(route));
+      return;
+    }
+    final String? owner;
+    try {
+      owner = await _relayClient.mailboxOwner(
+        host: route.host,
+        port: route.port,
+        protocol: route.protocol,
+        recipientDeviceId: recipientDeviceId,
+        expectedIdentityPublicKeyBase64: relayKey,
+      );
+    } on Object {
+      return;
+    }
+    final ok = owner == null || owner == expected;
+    if (_mailboxVouched.length >= 256) {
+      _mailboxVouched.remove(_mailboxVouched.keys.first);
+    }
+    _mailboxVouched[cacheKey] = (ok: ok, at: now);
+    if (!ok) throw StateError(_squattedMessage(route));
+  }
+
+  String _squattedMessage(PeerEndpoint route) =>
+      'The recipient\'s mailbox on ${route.label} belongs to another key; '
+      'not using this relay for them.';
+
+  final Map<String, ({bool ok, DateTime at})> _mailboxVouched = {};
+
+  @visibleForTesting
+  Future<void> setContactSigningKeyForTesting(
+    String deviceId,
+    String key,
+  ) async {
+    final contacts = [
+      for (final contact in _snapshot.contacts)
+        contact.deviceId == deviceId
+            ? contact.copyWith(signingPublicKeyBase64: key)
+            : contact,
+    ];
+    _snapshot = _snapshot.copyWith(contacts: contacts);
+  }
+
+  @visibleForTesting
+  void forgetMailboxVouchingForTesting() => _mailboxVouched.clear();
 
   Future<ContactInvite> _resolveInviteByCodephrase(String codephrase) async {
     final me = _requireIdentity();
@@ -38461,6 +38533,23 @@ class _ScoringRelayClient implements RelayClient {
       ),
     );
   }
+
+  @override
+  Future<String?> mailboxOwner({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    Duration timeout = const Duration(seconds: 4),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.mailboxOwner(
+    host: host,
+    port: port,
+    protocol: protocol,
+    recipientDeviceId: recipientDeviceId,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
 
   @override
   Future<void> acknowledgeLease({
