@@ -95,6 +95,7 @@ import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
 import 'discord/discord_api.dart';
 import 'discord/discord_carrier.dart';
+import 'discord/discord_service.dart';
 import 'telegram/td_engine.dart';
 import 'telegram/telegram_api_keys.dart';
 import 'telegram/telegram_bot_api.dart';
@@ -781,6 +782,7 @@ class MessengerController extends ChangeNotifier {
     await _persist('App mode: ${mode.name}.');
     _syncXmppChats();
     _syncTelegramClient();
+    _syncDiscordClient();
     if (_snapshot.identity == null || wasActive == conestActive) return;
     if (conestActive) {
       await _startConestRuntime();
@@ -4673,6 +4675,7 @@ class MessengerController extends ChangeNotifier {
       unawaited(_restoreMatrixClient());
       _startXmppChats();
       _syncTelegramClient();
+      _syncDiscordClient();
       await VoiceMessageService.cleanupAbandonedRecordings();
       await _recoverScheduledMessageTransitions();
       await _retireBundledRelayRoutes();
@@ -5785,6 +5788,46 @@ class MessengerController extends ChangeNotifier {
     await registerCarrierTransport(adapter, advertise: advertise);
   }
 
+  // Discord client (M31): opt-in, with the user's own account token, which
+  // is against Discord's terms (the user accepts that first). The token is
+  // kept in the vault and is never used by the carrier.
+
+  DiscordService get discord => _discordService ??= DiscordService(
+    network: _discordNetwork,
+    readAccount: () => _snapshot.carrierAccounts['discordClient'],
+    writeAccount: _writeDiscordAccount,
+    log: (line) => appendDebugLog(line),
+  )..addListener(notifyListeners);
+  DiscordService? _discordService;
+
+  Future<void> _writeDiscordAccount(Map<String, Object?>? account) async {
+    final accounts = {..._snapshot.carrierAccounts};
+    if (account == null) {
+      accounts.remove('discordClient');
+    } else {
+      accounts['discordClient'] = account;
+    }
+    _snapshot = _snapshot.copyWith(carrierAccounts: accounts);
+    await _persist('Discord client ${account == null ? 'removed' : 'on'}.');
+  }
+
+  /// Whether the Discord client may connect: alone in Discord-only mode, or
+  /// beside Conest while Online is on.
+  bool get _discordClientAllowed {
+    if (_disposed) return false;
+    if (!conestActive) return appMode == AppMode.discordOnly;
+    return _snapshot.identity?.connectivity.onlineEnabled ?? true;
+  }
+
+  /// Starts or stops the Discord client to match the mode and Online.
+  void _syncDiscordClient() {
+    if (!discord.enabled) return;
+    if (_discordClientAllowed) {
+      unawaited(discord.start());
+    } else if (discord.client != null) {
+      unawaited(discord.stop());
+    }
+  }
 
   // Telegram client (M30): the user's own account through TDLib, beside
   // Conest's chats or alone in Telegram-only mode. The session lives in
@@ -5840,7 +5883,6 @@ class MessengerController extends ChangeNotifier {
       unawaited(telegram.stop());
     }
   }
-
 
   // XMPP chats (M51 B1): the account's chats beside Conest's, or alone in
   // XMPP-only mode. Its own connection and resource, so pausing the
@@ -11396,6 +11438,7 @@ class MessengerController extends ChangeNotifier {
     await _applyGlobalConnectivityState();
     _syncXmppChats();
     _syncTelegramClient();
+    _syncDiscordClient();
     if ((matrixPolicyChanged && _snapshot.matrixSession != null) ||
         carrierPolicyChanged) {
       // Contacts learn whether to address this device over each carrier.
@@ -37841,6 +37884,7 @@ class MessengerController extends ChangeNotifier {
     unawaited(_stopNostrDirect());
     unawaited(_stopXmppChats());
     _telegramService?.dispose();
+    _discordService?.dispose();
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());

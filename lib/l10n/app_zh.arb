@@ -1630,5 +1630,18 @@
   "discordBotHelp": "在 Discord 开发者门户创建机器人，把它加入你与联系人的机器人共用的私人服务器，然后粘贴令牌和该频道的 ID。该机器人只供 Conest 使用。",
   "discordBotTokenField": "机器人令牌",
   "discordChannelField": "频道 ID",
-  "discordChangeBot": "更换机器人"
+  "discordChangeBot": "更换机器人",
+  "discordClientTitle": "Discord 客户端（违反 Discord 条款）",
+  "discordClientSubtitle": "在 Conest 中使用你自己的 Discord 账号，类似 Vencord 和 Vesktop",
+  "discordWarningTitle": "这可能导致你的账号被封禁",
+  "discordWarningBody": "在其他应用中使用账号令牌违反 Discord 条款，账号可能被封禁。Conest 只在你操作时才行动：只读取你打开的内容，只发送你发出的内容。此令牌不会用于其他用途，Conest 载体也绝不使用它。",
+  "discordWarningAccept": "我明白，继续",
+  "discordAccountTokenField": "账号令牌",
+  "discordTokenHelp": "可在浏览器的 Discord 开发者工具（Network 标签，Authorization 请求头）中找到。切勿分享。",
+  "discordSignedInAs": "已登录为 {name}",
+  "discordDirectMessages": "私信",
+  "discordNoChats": "还没有 Discord 聊天",
+  "discordServers": "服务器",
+  "discordLoadOlder": "加载更早的消息",
+  "discordOnbInstead": "改用作 Discord 客户端"
 }

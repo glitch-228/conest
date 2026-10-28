@@ -5167,6 +5167,9 @@ enum AppMode {
 
   /// A standalone Telegram client (M48): Conest stays dormant.
   telegramOnly,
+
+  /// A standalone Discord client (M48): Conest stays dormant.
+  discordOnly,
 }
 
 extension AppModeTraits on AppMode {

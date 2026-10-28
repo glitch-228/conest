@@ -6308,4 +6308,48 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get discordChangeBot => 'تغيير البوت';
+
+  @override
+  String get discordClientTitle => 'عميل ديسكورد (مخالف لشروط ديسكورد)';
+
+  @override
+  String get discordClientSubtitle =>
+      'استخدم حسابك في ديسكورد داخل Conest كما يفعل Vencord وVesktop';
+
+  @override
+  String get discordWarningTitle => 'قد يؤدي هذا إلى حظر حسابك';
+
+  @override
+  String get discordWarningBody =>
+      'استخدام رمز حسابك في تطبيق آخر مخالف لشروط ديسكورد وقد يحظر ديسكورد الحساب. لا يتصرف Conest إلا عندما تفعل أنت: يقرأ ما تفتحه ويرسل ما ترسله فقط. لا يستخدم هذا الرمز لأي شيء آخر ولا تستخدمه ناقلة Conest أبدًا.';
+
+  @override
+  String get discordWarningAccept => 'أفهم، تابع';
+
+  @override
+  String get discordAccountTokenField => 'رمز الحساب';
+
+  @override
+  String get discordTokenHelp =>
+      'ستجده في أدوات المطور لديسكورد في المتصفح (تبويب Network، ترويسة Authorization). لا تشاركه أبدًا.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'تم تسجيل الدخول باسم $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'الرسائل الخاصة';
+
+  @override
+  String get discordNoChats => 'لا توجد محادثات ديسكورد بعد';
+
+  @override
+  String get discordServers => 'الخوادم';
+
+  @override
+  String get discordLoadOlder => 'تحميل رسائل أقدم';
+
+  @override
+  String get discordOnbInstead => 'استخدمه كعميل ديسكورد بدلًا من ذلك';
 }

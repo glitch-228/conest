@@ -6169,4 +6169,49 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get discordChangeBot => 'Ganti bot';
+
+  @override
+  String get discordClientTitle =>
+      'Klien Discord (melanggar ketentuan Discord)';
+
+  @override
+  String get discordClientSubtitle =>
+      'Pakai akun Discord Anda di Conest, seperti Vencord dan Vesktop';
+
+  @override
+  String get discordWarningTitle => 'Akun Anda bisa diblokir';
+
+  @override
+  String get discordWarningBody =>
+      'Memakai token akun di aplikasi lain melanggar ketentuan Discord dan akun bisa diblokir. Conest hanya bertindak saat Anda bertindak: membaca yang Anda buka dan hanya mengirim yang Anda kirim. Token ini tidak dipakai untuk hal lain dan pembawa Conest tidak pernah memakainya.';
+
+  @override
+  String get discordWarningAccept => 'Saya mengerti, lanjutkan';
+
+  @override
+  String get discordAccountTokenField => 'Token akun';
+
+  @override
+  String get discordTokenHelp =>
+      'Cari di alat pengembang Discord di peramban (tab Network, header Authorization). Jangan bagikan.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'Masuk sebagai $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'Pesan langsung';
+
+  @override
+  String get discordNoChats => 'Belum ada obrolan Discord';
+
+  @override
+  String get discordServers => 'Server';
+
+  @override
+  String get discordLoadOlder => 'Muat pesan lebih lama';
+
+  @override
+  String get discordOnbInstead => 'Pakai sebagai klien Discord saja';
 }

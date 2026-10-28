@@ -76,6 +76,11 @@ class FakeDiscordAccount {
   late final String token;
   bool revoked = false;
   final Set<String> channelIds = {};
+
+  /// Servers the account is in: id to name, and their channels.
+  final Map<String, String> guilds = {};
+  final Map<String, List<Map<String, Object?>>> guildChannels = {};
+  final List<Map<String, Object?>> dms = [];
   final List<DiscordException> failNext = [];
 
   /// Errors for the next sends only (not reads).
@@ -113,6 +118,56 @@ class _FakeApi implements DiscordApi {
         if (account.bot) 'bot': true,
       };
     }
+    if (method == 'GET' && path == '/users/@me/guilds') {
+      return [
+        for (final e in account.guilds.entries) {'id': e.key, 'name': e.value},
+      ];
+    }
+    if (method == 'GET' && path == '/users/@me/channels') return account.dms;
+    final guild = RegExp(r'^/guilds/(\d+)/channels$').firstMatch(path);
+    if (method == 'GET' && guild != null) {
+      return account.guildChannels[guild.group(1)] ?? [];
+    }
+    final item = RegExp(
+      r'^/channels/(\d+)/messages/(\d+)(/reactions/.*)?$',
+    ).firstMatch(path);
+    if (item != null) {
+      final id = item.group(1)!;
+      if (!account.channelIds.contains(id)) {
+        throw DiscordException(path, 403, 'Missing Access');
+      }
+      final list = hub.channels[id]!;
+      final index = list.indexWhere((m) => m['id'] == item.group(2));
+      if (index < 0) throw DiscordException(path, 404, 'Unknown Message');
+      if (item.group(3) != null) {
+        (list[index]['reactions'] ??= <Map<String, Object?>>[]);
+        (list[index]['reactions'] as List).add({
+          'emoji': {'name': Uri.decodeComponent(item.group(3)!.split('/')[2])},
+          'count': 1,
+        });
+        account.sent.add((channel: id, content: 'REACT ${item.group(3)}'));
+        return null;
+      }
+      final author = (list[index]['author'] as Map)['id'];
+      if (author != account.id) {
+        throw DiscordException(
+          path,
+          403,
+          'Cannot edit a message authored by another user',
+        );
+      }
+      if (method == 'PATCH') {
+        list[index]['content'] = (body as Map)['content'];
+        list[index]['edited_timestamp'] = '2026-10-28T11:00:00+00:00';
+        account.sent.add((channel: id, content: 'EDIT ${(body)['content']}'));
+        return list[index];
+      }
+      if (method == 'DELETE') {
+        list.removeAt(index);
+        account.sent.add((channel: id, content: 'DELETE'));
+        return null;
+      }
+    }
     final channel = RegExp(r'^/channels/(\d+)/messages$').firstMatch(path);
     if (channel != null) {
       final id = channel.group(1)!;
@@ -125,7 +180,14 @@ class _FakeApi implements DiscordApi {
       if (method == 'GET') {
         final limit = int.parse(query?['limit'] ?? '50');
         final after = query?['after'];
+        final before = query?['before'];
         var list = hub.channels[id]!;
+        if (before != null) {
+          list = [
+            for (final m in list)
+              if (BigInt.parse(m['id']! as String) < BigInt.parse(before)) m,
+          ];
+        }
         if (after != null) {
           list = [
             for (final m in list)

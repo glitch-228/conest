@@ -1630,5 +1630,18 @@
   "discordBotHelp": "أنشئ بوتًا في بوابة مطوري ديسكورد وأضفه إلى خادم خاص تشاركه مع بوتات جهات اتصالك والصق الرمز ومعرّف القناة. استخدم بوتًا يقرؤه Conest فقط.",
   "discordBotTokenField": "رمز البوت",
   "discordChannelField": "معرّف القناة",
-  "discordChangeBot": "تغيير البوت"
+  "discordChangeBot": "تغيير البوت",
+  "discordClientTitle": "عميل ديسكورد (مخالف لشروط ديسكورد)",
+  "discordClientSubtitle": "استخدم حسابك في ديسكورد داخل Conest كما يفعل Vencord وVesktop",
+  "discordWarningTitle": "قد يؤدي هذا إلى حظر حسابك",
+  "discordWarningBody": "استخدام رمز حسابك في تطبيق آخر مخالف لشروط ديسكورد وقد يحظر ديسكورد الحساب. لا يتصرف Conest إلا عندما تفعل أنت: يقرأ ما تفتحه ويرسل ما ترسله فقط. لا يستخدم هذا الرمز لأي شيء آخر ولا تستخدمه ناقلة Conest أبدًا.",
+  "discordWarningAccept": "أفهم، تابع",
+  "discordAccountTokenField": "رمز الحساب",
+  "discordTokenHelp": "ستجده في أدوات المطور لديسكورد في المتصفح (تبويب Network، ترويسة Authorization). لا تشاركه أبدًا.",
+  "discordSignedInAs": "تم تسجيل الدخول باسم {name}",
+  "discordDirectMessages": "الرسائل الخاصة",
+  "discordNoChats": "لا توجد محادثات ديسكورد بعد",
+  "discordServers": "الخوادم",
+  "discordLoadOlder": "تحميل رسائل أقدم",
+  "discordOnbInstead": "استخدمه كعميل ديسكورد بدلًا من ذلك"
 }

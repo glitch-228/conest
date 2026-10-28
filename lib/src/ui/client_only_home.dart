@@ -8,6 +8,8 @@ import '../messenger_controller.dart';
 import '../models.dart';
 import 'app_mode_selector.dart';
 import 'matrix_home_screen.dart';
+import 'discord_chats_screen.dart';
+import 'discord_client_panel.dart';
 import 'telegram_chats_screen.dart';
 import 'telegram_client_panel.dart';
 import 'xmpp_chats_screen.dart';
@@ -25,6 +27,10 @@ Widget? clientOnlyHome(MessengerController controller, ConestPalette palette) =>
         palette: palette,
       ),
       AppMode.telegramOnly => TelegramHomeScreen(
+        controller: controller,
+        palette: palette,
+      ),
+      AppMode.discordOnly => DiscordHomeScreen(
         controller: controller,
         palette: palette,
       ),
@@ -60,6 +66,13 @@ class ClientOnlyChoices extends StatelessWidget {
             label: Text(l10n.onbTelegramInstead),
           ),
         ],
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          key: const ValueKey('onboarding-discord-only'),
+          onPressed: () => controller.setAppMode(AppMode.discordOnly),
+          icon: const Icon(Icons.forum_outlined),
+          label: Text(l10n.discordOnbInstead),
+        ),
       ],
     );
   }
@@ -240,6 +253,67 @@ class TelegramHomeScreen extends StatelessWidget {
                       AppModeSelector(controller: controller),
                     ],
                   ),
+                ),
+        );
+      },
+    );
+  }
+}
+
+/// Discord-only mode: the account's chats and nothing of Conest.
+class DiscordHomeScreen extends StatelessWidget {
+  const DiscordHomeScreen({
+    super.key,
+    required this.controller,
+    required this.palette,
+  });
+
+  final MessengerController controller;
+  final ConestPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = l10nOf(context);
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final client = controller.discord.client;
+        final ready = client?.signedIn ?? false;
+        Widget settings() => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DiscordClientPanel(controller: controller),
+            const SizedBox(height: 24),
+            AppModeSelector(controller: controller),
+          ],
+        );
+        return Scaffold(
+          backgroundColor: palette.panel,
+          appBar: AppBar(
+            title: const Text('Discord'),
+            actions: [
+              IconButton(
+                tooltip: l10n.tabSettings,
+                onPressed: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: Text(l10n.tabSettings)),
+                      body: ListView(
+                        padding: const EdgeInsets.all(20),
+                        children: [settings()],
+                      ),
+                    ),
+                  ),
+                ),
+                icon: const Icon(Icons.settings_outlined),
+              ),
+            ],
+          ),
+          body: ready
+              ? DiscordChatList(controller: controller, client: client!)
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: settings(),
                 ),
         );
       },

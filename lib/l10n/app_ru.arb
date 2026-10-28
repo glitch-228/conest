@@ -1630,5 +1630,18 @@
   "discordBotHelp": "Создайте бота на портале разработчиков Discord, добавьте его на закрытый сервер, общий с ботами ваших контактов, и вставьте токен и id канала. Бот должен использоваться только Conest.",
   "discordBotTokenField": "Токен бота",
   "discordChannelField": "Id канала",
-  "discordChangeBot": "Сменить бота"
+  "discordChangeBot": "Сменить бота",
+  "discordClientTitle": "Клиент Discord (против правил Discord)",
+  "discordClientSubtitle": "Использовать свой аккаунт Discord в Conest, как Vencord и Vesktop",
+  "discordWarningTitle": "Из-за этого аккаунт могут заблокировать",
+  "discordWarningBody": "Использование токена аккаунта в другом приложении нарушает правила Discord, и аккаунт могут заблокировать. Conest действует только по вашим действиям: читает то, что вы открываете, и отправляет только то, что отправляете вы. Токен больше ни для чего не используется, а переносчик Conest его не использует никогда.",
+  "discordWarningAccept": "Понимаю, продолжить",
+  "discordAccountTokenField": "Токен аккаунта",
+  "discordTokenHelp": "Его можно найти в инструментах разработчика Discord в браузере (вкладка Network, заголовок Authorization). Никому его не показывайте.",
+  "discordSignedInAs": "Вход выполнен как {name}",
+  "discordDirectMessages": "Личные сообщения",
+  "discordNoChats": "Чатов Discord пока нет",
+  "discordServers": "Серверы",
+  "discordLoadOlder": "Загрузить более старые сообщения",
+  "discordOnbInstead": "Использовать как клиент Discord"
 }

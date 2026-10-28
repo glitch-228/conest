@@ -9964,6 +9964,84 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Change bot'**
   String get discordChangeBot;
+
+  /// Settings: Discord client section title.
+  ///
+  /// In en, this message translates to:
+  /// **'Discord client (against Discord\'s terms)'**
+  String get discordClientTitle;
+
+  /// Settings: Discord client switch subtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Use your own Discord account in Conest, as Vencord and Vesktop do'**
+  String get discordClientSubtitle;
+
+  /// Discord client warning dialog title.
+  ///
+  /// In en, this message translates to:
+  /// **'This can get your account banned'**
+  String get discordWarningTitle;
+
+  /// Discord client warning dialog text.
+  ///
+  /// In en, this message translates to:
+  /// **'Using your account token in another app is against Discord\'s terms, and Discord can ban the account. Conest only acts when you do: it reads what you open and sends only what you send. It does not use this token for anything else, and the Conest carrier never uses it.'**
+  String get discordWarningBody;
+
+  /// Discord client warning: accept button.
+  ///
+  /// In en, this message translates to:
+  /// **'I understand, continue'**
+  String get discordWarningAccept;
+
+  /// Discord client: account token field.
+  ///
+  /// In en, this message translates to:
+  /// **'Account token'**
+  String get discordAccountTokenField;
+
+  /// Discord client: how to get the token.
+  ///
+  /// In en, this message translates to:
+  /// **'Find it in Discord\'s developer tools in a browser (Network tab, the Authorization header). Never share it.'**
+  String get discordTokenHelp;
+
+  /// Discord client: signed in.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in as {name}'**
+  String discordSignedInAs(String name);
+
+  /// Discord client: the direct messages section.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct messages'**
+  String get discordDirectMessages;
+
+  /// Discord client: nothing to show.
+  ///
+  /// In en, this message translates to:
+  /// **'No Discord chats yet'**
+  String get discordNoChats;
+
+  /// Discord client: the servers section.
+  ///
+  /// In en, this message translates to:
+  /// **'Servers'**
+  String get discordServers;
+
+  /// Discord client: load older messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Load older messages'**
+  String get discordLoadOlder;
+
+  /// Onboarding: use the app as a Discord client instead.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as a Discord client instead'**
+  String get discordOnbInstead;
 }
 
 class _AppLocalizationsDelegate

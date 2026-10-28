@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../bitchat_chats.dart';
 import '../messenger_controller.dart';
 import '../conest_theme.dart';
+import '../discord/discord_client.dart';
 import '../models.dart';
 import '../telegram/telegram_client.dart';
 import '../telegram/telegram_models.dart';
@@ -14,6 +15,7 @@ import 'delta_chats_screen.dart';
 import 'matrix_room_screen.dart';
 import 'nostr_chats_screen.dart';
 import 'radio_chats_screen.dart';
+import 'discord_chats_screen.dart';
 import 'telegram_chats_screen.dart';
 import 'xmpp_chats_screen.dart';
 import '../radio_chats.dart';
@@ -82,6 +84,7 @@ List<NetworkChatSource> networkChatSources(
   DeltaChatSource(controller),
   XmppChatSource(controller),
   TelegramChatSource(controller),
+  DiscordChatSource(controller),
   BitchatChatSource(controller),
   RadioChatSource(
     'meshcore',
@@ -240,6 +243,39 @@ class XmppChatSource extends NetworkChatSource {
           open: (context) => openXmppChat(context, controller, chat.jid),
         ),
   ];
+}
+
+/// The user's Discord direct messages (M31), when the opt-in client is on.
+class DiscordChatSource extends NetworkChatSource {
+  const DiscordChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'discord';
+
+  @override
+  String get label => 'Discord';
+
+  @override
+  bool get active => controller.discord.client?.signedIn ?? false;
+
+  @override
+  List<NetworkChat> chats([BuildContext? context]) {
+    final client = controller.discord.client;
+    if (client == null || !active) return const [];
+    return [
+      for (final channel in client.dms)
+        NetworkChat(
+          network: id,
+          id: channel.id,
+          title: discordChannelTitle(channel),
+          preview: client.messagesOf(channel.id).lastOrNull?.text ?? '',
+          isGroup: channel.kind == DcChannelKind.groupDm,
+          open: (context) => openDiscordChannel(context, controller, channel),
+        ),
+    ];
+  }
 }
 
 /// The user's Telegram chats (M30), when the client is signed in.

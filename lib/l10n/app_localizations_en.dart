@@ -6182,4 +6182,48 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get discordChangeBot => 'Change bot';
+
+  @override
+  String get discordClientTitle => 'Discord client (against Discord\'s terms)';
+
+  @override
+  String get discordClientSubtitle =>
+      'Use your own Discord account in Conest, as Vencord and Vesktop do';
+
+  @override
+  String get discordWarningTitle => 'This can get your account banned';
+
+  @override
+  String get discordWarningBody =>
+      'Using your account token in another app is against Discord\'s terms, and Discord can ban the account. Conest only acts when you do: it reads what you open and sends only what you send. It does not use this token for anything else, and the Conest carrier never uses it.';
+
+  @override
+  String get discordWarningAccept => 'I understand, continue';
+
+  @override
+  String get discordAccountTokenField => 'Account token';
+
+  @override
+  String get discordTokenHelp =>
+      'Find it in Discord\'s developer tools in a browser (Network tab, the Authorization header). Never share it.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'Signed in as $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'Direct messages';
+
+  @override
+  String get discordNoChats => 'No Discord chats yet';
+
+  @override
+  String get discordServers => 'Servers';
+
+  @override
+  String get discordLoadOlder => 'Load older messages';
+
+  @override
+  String get discordOnbInstead => 'Use as a Discord client instead';
 }

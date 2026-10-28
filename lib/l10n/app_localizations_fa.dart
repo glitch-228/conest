@@ -6182,4 +6182,48 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get discordChangeBot => 'تغییر ربات';
+
+  @override
+  String get discordClientTitle => 'کلاینت دیسکورد (برخلاف قوانین دیسکورد)';
+
+  @override
+  String get discordClientSubtitle =>
+      'استفاده از حساب دیسکورد خود در Conest مانند Vencord و Vesktop';
+
+  @override
+  String get discordWarningTitle => 'ممکن است حساب شما مسدود شود';
+
+  @override
+  String get discordWarningBody =>
+      'استفاده از توکن حساب در برنامه‌ای دیگر برخلاف قوانین دیسکورد است و ممکن است حساب مسدود شود. Conest فقط وقتی شما کاری می‌کنید عمل می‌کند: آنچه را باز می‌کنید می‌خواند و فقط آنچه می‌فرستید ارسال می‌کند. این توکن برای کار دیگری استفاده نمی‌شود و حامل Conest هرگز از آن استفاده نمی‌کند.';
+
+  @override
+  String get discordWarningAccept => 'متوجه هستم، ادامه';
+
+  @override
+  String get discordAccountTokenField => 'توکن حساب';
+
+  @override
+  String get discordTokenHelp =>
+      'آن را در ابزار توسعه‌دهنده دیسکورد در مرورگر پیدا کنید (زبانه Network، سرآیند Authorization). هرگز به اشتراک نگذارید.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'وارد شده با نام $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'پیام‌های خصوصی';
+
+  @override
+  String get discordNoChats => 'هنوز گفتگوی دیسکوردی نیست';
+
+  @override
+  String get discordServers => 'سرورها';
+
+  @override
+  String get discordLoadOlder => 'بارگذاری پیام‌های قدیمی‌تر';
+
+  @override
+  String get discordOnbInstead => 'استفاده به‌عنوان کلاینت دیسکورد';
 }

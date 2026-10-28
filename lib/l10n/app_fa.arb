@@ -1630,5 +1630,18 @@
   "discordBotHelp": "در پورتال توسعه‌دهندگان دیسکورد یک ربات بسازید، آن را به سروری خصوصی که با ربات مخاطبانتان مشترک است اضافه کنید و توکن و شناسه کانال را بچسبانید. رباتی را به کار ببرید که فقط Conest می‌خواند.",
   "discordBotTokenField": "توکن ربات",
   "discordChannelField": "شناسه کانال",
-  "discordChangeBot": "تغییر ربات"
+  "discordChangeBot": "تغییر ربات",
+  "discordClientTitle": "کلاینت دیسکورد (برخلاف قوانین دیسکورد)",
+  "discordClientSubtitle": "استفاده از حساب دیسکورد خود در Conest مانند Vencord و Vesktop",
+  "discordWarningTitle": "ممکن است حساب شما مسدود شود",
+  "discordWarningBody": "استفاده از توکن حساب در برنامه‌ای دیگر برخلاف قوانین دیسکورد است و ممکن است حساب مسدود شود. Conest فقط وقتی شما کاری می‌کنید عمل می‌کند: آنچه را باز می‌کنید می‌خواند و فقط آنچه می‌فرستید ارسال می‌کند. این توکن برای کار دیگری استفاده نمی‌شود و حامل Conest هرگز از آن استفاده نمی‌کند.",
+  "discordWarningAccept": "متوجه هستم، ادامه",
+  "discordAccountTokenField": "توکن حساب",
+  "discordTokenHelp": "آن را در ابزار توسعه‌دهنده دیسکورد در مرورگر پیدا کنید (زبانه Network، سرآیند Authorization). هرگز به اشتراک نگذارید.",
+  "discordSignedInAs": "وارد شده با نام {name}",
+  "discordDirectMessages": "پیام‌های خصوصی",
+  "discordNoChats": "هنوز گفتگوی دیسکوردی نیست",
+  "discordServers": "سرورها",
+  "discordLoadOlder": "بارگذاری پیام‌های قدیمی‌تر",
+  "discordOnbInstead": "استفاده به‌عنوان کلاینت دیسکورد"
 }

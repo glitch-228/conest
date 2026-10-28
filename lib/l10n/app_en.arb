@@ -9124,5 +9124,62 @@
   "discordChangeBot": "Change bot",
   "@discordChangeBot": {
     "description": "Settings: change the Discord bot."
+  },
+  "discordClientTitle": "Discord client (against Discord's terms)",
+  "@discordClientTitle": {
+    "description": "Settings: Discord client section title."
+  },
+  "discordClientSubtitle": "Use your own Discord account in Conest, as Vencord and Vesktop do",
+  "@discordClientSubtitle": {
+    "description": "Settings: Discord client switch subtitle."
+  },
+  "discordWarningTitle": "This can get your account banned",
+  "@discordWarningTitle": {
+    "description": "Discord client warning dialog title."
+  },
+  "discordWarningBody": "Using your account token in another app is against Discord's terms, and Discord can ban the account. Conest only acts when you do: it reads what you open and sends only what you send. It does not use this token for anything else, and the Conest carrier never uses it.",
+  "@discordWarningBody": {
+    "description": "Discord client warning dialog text."
+  },
+  "discordWarningAccept": "I understand, continue",
+  "@discordWarningAccept": {
+    "description": "Discord client warning: accept button."
+  },
+  "discordAccountTokenField": "Account token",
+  "@discordAccountTokenField": {
+    "description": "Discord client: account token field."
+  },
+  "discordTokenHelp": "Find it in Discord's developer tools in a browser (Network tab, the Authorization header). Never share it.",
+  "@discordTokenHelp": {
+    "description": "Discord client: how to get the token."
+  },
+  "discordSignedInAs": "Signed in as {name}",
+  "@discordSignedInAs": {
+    "description": "Discord client: signed in.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "discordDirectMessages": "Direct messages",
+  "@discordDirectMessages": {
+    "description": "Discord client: the direct messages section."
+  },
+  "discordNoChats": "No Discord chats yet",
+  "@discordNoChats": {
+    "description": "Discord client: nothing to show."
+  },
+  "discordServers": "Servers",
+  "@discordServers": {
+    "description": "Discord client: the servers section."
+  },
+  "discordLoadOlder": "Load older messages",
+  "@discordLoadOlder": {
+    "description": "Discord client: load older messages."
+  },
+  "discordOnbInstead": "Use as a Discord client instead",
+  "@discordOnbInstead": {
+    "description": "Onboarding: use the app as a Discord client instead."
   }
 }

@@ -187,4 +187,151 @@ void _discordControllerTests() {
       expect(alice.discordBotConfig, isNull);
     });
   });
+
+  group('Discord client', () {
+    Future<void> until(bool Function() done) async {
+      for (var i = 0; i < 300 && !done(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(done(), isTrue);
+    }
+
+    (FakeDiscord, FakeDiscordAccount) seeded() {
+      final hub = FakeDiscord();
+      final me = hub.addUser('me');
+      final friend = hub.addUser('friend');
+      final dm = hub.addChannel(members: [me, friend]);
+      me.dms.add({
+        'id': dm,
+        'type': 1,
+        'recipients': [
+          {'id': friend.id, 'username': 'friend'},
+        ],
+      });
+      hub.post(dm, friend, 'hi from friend');
+      return (hub, me);
+    }
+
+    Future<MessengerController> launch(
+      FakeDiscord hub, {
+      _MemoryVaultStore? vault,
+    }) async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        vaultStore: vault,
+        displayName: 'Alice',
+        discordNetwork: hub.network,
+      );
+      return controller;
+    }
+
+    test(
+      'stays off until accepted, then follows the mode and Online',
+      () async {
+        final (hub, me) = seeded();
+        final user = hub.addUser('x');
+        final vault = _MemoryVaultStore();
+        final alice = await launch(hub, vault: vault);
+        await expectLater(
+          alice.discord.enable(user.token, acceptedRisk: false),
+          throwsStateError,
+        );
+        expect(hub.calls, isEmpty);
+        await alice.discord.enable(me.token, acceptedRisk: true);
+        expect(alice.discord.client!.signedIn, isTrue);
+        // The carrier did not start and nothing was posted by the client.
+        expect(alice.discordChannel, isNull);
+        alice.dispose();
+
+        final again = await launch(hub, vault: vault);
+        addTearDown(again.dispose);
+        await until(() => again.discord.client?.signedIn ?? false);
+        await again.updateGlobalConnectivity(
+          again.identity!.connectivity.copyWith(onlineEnabled: false),
+        );
+        await until(() => again.discord.client == null);
+        await again.updateGlobalConnectivity(
+          again.identity!.connectivity.copyWith(onlineEnabled: true),
+        );
+        await until(() => again.discord.client?.signedIn ?? false);
+        // Discord-only mode keeps it running with Conest dormant.
+        await again.setAppMode(AppMode.discordOnly);
+        expect(again.conestActive, isFalse);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(again.discord.client?.signedIn, isTrue);
+        await again.setAppMode(AppMode.xmppOnly);
+        await until(() => again.discord.client == null);
+        await again.setAppMode(AppMode.conest);
+        await until(() => again.discord.client?.signedIn ?? false);
+      },
+    );
+
+    testWidgets('the panel warns first and the chat list opens a DM', (
+      tester,
+    ) async {
+      final (hub, me) = seeded();
+      late MessengerController alice;
+      await tester.runAsync(() async => alice = await launch(hub));
+      addTearDown(alice.dispose);
+      Widget host(Widget child) => MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: SingleChildScrollView(child: child)),
+      );
+      await tester.pumpWidget(host(DiscordClientPanel(controller: alice)));
+      await tester.enterText(
+        find.byKey(const ValueKey('discord-token-field')),
+        me.token,
+      );
+      await tester.tap(find.byKey(const ValueKey('discord-enable')));
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('against Discord'), findsWidgets);
+      expect(hub.calls, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('discord-accept-risk')));
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+      expect(find.byKey(const ValueKey('discord-signed-in')), findsOneWidget);
+
+      final client = alice.discord.client!;
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: DiscordChatList(controller: alice, client: client),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('friend'));
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('hi from friend'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('discord-composer')),
+        'hello back',
+      );
+      await tester.tap(find.byKey(const ValueKey('discord-send')));
+      for (var i = 0; i < 4; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+      expect(find.text('hello back'), findsOneWidget);
+      expect(me.sent.single.content, 'hello back');
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 2));
+    });
+  });
 }

@@ -5913,4 +5913,48 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get discordChangeBot => '更换机器人';
+
+  @override
+  String get discordClientTitle => 'Discord 客户端（违反 Discord 条款）';
+
+  @override
+  String get discordClientSubtitle =>
+      '在 Conest 中使用你自己的 Discord 账号，类似 Vencord 和 Vesktop';
+
+  @override
+  String get discordWarningTitle => '这可能导致你的账号被封禁';
+
+  @override
+  String get discordWarningBody =>
+      '在其他应用中使用账号令牌违反 Discord 条款，账号可能被封禁。Conest 只在你操作时才行动：只读取你打开的内容，只发送你发出的内容。此令牌不会用于其他用途，Conest 载体也绝不使用它。';
+
+  @override
+  String get discordWarningAccept => '我明白，继续';
+
+  @override
+  String get discordAccountTokenField => '账号令牌';
+
+  @override
+  String get discordTokenHelp =>
+      '可在浏览器的 Discord 开发者工具（Network 标签，Authorization 请求头）中找到。切勿分享。';
+
+  @override
+  String discordSignedInAs(String name) {
+    return '已登录为 $name';
+  }
+
+  @override
+  String get discordDirectMessages => '私信';
+
+  @override
+  String get discordNoChats => '还没有 Discord 聊天';
+
+  @override
+  String get discordServers => '服务器';
+
+  @override
+  String get discordLoadOlder => '加载更早的消息';
+
+  @override
+  String get discordOnbInstead => '改用作 Discord 客户端';
 }

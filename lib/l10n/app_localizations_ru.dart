@@ -6308,4 +6308,48 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get discordChangeBot => 'Сменить бота';
+
+  @override
+  String get discordClientTitle => 'Клиент Discord (против правил Discord)';
+
+  @override
+  String get discordClientSubtitle =>
+      'Использовать свой аккаунт Discord в Conest, как Vencord и Vesktop';
+
+  @override
+  String get discordWarningTitle => 'Из-за этого аккаунт могут заблокировать';
+
+  @override
+  String get discordWarningBody =>
+      'Использование токена аккаунта в другом приложении нарушает правила Discord, и аккаунт могут заблокировать. Conest действует только по вашим действиям: читает то, что вы открываете, и отправляет только то, что отправляете вы. Токен больше ни для чего не используется, а переносчик Conest его не использует никогда.';
+
+  @override
+  String get discordWarningAccept => 'Понимаю, продолжить';
+
+  @override
+  String get discordAccountTokenField => 'Токен аккаунта';
+
+  @override
+  String get discordTokenHelp =>
+      'Его можно найти в инструментах разработчика Discord в браузере (вкладка Network, заголовок Authorization). Никому его не показывайте.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'Вход выполнен как $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'Личные сообщения';
+
+  @override
+  String get discordNoChats => 'Чатов Discord пока нет';
+
+  @override
+  String get discordServers => 'Серверы';
+
+  @override
+  String get discordLoadOlder => 'Загрузить более старые сообщения';
+
+  @override
+  String get discordOnbInstead => 'Использовать как клиент Discord';
 }

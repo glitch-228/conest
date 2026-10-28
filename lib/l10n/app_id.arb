@@ -1630,5 +1630,18 @@
   "discordBotHelp": "Buat bot di portal pengembang Discord, tambahkan ke server pribadi yang dipakai bersama bot kontak Anda, lalu tempel token dan id kanalnya. Pakai bot yang hanya dibaca Conest.",
   "discordBotTokenField": "Token bot",
   "discordChannelField": "Id kanal",
-  "discordChangeBot": "Ganti bot"
+  "discordChangeBot": "Ganti bot",
+  "discordClientTitle": "Klien Discord (melanggar ketentuan Discord)",
+  "discordClientSubtitle": "Pakai akun Discord Anda di Conest, seperti Vencord dan Vesktop",
+  "discordWarningTitle": "Akun Anda bisa diblokir",
+  "discordWarningBody": "Memakai token akun di aplikasi lain melanggar ketentuan Discord dan akun bisa diblokir. Conest hanya bertindak saat Anda bertindak: membaca yang Anda buka dan hanya mengirim yang Anda kirim. Token ini tidak dipakai untuk hal lain dan pembawa Conest tidak pernah memakainya.",
+  "discordWarningAccept": "Saya mengerti, lanjutkan",
+  "discordAccountTokenField": "Token akun",
+  "discordTokenHelp": "Cari di alat pengembang Discord di peramban (tab Network, header Authorization). Jangan bagikan.",
+  "discordSignedInAs": "Masuk sebagai {name}",
+  "discordDirectMessages": "Pesan langsung",
+  "discordNoChats": "Belum ada obrolan Discord",
+  "discordServers": "Server",
+  "discordLoadOlder": "Muat pesan lebih lama",
+  "discordOnbInstead": "Pakai sebagai klien Discord saja"
 }

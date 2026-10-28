@@ -21,6 +21,9 @@ class AppModeSelector extends StatelessWidget {
     AppMode.matrixOnly =>
       'A Matrix client only. Conest chats are hidden and '
           'Conest networking stays off on this device.',
+    AppMode.discordOnly =>
+      'A Discord client only. Conest chats are hidden and '
+          'Conest networking stays off on this device.',
     AppMode.telegramOnly =>
       'A Telegram client only. Conest chats are hidden and '
           'Conest networking stays off on this device.',
@@ -36,6 +39,7 @@ class AppModeSelector extends StatelessWidget {
     if (controller.matrixAvailable) AppMode.matrixOnly,
     AppMode.xmppOnly,
     if (controller.telegram.supported) AppMode.telegramOnly,
+    AppMode.discordOnly,
   ];
 
   static String label(BuildContext context, AppMode mode) => switch (mode) {
@@ -44,6 +48,7 @@ class AppModeSelector extends StatelessWidget {
     AppMode.matrixOnly => l10nOf(context).uiMatrix58947E,
     AppMode.xmppOnly => 'XMPP',
     AppMode.telegramOnly => 'Telegram',
+    AppMode.discordOnly => 'Discord',
   };
 
   @override

@@ -135,6 +135,8 @@ import 'package:conest/src/telegram/telegram_bot_api.dart';
 import 'package:conest/src/telegram/telegram_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
+import 'package:conest/src/ui/discord_chats_screen.dart';
+import 'package:conest/src/ui/discord_client_panel.dart';
 import 'package:conest/src/ui/telegram_chats_screen.dart';
 import 'package:conest/src/ui/telegram_client_panel.dart';
 import 'package:conest/src/ui/xmpp_carrier_panel.dart';
