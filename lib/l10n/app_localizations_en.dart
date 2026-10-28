@@ -6018,4 +6018,144 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get telegramBotTokenField => 'Bot token';
+
+  @override
+  String get telegramClientTitle => 'Telegram client';
+
+  @override
+  String get telegramClientSubtitle =>
+      'Use your own Telegram account in Conest (unofficial client)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest is an unofficial Telegram client. Telegram\'s rules apply to your account.';
+
+  @override
+  String get telegramPhoneField => 'Phone number (+…)';
+
+  @override
+  String get telegramCodeField => 'Login code';
+
+  @override
+  String get telegramPasswordField => 'Two-step password';
+
+  @override
+  String get telegramQrLogin => 'Sign in with a QR code instead';
+
+  @override
+  String get telegramQrHint =>
+      'On your phone open Telegram, Settings, Devices, Link Desktop Device, and scan this code.';
+
+  @override
+  String get telegramNoAccount =>
+      'This number has no Telegram account. Conest only signs in; make the account in the official Telegram app first.';
+
+  @override
+  String get telegramLogOut => 'Log out and remove';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'Signed in as $name';
+  }
+
+  @override
+  String get telegramConnecting => 'Connecting…';
+
+  @override
+  String get telegramMods => 'Mod settings';
+
+  @override
+  String get telegramNoChats => 'No Telegram chats yet';
+
+  @override
+  String get telegramSaved => 'Saved Messages';
+
+  @override
+  String get telegramSponsored => 'Sponsored';
+
+  @override
+  String get telegramDeletedBySender => 'Deleted by sender';
+
+  @override
+  String get telegramAllChats => 'All chats';
+
+  @override
+  String get telegramArchive => 'Archive';
+
+  @override
+  String get telegramChannelReadOnly => 'Only admins can post here';
+
+  @override
+  String get telegramSendSilently => 'Send silently';
+
+  @override
+  String get telegramSchedule => 'Send later…';
+
+  @override
+  String get telegramTranslate => 'Translate';
+
+  @override
+  String get telegramExport => 'Export loaded messages';
+
+  @override
+  String get telegramDeleteForAll => 'Delete for everyone';
+
+  @override
+  String get telegramDeleteForMe => 'Delete for me';
+
+  @override
+  String get telegramDownload => 'Download';
+
+  @override
+  String get telegramOpenSponsored => 'Open link';
+
+  @override
+  String get telegramHiddenWords =>
+      'Hide messages containing these words (one per line)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'Show a notice when someone deletes a message';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'Only the notice stays. The deleted content is not kept.';
+
+  @override
+  String get telegramTranslateTo =>
+      'Translate into (language code, empty for the app language)';
+
+  @override
+  String get telegramPlugins => 'Plugins';
+
+  @override
+  String get telegramPluginHelp =>
+      'Plugins are small rule files. They can only hide messages, change the text you send and add commands, and only what they declare.';
+
+  @override
+  String get telegramPluginInstall => 'Install a plugin (paste its text)';
+
+  @override
+  String get telegramPluginBad =>
+      'That is not a valid plugin, or too many are installed.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'May: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'hide messages';
+
+  @override
+  String get telegramPermEditOutgoing => 'change what you send';
+
+  @override
+  String get telegramPermCommands => 'add commands';
+
+  @override
+  String get telegramDownloads => 'Downloads';
+
+  @override
+  String get telegramLoadOlder => 'Load older messages';
 }

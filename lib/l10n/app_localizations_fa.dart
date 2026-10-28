@@ -6018,4 +6018,144 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get telegramBotTokenField => 'توکن ربات';
+
+  @override
+  String get telegramClientTitle => 'کلاینت تلگرام';
+
+  @override
+  String get telegramClientSubtitle =>
+      'استفاده از حساب تلگرام خود در Conest (کلاینت غیررسمی)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest یک کلاینت غیررسمی تلگرام است. قوانین تلگرام برای حساب شما اعمال می‌شود.';
+
+  @override
+  String get telegramPhoneField => 'شماره تلفن (+…)';
+
+  @override
+  String get telegramCodeField => 'کد ورود';
+
+  @override
+  String get telegramPasswordField => 'گذرواژه تأیید دومرحله‌ای';
+
+  @override
+  String get telegramQrLogin => 'ورود با کد QR';
+
+  @override
+  String get telegramQrHint =>
+      'در تلفن خود تلگرام را باز کنید، تنظیمات، دستگاه‌ها، اتصال دستگاه دسکتاپ و این کد را اسکن کنید.';
+
+  @override
+  String get telegramNoAccount =>
+      'این شماره حساب تلگرام ندارد. Conest فقط وارد می‌شود؛ ابتدا حساب را در برنامه رسمی تلگرام بسازید.';
+
+  @override
+  String get telegramLogOut => 'خروج و حذف';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'وارد شده با نام $name';
+  }
+
+  @override
+  String get telegramConnecting => 'در حال اتصال…';
+
+  @override
+  String get telegramMods => 'تنظیمات افزونه‌ها';
+
+  @override
+  String get telegramNoChats => 'هنوز گفتگوی تلگرامی نیست';
+
+  @override
+  String get telegramSaved => 'پیام‌های ذخیره‌شده';
+
+  @override
+  String get telegramSponsored => 'حمایت‌شده';
+
+  @override
+  String get telegramDeletedBySender => 'توسط فرستنده حذف شد';
+
+  @override
+  String get telegramAllChats => 'همه گفتگوها';
+
+  @override
+  String get telegramArchive => 'بایگانی';
+
+  @override
+  String get telegramChannelReadOnly =>
+      'فقط مدیران می‌توانند اینجا پست بگذارند';
+
+  @override
+  String get telegramSendSilently => 'ارسال بی‌صدا';
+
+  @override
+  String get telegramSchedule => 'ارسال در زمان بعد…';
+
+  @override
+  String get telegramTranslate => 'ترجمه';
+
+  @override
+  String get telegramExport => 'صادر کردن پیام‌های بارگذاری‌شده';
+
+  @override
+  String get telegramDeleteForAll => 'حذف برای همه';
+
+  @override
+  String get telegramDeleteForMe => 'حذف برای من';
+
+  @override
+  String get telegramDownload => 'دانلود';
+
+  @override
+  String get telegramOpenSponsored => 'باز کردن پیوند';
+
+  @override
+  String get telegramHiddenWords =>
+      'پنهان کردن پیام‌های دارای این واژه‌ها (هر خط یکی)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'نمایش اعلان وقتی کسی پیامی را حذف می‌کند';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'فقط اعلان می‌ماند. محتوای حذف‌شده نگه داشته نمی‌شود.';
+
+  @override
+  String get telegramTranslateTo => 'ترجمه به (کد زبان، خالی برای زبان برنامه)';
+
+  @override
+  String get telegramPlugins => 'افزونه‌ها';
+
+  @override
+  String get telegramPluginHelp =>
+      'افزونه‌ها فایل‌های قانون کوچکی هستند. فقط می‌توانند پیام‌ها را پنهان کنند، متن ارسالی را تغییر دهند و دستور اضافه کنند، آن هم فقط در حد مجوزهایشان.';
+
+  @override
+  String get telegramPluginInstall => 'نصب افزونه (متن آن را بچسبانید)';
+
+  @override
+  String get telegramPluginBad =>
+      'این افزونه معتبر نیست یا تعداد افزونه‌ها زیاد است.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'مجاز: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'پنهان کردن پیام‌ها';
+
+  @override
+  String get telegramPermEditOutgoing => 'تغییر آنچه می‌فرستید';
+
+  @override
+  String get telegramPermCommands => 'افزودن دستورها';
+
+  @override
+  String get telegramDownloads => 'دانلودها';
+
+  @override
+  String get telegramLoadOlder => 'بارگذاری پیام‌های قدیمی‌تر';
 }

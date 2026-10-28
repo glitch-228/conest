@@ -5758,4 +5758,136 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get telegramBotTokenField => '机器人令牌';
+
+  @override
+  String get telegramClientTitle => 'Telegram 客户端';
+
+  @override
+  String get telegramClientSubtitle => '在 Conest 中使用你自己的 Telegram 账号（非官方客户端）';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest 是非官方的 Telegram 客户端。你的账号仍受 Telegram 规则约束。';
+
+  @override
+  String get telegramPhoneField => '手机号码 (+…)';
+
+  @override
+  String get telegramCodeField => '登录验证码';
+
+  @override
+  String get telegramPasswordField => '两步验证密码';
+
+  @override
+  String get telegramQrLogin => '改用二维码登录';
+
+  @override
+  String get telegramQrHint => '在手机上打开 Telegram，进入设置、设备、关联桌面设备，然后扫描此二维码。';
+
+  @override
+  String get telegramNoAccount =>
+      '该号码没有 Telegram 账号。Conest 只负责登录，请先在官方 Telegram 应用中注册。';
+
+  @override
+  String get telegramLogOut => '退出并移除';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return '已登录为 $name';
+  }
+
+  @override
+  String get telegramConnecting => '正在连接…';
+
+  @override
+  String get telegramMods => '模组设置';
+
+  @override
+  String get telegramNoChats => '还没有 Telegram 聊天';
+
+  @override
+  String get telegramSaved => '收藏的消息';
+
+  @override
+  String get telegramSponsored => '赞助内容';
+
+  @override
+  String get telegramDeletedBySender => '发送者已删除';
+
+  @override
+  String get telegramAllChats => '全部聊天';
+
+  @override
+  String get telegramArchive => '归档';
+
+  @override
+  String get telegramChannelReadOnly => '只有管理员可以在此发言';
+
+  @override
+  String get telegramSendSilently => '静默发送';
+
+  @override
+  String get telegramSchedule => '稍后发送…';
+
+  @override
+  String get telegramTranslate => '翻译';
+
+  @override
+  String get telegramExport => '导出已加载的消息';
+
+  @override
+  String get telegramDeleteForAll => '为所有人删除';
+
+  @override
+  String get telegramDeleteForMe => '仅为我删除';
+
+  @override
+  String get telegramDownload => '下载';
+
+  @override
+  String get telegramOpenSponsored => '打开链接';
+
+  @override
+  String get telegramHiddenWords => '隐藏包含这些词的消息（每行一个）';
+
+  @override
+  String get telegramDeletedNoticeSwitch => '有人删除消息时显示提示';
+
+  @override
+  String get telegramDeletedNoticeNote => '只保留提示，已删除的内容不会保留。';
+
+  @override
+  String get telegramTranslateTo => '翻译为（语言代码，留空则用应用语言）';
+
+  @override
+  String get telegramPlugins => '插件';
+
+  @override
+  String get telegramPluginHelp => '插件是小型规则文件，只能隐藏消息、修改你发送的文本和添加命令，且仅限其声明的权限。';
+
+  @override
+  String get telegramPluginInstall => '安装插件（粘贴其文本）';
+
+  @override
+  String get telegramPluginBad => '这不是有效的插件，或已安装过多。';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return '权限：$permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => '隐藏消息';
+
+  @override
+  String get telegramPermEditOutgoing => '修改你发送的内容';
+
+  @override
+  String get telegramPermCommands => '添加命令';
+
+  @override
+  String get telegramDownloads => '下载';
+
+  @override
+  String get telegramLoadOlder => '加载更早的消息';
 }

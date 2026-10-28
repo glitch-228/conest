@@ -335,4 +335,211 @@ void _telegramControllerTests() {
       expect(again.telegram.mods.plugins.single.id, 'p');
     });
   });
+
+  group('Telegram client screens', () {
+    final keys = TelegramApiKeys.parse(
+      '424242',
+      'abcdef0123456789abcdef0123456789',
+    );
+
+    Future<(MessengerController, FakeTdEngine)> start(
+      WidgetTester tester, {
+      bool loggedIn = false,
+      void Function(FakeTdEngine engine)? seed,
+    }) async {
+      late MessengerController controller;
+      final engine = FakeTdEngine(loggedIn: loggedIn);
+      seed?.call(engine);
+      await tester.runAsync(() async {
+        final dir = await Directory.systemTemp.createTemp('conest-tg-ui-');
+        addTearDown(() => dir.delete(recursive: true));
+        controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          telegramApiKeys: keys,
+          telegramDirectory: () async => dir,
+          tdEngineFactory: () => engine,
+        );
+      });
+      addTearDown(controller.dispose);
+      return (controller, engine);
+    }
+
+    Widget host(Widget child) => MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(body: SingleChildScrollView(child: child)),
+    );
+
+    Future<void> settleUi(WidgetTester tester) async {
+      for (var i = 0; i < 8; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+      }
+    }
+
+    testWidgets('the panel signs in step by step', (tester) async {
+      final (controller, _) = await start(tester);
+      await tester.pumpWidget(
+        host(TelegramClientPanel(controller: controller)),
+      );
+      await tester.tap(find.byKey(const ValueKey('telegram-client-switch')));
+      await settleUi(tester);
+      expect(
+        find.byKey(const ValueKey('telegram-phone-field')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('unofficial'), findsWidgets);
+      await tester.enterText(
+        find.byKey(const ValueKey('telegram-phone-field')),
+        '+15550001',
+      );
+      await tester.tap(find.byKey(const ValueKey('telegram-phone-continue')));
+      await settleUi(tester);
+      expect(find.byKey(const ValueKey('telegram-code-field')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('telegram-code-field')),
+        '00000',
+      );
+      await tester.tap(find.byKey(const ValueKey('telegram-code-continue')));
+      await settleUi(tester);
+      expect(find.byKey(const ValueKey('telegram-auth-error')), findsOneWidget);
+      expect(find.text('PHONE_CODE_INVALID'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('telegram-code-field')),
+        '12345',
+      );
+      await tester.tap(find.byKey(const ValueKey('telegram-code-continue')));
+      await settleUi(tester);
+      expect(find.byKey(const ValueKey('telegram-signed-in')), findsOneWidget);
+      expect(find.textContaining('Me Self'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 2));
+    });
+
+    testWidgets('the panel is absent without keys', (tester) async {
+      late MessengerController controller;
+      await tester.runAsync(() async {
+        controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Alice',
+          tdEngineFactory: () => FakeTdEngine(),
+        );
+      });
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        host(TelegramClientPanel(controller: controller)),
+      );
+      expect(
+        find.byKey(const ValueKey('telegram-client-switch')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('a chat sends, shows deletions and sponsored messages', (
+      tester,
+    ) async {
+      final (controller, engine) = await start(
+        tester,
+        loggedIn: true,
+        seed: (engine) {
+          engine.addChat(
+            10,
+            'Bob',
+            order: 300,
+            messages: [
+              FakeTdEngine.message(id: 100, chatId: 10, text: 'hello Alice'),
+            ],
+          );
+          engine.addChat(11, 'News', type: 'channel', order: 200);
+          engine.sponsored.add({
+            '@type': 'sponsoredMessage',
+            'message_id': 9,
+            'title': 'Brand',
+            'content': {
+              '@type': 'messageText',
+              'text': {'text': 'Buy now'},
+            },
+          });
+        },
+      );
+      await tester.runAsync(controller.telegram.enable);
+      await tester.runAsync(() async {
+        for (var i = 0; i < 100; i++) {
+          if (controller.telegram.client?.chats.length == 2) break;
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: TelegramChatList(
+              client: controller.telegram.client!,
+              open: (_) {},
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Bob'), findsOneWidget);
+      expect(find.text('hello Alice'), findsOneWidget);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: TelegramChatScreen(controller: controller, chatId: 10),
+        ),
+      );
+      await settleUi(tester);
+      expect(find.text('hello Alice'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('telegram-composer')),
+        'hi Bob',
+      );
+      await tester.tap(find.byKey(const ValueKey('telegram-send')));
+      await settleUi(tester);
+      expect(find.text('hi Bob'), findsOneWidget);
+      expect(
+        engine.requests.where((r) => r['@type'] == 'sendMessage'),
+        hasLength(1),
+      );
+
+      // Bob deletes his message: only a notice is left.
+      engine.emit({
+        '@type': 'updateDeleteMessages',
+        'chat_id': 10,
+        'message_ids': [100],
+        'is_permanent': true,
+        'from_cache': false,
+      });
+      await settleUi(tester);
+      expect(find.text('hello Alice'), findsNothing);
+      expect(find.text('Deleted by sender'), findsOneWidget);
+
+      // A channel is read only and shows what advertisers paid for.
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: TelegramChatScreen(
+            key: const ValueKey('chat-11'),
+            controller: controller,
+            chatId: 11,
+          ),
+        ),
+      );
+      await settleUi(tester);
+      expect(find.byKey(const ValueKey('telegram-composer')), findsNothing);
+      expect(find.text('Only admins can post here'), findsOneWidget);
+      expect(find.textContaining('Sponsored'), findsOneWidget);
+      expect(find.text('Buy now'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 2));
+    });
+  });
 }

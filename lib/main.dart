@@ -109,6 +109,7 @@ import 'src/ui/signature_panels.dart';
 import 'src/ui/signature_widgets.dart';
 import 'src/ui/tor_carrier_panel.dart';
 import 'src/ui/telegram_carrier_panel.dart';
+import 'src/ui/telegram_client_panel.dart';
 import 'src/ui/xmpp_carrier_panel.dart';
 import 'src/ui/xmpp_chats_screen.dart';
 import 'src/ui/client_only_home.dart';
@@ -16222,6 +16223,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             XmppCarrierPanel(controller: widget.controller),
                             XmppChatsPanel(controller: widget.controller),
                             TelegramCarrierPanel(controller: widget.controller),
+                            TelegramClientPanel(controller: widget.controller),
                             if (widget
                                 .controller
                                 .userMode

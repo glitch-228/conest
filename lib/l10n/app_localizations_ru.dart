@@ -6143,4 +6143,145 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get telegramBotTokenField => 'Токен бота';
+
+  @override
+  String get telegramClientTitle => 'Клиент Telegram';
+
+  @override
+  String get telegramClientSubtitle =>
+      'Использовать свой аккаунт Telegram в Conest (неофициальный клиент)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest — неофициальный клиент Telegram. К вашему аккаунту применяются правила Telegram.';
+
+  @override
+  String get telegramPhoneField => 'Номер телефона (+…)';
+
+  @override
+  String get telegramCodeField => 'Код входа';
+
+  @override
+  String get telegramPasswordField => 'Пароль двухэтапной проверки';
+
+  @override
+  String get telegramQrLogin => 'Войти по QR-коду';
+
+  @override
+  String get telegramQrHint =>
+      'На телефоне откройте Telegram, Настройки, Устройства, Подключить устройство и отсканируйте этот код.';
+
+  @override
+  String get telegramNoAccount =>
+      'У этого номера нет аккаунта Telegram. Conest только входит в аккаунт; сначала создайте его в официальном приложении Telegram.';
+
+  @override
+  String get telegramLogOut => 'Выйти и удалить';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'Вход выполнен как $name';
+  }
+
+  @override
+  String get telegramConnecting => 'Подключение…';
+
+  @override
+  String get telegramMods => 'Настройки модов';
+
+  @override
+  String get telegramNoChats => 'Чатов Telegram пока нет';
+
+  @override
+  String get telegramSaved => 'Избранное';
+
+  @override
+  String get telegramSponsored => 'Реклама';
+
+  @override
+  String get telegramDeletedBySender => 'Удалено отправителем';
+
+  @override
+  String get telegramAllChats => 'Все чаты';
+
+  @override
+  String get telegramArchive => 'Архив';
+
+  @override
+  String get telegramChannelReadOnly =>
+      'Писать здесь могут только администраторы';
+
+  @override
+  String get telegramSendSilently => 'Отправить без звука';
+
+  @override
+  String get telegramSchedule => 'Отправить позже…';
+
+  @override
+  String get telegramTranslate => 'Перевести';
+
+  @override
+  String get telegramExport => 'Экспортировать загруженные сообщения';
+
+  @override
+  String get telegramDeleteForAll => 'Удалить у всех';
+
+  @override
+  String get telegramDeleteForMe => 'Удалить у меня';
+
+  @override
+  String get telegramDownload => 'Скачать';
+
+  @override
+  String get telegramOpenSponsored => 'Открыть ссылку';
+
+  @override
+  String get telegramHiddenWords =>
+      'Скрывать сообщения с этими словами (по одному в строке)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'Показывать уведомление, когда кто-то удаляет сообщение';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'Остаётся только уведомление. Удалённое содержимое не сохраняется.';
+
+  @override
+  String get telegramTranslateTo =>
+      'Переводить на (код языка, пусто — язык приложения)';
+
+  @override
+  String get telegramPlugins => 'Плагины';
+
+  @override
+  String get telegramPluginHelp =>
+      'Плагины — небольшие файлы правил. Они могут только скрывать сообщения, менять отправляемый текст и добавлять команды, и только то, что заявлено.';
+
+  @override
+  String get telegramPluginInstall => 'Установить плагин (вставьте его текст)';
+
+  @override
+  String get telegramPluginBad =>
+      'Это не подходящий плагин, или установлено слишком много.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'Может: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'скрывать сообщения';
+
+  @override
+  String get telegramPermEditOutgoing => 'менять отправляемое';
+
+  @override
+  String get telegramPermCommands => 'добавлять команды';
+
+  @override
+  String get telegramDownloads => 'Загрузки';
+
+  @override
+  String get telegramLoadOlder => 'Загрузить более старые сообщения';
 }

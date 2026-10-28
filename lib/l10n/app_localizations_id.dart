@@ -6004,4 +6004,145 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get telegramBotTokenField => 'Token bot';
+
+  @override
+  String get telegramClientTitle => 'Klien Telegram';
+
+  @override
+  String get telegramClientSubtitle =>
+      'Pakai akun Telegram Anda di Conest (klien tidak resmi)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest adalah klien Telegram tidak resmi. Aturan Telegram berlaku untuk akun Anda.';
+
+  @override
+  String get telegramPhoneField => 'Nomor telepon (+…)';
+
+  @override
+  String get telegramCodeField => 'Kode masuk';
+
+  @override
+  String get telegramPasswordField => 'Kata sandi dua langkah';
+
+  @override
+  String get telegramQrLogin => 'Masuk dengan kode QR';
+
+  @override
+  String get telegramQrHint =>
+      'Di ponsel buka Telegram, Pengaturan, Perangkat, Tautkan Perangkat Desktop, lalu pindai kode ini.';
+
+  @override
+  String get telegramNoAccount =>
+      'Nomor ini tidak punya akun Telegram. Conest hanya untuk masuk; buat akun dulu di aplikasi Telegram resmi.';
+
+  @override
+  String get telegramLogOut => 'Keluar dan hapus';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'Masuk sebagai $name';
+  }
+
+  @override
+  String get telegramConnecting => 'Menyambung…';
+
+  @override
+  String get telegramMods => 'Pengaturan mod';
+
+  @override
+  String get telegramNoChats => 'Belum ada obrolan Telegram';
+
+  @override
+  String get telegramSaved => 'Pesan Tersimpan';
+
+  @override
+  String get telegramSponsored => 'Bersponsor';
+
+  @override
+  String get telegramDeletedBySender => 'Dihapus oleh pengirim';
+
+  @override
+  String get telegramAllChats => 'Semua obrolan';
+
+  @override
+  String get telegramArchive => 'Arsip';
+
+  @override
+  String get telegramChannelReadOnly =>
+      'Hanya admin yang dapat memposting di sini';
+
+  @override
+  String get telegramSendSilently => 'Kirim tanpa suara';
+
+  @override
+  String get telegramSchedule => 'Kirim nanti…';
+
+  @override
+  String get telegramTranslate => 'Terjemahkan';
+
+  @override
+  String get telegramExport => 'Ekspor pesan yang dimuat';
+
+  @override
+  String get telegramDeleteForAll => 'Hapus untuk semua';
+
+  @override
+  String get telegramDeleteForMe => 'Hapus untuk saya';
+
+  @override
+  String get telegramDownload => 'Unduh';
+
+  @override
+  String get telegramOpenSponsored => 'Buka tautan';
+
+  @override
+  String get telegramHiddenWords =>
+      'Sembunyikan pesan yang berisi kata ini (satu per baris)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'Tampilkan pemberitahuan saat seseorang menghapus pesan';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'Hanya pemberitahuan yang tersisa. Isi yang dihapus tidak disimpan.';
+
+  @override
+  String get telegramTranslateTo =>
+      'Terjemahkan ke (kode bahasa, kosong untuk bahasa aplikasi)';
+
+  @override
+  String get telegramPlugins => 'Plugin';
+
+  @override
+  String get telegramPluginHelp =>
+      'Plugin adalah berkas aturan kecil. Hanya dapat menyembunyikan pesan, mengubah teks yang Anda kirim, dan menambah perintah, sesuai izin yang dinyatakan.';
+
+  @override
+  String get telegramPluginInstall => 'Pasang plugin (tempel teksnya)';
+
+  @override
+  String get telegramPluginBad =>
+      'Itu bukan plugin yang valid, atau terlalu banyak yang terpasang.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'Boleh: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'menyembunyikan pesan';
+
+  @override
+  String get telegramPermEditOutgoing => 'mengubah yang Anda kirim';
+
+  @override
+  String get telegramPermCommands => 'menambah perintah';
+
+  @override
+  String get telegramDownloads => 'Unduhan';
+
+  @override
+  String get telegramLoadOlder => 'Muat pesan lebih lama';
 }

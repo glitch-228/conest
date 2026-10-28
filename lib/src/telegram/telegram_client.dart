@@ -122,6 +122,9 @@ class TelegramClient extends ChangeNotifier {
     await engine.close();
   }
 
+  /// Tells listeners something outside the client changed (mod settings).
+  void refresh() => notifyListeners();
+
   void _set(TgAuth next) {
     auth = next;
     notifyListeners();

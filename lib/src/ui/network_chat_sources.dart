@@ -7,11 +7,14 @@ import '../bitchat_chats.dart';
 import '../messenger_controller.dart';
 import '../conest_theme.dart';
 import '../models.dart';
+import '../telegram/telegram_client.dart';
+import '../telegram/telegram_models.dart';
 import 'bitchat_chats_screen.dart';
 import 'delta_chats_screen.dart';
 import 'matrix_room_screen.dart';
 import 'nostr_chats_screen.dart';
 import 'radio_chats_screen.dart';
+import 'telegram_chats_screen.dart';
 import 'xmpp_chats_screen.dart';
 import '../radio_chats.dart';
 
@@ -78,6 +81,7 @@ List<NetworkChatSource> networkChatSources(
   NostrChatSource(controller),
   DeltaChatSource(controller),
   XmppChatSource(controller),
+  TelegramChatSource(controller),
   BitchatChatSource(controller),
   RadioChatSource(
     'meshcore',
@@ -236,6 +240,46 @@ class XmppChatSource extends NetworkChatSource {
           open: (context) => openXmppChat(context, controller, chat.jid),
         ),
   ];
+}
+
+/// The user's Telegram chats (M30), when the client is signed in.
+class TelegramChatSource extends NetworkChatSource {
+  const TelegramChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'telegram';
+
+  @override
+  String get label => 'Telegram';
+
+  @override
+  bool get active => controller.telegram.client?.auth == TgAuth.ready;
+
+  @override
+  List<NetworkChat> chats([BuildContext? context]) {
+    final client = controller.telegram.client;
+    if (client == null || !active) return const [];
+    return [
+      for (final chat in client.chatList())
+        NetworkChat(
+          network: id,
+          id: '${chat.id}',
+          title: telegramChatTitle(context, chat),
+          preview: telegramPreview(context, chat.lastMessage),
+          at: chat.lastMessage?.date.toLocal(),
+          unread: chat.unread,
+          isGroup:
+              chat.kind == TgChatKind.group || chat.kind == TgChatKind.channel,
+          searchText: () => client
+              .messagesOf(chat.id)
+              .map((message) => message.content.text)
+              .join('\n'),
+          open: (context) => openTelegramChat(context, controller, chat.id),
+        ),
+    ];
+  }
 }
 
 /// Matrix rooms and DMs from the full Matrix client.

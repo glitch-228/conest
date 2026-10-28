@@ -9670,6 +9670,258 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Bot token'**
   String get telegramBotTokenField;
+
+  /// Settings: title of the Telegram client section.
+  ///
+  /// In en, this message translates to:
+  /// **'Telegram client'**
+  String get telegramClientTitle;
+
+  /// Settings: subtitle of the Telegram client switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Use your own Telegram account in Conest (unofficial client)'**
+  String get telegramClientSubtitle;
+
+  /// Settings: notice that Conest is not the official Telegram app.
+  ///
+  /// In en, this message translates to:
+  /// **'Conest is an unofficial Telegram client. Telegram\'s rules apply to your account.'**
+  String get telegramUnofficial;
+
+  /// Telegram sign-in: phone number field.
+  ///
+  /// In en, this message translates to:
+  /// **'Phone number (+…)'**
+  String get telegramPhoneField;
+
+  /// Telegram sign-in: login code field.
+  ///
+  /// In en, this message translates to:
+  /// **'Login code'**
+  String get telegramCodeField;
+
+  /// Telegram sign-in: two-step password field.
+  ///
+  /// In en, this message translates to:
+  /// **'Two-step password'**
+  String get telegramPasswordField;
+
+  /// Telegram sign-in: use a QR code.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in with a QR code instead'**
+  String get telegramQrLogin;
+
+  /// Telegram sign-in: how to use the QR code.
+  ///
+  /// In en, this message translates to:
+  /// **'On your phone open Telegram, Settings, Devices, Link Desktop Device, and scan this code.'**
+  String get telegramQrHint;
+
+  /// Telegram sign-in: the number has no account.
+  ///
+  /// In en, this message translates to:
+  /// **'This number has no Telegram account. Conest only signs in; make the account in the official Telegram app first.'**
+  String get telegramNoAccount;
+
+  /// Settings: log out of Telegram and remove its data here.
+  ///
+  /// In en, this message translates to:
+  /// **'Log out and remove'**
+  String get telegramLogOut;
+
+  /// Settings: who is signed in to Telegram.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in as {name}'**
+  String telegramSignedInAs(String name);
+
+  /// Settings: Telegram is starting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting…'**
+  String get telegramConnecting;
+
+  /// Settings: open the Telegram mod settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod settings'**
+  String get telegramMods;
+
+  /// Telegram client: no chats yet.
+  ///
+  /// In en, this message translates to:
+  /// **'No Telegram chats yet'**
+  String get telegramNoChats;
+
+  /// Telegram client: Saved Messages chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved Messages'**
+  String get telegramSaved;
+
+  /// Telegram client: label on sponsored messages in channels.
+  ///
+  /// In en, this message translates to:
+  /// **'Sponsored'**
+  String get telegramSponsored;
+
+  /// Telegram client: a message the sender deleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Deleted by sender'**
+  String get telegramDeletedBySender;
+
+  /// Telegram client: the main chat list tab.
+  ///
+  /// In en, this message translates to:
+  /// **'All chats'**
+  String get telegramAllChats;
+
+  /// Telegram client: the archive tab.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive'**
+  String get telegramArchive;
+
+  /// Telegram client: channels cannot be written to.
+  ///
+  /// In en, this message translates to:
+  /// **'Only admins can post here'**
+  String get telegramChannelReadOnly;
+
+  /// Telegram client: send without a sound.
+  ///
+  /// In en, this message translates to:
+  /// **'Send silently'**
+  String get telegramSendSilently;
+
+  /// Telegram client: send later.
+  ///
+  /// In en, this message translates to:
+  /// **'Send later…'**
+  String get telegramSchedule;
+
+  /// Telegram client: translate a message.
+  ///
+  /// In en, this message translates to:
+  /// **'Translate'**
+  String get telegramTranslate;
+
+  /// Telegram client: save the loaded chat to a file.
+  ///
+  /// In en, this message translates to:
+  /// **'Export loaded messages'**
+  String get telegramExport;
+
+  /// Telegram client: delete a message for everyone.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete for everyone'**
+  String get telegramDeleteForAll;
+
+  /// Telegram client: delete a message only here.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete for me'**
+  String get telegramDeleteForMe;
+
+  /// Telegram client: download a file.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get telegramDownload;
+
+  /// Telegram client: open a sponsored link.
+  ///
+  /// In en, this message translates to:
+  /// **'Open link'**
+  String get telegramOpenSponsored;
+
+  /// Mod settings: words that hide messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide messages containing these words (one per line)'**
+  String get telegramHiddenWords;
+
+  /// Mod settings: notice for deleted messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Show a notice when someone deletes a message'**
+  String get telegramDeletedNoticeSwitch;
+
+  /// Mod settings: what the notice does and does not keep.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the notice stays. The deleted content is not kept.'**
+  String get telegramDeletedNoticeNote;
+
+  /// Mod settings: translation language code.
+  ///
+  /// In en, this message translates to:
+  /// **'Translate into (language code, empty for the app language)'**
+  String get telegramTranslateTo;
+
+  /// Mod settings: plugins section.
+  ///
+  /// In en, this message translates to:
+  /// **'Plugins'**
+  String get telegramPlugins;
+
+  /// Mod settings: what plugins are.
+  ///
+  /// In en, this message translates to:
+  /// **'Plugins are small rule files. They can only hide messages, change the text you send and add commands, and only what they declare.'**
+  String get telegramPluginHelp;
+
+  /// Mod settings: install a plugin from pasted text.
+  ///
+  /// In en, this message translates to:
+  /// **'Install a plugin (paste its text)'**
+  String get telegramPluginInstall;
+
+  /// Mod settings: pasted plugin is not valid.
+  ///
+  /// In en, this message translates to:
+  /// **'That is not a valid plugin, or too many are installed.'**
+  String get telegramPluginBad;
+
+  /// Mod settings: what a plugin may do.
+  ///
+  /// In en, this message translates to:
+  /// **'May: {permissions}'**
+  String telegramPluginPermissions(String permissions);
+
+  /// Plugin permission name.
+  ///
+  /// In en, this message translates to:
+  /// **'hide messages'**
+  String get telegramPermReadMessages;
+
+  /// Plugin permission name.
+  ///
+  /// In en, this message translates to:
+  /// **'change what you send'**
+  String get telegramPermEditOutgoing;
+
+  /// Plugin permission name.
+  ///
+  /// In en, this message translates to:
+  /// **'add commands'**
+  String get telegramPermCommands;
+
+  /// Telegram client: active downloads.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloads'**
+  String get telegramDownloads;
+
+  /// Telegram client: load older messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Load older messages'**
+  String get telegramLoadOlder;
 }
 
 class _AppLocalizationsDelegate

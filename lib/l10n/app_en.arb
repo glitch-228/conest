@@ -8918,5 +8918,183 @@
   "telegramBotTokenField": "Bot token",
   "@telegramBotTokenField": {
     "description": "Settings: field label for the Telegram bot token."
+  },
+  "telegramClientTitle": "Telegram client",
+  "@telegramClientTitle": {
+    "description": "Settings: title of the Telegram client section."
+  },
+  "telegramClientSubtitle": "Use your own Telegram account in Conest (unofficial client)",
+  "@telegramClientSubtitle": {
+    "description": "Settings: subtitle of the Telegram client switch."
+  },
+  "telegramUnofficial": "Conest is an unofficial Telegram client. Telegram's rules apply to your account.",
+  "@telegramUnofficial": {
+    "description": "Settings: notice that Conest is not the official Telegram app."
+  },
+  "telegramPhoneField": "Phone number (+…)",
+  "@telegramPhoneField": {
+    "description": "Telegram sign-in: phone number field."
+  },
+  "telegramCodeField": "Login code",
+  "@telegramCodeField": {
+    "description": "Telegram sign-in: login code field."
+  },
+  "telegramPasswordField": "Two-step password",
+  "@telegramPasswordField": {
+    "description": "Telegram sign-in: two-step password field."
+  },
+  "telegramQrLogin": "Sign in with a QR code instead",
+  "@telegramQrLogin": {
+    "description": "Telegram sign-in: use a QR code."
+  },
+  "telegramQrHint": "On your phone open Telegram, Settings, Devices, Link Desktop Device, and scan this code.",
+  "@telegramQrHint": {
+    "description": "Telegram sign-in: how to use the QR code."
+  },
+  "telegramNoAccount": "This number has no Telegram account. Conest only signs in; make the account in the official Telegram app first.",
+  "@telegramNoAccount": {
+    "description": "Telegram sign-in: the number has no account."
+  },
+  "telegramLogOut": "Log out and remove",
+  "@telegramLogOut": {
+    "description": "Settings: log out of Telegram and remove its data here."
+  },
+  "telegramSignedInAs": "Signed in as {name}",
+  "@telegramSignedInAs": {
+    "description": "Settings: who is signed in to Telegram.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "telegramConnecting": "Connecting…",
+  "@telegramConnecting": {
+    "description": "Settings: Telegram is starting."
+  },
+  "telegramMods": "Mod settings",
+  "@telegramMods": {
+    "description": "Settings: open the Telegram mod settings."
+  },
+  "telegramNoChats": "No Telegram chats yet",
+  "@telegramNoChats": {
+    "description": "Telegram client: no chats yet."
+  },
+  "telegramSaved": "Saved Messages",
+  "@telegramSaved": {
+    "description": "Telegram client: Saved Messages chat."
+  },
+  "telegramSponsored": "Sponsored",
+  "@telegramSponsored": {
+    "description": "Telegram client: label on sponsored messages in channels."
+  },
+  "telegramDeletedBySender": "Deleted by sender",
+  "@telegramDeletedBySender": {
+    "description": "Telegram client: a message the sender deleted."
+  },
+  "telegramAllChats": "All chats",
+  "@telegramAllChats": {
+    "description": "Telegram client: the main chat list tab."
+  },
+  "telegramArchive": "Archive",
+  "@telegramArchive": {
+    "description": "Telegram client: the archive tab."
+  },
+  "telegramChannelReadOnly": "Only admins can post here",
+  "@telegramChannelReadOnly": {
+    "description": "Telegram client: channels cannot be written to."
+  },
+  "telegramSendSilently": "Send silently",
+  "@telegramSendSilently": {
+    "description": "Telegram client: send without a sound."
+  },
+  "telegramSchedule": "Send later…",
+  "@telegramSchedule": {
+    "description": "Telegram client: send later."
+  },
+  "telegramTranslate": "Translate",
+  "@telegramTranslate": {
+    "description": "Telegram client: translate a message."
+  },
+  "telegramExport": "Export loaded messages",
+  "@telegramExport": {
+    "description": "Telegram client: save the loaded chat to a file."
+  },
+  "telegramDeleteForAll": "Delete for everyone",
+  "@telegramDeleteForAll": {
+    "description": "Telegram client: delete a message for everyone."
+  },
+  "telegramDeleteForMe": "Delete for me",
+  "@telegramDeleteForMe": {
+    "description": "Telegram client: delete a message only here."
+  },
+  "telegramDownload": "Download",
+  "@telegramDownload": {
+    "description": "Telegram client: download a file."
+  },
+  "telegramOpenSponsored": "Open link",
+  "@telegramOpenSponsored": {
+    "description": "Telegram client: open a sponsored link."
+  },
+  "telegramHiddenWords": "Hide messages containing these words (one per line)",
+  "@telegramHiddenWords": {
+    "description": "Mod settings: words that hide messages."
+  },
+  "telegramDeletedNoticeSwitch": "Show a notice when someone deletes a message",
+  "@telegramDeletedNoticeSwitch": {
+    "description": "Mod settings: notice for deleted messages."
+  },
+  "telegramDeletedNoticeNote": "Only the notice stays. The deleted content is not kept.",
+  "@telegramDeletedNoticeNote": {
+    "description": "Mod settings: what the notice does and does not keep."
+  },
+  "telegramTranslateTo": "Translate into (language code, empty for the app language)",
+  "@telegramTranslateTo": {
+    "description": "Mod settings: translation language code."
+  },
+  "telegramPlugins": "Plugins",
+  "@telegramPlugins": {
+    "description": "Mod settings: plugins section."
+  },
+  "telegramPluginHelp": "Plugins are small rule files. They can only hide messages, change the text you send and add commands, and only what they declare.",
+  "@telegramPluginHelp": {
+    "description": "Mod settings: what plugins are."
+  },
+  "telegramPluginInstall": "Install a plugin (paste its text)",
+  "@telegramPluginInstall": {
+    "description": "Mod settings: install a plugin from pasted text."
+  },
+  "telegramPluginBad": "That is not a valid plugin, or too many are installed.",
+  "@telegramPluginBad": {
+    "description": "Mod settings: pasted plugin is not valid."
+  },
+  "telegramPluginPermissions": "May: {permissions}",
+  "@telegramPluginPermissions": {
+    "description": "Mod settings: what a plugin may do.",
+    "placeholders": {
+      "permissions": {
+        "type": "String"
+      }
+    }
+  },
+  "telegramPermReadMessages": "hide messages",
+  "@telegramPermReadMessages": {
+    "description": "Plugin permission name."
+  },
+  "telegramPermEditOutgoing": "change what you send",
+  "@telegramPermEditOutgoing": {
+    "description": "Plugin permission name."
+  },
+  "telegramPermCommands": "add commands",
+  "@telegramPermCommands": {
+    "description": "Plugin permission name."
+  },
+  "telegramDownloads": "Downloads",
+  "@telegramDownloads": {
+    "description": "Telegram client: active downloads."
+  },
+  "telegramLoadOlder": "Load older messages",
+  "@telegramLoadOlder": {
+    "description": "Telegram client: load older messages."
   }
 }

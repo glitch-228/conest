@@ -6145,4 +6145,144 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get telegramBotTokenField => 'رمز البوت';
+
+  @override
+  String get telegramClientTitle => 'عميل تيليجرام';
+
+  @override
+  String get telegramClientSubtitle =>
+      'استخدم حسابك في تيليجرام داخل Conest (عميل غير رسمي)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest عميل غير رسمي لتيليجرام. تنطبق قواعد تيليجرام على حسابك.';
+
+  @override
+  String get telegramPhoneField => 'رقم الهاتف (+…)';
+
+  @override
+  String get telegramCodeField => 'رمز الدخول';
+
+  @override
+  String get telegramPasswordField => 'كلمة مرور التحقق بخطوتين';
+
+  @override
+  String get telegramQrLogin => 'تسجيل الدخول برمز QR بدلًا من ذلك';
+
+  @override
+  String get telegramQrHint =>
+      'على هاتفك افتح تيليجرام ثم الإعدادات ثم الأجهزة ثم ربط جهاز سطح المكتب وامسح هذا الرمز.';
+
+  @override
+  String get telegramNoAccount =>
+      'لا يوجد حساب تيليجرام لهذا الرقم. Conest يسجّل الدخول فقط؛ أنشئ الحساب أولًا في تطبيق تيليجرام الرسمي.';
+
+  @override
+  String get telegramLogOut => 'تسجيل الخروج والإزالة';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'تم تسجيل الدخول باسم $name';
+  }
+
+  @override
+  String get telegramConnecting => 'جارٍ الاتصال…';
+
+  @override
+  String get telegramMods => 'إعدادات التعديلات';
+
+  @override
+  String get telegramNoChats => 'لا توجد محادثات تيليجرام بعد';
+
+  @override
+  String get telegramSaved => 'الرسائل المحفوظة';
+
+  @override
+  String get telegramSponsored => 'مُموَّل';
+
+  @override
+  String get telegramDeletedBySender => 'حذفها المرسل';
+
+  @override
+  String get telegramAllChats => 'كل المحادثات';
+
+  @override
+  String get telegramArchive => 'الأرشيف';
+
+  @override
+  String get telegramChannelReadOnly => 'يمكن للمشرفين فقط النشر هنا';
+
+  @override
+  String get telegramSendSilently => 'إرسال بصمت';
+
+  @override
+  String get telegramSchedule => 'إرسال لاحقًا…';
+
+  @override
+  String get telegramTranslate => 'ترجمة';
+
+  @override
+  String get telegramExport => 'تصدير الرسائل المحمّلة';
+
+  @override
+  String get telegramDeleteForAll => 'حذف للجميع';
+
+  @override
+  String get telegramDeleteForMe => 'حذف لدي فقط';
+
+  @override
+  String get telegramDownload => 'تنزيل';
+
+  @override
+  String get telegramOpenSponsored => 'فتح الرابط';
+
+  @override
+  String get telegramHiddenWords =>
+      'إخفاء الرسائل التي تحتوي هذه الكلمات (كلمة في كل سطر)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'إظهار إشعار عندما يحذف أحدهم رسالة';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'يبقى الإشعار فقط. لا يُحتفظ بالمحتوى المحذوف.';
+
+  @override
+  String get telegramTranslateTo =>
+      'الترجمة إلى (رمز اللغة، فارغ للغة التطبيق)';
+
+  @override
+  String get telegramPlugins => 'الإضافات';
+
+  @override
+  String get telegramPluginHelp =>
+      'الإضافات ملفات قواعد صغيرة. تستطيع فقط إخفاء الرسائل وتغيير النص المرسل وإضافة أوامر، وبحسب ما تعلنه فقط.';
+
+  @override
+  String get telegramPluginInstall => 'تثبيت إضافة (الصق نصها)';
+
+  @override
+  String get telegramPluginBad =>
+      'هذه ليست إضافة صالحة أو أن عدد المثبتة كبير.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'يمكنها: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'إخفاء الرسائل';
+
+  @override
+  String get telegramPermEditOutgoing => 'تغيير ما ترسله';
+
+  @override
+  String get telegramPermCommands => 'إضافة أوامر';
+
+  @override
+  String get telegramDownloads => 'التنزيلات';
+
+  @override
+  String get telegramLoadOlder => 'تحميل رسائل أقدم';
 }

@@ -64,8 +64,9 @@ class TelegramService extends ChangeNotifier {
   /// Turns the client on (making TDLib's database key the first time) and
   /// starts it.
   Future<void> enable() async {
-    if (!supported)
+    if (!supported) {
       throw StateError('Telegram is not available in this build.');
+    }
     final existing = readAccount();
     final key = existing?['dbKey'];
     await writeAccount({
