@@ -12521,6 +12521,24 @@ void main() {
     );
   });
 
+  test('a hidden address from a relay link is pinned to the link key', () async {
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+    final key = base64Encode(List<int>.filled(32, 7));
+    const hidden = 'wss://relay.link.test/s3cret-path_1';
+    await alice.addRelayFromLink(
+      'conest-relay://relay.link.test:7667?id=relay-1&key='
+      '${Uri.encodeQueryComponent(key)}&wss=${Uri.encodeQueryComponent(hidden)}',
+    );
+    final wss = alice.identity!.configuredRelays.singleWhere(
+      (route) => route.protocol == PeerRouteProtocol.wss,
+    );
+    expect(alice.pinnedRelayIdentityKeys[wss.routeKey], key);
+  });
+
   test('what a network cuts is remembered, judged blocked there, and kept '
       'across a restart', () async {
     var now = DateTime.now().toUtc();

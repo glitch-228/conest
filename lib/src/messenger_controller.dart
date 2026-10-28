@@ -11128,6 +11128,18 @@ class MessengerController extends ChangeNotifier {
     await addRelay(host: link.host, port: link.port);
     // Its hidden address too, when the link carries one (M38-A).
     if (link.hiddenAddress case final hidden?) {
+      // Pinned to the link's identity before it is ever dialled.
+      final route = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: hidden,
+        port: 443,
+      );
+      _snapshot = _snapshot.copyWith(
+        pinnedRelayIdentityKeys: {
+          ..._snapshot.pinnedRelayIdentityKeys,
+          route.routeKey: link.identityKeyBase64,
+        },
+      );
       await addRelay(host: hidden, port: 443);
     }
   }
@@ -29537,11 +29549,14 @@ class MessengerController extends ChangeNotifier {
   void _adoptHiddenRelayAddress(PeerEndpoint route) {
     final me = identity;
     final key = _pinnedIdentityKeyForRoute(route);
-    final hidden = RelayClient.sessionInfoFor(
-      route.host,
-      route.port,
-    )?.hiddenAddress;
-    if (me == null || key == null || hidden == null) return;
+    final info = RelayClient.sessionInfoFor(route.host, route.port);
+    final hidden = info?.hiddenAddress;
+    if (me == null ||
+        key == null ||
+        hidden == null ||
+        info?.identityPublicKeyBase64 != key) {
+      return;
+    }
     if (!me.configuredRelays.any((relay) => relay.routeKey == route.routeKey)) {
       return;
     }
@@ -29575,11 +29590,14 @@ class MessengerController extends ChangeNotifier {
   void _adoptBorrowedRelayAddress(PeerEndpoint route) {
     final me = identity;
     final key = _pinnedIdentityKeyForRoute(route);
-    final borrowed = RelayClient.sessionInfoFor(
-      route.host,
-      route.port,
-    )?.borrowed;
-    if (me == null || key == null || borrowed == null) return;
+    final info = RelayClient.sessionInfoFor(route.host, route.port);
+    final borrowed = info?.borrowed;
+    if (me == null ||
+        key == null ||
+        borrowed == null ||
+        info?.identityPublicKeyBase64 != key) {
+      return;
+    }
     if (!me.configuredRelays.any((relay) => relay.routeKey == route.routeKey)) {
       return;
     }
