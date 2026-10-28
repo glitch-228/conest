@@ -857,6 +857,9 @@ class RelayClient {
     StreamSubscription<Map<String, dynamic>>? inner;
     Timer? beat;
     controller = StreamController<RelayFetchBatch>(
+      // A slow consumer pauses the subscription instead of piling batches up.
+      onPause: () => inner?.pause(),
+      onResume: () => inner?.resume(),
       onListen: () async {
         try {
           if (!supportsSubscribe(

@@ -755,4 +755,38 @@ void main() {
     );
     expect(RelayClient.v1ProofExtra('store', {'limit': 1}), '');
   });
+
+  test('frames are limited on their header, by what was asked', () {
+    final decoder = RelayV2FrameDecoder(
+      41 * 1024 * 1024,
+      limitFor: (type, stream) =>
+          type == RelayV2FrameType.response && stream == 3 ? 5000 : 1000,
+    );
+    List<int> header(int length, int type, int stream) => [
+      length >> 24,
+      (length >> 16) & 0xff,
+      (length >> 8) & 0xff,
+      length & 0xff,
+      type,
+      stream >> 24,
+      (stream >> 16) & 0xff,
+      (stream >> 8) & 0xff,
+      stream & 0xff,
+    ];
+    // Only the header has arrived: a frame over its limit already fails.
+    decoder.add(header(2000, RelayV2FrameType.pong, 0));
+    expect(decoder.next, throwsFormatException);
+    final answer = RelayV2FrameDecoder(
+      41 * 1024 * 1024,
+      limitFor: (type, stream) =>
+          type == RelayV2FrameType.response && stream == 3 ? 5000 : 1000,
+    )..add(header(4000, RelayV2FrameType.response, 3));
+    expect(answer.next(), isNull, reason: 'allowed, waiting for the payload');
+    final foreign = RelayV2FrameDecoder(
+      41 * 1024 * 1024,
+      limitFor: (type, stream) =>
+          type == RelayV2FrameType.response && stream == 3 ? 5000 : 1000,
+    )..add(header(4000, RelayV2FrameType.response, 9));
+    expect(foreign.next, throwsFormatException);
+  });
 }

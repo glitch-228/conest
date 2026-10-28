@@ -18342,6 +18342,7 @@ class MessengerController extends ChangeNotifier {
     int? generation,
   ) async {
     final stopwatch = Stopwatch()..start();
+    var stoppedOnPurpose = false;
     try {
       final expectedRelayKey = await _requireOperationalRelayPin(route);
       await for (final batch in _relayClient.subscribeEnvelopes(
@@ -18394,8 +18395,14 @@ class MessengerController extends ChangeNotifier {
             (generation != null && generation != _longPollGeneration) ||
             _pickPrimaryRelayForLongPoll(current, slot: slot)?.routeKey !=
                 route.routeKey) {
+          stoppedOnPurpose = true;
           break;
         }
+      }
+      // The relay ended the subscription cleanly: not again at once (a
+      // relay that does so in a loop must not be hammered).
+      if (!stoppedOnPurpose) {
+        await Future<void>.delayed(const Duration(seconds: 2));
       }
     } catch (error) {
       _routeHealthTracker.recordFailure(route, error: error.toString());

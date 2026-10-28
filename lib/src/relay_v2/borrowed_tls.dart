@@ -31,7 +31,12 @@ class BorrowedTlsChannel implements RelayByteChannel {
   static const int _maxData = 8 * 1024;
   static const int _tag = 16;
 
-  final StreamController<List<int>> _input = StreamController<List<int>>();
+  // Pausing the reader pauses the socket: nothing piles up in memory.
+  late final StreamController<List<int>> _input = StreamController<List<int>>(
+    onPause: () => _remoteSubscription?.pause(),
+    onResume: () => _remoteSubscription?.resume(),
+  );
+  StreamSubscription<List<int>>? _remoteSubscription;
   Socket? _remote;
   bool _closed = false;
   late List<int> _sendKey;
@@ -295,7 +300,7 @@ class BorrowedTlsChannel implements RelayByteChannel {
       cancelOnError: true,
     );
 
-    remote.listen(
+    _remoteSubscription = remote.listen(
       (chunk) async {
         try {
           if (!cut) {

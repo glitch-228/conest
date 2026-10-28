@@ -92,9 +92,14 @@ class RelayByteQueue {
 
 /// Frames out of decrypted record bytes, each at most [maxPayload].
 class RelayV2FrameDecoder {
-  RelayV2FrameDecoder(this.maxPayload);
+  RelayV2FrameDecoder(this.maxPayload, {this.limitFor});
 
   final int maxPayload;
+
+  /// A tighter limit for a frame of [type] on [stream] (read from its
+  /// header, before its payload is waited for or buffered): null keeps
+  /// [maxPayload].
+  final int? Function(int type, int stream)? limitFor;
   final RelayByteQueue _queue = RelayByteQueue();
 
   void add(List<int> bytes) => _queue.add(bytes);
@@ -108,7 +113,18 @@ class RelayV2FrameDecoder {
         (_queue.peekByte(1) << 16) |
         (_queue.peekByte(2) << 8) |
         _queue.peekByte(3);
-    if (length > maxPayload) {
+    var limit = maxPayload;
+    final tighter = limitFor;
+    if (tighter != null && _queue.length >= relayV2FrameHeader) {
+      final stream =
+          (_queue.peekByte(5) << 24) |
+          (_queue.peekByte(6) << 16) |
+          (_queue.peekByte(7) << 8) |
+          _queue.peekByte(8);
+      final own = tighter(_queue.peekByte(4), stream);
+      if (own != null && own < limit) limit = own;
+    }
+    if (length > limit) {
       throw FormatException('Relay frame too large: $length bytes.');
     }
     if (_queue.length < relayV2FrameHeader + length) return null;

@@ -17,7 +17,11 @@ class WebSocketRelayChannel implements RelayByteChannel {
   WebSocketRelayChannel._(this._socket);
 
   final Socket _socket;
-  final StreamController<List<int>> _input = StreamController<List<int>>();
+  // Pausing the reader pauses the socket: nothing piles up in memory.
+  late final StreamController<List<int>> _input = StreamController<List<int>>(
+    onPause: () => _subscription?.pause(),
+    onResume: () => _subscription?.resume(),
+  );
   final RelayByteQueue _buffer = RelayByteQueue();
   final Random _random = Random.secure();
   StreamSubscription<List<int>>? _subscription;

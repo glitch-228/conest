@@ -156,7 +156,11 @@ class RelayV2Session {
   ) : maxStreams = _intFrom(hello['max_streams'], 32).clamp(1, 256);
 
   /// The largest frame this client takes (a fetch of 128 envelopes fits).
-  static const int maxFramePayload = 48 * 1024 * 1024;
+  static const int maxFramePayload = 41 * 1024 * 1024;
+
+  /// What any other frame (an answer nobody asked big, a pong, a stray
+  /// stream) may carry.
+  static const int smallFramePayload = 1024 * 1024;
 
   final RelayByteChannel _channel;
   final RelayInputReader _reader;
@@ -171,7 +175,23 @@ class RelayV2Session {
   /// Mailboxes whose owner proved itself on this session.
   final Set<String> provedMailboxes = <String>{};
   final Duration _keepalive;
-  final RelayV2FrameDecoder _decoder = RelayV2FrameDecoder(maxFramePayload);
+  late final RelayV2FrameDecoder _decoder = RelayV2FrameDecoder(
+    maxFramePayload,
+    limitFor: (type, stream) {
+      // Checked on the header, before the payload is buffered: an answer
+      // may be as big as its request allowed, events as big as a fetch,
+      // everything else is small.
+      if (type == RelayV2FrameType.response) {
+        final limit = _limits[stream];
+        return limit == null ? smallFramePayload : limit + 4096;
+      }
+      if (type == RelayV2FrameType.event &&
+          _subscriptions.containsKey(stream)) {
+        return null;
+      }
+      return smallFramePayload;
+    },
+  );
   final Map<int, Completer<Map<String, dynamic>>> _pending = {};
   final Map<int, int> _limits = {};
   final Map<int, StreamController<Map<String, dynamic>>> _subscriptions = {};
