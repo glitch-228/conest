@@ -267,9 +267,10 @@ class TelegramMods {
   }
 
   /// Applies command expansion and filters to outgoing [text]; null blocks.
-  String? outgoing(String text) {
+  String? outgoing(String text, {bool botChat = false}) {
     var result = text;
-    if (result.startsWith('/')) {
+    // Commands in a chat with a bot go to the bot unchanged.
+    if (!botChat && result.startsWith('/')) {
       final space = result.indexOf(' ');
       final name = result.substring(1, space < 0 ? null : space);
       final args = space < 0 ? '' : result.substring(space + 1);

@@ -226,6 +226,33 @@ void main() {
     },
   );
 
+  test('a send cuts the idle wait short', () async {
+    var looks = 0;
+    final api = hub.network.api(bobBot.token, DiscordAuth.bot);
+    final counting = _CountingApi(api, onPoll: () => looks++);
+    final bob = DiscordCarrierChannel(
+      config: DiscordBotConfig(
+        token: bobBot.token,
+        botId: bobBot.id,
+        username: 'b',
+        channelId: channel,
+      ),
+      api: counting,
+      onFrame: (_, _) {},
+      pollInterval: const Duration(seconds: 30),
+      sendSpacing: Duration.zero,
+      // Every wait is long, as after a long quiet spell.
+      wait: (delay) => Future<void>.delayed(const Duration(seconds: 30)),
+    )..start();
+    addTearDown(bob.stop);
+    await until(() => looks >= 1);
+    final before = looks;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(looks, before);
+    await bob.sendFrame('${aliceBot.id}|$channel', Uint8List(3));
+    await until(() => looks > before);
+  });
+
   test('the slowdown stretches every look', () async {
     final waits = <Duration>[];
     final bob = DiscordCarrierChannel(
@@ -401,4 +428,25 @@ void main() {
     expect(isDiscordId('1234567890123456789'), isTrue);
     expect(isDiscordId('12ab'), isFalse);
   });
+}
+
+class _CountingApi implements DiscordApi {
+  _CountingApi(this.inner, {required this.onPoll});
+  final DiscordApi inner;
+  final void Function() onPoll;
+
+  @override
+  Future<Object?> call(
+    String method,
+    String path, {
+    Map<String, String>? query,
+    Object? body,
+    Duration timeout = const Duration(seconds: 30),
+  }) {
+    if (method == 'GET' && path.endsWith('/messages')) onPoll();
+    return inner.call(method, path, query: query, body: body, timeout: timeout);
+  }
+
+  @override
+  void close() => inner.close();
 }

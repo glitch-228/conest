@@ -338,26 +338,34 @@ class DiscordClient extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
+  void testRefreshWindow(String channelId, List found) =>
+      _refreshWindow(channelId, found);
+
   /// Merges the newest page [found] and drops the messages inside its time
   /// span that Discord no longer lists (deleted by someone).
   void _refreshWindow(String channelId, List found) {
     final ids = <String>{};
     BigInt? oldest;
+    BigInt? newest;
     for (final json in found.take(100)) {
       final message = DcMessage.parse(json);
       if (message == null || message.channelId != channelId) continue;
       ids.add(message.id);
       final n = BigInt.tryParse(message.id);
       if (n != null && (oldest == null || n < oldest)) oldest = n;
+      if (n != null && (newest == null || n > newest)) newest = n;
     }
     final list = _messages[channelId];
-    if (list != null && oldest != null) {
+    if (list != null && oldest != null && newest != null) {
       // A page shorter than asked reaches back to the first message.
       final wholeChannel = found.length < 50;
       list.removeWhere((m) {
         final n = BigInt.tryParse(m.id);
         return n != null &&
             (wholeChannel || n >= oldest!) &&
+            // Newer than the page: arrived after it was read, not deleted.
+            n <= newest! &&
             !ids.contains(m.id);
       });
     }

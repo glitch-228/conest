@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../app_locales.dart';
 import '../messenger_controller.dart';
 import '../qr_scan_screen.dart';
@@ -58,9 +59,17 @@ bool xmppShowsLock(XmppChat chat) =>
 /// What a message shows instead of (or beside) its text, if anything.
 String? xmppSecurityNote(BuildContext context, XmppChatMessage message) {
   final l10n = l10nOf(context);
+  final label = _securityLabel(message, l10n);
   if (message.securityNote == xmppEditNotAppliedNote) {
-    return l10n.xmppEditNotApplied;
+    // Beside the label, never instead of it.
+    return label == null
+        ? l10n.xmppEditNotApplied
+        : '$label · ${l10n.xmppEditNotApplied}';
   }
+  return label;
+}
+
+String? _securityLabel(XmppChatMessage message, AppLocalizations l10n) {
   return switch (message.security) {
     XmppSecurity.unreadable => l10n.xmppUnreadable,
     XmppSecurity.untrusted => l10n.xmppUntrustedMsg,

@@ -152,6 +152,20 @@ void main() {
     },
   );
 
+  test('a message newer than the page that was read is not dropped', () async {
+    final c = client();
+    await c.start();
+    await c.loadMessages(general);
+    // A message this client already shows, newer than what the next page
+    // (an older snapshot) lists.
+    final snapshot = hub.channels[general]!.map((m) => Map.of(m)).toList();
+    hub.post(general, friend, 'brand new');
+    await c.loadMessages(general);
+    expect(c.messagesOf(general).any((m) => m.text == 'brand new'), isTrue);
+    c.testRefreshWindow(general, snapshot);
+    expect(c.messagesOf(general).any((m) => m.text == 'brand new'), isTrue);
+  });
+
   test('one failed look does not stop watching', () async {
     final c = client();
     await c.start();

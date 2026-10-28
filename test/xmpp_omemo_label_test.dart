@@ -1,3 +1,4 @@
+import 'package:conest/l10n/app_localizations.dart';
 import 'package:conest/src/ui/xmpp_omemo_screens.dart';
 import 'package:conest/src/xmpp/xmpp_chats.dart';
 import 'package:flutter/material.dart';
@@ -56,5 +57,41 @@ void main() {
       verified: true,
     );
     expect(text, isNot(contains('encrypted')));
+  });
+
+  testWidgets('the edit-not-applied note comes beside the label', (
+    tester,
+  ) async {
+    late String legacy;
+    late String plain;
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Builder(
+          builder: (context) {
+            XmppChatMessage message(XmppSecurity security) => XmppChatMessage(
+              id: '1',
+              from: 'bob@example.org',
+              text: 'hi',
+              at: DateTime.utc(2026),
+              outgoing: false,
+              security: security,
+              securityNote: xmppEditNotAppliedNote,
+            );
+            legacy = xmppSecurityNote(
+              context,
+              message(XmppSecurity.legacyOmemo),
+            )!;
+            plain = xmppSecurityNote(context, message(XmppSecurity.plain))!;
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    expect(legacy, contains('legacy OMEMO'));
+    expect(legacy, contains('not applied'));
+    expect(plain, contains('not applied'));
+    expect(plain, isNot(contains('legacy')));
   });
 }

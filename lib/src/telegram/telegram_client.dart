@@ -74,6 +74,9 @@ class TelegramClient extends ChangeNotifier {
   final Map<int, TgChat> chats = {};
   final Map<int, List<TgMessage>> _messages = {};
   final Map<int, String> userNames = {};
+
+  /// Users that are bots (their chats get no plugin command expansion).
+  final Set<int> botUsers = {};
   List<TgFolder> folders = const [];
   final Map<int, TgFile> files = {};
   StreamSubscription<Map<String, dynamic>>? _subscription;
@@ -393,6 +396,12 @@ class TelegramClient extends ChangeNotifier {
       tdText(user['first_name'], 100),
       tdText(user['last_name'], 100),
     ].where((part) => part.isNotEmpty).join(' ');
+    final type = user['type'];
+    if (type is Map && type['@type'] == 'userTypeBot') {
+      if (botUsers.length < 20000) botUsers.add(id);
+    } else {
+      botUsers.remove(id);
+    }
     if (userNames.length < 20000 || userNames.containsKey(id)) {
       userNames[id] = name;
     }
@@ -583,7 +592,8 @@ class TelegramClient extends ChangeNotifier {
     bool silent = false,
     DateTime? sendAt,
   }) async {
-    final out = mods.outgoing(text);
+    final peer = chats[chatId]?.userId ?? 0;
+    final out = mods.outgoing(text, botChat: botUsers.contains(peer));
     if (out == null) return false;
     if (out.length > 4096) {
       throw ArgumentError('Telegram messages are at most 4096 characters.');

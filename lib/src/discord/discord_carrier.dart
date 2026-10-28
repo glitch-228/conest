@@ -246,7 +246,7 @@ class DiscordCarrierChannel
           }
         }
         first = false;
-        await _wait(_nextLook(gotFrames: delivered > 0));
+        await _sleep(_nextLook(gotFrames: delivered > 0));
       } on DiscordException catch (error) {
         if (!_running) return;
         if (error.unauthorized || error.forbidden || error.code == 404) {
@@ -305,6 +305,15 @@ class DiscordCarrierChannel
   }
 
   bool _recentSend = false;
+  Completer<void>? _wake;
+
+  /// Waits [delay], or less when a send wakes the loop: an answer to what
+  /// was just sent should not wait out a long idle pause.
+  Future<void> _sleep(Duration delay) {
+    if (_recentSend) return Future.value();
+    final wake = _wake = Completer<void>();
+    return Future.any([_wait(delay), wake.future]);
+  }
 
   bool _onMessage(Map message) {
     final author = message['author'];
@@ -339,6 +348,8 @@ class DiscordCarrierChannel
     if (_queued >= 64) throw StateError('Discord sending is backed up.');
     _queued++;
     _recentSend = true;
+    final wake = _wake;
+    if (wake != null && !wake.isCompleted) wake.complete();
     final text = '<@${target.botId}> ${base64.encode(frame)}';
     final done = Completer<void>();
     _sendQueue = _sendQueue.then((_) async {

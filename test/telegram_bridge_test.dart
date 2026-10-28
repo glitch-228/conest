@@ -191,17 +191,15 @@ void batcherTests() {
   group('the batcher', () {
     late List<Map<String, Object?>> sent;
     late List<_FakeTimer> timers;
-    TelegramBridgeBatcher make({int maxItems = 20, int maxPending = 200}) =>
-        TelegramBridgeBatcher(
-          send: sent.add,
-          maxItems: maxItems,
-          maxPending: maxPending,
-          timer: (_, callback) {
-            final timer = _FakeTimer(callback);
-            timers.add(timer);
-            return timer;
-          },
-        );
+    TelegramBridgeBatcher make({int maxItems = 20}) => TelegramBridgeBatcher(
+      send: sent.add,
+      maxItems: maxItems,
+      timer: (_, callback) {
+        final timer = _FakeTimer(callback);
+        timers.add(timer);
+        return timer;
+      },
+    );
 
     Map<String, Object?> event(int i, {int size = 5}) => {
       'type': 'tgx',
@@ -241,21 +239,10 @@ void batcherTests() {
       expect(sent.every((b) => (b['items'] as List).length <= 3), isTrue);
     });
 
-    test('big texts flush early and the backlog is bounded', () {
+    test('big texts flush early', () {
       final batcher = make();
       batcher.add(event(1, size: 40 * 1024));
       expect(sent, hasLength(1));
-      final bounded = make(maxItems: 1000, maxPending: 10);
-      for (var i = 0; i < 50; i++) {
-        bounded.add(event(i));
-      }
-      expect(bounded.pending, 10);
-      bounded.flush();
-      final ids = [
-        for (final b in sent.skip(1))
-          for (final i in b['items'] as List) (i as Map)['id'],
-      ];
-      expect(ids.first, '40');
     });
 
     test('dispose drops what is waiting', () {

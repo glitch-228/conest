@@ -17,8 +17,10 @@ output=$(realpath -m "$2")
 
 cache_dir=${CONEST_TDLIB_CACHE:-$HOME/.cache/conest-tdlib}
 cached="$cache_dir/$target-$COMMIT"
-# A cached build is used only if it still matches the hash written when it
-# was built (a poisoned or damaged cache entry is rebuilt, not shipped).
+# A cached build is used only if it still matches the hash written next to
+# it when it was built. The hash lives in the same cache, so this catches
+# damage, not tampering: whoever can write the cache can write both files.
+# Release builds therefore never use a cache (see release.yml).
 if [ -s "$cached" ] && [ -s "$cached.sha256" ] &&
   (cd "$cache_dir" && sha256sum --check --status "$(basename "$cached").sha256"); then
   mkdir -p "$(dirname "$output")"

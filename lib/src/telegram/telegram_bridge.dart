@@ -242,13 +242,16 @@ class TelegramBridgeInbox {
 /// Gathers relayed messages and sends them to the other devices in batches:
 /// one sync envelope for a burst, not one per message. A batch is sent
 /// after [delay], or at once when it reaches [maxItems] or [maxChars].
+///
+/// Waiting messages live only in memory: if the app is killed within
+/// [delay] (4 s) of a message, that message is not relayed. The bridge is a
+/// convenience copy, not a sync of history.
 class TelegramBridgeBatcher {
   TelegramBridgeBatcher({
     required this.send,
     this.delay = const Duration(seconds: 4),
     this.maxItems = 20,
     this.maxChars = 32 * 1024,
-    this.maxPending = 200,
     Timer Function(Duration, void Function())? timer,
   }) : _timer = timer ?? Timer.new;
 
@@ -257,9 +260,6 @@ class TelegramBridgeBatcher {
   final Duration delay;
   final int maxItems;
   final int maxChars;
-
-  /// Most messages waiting at once; the oldest are dropped past it.
-  final int maxPending;
 
   /// Most items taken from one received batch.
   static const int maxReceivedItems = 50;
@@ -275,10 +275,6 @@ class TelegramBridgeBatcher {
     final size = (event['text'] as String? ?? '').length + 300;
     _items.add(event);
     _chars += size;
-    while (_items.length > maxPending) {
-      final dropped = _items.removeAt(0);
-      _chars -= (dropped['text'] as String? ?? '').length + 300;
-    }
     if (_items.length >= maxItems || _chars >= maxChars) {
       flush();
     } else {

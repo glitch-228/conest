@@ -718,6 +718,41 @@ void main() {
     });
   });
 
+  group('plugin commands and bots', () {
+    test('commands are not expanded in a chat with a bot', () async {
+      final mods = TelegramMods();
+      mods.install(
+        '{"id":"p","name":"P","permissions":["commands"],"rules":['
+        '{"do":"command","name":"shrug","insert":"EXPANDED"}]}',
+      );
+      final engine = FakeTdEngine(loggedIn: true)
+        ..addChat(10, 'A bot', order: 300, userId: 77)
+        ..addChat(11, 'A person', order: 200, userId: 78);
+      final client = await startClient(engine, mods: mods);
+      await until(() => client.chats.length >= 2);
+      engine.emit({
+        '@type': 'updateUser',
+        'user': {
+          'id': 77,
+          'first_name': 'Bot',
+          'type': {'@type': 'userTypeBot'},
+        },
+      });
+      await pump(30);
+      String lastText() =>
+          ((engine.requests.lastWhere(
+                        (r) => r['@type'] == 'sendMessage',
+                      )['input_message_content']
+                      as Map)['text']
+                  as Map)['text']
+              as String;
+      await client.sendText(10, '/shrug');
+      expect(lastText(), '/shrug');
+      await client.sendText(11, '/shrug');
+      expect(lastText(), 'EXPANDED');
+    });
+  });
+
   group('the bridge respects mods', () {
     test('messages hidden by the user are not relayed', () async {
       final engine = FakeTdEngine(loggedIn: true)
