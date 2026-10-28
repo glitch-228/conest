@@ -571,6 +571,15 @@ impl Session {
                 }
                 // And the borrowed-handshake address (M38-D).
                 if trusted
+                    && let Some(cert) = self.state.tls_cert_info()
+                    && let Some(v2) = answer
+                        .get_mut("stats")
+                        .and_then(|stats| stats.get_mut("v2"))
+                        .and_then(Value::as_object_mut)
+                {
+                    v2.insert("tls_cert".to_owned(), cert);
+                }
+                if trusted
                     && let Some(borrowed) = self.state.borrowed_info()
                     && let Some(v2) = answer
                         .get_mut("stats")

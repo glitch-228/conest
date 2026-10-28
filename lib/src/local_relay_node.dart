@@ -80,6 +80,13 @@ class LocalRelayNode {
   /// v2 sessions this relay has taken (diagnostics and tests).
   int get sessionsServed => _sessionsServed;
   int _sessionsServed = 0;
+
+  /// Tests: drop v2 sessions on arrival (the relay still answers v1).
+  bool refuseSessions = false;
+
+  /// Cleartext v1 requests answered (tests).
+  int get v1RequestsSeen => _v1RequestsSeen;
+  int _v1RequestsSeen = 0;
   void Function(String recipientDeviceId, RelayEnvelope envelope)?
   onEnvelopeStored;
 
@@ -187,6 +194,10 @@ class LocalRelayNode {
           initial[1] == relayV2Magic[1] &&
           initial[2] == relayV2Magic[2] &&
           initial[3] == relayV2Magic[3]) {
+        if (refuseSessions) {
+          socket.destroy();
+          return;
+        }
         await _serveSession(socket, incoming, await keys);
         return;
       }
@@ -202,6 +213,7 @@ class LocalRelayNode {
       }
       final wireRequest = await _readWireRequest(incoming);
       isHttp = wireRequest.isHttp;
+      _v1RequestsSeen++;
       // Health carries the identity once it is derived.
       await _identityKeys;
       final response = await _signed(

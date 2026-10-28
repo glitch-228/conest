@@ -11,6 +11,7 @@ import 'package:conest/src/relay_v2/frames.dart';
 import 'package:conest/src/relay_v2/noise_nk.dart';
 import 'package:conest/src/relay_v2/session.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Map<String, dynamic> _fixture() =>
@@ -311,6 +312,35 @@ void main() {
       expect(node.sessionsServed, 1);
     });
 
+    test('an owned mailbox is not asked for in cleartext when its session '
+        'fails', () async {
+      final (node, port, identity) = await _startRelay();
+      const client = RelayClient();
+      await client.inspectHealth(
+        host: '127.0.0.1',
+        port: port,
+        expectedIdentityPublicKeyBase64: identity,
+      );
+      RelayClient.registerMailboxSecret('dev-owned', List<int>.filled(32, 9));
+      await RelayClient.v2Pool.closeAll();
+      // Sessions cannot open now, though v1 would still answer. The fetch
+      // fails; it does not turn into a cleartext v1 request carrying the
+      // mailbox id and its proof.
+      node.refuseSessions = true;
+      final before = node.v1RequestsSeen;
+      await expectLater(
+        client.fetchEnvelopes(
+          host: '127.0.0.1',
+          port: port,
+          recipientDeviceId: 'dev-owned',
+          timeout: const Duration(seconds: 2),
+          expectedIdentityPublicKeyBase64: identity,
+        ),
+        throwsA(anything),
+      );
+      expect(node.v1RequestsSeen, before);
+    });
+
     test('a broken session is replaced on the next request', () async {
       final (node, port, identity) = await _startRelay();
       const client = RelayClient();
@@ -511,7 +541,9 @@ void main() {
           ..usePrivateKey('test/fixtures/relay_v2/tls/key.pem'),
       );
       addTearDown(() => front.close(force: true));
+      final seenPaths = <String>[];
       front.listen((request) async {
+        seenPaths.add(request.uri.path);
         if (request.uri.path != '/s3cret-path_1' ||
             !WebSocketTransformer.isUpgradeRequest(request)) {
           request.response.statusCode = 404;
@@ -544,7 +576,46 @@ void main() {
         ),
         throwsA(anything),
       );
-      // Pinned: answers are checked against the identity instead.
+      // Pinned, but the certificate's hash was never signed by the
+      // identity: the secret path is not even sent.
+      seenPaths.clear();
+      await expectLater(
+        client.inspectHealth(
+          host: '127.0.0.1',
+          port: front.port,
+          protocol: PeerRouteProtocol.wss,
+          expectedIdentityPublicKeyBase64: identity,
+        ),
+        throwsA(anything),
+      );
+      expect(
+        seenPaths,
+        isEmpty,
+        reason: 'the path went to an unverified server',
+      );
+      // A different certificate's hash does not do either.
+      RelayClient.debugRegisterTlsCert(identity, List<int>.filled(32, 7));
+      await expectLater(
+        client.inspectHealth(
+          host: '127.0.0.1',
+          port: front.port,
+          protocol: PeerRouteProtocol.wss,
+          expectedIdentityPublicKeyBase64: identity,
+        ),
+        throwsA(anything),
+      );
+      expect(seenPaths, isEmpty);
+      // The signed hash of this very certificate: accepted.
+      final pem = File(
+        'test/fixtures/relay_v2/tls/cert.pem',
+      ).readAsStringSync();
+      final der = base64Decode(
+        pem
+            .split('-----BEGIN CERTIFICATE-----')[1]
+            .split('-----END CERTIFICATE-----')[0]
+            .replaceAll(RegExp(r'\s'), ''),
+      );
+      RelayClient.debugRegisterTlsCert(identity, sha256.convert(der).bytes);
       final health = await client.inspectHealth(
         host: '127.0.0.1',
         port: front.port,

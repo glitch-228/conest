@@ -292,6 +292,29 @@ class RelayClient {
     return (host: host, port: port, sni: sni);
   }
 
+  static Future<void> _recordTlsCert(Object? v2, String identity) async {
+    if (v2 is! Map<String, dynamic>) return;
+    final cert = v2['tls_cert'];
+    if (cert is! Map<String, dynamic>) return;
+    try {
+      final hash = base64Decode(cert['sha256'] as String);
+      final signature = base64Decode(cert['sig'] as String);
+      if (hash.length != 32) return;
+      if (await verifyEd25519Signature(
+        publicKey: base64Decode(identity),
+        message: [...utf8.encode('conest-relay-tls-cert-v1'), ...hash],
+        signature: signature,
+      )) {
+        if (_tlsCerts.length >= 64 && !_tlsCerts.containsKey(identity)) {
+          _tlsCerts.remove(_tlsCerts.keys.first);
+        }
+        _tlsCerts[identity] = hash;
+      }
+    } on Object {
+      // Not a certificate hash we can use.
+    }
+  }
+
   static String? _policyWord(Object? v2, String name, Set<String> allowed) {
     if (v2 is! Map<String, dynamic>) return null;
     final policy = v2['policy'];
@@ -397,6 +420,7 @@ class RelayClient {
     _tokens.clear();
     _wssPaths.clear();
     _borrowedSites.clear();
+    _tlsCerts.clear();
     await v2Pool.closeAll();
   }
 
@@ -926,6 +950,17 @@ class RelayClient {
           : 'tcp'}:$host:$port:'
       '${base64Encode(known.noiseKey!)}';
 
+  /// The TLS certificate hashes relays' identities signed (learned inside
+  /// sessions), by identity key: the only self-signed certificates a hidden
+  /// address is trusted with.
+  static final Map<String, List<int>> _tlsCerts = {};
+
+  /// Teaches the client a certificate hash for [identity] (tests; the
+  /// client learns it from a trusted session's health answer).
+  @visibleForTesting
+  static void debugRegisterTlsCert(String identity, List<int> sha256) =>
+      _tlsCerts[identity] = sha256;
+
   /// Borrowed-handshake relay addresses: the site they play, by host and
   /// port (M38-D).
   static final Map<String, String> _borrowedSites = {};
@@ -989,7 +1024,7 @@ class RelayClient {
       host: host,
       port: port,
       path: path,
-      allowUntrustedCertificate: pinned,
+      pinnedCertSha256: identity == null ? null : _tlsCerts[identity],
       timeout: timeout,
     );
   }
@@ -1053,8 +1088,12 @@ class RelayClient {
   }
 
   /// Sends [request] over the relay's v2 session when it has one; null to
-  /// use v1 instead (no sessions known yet, or none to be had now). Mailbox
-  /// ids then never cross the network in the clear.
+  /// use v1 instead (no sessions known yet, or none to be had now). Once a
+  /// relay is known to have sessions, an action on an owned mailbox is not
+  /// repeated in cleartext v1 over plain TCP when the session fails (that
+  /// would show the mailbox id and a proof to the network): the request
+  /// fails and the caller tries another route. Over a hidden (TLS) address
+  /// the fallback stays, since v1 is then inside TLS.
   Future<_RelayCallResult?> _trySession({
     required String host,
     required int port,
@@ -1103,12 +1142,26 @@ class RelayClient {
       return null;
     }
     if (!known.sessions) return null;
-    if (v2Pool.inBackoff(_sessionKey(host, port, known))) return null;
+    final mustStayPrivate =
+        _ownedActions.contains(request['action']) &&
+        !isHiddenRouteProtocol(protocol);
+    _RelayCallResult? fallback(String why) {
+      if (mustStayPrivate) {
+        throw StateError(
+          'Relay session unavailable ($why); not falling back to cleartext.',
+        );
+      }
+      return null;
+    }
+
+    if (v2Pool.inBackoff(_sessionKey(host, port, known))) {
+      return fallback('backing off');
+    }
     final RelayV2Session session;
     try {
       session = await _sessionFor(host, port, known, timeout);
     } on Object {
-      return null;
+      return fallback('connect failed');
     }
     final owned = request['recipient_device_id'];
     if (known.mailboxAuth &&
@@ -1122,9 +1175,13 @@ class RelayClient {
           timeout,
         );
       } on RelayV2Unavailable {
-        return null;
+        return fallback('proof refused');
       } on SocketException {
-        return null;
+        return fallback('proof failed');
+      } on TimeoutException {
+        return fallback('proof timed out');
+      } on StateError {
+        return fallback('proof failed');
       }
     }
     final token = _tokens[expectedIdentityPublicKeyBase64];
@@ -1144,11 +1201,14 @@ class RelayClient {
         maxResponseBytes: maxResponseBytes,
       );
     } on RelayV2Unavailable {
-      return null;
+      return fallback('unavailable');
     } on SocketException {
-      // The session broke under this request: once more over v1 (a store
-      // is deduplicated by its message id, a leased fetch replays).
-      return null;
+      // The session broke under this request: a store is deduplicated by
+      // its message id, so it may go once more over v1; an owned action
+      // may not (see above).
+      return fallback('broke');
+    } on TimeoutException {
+      return fallback('timed out');
     }
     if (body['ok'] == false) {
       throw StateError(body['error'] as String? ?? 'Relay request failed.');
@@ -1183,6 +1243,7 @@ class RelayClient {
     final key = '$host:$port';
     List<int>? noiseKey;
     final v2 = stats['v2'];
+    await _recordTlsCert(v2, identityPublicKeyBase64);
     if (v2 is Map<String, dynamic> &&
         v2['sessions'] == 1 &&
         v2['noise'] == relayV2NoiseProtocol &&

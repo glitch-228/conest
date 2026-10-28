@@ -75,6 +75,7 @@ pub(crate) struct TlsLayer {
     decoy: Decoy,
 }
 
+pub(crate) const TLS_CERT_LABEL: &[u8] = b"conest-relay-tls-cert-v1";
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_WS_FRAME: usize = 2 * 1024 * 1024;
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -683,6 +684,23 @@ pub(crate) fn tls_layer(state: &RelayState) -> Result<Option<TlsLayer>, String> 
 }
 
 impl RelayState {
+    /// The TLS certificate's SHA-256 and the identity's signature over it
+    /// (label, then the hash), told to trusted sessions so a client can
+    /// accept a self-signed certificate on the hidden address only when it
+    /// is this very one, before it sends the secret path.
+    pub(crate) fn tls_cert_info(&self) -> Option<serde_json::Value> {
+        use sha2::Digest;
+        let path = self.config.ext.tls_cert.as_ref()?;
+        let leaf = CertificateDer::pem_file_iter(path).ok()?.next()?.ok()?;
+        let hash: [u8; 32] = sha2::Sha256::digest(leaf.as_ref()).into();
+        let mut message = TLS_CERT_LABEL.to_vec();
+        message.extend_from_slice(&hash);
+        Some(serde_json::json!({
+            "sha256": BASE64_STANDARD.encode(hash),
+            "sig": BASE64_STANDARD.encode(self.identity.sign(&message)),
+        }))
+    }
+
     /// Where and how to reach the borrowed-handshake layer, when it is on
     /// and a public host is set: told to clients inside sessions only.
     pub(crate) fn borrowed_info(&self) -> Option<serde_json::Value> {
@@ -1046,6 +1064,40 @@ mod tests {
             health["stats"]["v2"]["hidden"],
             "wss://relay.test:8443/hidden-path-123"
         );
+        // ...with the certificate's hash, signed by the identity.
+        let cert = &health["stats"]["v2"]["tls_cert"];
+        let hash = BASE64_STANDARD
+            .decode(cert["sha256"].as_str().expect("hash"))
+            .expect("base64");
+        let mut message = TLS_CERT_LABEL.to_vec();
+        message.extend_from_slice(&hash);
+        let signature: [u8; 64] = BASE64_STANDARD
+            .decode(cert["sig"].as_str().expect("sig"))
+            .expect("base64")
+            .try_into()
+            .expect("64 bytes");
+        use ed25519_dalek::Verifier;
+        relay
+            .state
+            .identity
+            .signing_key
+            .verifying_key()
+            .verify(&message, &ed25519_dalek::Signature::from_bytes(&signature))
+            .expect("signed by the identity");
+        assert_eq!(
+            hash,
+            sha2::Sha256::digest(
+                CertificateDer::pem_file_iter(fixture("cert.pem"))
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .unwrap()
+                    .as_ref()
+            )
+            .to_vec()
+        );
+        // An anonymous session gets none of it.
+        assert!(anonymous["stats"]["v2"].get("tls_cert").is_none());
         let line = r#"{"action":"health"}"#;
         let v1 =
             crate::v1::handle_request_bytes(line.as_bytes(), line.len(), &relay.state, "127.0.0.1");

@@ -26,17 +26,16 @@ class WebSocketRelayChannel implements RelayByteChannel {
   static const int _maxFrame = 2 * 1024 * 1024;
   static const int _maxHead = 16 * 1024;
 
-  /// Connects and upgrades. [allowUntrustedCertificate] skips the WebPKI
-  /// check of the relay's certificate: the caller passes true only when
-  /// the relay's identity is pinned, because then every answer is checked
-  /// against that identity anyway (signed v1 answers, or a Noise session
-  /// with the key the identity signed), so a self-signed certificate is
-  /// as good as any.
+  /// Connects and upgrades. The secret path is sent only to a server whose
+  /// certificate is a WebPKI one, or is exactly the certificate whose
+  /// SHA-256 ([pinnedCertSha256]) the relay's identity signed: whoever
+  /// else answers on that address (a poisoned DNS answer, a middlebox)
+  /// learns nothing, not even the path.
   static Future<WebSocketRelayChannel> connect({
     required String host,
     required int port,
     required String path,
-    required bool allowUntrustedCertificate,
+    List<int>? pinnedCertSha256,
     Duration timeout = const Duration(seconds: 8),
   }) async {
     final socket = await Circumvention.instance
@@ -45,7 +44,12 @@ class WebSocketRelayChannel implements RelayByteChannel {
           port,
           timeout: timeout,
           supportedProtocols: const ['http/1.1'],
-          onBadCertificate: (_) => allowUntrustedCertificate,
+          onBadCertificate: (certificate) =>
+              pinnedCertSha256 != null &&
+              _sameBytes(
+                crypto.sha256.convert(certificate.der).bytes,
+                pinnedCertSha256,
+              ),
         )
         .timeout(timeout);
     try {
@@ -61,6 +65,15 @@ class WebSocketRelayChannel implements RelayByteChannel {
       rethrow;
     }
     return channel;
+  }
+
+  static bool _sameBytes(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    var difference = 0;
+    for (var index = 0; index < a.length; index++) {
+      difference |= a[index] ^ b[index];
+    }
+    return difference == 0;
   }
 
   Future<void> _upgrade(String host, int port, String path) async {
