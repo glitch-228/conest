@@ -245,6 +245,17 @@ class _TelegramClientPanelState extends State<TelegramClientPanel> {
                 ),
               ),
             ),
+            SwitchListTile.adaptive(
+              key: const ValueKey('telegram-relay-saved'),
+              contentPadding: EdgeInsets.zero,
+              title: Text(l10n.telegramRelaySaved),
+              subtitle: Text(l10n.telegramRelayNote),
+              value: widget.controller.telegram.bridge.savedMessages,
+              onChanged: (value) {
+                widget.controller.telegram.bridge.savedMessages = value;
+                widget.controller.telegram.saveBridge();
+              },
+            ),
             Row(
               children: [
                 OutlinedButton.icon(

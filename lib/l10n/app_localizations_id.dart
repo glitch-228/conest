@@ -5736,13 +5736,15 @@ class AppLocalizationsId extends AppLocalizations {
   String get notifyAllMessages => 'Beri tahu semua pesan';
 
   @override
-  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+  String get xmppEncOmemo2Unverified =>
+      'terenkripsi, belum diverifikasi (OMEMO)';
 
   @override
-  String get xmppTrustPending => 'new device, not confirmed';
+  String get xmppTrustPending => 'perangkat baru, belum dikonfirmasi';
 
   @override
-  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+  String get xmppUnconfirmedMsg =>
+      'Dari perangkat baru yang belum Anda konfirmasi.';
 
   @override
   String get xmppEncOmemo2 => 'terenkripsi (OMEMO)';
@@ -6214,4 +6216,23 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get discordOnbInstead => 'Pakai sebagai klien Discord saja';
+
+  @override
+  String get telegramRelaySaved =>
+      'Teruskan Pesan Tersimpan ke perangkat saya yang lain';
+
+  @override
+  String get telegramRelayChat =>
+      'Teruskan obrolan ini ke perangkat saya yang lain';
+
+  @override
+  String get telegramRelayNote =>
+      'Hanya teks pesan yang dikirim, terenkripsi ujung ke ujung antar perangkat Anda. Login Telegram Anda tidak pernah meninggalkan perangkat ini.';
+
+  @override
+  String get telegramViaDevice => 'Telegram, lewat perangkat Anda yang lain';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'Hanya baca di sini. Balas di Telegram pada perangkat yang memilikinya.';
 }

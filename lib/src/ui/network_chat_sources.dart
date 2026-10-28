@@ -85,6 +85,7 @@ List<NetworkChatSource> networkChatSources(
   XmppChatSource(controller),
   TelegramChatSource(controller),
   DiscordChatSource(controller),
+  TelegramBridgeChatSource(controller),
   BitchatChatSource(controller),
   RadioChatSource(
     'meshcore',
@@ -242,6 +243,46 @@ class XmppChatSource extends NetworkChatSource {
               chat.messages.map((message) => message.text).join('\n'),
           open: (context) => openXmppChat(context, controller, chat.jid),
         ),
+  ];
+}
+
+/// Telegram chats relayed from another of the account's devices (M30).
+class TelegramBridgeChatSource extends NetworkChatSource {
+  const TelegramBridgeChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'telegram-bridge';
+
+  @override
+  String get label => 'Telegram';
+
+  @override
+  bool get active => controller.telegramBridgeInbox.chats.isNotEmpty;
+
+  @override
+  List<NetworkChat> chats([BuildContext? context]) => [
+    for (final chat in controller.telegramBridgeInbox.chats.values)
+      NetworkChat(
+        network: id,
+        id: chat.id,
+        title: chat.saved ? l10nOf(context).telegramSaved : chat.title,
+        preview: chat.messages.lastOrNull?.text ?? '',
+        at: chat.messages.lastOrNull?.at.toLocal(),
+        unread: chat.unread,
+        searchText: () => chat.messages.map((m) => m.text).join('\n'),
+        open: (context) => unawaited(
+          Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => TelegramBridgedChatScreen(
+                controller: controller,
+                chatId: chat.id,
+              ),
+            ),
+          ),
+        ),
+      ),
   ];
 }
 

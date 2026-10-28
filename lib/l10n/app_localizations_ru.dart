@@ -5874,13 +5874,14 @@ class AppLocalizationsRu extends AppLocalizations {
   String get notifyAllMessages => 'Уведомлять обо всех сообщениях';
 
   @override
-  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+  String get xmppEncOmemo2Unverified => 'зашифровано, не проверено (OMEMO)';
 
   @override
-  String get xmppTrustPending => 'new device, not confirmed';
+  String get xmppTrustPending => 'новое устройство, не подтверждено';
 
   @override
-  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+  String get xmppUnconfirmedMsg =>
+      'С нового устройства, которое вы не подтвердили.';
 
   @override
   String get xmppEncOmemo2 => 'зашифровано (OMEMO)';
@@ -6352,4 +6353,23 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get discordOnbInstead => 'Использовать как клиент Discord';
+
+  @override
+  String get telegramRelaySaved =>
+      'Передавать Избранное на мои другие устройства';
+
+  @override
+  String get telegramRelayChat =>
+      'Передавать этот чат на мои другие устройства';
+
+  @override
+  String get telegramRelayNote =>
+      'Передаётся только текст сообщений, со сквозным шифрованием между вашими устройствами. Вход в Telegram не покидает это устройство.';
+
+  @override
+  String get telegramViaDevice => 'Telegram, через другое ваше устройство';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'Только чтение. Отвечайте в Telegram на устройстве, где он есть.';
 }

@@ -345,7 +345,7 @@ void _xmppControllerTests() {
       expect(find.byKey(const ValueKey('xmpp-request-banner')), findsOneWidget);
       // No composer before accepting.
       expect(find.byKey(const ValueKey('xmpp-composer')), findsNothing);
-      expect(find.textContaining('not encrypted'), findsOneWidget);
+      expect(find.textContaining('encrypted if the contact'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('xmpp-request-accept')));
       await tester.pump();
       await tester.enterText(
@@ -365,10 +365,7 @@ void _xmppControllerTests() {
       await tester.pump();
       expect(server.received.any((e) => e.childText('body') == 'hey'), isTrue);
       expect(
-        find.descendant(
-          of: find.byType(ListView),
-          matching: find.text('hey'),
-        ),
+        find.descendant(of: find.byType(ListView), matching: find.text('hey')),
         findsOneWidget,
       );
       await tester.runAsync(alice.disableXmppChats);

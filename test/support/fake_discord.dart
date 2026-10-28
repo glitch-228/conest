@@ -202,8 +202,9 @@ class _FakeApi implements DiscordApi {
         if (content.length > 2000) {
           throw DiscordException(path, 400, 'Must be 2000 or fewer in length.');
         }
-        if (account.failNextPost.isNotEmpty)
+        if (account.failNextPost.isNotEmpty) {
           throw account.failNextPost.removeAt(0);
+        }
         account.bodies.add(data);
         account.sent.add((channel: id, content: content));
         return hub.post(id, account, content);

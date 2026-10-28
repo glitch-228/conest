@@ -1643,5 +1643,13 @@
   "discordNoChats": "هنوز گفتگوی دیسکوردی نیست",
   "discordServers": "سرورها",
   "discordLoadOlder": "بارگذاری پیام‌های قدیمی‌تر",
-  "discordOnbInstead": "استفاده به‌عنوان کلاینت دیسکورد"
+  "discordOnbInstead": "استفاده به‌عنوان کلاینت دیسکورد",
+  "telegramRelaySaved": "انتقال پیام‌های ذخیره‌شده به دستگاه‌های دیگرم",
+  "telegramRelayChat": "انتقال این گفتگو به دستگاه‌های دیگرم",
+  "telegramRelayNote": "فقط متن پیام‌ها منتقل می‌شود، با رمزنگاری سرتاسری بین دستگاه‌هایتان. ورود تلگرام شما از این دستگاه خارج نمی‌شود.",
+  "telegramViaDevice": "تلگرام، از طریق دستگاه دیگرتان",
+  "telegramBridgeReadOnly": "اینجا فقط‌خواندنی است. در تلگرام روی دستگاهی که دارد پاسخ دهید.",
+  "xmppEncOmemo2Unverified": "رمزنگاری‌شده، تأییدنشده (OMEMO)",
+  "xmppTrustPending": "دستگاه جدید، تأییدنشده",
+  "xmppUnconfirmedMsg": "از دستگاه جدیدی که تأیید نکرده‌اید."
 }

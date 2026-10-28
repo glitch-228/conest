@@ -5749,13 +5749,13 @@ class AppLocalizationsFa extends AppLocalizations {
   String get notifyAllMessages => 'برای همهٔ پیام‌ها اعلان بده';
 
   @override
-  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+  String get xmppEncOmemo2Unverified => 'رمزنگاری‌شده، تأییدنشده (OMEMO)';
 
   @override
-  String get xmppTrustPending => 'new device, not confirmed';
+  String get xmppTrustPending => 'دستگاه جدید، تأییدنشده';
 
   @override
-  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+  String get xmppUnconfirmedMsg => 'از دستگاه جدیدی که تأیید نکرده‌اید.';
 
   @override
   String get xmppEncOmemo2 => 'رمزگذاری‌شده (OMEMO)';
@@ -6226,4 +6226,22 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get discordOnbInstead => 'استفاده به‌عنوان کلاینت دیسکورد';
+
+  @override
+  String get telegramRelaySaved =>
+      'انتقال پیام‌های ذخیره‌شده به دستگاه‌های دیگرم';
+
+  @override
+  String get telegramRelayChat => 'انتقال این گفتگو به دستگاه‌های دیگرم';
+
+  @override
+  String get telegramRelayNote =>
+      'فقط متن پیام‌ها منتقل می‌شود، با رمزنگاری سرتاسری بین دستگاه‌هایتان. ورود تلگرام شما از این دستگاه خارج نمی‌شود.';
+
+  @override
+  String get telegramViaDevice => 'تلگرام، از طریق دستگاه دیگرتان';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'اینجا فقط‌خواندنی است. در تلگرام روی دستگاهی که دارد پاسخ دهید.';
 }

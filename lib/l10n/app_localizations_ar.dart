@@ -5879,13 +5879,13 @@ class AppLocalizationsAr extends AppLocalizations {
   String get notifyAllMessages => 'الإشعار لكل الرسائل';
 
   @override
-  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+  String get xmppEncOmemo2Unverified => 'مشفّر، غير موثّق (OMEMO)';
 
   @override
-  String get xmppTrustPending => 'new device, not confirmed';
+  String get xmppTrustPending => 'جهاز جديد، غير مؤكَّد';
 
   @override
-  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+  String get xmppUnconfirmedMsg => 'من جهاز جديد لم تؤكده.';
 
   @override
   String get xmppEncOmemo2 => 'مشفّرة (OMEMO)';
@@ -6352,4 +6352,21 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get discordOnbInstead => 'استخدمه كعميل ديسكورد بدلًا من ذلك';
+
+  @override
+  String get telegramRelaySaved => 'نقل الرسائل المحفوظة إلى أجهزتي الأخرى';
+
+  @override
+  String get telegramRelayChat => 'نقل هذه المحادثة إلى أجهزتي الأخرى';
+
+  @override
+  String get telegramRelayNote =>
+      'يُنقل نص الرسائل فقط، ومشفّر من طرف إلى طرف بين أجهزتك. لا يغادر تسجيل دخولك إلى تيليجرام هذا الجهاز.';
+
+  @override
+  String get telegramViaDevice => 'تيليجرام عبر جهازك الآخر';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'للقراءة فقط هنا. أجب في تيليجرام على الجهاز الذي يملكه.';
 }

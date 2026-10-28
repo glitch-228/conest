@@ -5501,13 +5501,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get notifyAllMessages => '所有消息都通知';
 
   @override
-  String get xmppEncOmemo2Unverified => 'encrypted, unverified (OMEMO)';
+  String get xmppEncOmemo2Unverified => '已加密，未验证 (OMEMO)';
 
   @override
-  String get xmppTrustPending => 'new device, not confirmed';
+  String get xmppTrustPending => '新设备，未确认';
 
   @override
-  String get xmppUnconfirmedMsg => 'From a new device you have not confirmed.';
+  String get xmppUnconfirmedMsg => '来自你尚未确认的新设备。';
 
   @override
   String get xmppEncOmemo2 => '已加密（OMEMO）';
@@ -5957,4 +5957,20 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get discordOnbInstead => '改用作 Discord 客户端';
+
+  @override
+  String get telegramRelaySaved => '把收藏的消息转发到我的其他设备';
+
+  @override
+  String get telegramRelayChat => '把此聊天转发到我的其他设备';
+
+  @override
+  String get telegramRelayNote =>
+      '只转发消息文本，并在你的设备之间端到端加密。你的 Telegram 登录信息不会离开此设备。';
+
+  @override
+  String get telegramViaDevice => 'Telegram（经由你的其他设备）';
+
+  @override
+  String get telegramBridgeReadOnly => '此处只读。请在装有 Telegram 的设备上回复。';
 }

@@ -532,9 +532,27 @@ class _TelegramChatScreenState extends State<TelegramChatScreen> {
             key: const ValueKey('telegram-chat-menu'),
             onSelected: (value) {
               if (value == 'export') unawaited(_export());
+              if (value == 'relay') {
+                final service = widget.controller.telegram;
+                final on = service.bridge.chats.contains(widget.chatId);
+                if (!service.bridge.setChat(widget.chatId, !on)) {
+                  _toast(StateError('Too many relayed chats.'));
+                }
+                service.saveBridge();
+                setState(() {});
+              }
             },
             itemBuilder: (_) => [
               PopupMenuItem(value: 'export', child: Text(l10n.telegramExport)),
+              if (chat.kind != TgChatKind.saved)
+                CheckedPopupMenuItem(
+                  key: const ValueKey('telegram-relay-chat'),
+                  value: 'relay',
+                  checked: widget.controller.telegram.bridge.chats.contains(
+                    widget.chatId,
+                  ),
+                  child: Text(l10n.telegramRelayChat),
+                ),
             ],
           ),
         ],
@@ -754,6 +772,106 @@ class _TelegramChatScreenState extends State<TelegramChatScreen> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// A chat relayed from another of the account's devices: read only.
+class TelegramBridgedChatScreen extends StatefulWidget {
+  const TelegramBridgedChatScreen({
+    super.key,
+    required this.controller,
+    required this.chatId,
+  });
+
+  final MessengerController controller;
+  final String chatId;
+
+  @override
+  State<TelegramBridgedChatScreen> createState() =>
+      _TelegramBridgedChatScreenState();
+}
+
+class _TelegramBridgedChatScreenState extends State<TelegramBridgedChatScreen> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.markBridgedTelegramRead(widget.chatId);
+    widget.controller.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_changed);
+    super.dispose();
+  }
+
+  void _changed() {
+    if (!mounted) return;
+    widget.controller.markBridgedTelegramRead(widget.chatId);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = l10nOf(context);
+    final theme = Theme.of(context);
+    final chat = widget.controller.telegramBridgeInbox.chats[widget.chatId];
+    if (chat == null) {
+      return Scaffold(
+        appBar: AppBar(),
+        body: Center(child: Text(l10n.xmppChatGone)),
+      );
+    }
+    return Scaffold(
+      appBar: AppBar(title: Text(chat.saved ? l10n.telegramSaved : chat.title)),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView(
+              reverse: true,
+              children: [
+                for (final m in chat.messages.reversed)
+                  Align(
+                    alignment: m.outgoing
+                        ? AlignmentDirectional.centerEnd
+                        : AlignmentDirectional.centerStart,
+                    child: Container(
+                      key: ValueKey('telegram-bridged-${m.id}'),
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 3,
+                      ),
+                      padding: const EdgeInsets.all(10),
+                      constraints: const BoxConstraints(maxWidth: 520),
+                      decoration: BoxDecoration(
+                        color: m.outgoing
+                            ? theme.colorScheme.primaryContainer
+                            : theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (!m.outgoing && m.from.isNotEmpty)
+                            Text(m.from, style: theme.textTheme.labelSmall),
+                          SelectableText(m.text),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text(
+              l10n.telegramBridgeReadOnly,
+              style: theme.textTheme.bodySmall,
+            ),
+          ),
         ],
       ),
     );

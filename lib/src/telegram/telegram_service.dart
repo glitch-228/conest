@@ -8,7 +8,9 @@ import 'package:path/path.dart' as p;
 
 import 'td_engine.dart';
 import 'telegram_api_keys.dart';
+import 'telegram_bridge.dart';
 import 'telegram_client.dart';
+import 'telegram_models.dart';
 import 'telegram_mods.dart';
 
 /// Owns the Telegram client for the app: whether it is available in this
@@ -25,6 +27,9 @@ class TelegramService extends ChangeNotifier {
     required this.writeMods,
     this.languageCode = 'en',
     this.log,
+    this.readBridge,
+    this.writeBridge,
+    this.bridgeOut,
   }) : _engineFactory = engineFactory;
 
   /// Conest's own api_id and api_hash; null in builds without them.
@@ -39,6 +44,38 @@ class TelegramService extends ChangeNotifier {
   final void Function(Map<String, Object?> mods) writeMods;
   final String languageCode;
   final void Function(String line)? log;
+
+  /// Saved bridge settings, and where relayed messages go (the account's
+  /// other devices).
+  final Object? Function()? readBridge;
+  final void Function(Map<String, Object?> settings)? writeBridge;
+  final void Function(Map<String, Object?> event)? bridgeOut;
+
+  TelegramBridgeSettings? _bridge;
+
+  /// What this device relays to the account's other devices.
+  TelegramBridgeSettings get bridge =>
+      _bridge ??= TelegramBridgeSettings.fromJson(readBridge?.call());
+
+  void saveBridge() {
+    writeBridge?.call(bridge.toJson());
+    notifyListeners();
+  }
+
+  void _relay(TelegramClient client, TgMessage message, TgChat chat) {
+    final out = bridgeOut;
+    if (out == null || !bridge.any) return;
+    final event = bridgeEventFor(
+      message: message,
+      chat: chat,
+      chatTitle: chat.kind == TgChatKind.saved ? 'Saved Messages' : chat.title,
+      from: message.outgoing
+          ? client.selfName
+          : client.nameOf(message.senderId),
+      settings: bridge,
+    );
+    if (event != null) out(event);
+  }
 
   TelegramClient? _client;
   TelegramMods? _mods;
@@ -103,6 +140,7 @@ class TelegramService extends ChangeNotifier {
       languageCode: languageCode,
       log: log,
     )..addListener(notifyListeners);
+    client.onLiveMessage = (message, chat) => _relay(client, message, chat);
     _client = client;
     await client.start();
     notifyListeners();

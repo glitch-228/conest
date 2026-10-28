@@ -62,7 +62,7 @@ class FakeBot {
         'from': {
           'id': fromId,
           'is_bot': isBot,
-          if (fromUsername != null) 'username': fromUsername,
+          'username': ?fromUsername,
         },
         'chat': {'id': fromId, 'type': chatType},
         'text': text,

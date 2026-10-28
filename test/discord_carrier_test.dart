@@ -179,7 +179,7 @@ void main() {
     for (final bad in [
       'someone',
       '123|456',
-      '${bobBot.id}',
+      bobBot.id,
       '${bobBot.id}|abc',
     ]) {
       expect(

@@ -10042,6 +10042,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Use as a Discord client instead'**
   String get discordOnbInstead;
+
+  /// Telegram bridge: relay Saved Messages to own devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay Saved Messages to my other devices'**
+  String get telegramRelaySaved;
+
+  /// Telegram bridge: relay a chat to own devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay this chat to my other devices'**
+  String get telegramRelayChat;
+
+  /// Telegram bridge: what is and is not relayed.
+  ///
+  /// In en, this message translates to:
+  /// **'Only message text goes, end-to-end encrypted between your devices. Your Telegram login never leaves this device.'**
+  String get telegramRelayNote;
+
+  /// Telegram bridge: label for chats relayed from another device.
+  ///
+  /// In en, this message translates to:
+  /// **'Telegram, via your other device'**
+  String get telegramViaDevice;
+
+  /// Telegram bridge: relayed chats cannot be answered here.
+  ///
+  /// In en, this message translates to:
+  /// **'Read only here. Answer in Telegram on the device that has it.'**
+  String get telegramBridgeReadOnly;
 }
 
 class _AppLocalizationsDelegate

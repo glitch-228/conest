@@ -1643,5 +1643,13 @@
   "discordNoChats": "还没有 Discord 聊天",
   "discordServers": "服务器",
   "discordLoadOlder": "加载更早的消息",
-  "discordOnbInstead": "改用作 Discord 客户端"
+  "discordOnbInstead": "改用作 Discord 客户端",
+  "telegramRelaySaved": "把收藏的消息转发到我的其他设备",
+  "telegramRelayChat": "把此聊天转发到我的其他设备",
+  "telegramRelayNote": "只转发消息文本，并在你的设备之间端到端加密。你的 Telegram 登录信息不会离开此设备。",
+  "telegramViaDevice": "Telegram（经由你的其他设备）",
+  "telegramBridgeReadOnly": "此处只读。请在装有 Telegram 的设备上回复。",
+  "xmppEncOmemo2Unverified": "已加密，未验证 (OMEMO)",
+  "xmppTrustPending": "新设备，未确认",
+  "xmppUnconfirmedMsg": "来自你尚未确认的新设备。"
 }

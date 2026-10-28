@@ -98,6 +98,8 @@ import 'discord/discord_carrier.dart';
 import 'discord/discord_service.dart';
 import 'telegram/td_engine.dart';
 import 'telegram/telegram_api_keys.dart';
+import 'telegram/telegram_bridge.dart';
+import 'telegram/telegram_client.dart' show TgAuth;
 import 'telegram/telegram_bot_api.dart';
 import 'telegram/telegram_carrier.dart';
 import 'telegram/telegram_service.dart';
@@ -5850,6 +5852,9 @@ class MessengerController extends ChangeNotifier {
     writeAccount: _writeTelegramAccount,
     readMods: () => _snapshot.networkChats['telegramMods'],
     writeMods: _writeTelegramMods,
+    readBridge: () => _snapshot.networkChats['telegramBridgeSettings'],
+    writeBridge: _writeTelegramBridgeSettings,
+    bridgeOut: _syncToOwnDevices,
     languageCode: Platform.localeName.split(RegExp('[_-]')).first,
     log: (line) => appendDebugLog(line),
   )..addListener(notifyListeners);
@@ -5864,6 +5869,56 @@ class MessengerController extends ChangeNotifier {
     }
     _snapshot = _snapshot.copyWith(carrierAccounts: accounts);
     await _persist('Telegram client ${account == null ? 'removed' : 'on'}.');
+  }
+
+  void _writeTelegramBridgeSettings(Map<String, Object?> settings) {
+    _snapshot = _snapshot.copyWith(
+      networkChats: {
+        ..._snapshot.networkChats,
+        'telegramBridgeSettings': settings,
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
+  /// Messages relayed from this account's other devices that have Telegram.
+  TelegramBridgeInbox get telegramBridgeInbox {
+    final json = _snapshot.networkChats['telegramBridge'];
+    final cached = _telegramInboxCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final inbox = TelegramBridgeInbox.fromJson(json);
+    _telegramInboxCache = (json, inbox);
+    return inbox;
+  }
+
+  (Object?, TelegramBridgeInbox)? _telegramInboxCache;
+
+  /// A relayed Telegram message from one of this account's devices. A
+  /// device with its own signed-in Telegram already has the chats.
+  bool _acceptBridgedTelegram(Map<String, dynamic> event) {
+    if (telegram.client?.auth == TgAuth.ready) return false;
+    final inbox = telegramBridgeInbox;
+    if (!inbox.accept(event)) return false;
+    final json = inbox.toJson();
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'telegramBridge': json},
+    );
+    _telegramInboxCache = (json, inbox);
+    return true;
+  }
+
+  /// Marks relayed chat [id] read here.
+  void markBridgedTelegramRead(String id) {
+    final inbox = telegramBridgeInbox;
+    final chat = inbox.chats[id];
+    if (chat == null || chat.unread == 0) return;
+    chat.unread = 0;
+    final json = inbox.toJson();
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'telegramBridge': json},
+    );
+    _telegramInboxCache = (json, inbox);
+    unawaited(_saveSnapshotSilently(notify: true, debounce: true));
   }
 
   void _writeTelegramMods(Map<String, Object?> mods) {
@@ -34392,6 +34447,7 @@ class MessengerController extends ChangeNotifier {
     final bulky = const {
       'group_message',
       'history_page',
+      'tgx',
     }.contains(event['type']);
     for (final device in devices) {
       final payload = QueuedEnvelopePayload(
@@ -35440,6 +35496,9 @@ class MessengerController extends ChangeNotifier {
             continue;
           case 'gtx':
             await _postForOwnDevice(sender, event['chat'], event['message']);
+            continue;
+          case 'tgx':
+            if (_acceptBridgedTelegram(event)) changed = true;
             continue;
         }
       } catch (error) {

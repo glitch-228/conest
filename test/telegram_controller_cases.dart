@@ -571,4 +571,104 @@ void _telegramControllerTests() {
       await tester.pump(const Duration(seconds: 2));
     });
   });
+
+  group('Telegram bridge between own devices', () {
+    test('relays chosen chats as text to a device without Telegram', () async {
+      final keys = TelegramApiKeys.parse(
+        '424242',
+        'abcdef0123456789abcdef0123456789',
+      );
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final engine = FakeTdEngine(loggedIn: true)
+        ..addChat(10, 'Bob', order: 300)
+        ..addChat(11, 'Secret group', order: 200)
+        ..addChat(1, '', userId: 1, order: 100);
+      final dir = await Directory.systemTemp.createTemp('conest-tg-br-');
+      addTearDown(() => dir.delete(recursive: true));
+      Future<MessengerController> make(
+        String name, {
+        bool telegram = false,
+      }) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          telegramApiKeys: telegram ? keys : null,
+          telegramDirectory: () async => dir,
+          tdEngineFactory: telegram ? () => engine : null,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final laptop = await make('Laptop', telegram: true);
+      final phone = await make('Phone');
+      final qr = await phone.startLinkAsNewDevice();
+      await laptop.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () =>
+            phone.linkState == LinkState.compareCode &&
+            laptop.linkState == LinkState.compareCode,
+      );
+      await phone.confirmLinkCode();
+      await laptop.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(laptop.pollNow());
+        return phone.linkState == LinkState.linked &&
+            laptop.ownDevices.isNotEmpty;
+      });
+
+      await laptop.telegram.enable();
+      await _waitForIroh(
+        () => laptop.telegram.client?.chats.length == 3,
+        reason: 'chats did not load',
+      );
+      // Nothing is relayed until the user chooses.
+      engine.emit({
+        '@type': 'updateNewMessage',
+        'message': FakeTdEngine.message(id: 1, chatId: 10, text: 'before'),
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await phone.pollNow();
+      expect(phone.telegramBridgeInbox.chats, isEmpty);
+
+      laptop.telegram.bridge.savedMessages = true;
+      laptop.telegram.bridge.setChat(10, true);
+      laptop.telegram.saveBridge();
+      engine.emit({
+        '@type': 'updateNewMessage',
+        'message': FakeTdEngine.message(id: 2, chatId: 10, text: 'relayed hi'),
+      });
+      engine.emit({
+        '@type': 'updateNewMessage',
+        'message': FakeTdEngine.message(id: 3, chatId: 11, text: 'not chosen'),
+      });
+      engine.emit({
+        '@type': 'updateNewMessage',
+        'message': FakeTdEngine.message(
+          id: 4,
+          chatId: 1,
+          text: 'note to self',
+          outgoing: true,
+          sender: 1,
+        ),
+      });
+      await _waitForIroh(() {
+        unawaited(phone.pollNow());
+        return phone.telegramBridgeInbox.chats['10']?.messages.length == 1 &&
+            phone.telegramBridgeInbox.chats['1']?.messages.length == 1;
+      }, reason: 'the messages did not reach the phone');
+      final inbox = phone.telegramBridgeInbox;
+      expect(inbox.chats['10']!.messages.single.text, 'relayed hi');
+      expect(inbox.chats['1']!.saved, isTrue);
+      expect(inbox.chats.containsKey('11'), isFalse);
+      expect(inbox.chats['10']!.unread, 1);
+      phone.markBridgedTelegramRead('10');
+      expect(phone.telegramBridgeInbox.chats['10']!.unread, 0);
+      // The phone holds no session and no key.
+      expect(phone.telegram.enabled, isFalse);
+      expect(phone.telegram.client, isNull);
+    });
+  });
 }

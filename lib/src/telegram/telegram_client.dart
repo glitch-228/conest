@@ -57,6 +57,10 @@ class TelegramClient extends ChangeNotifier {
   final String languageCode;
   final void Function(String line)? log;
 
+  /// Called for each new message that arrives or is sent while the client
+  /// runs (not for history loaded on request): the bridge to other devices.
+  void Function(TgMessage message, TgChat chat)? onLiveMessage;
+
   TgAuth auth = TgAuth.starting;
 
   /// The tg://login link for the QR code while [auth] is waitQr.
@@ -257,7 +261,7 @@ class TelegramClient extends ChangeNotifier {
         _putUser(update['user']);
       case 'updateNewMessage':
         final message = TgMessage.parse(update['message']);
-        if (message != null) _addMessage(message);
+        if (message != null) _addMessage(message, live: true);
       case 'updateMessageContent':
         _changeMessage(
           tdInt(update['chat_id']),
@@ -294,6 +298,7 @@ class TelegramClient extends ChangeNotifier {
           final list = _messages[message.chatId];
           list?.removeWhere((m) => m.id == old);
           _addMessage(message);
+          _relay(message);
         }
       case 'updateMessageSendFailed':
         _changeMessage(
@@ -416,7 +421,12 @@ class TelegramClient extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _addMessage(TgMessage message) {
+  void _relay(TgMessage message) {
+    final chat = chats[message.chatId];
+    if (chat != null) onLiveMessage?.call(message, chat);
+  }
+
+  void _addMessage(TgMessage message, {bool live = false}) {
     final list = _messages.putIfAbsent(message.chatId, () => []);
     final index = list.indexWhere((m) => m.id == message.id);
     if (index >= 0) {
@@ -424,6 +434,8 @@ class TelegramClient extends ChangeNotifier {
     } else {
       list.add(message);
       list.sort((a, b) => a.id.compareTo(b.id));
+      // Pending outgoing messages are relayed once, when they are sent.
+      if (live && message.sendState == TgSendState.sent) _relay(message);
       while (list.length > maxTelegramMessagesPerChat) {
         list.removeAt(0);
       }

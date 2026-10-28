@@ -1643,5 +1643,13 @@
   "discordNoChats": "لا توجد محادثات ديسكورد بعد",
   "discordServers": "الخوادم",
   "discordLoadOlder": "تحميل رسائل أقدم",
-  "discordOnbInstead": "استخدمه كعميل ديسكورد بدلًا من ذلك"
+  "discordOnbInstead": "استخدمه كعميل ديسكورد بدلًا من ذلك",
+  "telegramRelaySaved": "نقل الرسائل المحفوظة إلى أجهزتي الأخرى",
+  "telegramRelayChat": "نقل هذه المحادثة إلى أجهزتي الأخرى",
+  "telegramRelayNote": "يُنقل نص الرسائل فقط، ومشفّر من طرف إلى طرف بين أجهزتك. لا يغادر تسجيل دخولك إلى تيليجرام هذا الجهاز.",
+  "telegramViaDevice": "تيليجرام عبر جهازك الآخر",
+  "telegramBridgeReadOnly": "للقراءة فقط هنا. أجب في تيليجرام على الجهاز الذي يملكه.",
+  "xmppEncOmemo2Unverified": "مشفّر، غير موثّق (OMEMO)",
+  "xmppTrustPending": "جهاز جديد، غير مؤكَّد",
+  "xmppUnconfirmedMsg": "من جهاز جديد لم تؤكده."
 }

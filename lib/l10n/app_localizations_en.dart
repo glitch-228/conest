@@ -6226,4 +6226,21 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get discordOnbInstead => 'Use as a Discord client instead';
+
+  @override
+  String get telegramRelaySaved => 'Relay Saved Messages to my other devices';
+
+  @override
+  String get telegramRelayChat => 'Relay this chat to my other devices';
+
+  @override
+  String get telegramRelayNote =>
+      'Only message text goes, end-to-end encrypted between your devices. Your Telegram login never leaves this device.';
+
+  @override
+  String get telegramViaDevice => 'Telegram, via your other device';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'Read only here. Answer in Telegram on the device that has it.';
 }

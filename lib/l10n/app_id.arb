@@ -1643,5 +1643,13 @@
   "discordNoChats": "Belum ada obrolan Discord",
   "discordServers": "Server",
   "discordLoadOlder": "Muat pesan lebih lama",
-  "discordOnbInstead": "Pakai sebagai klien Discord saja"
+  "discordOnbInstead": "Pakai sebagai klien Discord saja",
+  "telegramRelaySaved": "Teruskan Pesan Tersimpan ke perangkat saya yang lain",
+  "telegramRelayChat": "Teruskan obrolan ini ke perangkat saya yang lain",
+  "telegramRelayNote": "Hanya teks pesan yang dikirim, terenkripsi ujung ke ujung antar perangkat Anda. Login Telegram Anda tidak pernah meninggalkan perangkat ini.",
+  "telegramViaDevice": "Telegram, lewat perangkat Anda yang lain",
+  "telegramBridgeReadOnly": "Hanya baca di sini. Balas di Telegram pada perangkat yang memilikinya.",
+  "xmppEncOmemo2Unverified": "terenkripsi, belum diverifikasi (OMEMO)",
+  "xmppTrustPending": "perangkat baru, belum dikonfirmasi",
+  "xmppUnconfirmedMsg": "Dari perangkat baru yang belum Anda konfirmasi."
 }

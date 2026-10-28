@@ -1643,5 +1643,13 @@
   "discordNoChats": "Чатов Discord пока нет",
   "discordServers": "Серверы",
   "discordLoadOlder": "Загрузить более старые сообщения",
-  "discordOnbInstead": "Использовать как клиент Discord"
+  "discordOnbInstead": "Использовать как клиент Discord",
+  "telegramRelaySaved": "Передавать Избранное на мои другие устройства",
+  "telegramRelayChat": "Передавать этот чат на мои другие устройства",
+  "telegramRelayNote": "Передаётся только текст сообщений, со сквозным шифрованием между вашими устройствами. Вход в Telegram не покидает это устройство.",
+  "telegramViaDevice": "Telegram, через другое ваше устройство",
+  "telegramBridgeReadOnly": "Только чтение. Отвечайте в Telegram на устройстве, где он есть.",
+  "xmppEncOmemo2Unverified": "зашифровано, не проверено (OMEMO)",
+  "xmppTrustPending": "новое устройство, не подтверждено",
+  "xmppUnconfirmedMsg": "С нового устройства, которое вы не подтвердили."
 }
