@@ -973,7 +973,11 @@ class MessengerController extends ChangeNotifier {
   bool _windowFocused = true;
 
   /// Desktops: the window gained or lost the focus.
-  void setWindowFocused(bool focused) => _windowFocused = focused;
+  void setWindowFocused(bool focused) {
+    _windowFocused = focused;
+    // A key released while the window was elsewhere never reaches us.
+    if (!focused) unawaited(releasePushToTalk());
+  }
   DateTime? _appBackgroundedAtUtc;
   NetworkCostClass _networkCostClass = NetworkCostClass.unmetered;
   String? _statusMessage;
@@ -1501,6 +1505,7 @@ class MessengerController extends ChangeNotifier {
         incoming: session != null && !session.outgoing,
       );
       _voiceCallSoundCues.handle(session);
+      _syncPushToTalkSession();
       if (session?.state == VoiceCallState.connected) {
         unawaited(_applyPushToTalk());
         unawaited(voiceMessageService.stopPlayback());
@@ -1540,6 +1545,7 @@ class MessengerController extends ChangeNotifier {
   bool _recoveringCallAudio = false;
   // Settings → Voice (voice_settings_controller.dart).
   bool _pushToTalkHeld = false;
+  Object? _pushToTalkSession;
   String _appliedParticipantVolumes = '';
 
   /// The call's audio device stopped (a headset disconnected, the default
@@ -1913,6 +1919,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   void setAppForegroundState(bool value) {
+    if (!value) unawaited(releasePushToTalk());
     if (_appInForeground == value) {
       return;
     }

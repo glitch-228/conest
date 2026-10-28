@@ -233,10 +233,14 @@ impl VoiceGate {
         }
     }
 
-    fn open(&mut self, level_db: f32, mode: u8, threshold_db: f32) -> bool {
+    fn open(&mut self, level_db: f32, mode: u8, threshold_db: f32, muted: bool) -> bool {
         // The floor falls at once to quieter frames and rises slowly
-        // (1 dB a second), so speech does not lift it.
-        if level_db < self.noise_floor_db {
+        // (1 dB a second), so speech does not lift it. A muted microphone
+        // or exact silence says nothing about the room: it would drag the
+        // floor to the bottom, and the first breath would open the gate.
+        if muted || level_db <= -99.0 {
+            // Learns nothing.
+        } else if level_db < self.noise_floor_db {
             self.noise_floor_db = level_db.max(-90.0);
         } else {
             self.noise_floor_db = (self.noise_floor_db + 0.02).min(-20.0);
@@ -246,7 +250,12 @@ impl VoiceGate {
             1 => threshold_db,
             _ => self.noise_floor_db + 12.0,
         };
-        if level_db >= threshold {
+        if muted {
+            // Nothing is sent, so nothing opens or extends the hold (and
+            // no 300 ms of open gate follows an unmute).
+            self.hold = 0;
+            false
+        } else if level_db >= threshold {
             self.hold = GATE_HOLD_FRAMES;
             true
         } else if self.hold > 0 {
@@ -1204,6 +1213,7 @@ fn encode_loop(
             level_db,
             tuning.gate_mode.load(Ordering::Relaxed),
             load_f32(&tuning.gate_threshold_db),
+            muted.load(Ordering::Relaxed),
         );
         tuning.gate_open.store(open, Ordering::Relaxed);
         if !open {
@@ -1564,21 +1574,42 @@ mod tests {
     fn voice_gate_holds_after_speech_and_learns_the_noise_floor() {
         let mut gate = VoiceGate::new();
         // Always-send mode never closes.
-        assert!(gate.open(-90.0, 0, -50.0));
+        assert!(gate.open(-90.0, 0, -50.0, false));
         // Manual threshold: speech opens it, 300 ms of hold, then closed.
-        assert!(gate.open(-20.0, 1, -40.0));
+        assert!(gate.open(-20.0, 1, -40.0, false));
         for _ in 0..GATE_HOLD_FRAMES {
-            assert!(gate.open(-70.0, 1, -40.0));
+            assert!(gate.open(-70.0, 1, -40.0, false));
         }
-        assert!(!gate.open(-70.0, 1, -40.0));
+        assert!(!gate.open(-70.0, 1, -40.0, false));
         // Automatic: a steady room at -55 dB stays out, speech 20 dB over
         // it comes through.
         let mut auto = VoiceGate::new();
         for _ in 0..200 {
-            auto.open(-55.0, 2, 0.0);
+            auto.open(-55.0, 2, 0.0, false);
         }
-        assert!(!auto.open(-55.0, 2, 0.0));
-        assert!(auto.open(-35.0, 2, 0.0));
+        assert!(!auto.open(-55.0, 2, 0.0, false));
+        assert!(auto.open(-35.0, 2, 0.0, false));
+    }
+
+    #[test]
+    fn voice_gate_learns_nothing_from_muted_or_silent_frames() {
+        let mut auto = VoiceGate::new();
+        for _ in 0..200 {
+            auto.open(-55.0, 2, 0.0, false);
+        }
+        let floor = auto.noise_floor_db;
+        // Muted (even with a loud frame) and exact silence: floor unchanged.
+        for _ in 0..500 {
+            auto.open(-100.0, 2, 0.0, true);
+            auto.open(-100.0, 2, 0.0, false);
+            auto.open(-30.0, 2, 0.0, true);
+        }
+        assert_eq!(auto.noise_floor_db, floor);
+        // The room's own noise after un-muting does not open the gate.
+        assert!(!auto.open(-55.0, 2, 0.0, false));
+        // A loud muted frame does not hold the gate open after the unmute.
+        assert!(!auto.open(-30.0, 2, 0.0, true));
+        assert!(!auto.open(-55.0, 2, 0.0, false));
     }
 
     #[test]

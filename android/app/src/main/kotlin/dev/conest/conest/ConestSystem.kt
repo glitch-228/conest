@@ -375,13 +375,20 @@ object ConestSystem {
     }
 
     private fun postOrRefreshGroupSummary(context: Context, manager: NotificationManager) {
-        val summary = notificationBuilder(context, MESSAGES_CHANNEL_ID)
+        // The summary never sounds itself (a re-post on the sounding
+        // channel would defeat quiet hours and a muted chat): it sits on the
+        // quiet channel, and only the children alert.
+        val builder = notificationBuilder(context, QUIET_CHANNEL_ID)
             .setContentTitle("Conest")
             .setContentText("New messages")
             .setGroup(GROUP_KEY_MESSAGES)
             .setGroupSummary(true)
+            .setOnlyAlertOnce(true)
             .setAutoCancel(true)
-            .build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+        }
+        val summary = builder.build()
         manager.notify(SUMMARY_NOTIFICATION_ID, summary)
     }
 

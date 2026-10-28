@@ -3120,6 +3120,33 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('the push-to-talk key always lets go, in a call or not', (
+    tester,
+  ) async {
+    late MessengerController alice;
+    await tester.runAsync(() async {
+      alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      await alice.updateVoiceSettings(
+        alice.voiceSettings.copyWith(
+          inputMode: VoiceInputMode.pushToTalk,
+          pushToTalkKey: LogicalKeyboardKey.keyT.keyId,
+        ),
+      );
+      await alice.setPushToTalkHeld(true);
+    });
+    addTearDown(alice.dispose);
+    final keys = PushToTalkKeyHandler(alice)..attach();
+    addTearDown(keys.detach);
+    expect(alice.callUsesMicrophone, isFalse);
+    expect(alice.pushToTalkHeld, isTrue);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyT);
+    await tester.pump();
+    expect(alice.pushToTalkHeld, isFalse);
+  });
+
   group('contact recovery', () {
     late _FakeRelayClient relay;
     late MessengerController alice;
@@ -6325,6 +6352,100 @@ void main() {
       expect(alice.voiceCallService!.mediaBusy, true);
     },
   );
+
+  group('push to talk', () {
+    Future<(MessengerController, MessengerController, _VoiceRecordingBridge)>
+    pair() async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final bridge = _VoiceRecordingBridge();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        platformBridge: bridge,
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        platformBridge: _VoiceRecordingBridge(),
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      await _waitForIroh(
+        () => alice.contacts.single.featureCapabilities.contains(
+          ApplicationCapability.voiceCallsV1,
+        ),
+      );
+      await alice.updateVoiceSettings(
+        alice.voiceSettings.copyWith(inputMode: VoiceInputMode.pushToTalk),
+      );
+      return (alice, bob, bridge);
+    }
+
+    Future<void> connect(
+      MessengerController alice,
+      MessengerController bob,
+    ) async {
+      final call = await alice.voiceCallService!.startOutgoing(
+        bob.identity!.deviceId,
+      );
+      await alice.voiceCallService!.onAccepted(callId: call.callId);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('a hold from the last call does not open the next one', () async {
+      final (alice, bob, bridge) = await pair();
+      await connect(alice, bob);
+      expect(bridge.mutes.last, isTrue);
+      await alice.setPushToTalkHeld(true);
+      expect(bridge.mutes.last, isFalse);
+      await alice.voiceCallService!.end();
+      await Future<void>.delayed(Duration.zero);
+      expect(alice.pushToTalkHeld, isFalse);
+      bridge.mutes.clear();
+      await connect(alice, bob);
+      expect(bridge.mutes, isNotEmpty);
+      expect(bridge.mutes.last, isTrue);
+    });
+
+    test('a group-call change during a 1:1 call keeps the hold', () async {
+      final (alice, bob, bridge) = await pair();
+      await connect(alice, bob);
+      await alice.setPushToTalkHeld(true);
+      // The group service really announces a change (the controller's
+      // listener runs on it) while no group call is joined.
+      var changes = 0;
+      final watch = alice.groupCallService!.changes.listen((_) => changes++);
+      addTearDown(watch.cancel);
+      await alice.groupCallService!.setNoiseSuppression(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(changes, 1);
+      expect(alice.pushToTalkHeld, isTrue);
+      expect(bridge.mutes.last, isFalse);
+    });
+
+    test('losing the window focus lets go of the key', () async {
+      final (alice, bob, bridge) = await pair();
+      await connect(alice, bob);
+      await alice.setPushToTalkHeld(true);
+      alice.setWindowFocused(false);
+      await Future<void>.delayed(Duration.zero);
+      expect(alice.pushToTalkHeld, isFalse);
+      expect(bridge.mutes.last, isTrue);
+      await alice.setPushToTalkHeld(true);
+      alice.setAppForegroundState(false);
+      await Future<void>.delayed(Duration.zero);
+      expect(alice.pushToTalkHeld, isFalse);
+    });
+  });
 
   group('a call whose audio device stops', () {
     Future<(MessengerController, _VoiceRecordingBridge)> connectedCall() async {
@@ -30358,6 +30479,11 @@ class _VoiceRecordingBridge extends _RecordingPlatformBridge {
   }
   @override
   Future<void> closeVoiceCallMedia() async {}
+
+  /// Every mute the call audio was told, in order.
+  final mutes = <bool>[];
+  @override
+  Future<void> setVoiceCallMuted(bool muted) async => mutes.add(muted);
   @override
   Future<void> setVoiceCallNoiseSuppression(bool enabled) async {}
   @override
