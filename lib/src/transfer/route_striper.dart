@@ -74,6 +74,10 @@ class RouteStriper<R> {
     return routes;
   }
 
+  /// Whether [route] failed lately and is resting.
+  bool isResting(R route) =>
+      _state(route).restingUntil?.isAfter(_now()) == true;
+
   /// Whether [route] has not delivered a block yet (its speed is a guess).
   bool unmeasured(R route) => _state(route).samples == 0;
 
@@ -116,7 +120,12 @@ class RouteStriper<R> {
   void failed(StripeLease<R> lease) {
     if (!_end(lease)) return;
     final state = _state(lease.route);
-    state.failures = state.failures < 16 ? state.failures + 1 : 16;
+    // Blocks that were already in flight when it began resting do not
+    // make it rest longer.
+    final already = state.restingUntil?.isAfter(_now()) == true;
+    if (!already) {
+      state.failures = state.failures < 16 ? state.failures + 1 : 16;
+    }
     final rest = _restAfterFailure * (1 << (state.failures - 1).clamp(0, 6));
     state.restingUntil = _now().add(rest > _maxRest ? _maxRest : rest);
   }

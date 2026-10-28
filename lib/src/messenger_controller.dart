@@ -3132,7 +3132,10 @@ class MessengerController extends ChangeNotifier {
 
       Future<bool> sendOnIroh() async {
         // While LAN works, only direct Iroh paths share the work.
-        final peer = _transportPeerForContact(contact, allowRelay: !lanUsable);
+        final peer = _transportPeerForContact(
+          contact,
+          allowRelay: !lanUsable || !_lanProvenFor(peerId),
+        );
         for (final route in await adapter!.discoverRoutes(peer)) {
           if (!route.permitsPayload(bytes.length)) continue;
           if (await _groupHistory.fileForPeer(
@@ -21112,6 +21115,14 @@ class MessengerController extends ChangeNotifier {
   /// blocks, so the next blocks go where they arrive soonest.
   final Map<String, RouteStriper<_BlockRoute>> _blockStripers = {};
 
+  /// LAN has carried blocks to [peerDeviceId] and is not resting: Iroh then
+  /// shares the work only on direct paths.
+  bool _lanProvenFor(String peerDeviceId) {
+    final striper = _blockStriperFor(peerDeviceId);
+    return !striper.unmeasured(_BlockRoute.lanBinary) &&
+        !striper.isResting(_BlockRoute.lanBinary);
+  }
+
   RouteStriper<_BlockRoute> _blockStriperFor(String peerDeviceId) {
     final striper = _blockStripers.remove(peerDeviceId);
     // The most recently used peers stay (at most 64).
@@ -21458,7 +21469,9 @@ class MessengerController extends ChangeNotifier {
           ),
           // While LAN works, Iroh shares the file only on a direct path;
           // the relay stays the fallback when nothing else carries a block.
-          allowRelay: allowIrohRelay && !lanUsable,
+          allowRelay:
+              allowIrohRelay &&
+              !(lanUsable && _lanProvenFor(requester.deviceId)),
         );
         if (receipt != null) {
           appendDebugLog(
