@@ -5901,7 +5901,16 @@ class MessengerController extends ChangeNotifier {
   bool _acceptBridgedTelegram(Map<String, dynamic> event) {
     if (telegram.client?.auth == TgAuth.ready) return false;
     final inbox = telegramBridgeInbox;
-    if (!inbox.accept(event)) return false;
+    final items = event['items'];
+    var any = false;
+    if (items is List) {
+      for (final item in items.take(TelegramBridgeBatcher.maxReceivedItems)) {
+        if (item is Map<String, dynamic> && inbox.accept(item)) any = true;
+      }
+    } else {
+      any = inbox.accept(event);
+    }
+    if (!any) return false;
     final json = inbox.toJson();
     _snapshot = _snapshot.copyWith(
       networkChats: {..._snapshot.networkChats, 'telegramBridge': json},

@@ -53,6 +53,10 @@ class TelegramService extends ChangeNotifier {
 
   TelegramBridgeSettings? _bridge;
 
+  late final TelegramBridgeBatcher? _batcher = bridgeOut == null
+      ? null
+      : TelegramBridgeBatcher(send: bridgeOut!);
+
   /// What this device relays to the account's other devices.
   TelegramBridgeSettings get bridge =>
       _bridge ??= TelegramBridgeSettings.fromJson(readBridge?.call());
@@ -63,8 +67,7 @@ class TelegramService extends ChangeNotifier {
   }
 
   void _relay(TelegramClient client, TgMessage message, TgChat chat) {
-    final out = bridgeOut;
-    if (out == null || !bridge.any) return;
+    if (_batcher == null || !bridge.any) return;
     final event = bridgeEventFor(
       message: message,
       chat: chat,
@@ -74,7 +77,7 @@ class TelegramService extends ChangeNotifier {
           : client.nameOf(message.senderId),
       settings: bridge,
     );
-    if (event != null) out(event);
+    if (event != null) _batcher.add(event);
   }
 
   TelegramClient? _client;
@@ -188,6 +191,7 @@ class TelegramService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _batcher?.flush();
     final client = _client;
     _client = null;
     if (client != null) {

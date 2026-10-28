@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'telegram_models.dart';
 
 /// Which Telegram chats this device relays to the account's other devices
@@ -234,5 +236,79 @@ class TelegramBridgeInbox {
       inbox.chats[chat.id] = chat;
     }
     return inbox;
+  }
+}
+
+/// Gathers relayed messages and sends them to the other devices in batches:
+/// one sync envelope for a burst, not one per message. A batch is sent
+/// after [delay], or at once when it reaches [maxItems] or [maxChars].
+class TelegramBridgeBatcher {
+  TelegramBridgeBatcher({
+    required this.send,
+    this.delay = const Duration(seconds: 4),
+    this.maxItems = 20,
+    this.maxChars = 32 * 1024,
+    this.maxPending = 200,
+    Timer Function(Duration, void Function())? timer,
+  }) : _timer = timer ?? Timer.new;
+
+  /// Takes one `tgx` event with an `items` list.
+  final void Function(Map<String, Object?> batch) send;
+  final Duration delay;
+  final int maxItems;
+  final int maxChars;
+
+  /// Most messages waiting at once; the oldest are dropped past it.
+  final int maxPending;
+
+  /// Most items taken from one received batch.
+  static const int maxReceivedItems = 50;
+  final Timer Function(Duration, void Function()) _timer;
+
+  final List<Map<String, Object?>> _items = [];
+  int _chars = 0;
+  Timer? _scheduled;
+
+  int get pending => _items.length;
+
+  void add(Map<String, Object?> event) {
+    final size = (event['text'] as String? ?? '').length + 300;
+    _items.add(event);
+    _chars += size;
+    while (_items.length > maxPending) {
+      final dropped = _items.removeAt(0);
+      _chars -= (dropped['text'] as String? ?? '').length + 300;
+    }
+    if (_items.length >= maxItems || _chars >= maxChars) {
+      flush();
+    } else {
+      _scheduled ??= _timer(delay, flush);
+    }
+  }
+
+  void flush() {
+    _scheduled?.cancel();
+    _scheduled = null;
+    while (_items.isNotEmpty) {
+      final batch = <Map<String, Object?>>[];
+      var chars = 0;
+      while (_items.isNotEmpty &&
+          batch.length < maxItems &&
+          (batch.isEmpty ||
+              chars + _items.first.toString().length < maxChars)) {
+        final item = _items.removeAt(0);
+        chars += item.toString().length;
+        batch.add(item);
+      }
+      send({'type': 'tgx', 'items': batch});
+    }
+    _chars = 0;
+  }
+
+  void dispose() {
+    _scheduled?.cancel();
+    _scheduled = null;
+    _items.clear();
+    _chars = 0;
   }
 }

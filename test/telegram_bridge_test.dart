@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:conest/src/telegram/telegram_bridge.dart';
 import 'package:conest/src/telegram/telegram_models.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +20,7 @@ TgMessage message(int id, int chatId, {String text = 'hi', bool out = false}) =>
     )!;
 
 void main() {
+  batcherTests();
   test('only chosen chats and Saved Messages are relayed', () {
     final settings = TelegramBridgeSettings(chats: {10});
     Map<String, Object?>? event(TgChat c, TgMessage m) => bridgeEventFor(
@@ -166,5 +169,101 @@ void main() {
     final again = TelegramBridgeInbox.fromJson(inbox.toJson());
     expect(again.chats['10']!.messages.single.text, 'kept');
     expect(again.chats['10']!.saved, isTrue);
+  });
+}
+
+class _FakeTimer implements Timer {
+  _FakeTimer(this.callback);
+  final void Function() callback;
+  bool cancelled = false;
+
+  @override
+  void cancel() => cancelled = true;
+
+  @override
+  bool get isActive => !cancelled;
+
+  @override
+  int get tick => 0;
+}
+
+void batcherTests() {
+  group('the batcher', () {
+    late List<Map<String, Object?>> sent;
+    late List<_FakeTimer> timers;
+    TelegramBridgeBatcher make({int maxItems = 20, int maxPending = 200}) =>
+        TelegramBridgeBatcher(
+          send: sent.add,
+          maxItems: maxItems,
+          maxPending: maxPending,
+          timer: (_, callback) {
+            final timer = _FakeTimer(callback);
+            timers.add(timer);
+            return timer;
+          },
+        );
+
+    Map<String, Object?> event(int i, {int size = 5}) => {
+      'type': 'tgx',
+      'chat': '10',
+      'id': '$i',
+      'text': 'x' * size,
+    };
+
+    setUp(() {
+      sent = [];
+      timers = [];
+    });
+
+    test('a burst becomes one envelope, sent when the timer fires', () {
+      final batcher = make();
+      for (var i = 0; i < 5; i++) {
+        batcher.add(event(i));
+      }
+      expect(sent, isEmpty);
+      expect(timers, hasLength(1));
+      timers.single.callback();
+      expect(sent, hasLength(1));
+      expect((sent.single['items'] as List).length, 5);
+      expect(sent.single['type'], 'tgx');
+      expect(batcher.pending, 0);
+    });
+
+    test('a full batch goes at once, in bounded pieces', () {
+      final batcher = make(maxItems: 3);
+      for (var i = 0; i < 7; i++) {
+        batcher.add(event(i));
+      }
+      expect(sent.length, 2);
+      expect((sent.first['items'] as List).length, 3);
+      batcher.flush();
+      expect(sent.length, 3);
+      expect(sent.every((b) => (b['items'] as List).length <= 3), isTrue);
+    });
+
+    test('big texts flush early and the backlog is bounded', () {
+      final batcher = make();
+      batcher.add(event(1, size: 40 * 1024));
+      expect(sent, hasLength(1));
+      final bounded = make(maxItems: 1000, maxPending: 10);
+      for (var i = 0; i < 50; i++) {
+        bounded.add(event(i));
+      }
+      expect(bounded.pending, 10);
+      bounded.flush();
+      final ids = [
+        for (final b in sent.skip(1))
+          for (final i in b['items'] as List) (i as Map)['id'],
+      ];
+      expect(ids.first, '40');
+    });
+
+    test('dispose drops what is waiting', () {
+      final batcher = make();
+      batcher.add(event(1));
+      batcher.dispose();
+      expect(timers.single.cancelled, isTrue);
+      expect(batcher.pending, 0);
+    });
   });
 }
