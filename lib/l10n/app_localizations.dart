@@ -9928,6 +9928,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Use as a Telegram client instead'**
   String get onbTelegramInstead;
+
+  /// Presentation text for message route information: the Discord carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by Discord bots, still end-to-end encrypted by Conest; Discord sees both bots and when.'**
+  String get routeDiscordDescription;
+
+  /// Settings: subtitle of the Discord bot carrier switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Carry messages through a Discord bot you made'**
+  String get discordCarrierSubtitle;
+
+  /// Settings: how to set up the Discord bot carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Make a bot in the Discord developer portal, add it to a private server you share with your contacts\' bots, and paste its token and that channel\'s id. Use a bot only Conest reads.'**
+  String get discordBotHelp;
+
+  /// Settings: Discord bot token field.
+  ///
+  /// In en, this message translates to:
+  /// **'Bot token'**
+  String get discordBotTokenField;
+
+  /// Settings: Discord channel id field.
+  ///
+  /// In en, this message translates to:
+  /// **'Channel id'**
+  String get discordChannelField;
+
+  /// Settings: change the Discord bot.
+  ///
+  /// In en, this message translates to:
+  /// **'Change bot'**
+  String get discordChangeBot;
 }
 
 class _AppLocalizationsDelegate

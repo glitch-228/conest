@@ -64,6 +64,7 @@ String messageRouteLabel(BuildContext? context, MessageRoute value) =>
       MessageRoute.viaOwnDevice => l10nOf(context).routeViaOwnDevice,
       MessageRoute.xmppCarrier => 'XMPP',
       MessageRoute.telegramCarrier => 'Telegram',
+      MessageRoute.discordCarrier => 'Discord',
     };
 
 String themeModeLabel(BuildContext? context, ConestThemeMode value) =>
@@ -128,6 +129,7 @@ String messageRouteDescription(BuildContext? context, MessageRoute value) =>
       MessageRoute.viaOwnDevice => l10nOf(context).routeOwnDeviceDescription,
       MessageRoute.xmppCarrier => l10nOf(context).routeXmppDescription,
       MessageRoute.telegramCarrier => l10nOf(context).routeTelegramDescription,
+      MessageRoute.discordCarrier => l10nOf(context).routeDiscordDescription,
     };
 
 String transportKindLabel(BuildContext? context, TransportKind value) =>

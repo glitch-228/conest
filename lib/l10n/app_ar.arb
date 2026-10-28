@@ -1624,5 +1624,11 @@
   "telegramPermCommands": "إضافة أوامر",
   "telegramDownloads": "التنزيلات",
   "telegramLoadOlder": "تحميل رسائل أقدم",
-  "onbTelegramInstead": "استخدمه كعميل تيليجرام بدلًا من ذلك"
+  "onbTelegramInstead": "استخدمه كعميل تيليجرام بدلًا من ذلك",
+  "routeDiscordDescription": "يُنقل عبر بوتات ديسكورد، ومشفّر من طرف إلى طرف بواسطة Conest؛ يرى ديسكورد البوتين والوقت.",
+  "discordCarrierSubtitle": "نقل الرسائل عبر بوت ديسكورد أنشأته",
+  "discordBotHelp": "أنشئ بوتًا في بوابة مطوري ديسكورد وأضفه إلى خادم خاص تشاركه مع بوتات جهات اتصالك والصق الرمز ومعرّف القناة. استخدم بوتًا يقرؤه Conest فقط.",
+  "discordBotTokenField": "رمز البوت",
+  "discordChannelField": "معرّف القناة",
+  "discordChangeBot": "تغيير البوت"
 }

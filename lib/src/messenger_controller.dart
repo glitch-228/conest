@@ -93,6 +93,8 @@ import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
+import 'discord/discord_api.dart';
+import 'discord/discord_carrier.dart';
 import 'telegram/td_engine.dart';
 import 'telegram/telegram_api_keys.dart';
 import 'telegram/telegram_bot_api.dart';
@@ -595,11 +597,13 @@ class MessengerController extends ChangeNotifier {
     EnergyPolicy? energyPolicy,
     XmppNetwork? xmppNetwork,
     TelegramNetwork? telegramNetwork,
+    DiscordNetwork? discordNetwork,
     TelegramApiKeys? telegramApiKeys,
     TdEngine? Function()? tdEngineFactory,
     Future<Directory> Function()? telegramDirectory,
   }) : _xmppNetwork = xmppNetwork ?? const XmppNetwork(),
        _telegramNetwork = telegramNetwork ?? const TelegramNetwork(),
+       _discordNetwork = discordNetwork ?? const DiscordNetwork(),
        _telegramApiKeys = telegramApiKeys ?? TelegramApiKeys.fromEnvironment(),
        _tdEngineFactory = tdEngineFactory ?? NativeTdEngine.tryCreate,
        _telegramDirectoryProvider =
@@ -722,6 +726,7 @@ class MessengerController extends ChangeNotifier {
   bool _torApiResolved;
   final XmppNetwork _xmppNetwork;
   final TelegramNetwork _telegramNetwork;
+  final DiscordNetwork _discordNetwork;
   final TelegramApiKeys? _telegramApiKeys;
   final TdEngine? Function() _tdEngineFactory;
   final Future<Directory> Function() _telegramDirectoryProvider;
@@ -5347,6 +5352,10 @@ class MessengerController extends ChangeNotifier {
         !_carrierTransports.containsKey(TransportKind.telegram)) {
       await _startTelegramCarrier(advertise: false);
     }
+    if (discordBotConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.discord)) {
+      await _startDiscordCarrier(advertise: false);
+    }
   }
 
   /// Tor through Arti in the native library, looked up once.
@@ -5712,6 +5721,70 @@ class MessengerController extends ChangeNotifier {
     _telegramChannel = channel;
     await registerCarrierTransport(adapter, advertise: advertise);
   }
+
+  // Discord bot carrier (M31): a bot the user made, whose token is kept in
+  // the vault. The carrier never uses a user account token.
+
+  /// The Discord bot carrier's saved bot, if set up.
+  DiscordBotConfig? get discordBotConfig => DiscordBotConfig.fromJson(
+    _snapshot.carrierAccounts[TransportKind.discord.name],
+  );
+
+  /// The running Discord bot connection, for its state in settings.
+  DiscordCarrierChannel? get discordChannel => _discordChannel;
+  DiscordCarrierChannel? _discordChannel;
+
+  /// Reaches contacts through the bot with [token], in the private channel
+  /// [channelId] that the contacts' bots can also see. Returns the address.
+  Future<String> enableDiscordCarrier(String token, String channelId) async {
+    _requireIdentity();
+    if (!_carrierAllowed(TransportKind.discord)) {
+      throw StateError('Turn on Online and Discord in Connectivity first.');
+    }
+    final config = await checkDiscordBot(token, channelId, _discordNetwork);
+    await unregisterCarrierTransport(TransportKind.discord);
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.discord.name: config.toJson(),
+      },
+    );
+    await _persist('Discord bot carrier set up.');
+    await _startDiscordCarrier();
+    return config.address;
+  }
+
+  /// Stops the Discord bot carrier and forgets the bot token here.
+  Future<void> disableDiscordCarrier() async {
+    await unregisterCarrierTransport(TransportKind.discord);
+    _discordChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.discord.name),
+    );
+    await _persist('Discord bot carrier removed.');
+  }
+
+  Future<void> _startDiscordCarrier({bool advertise = true}) async {
+    final config = discordBotConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.discord] ??
+        createDiscordCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = DiscordCarrierChannel(
+      config: config,
+      api: _discordNetwork.api(config.token, DiscordAuth.bot),
+      pollInterval: _discordNetwork.pollInterval,
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+      log: (line) => appendDebugLog(line),
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _discordChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
 
   // Telegram client (M30): the user's own account through TDLib, beside
   // Conest's chats or alone in Telegram-only mode. The session lives in
@@ -8592,6 +8665,14 @@ class MessengerController extends ChangeNotifier {
             ready: false,
             address: adapter.status.address,
             lastError: xmpp.lastError ?? xmpp.state.name,
+          ),
+        final DiscordCarrierChannel discord
+            when discord.state != DiscordCarrierState.connected =>
+          CarrierStatus(
+            kind: adapter.kind,
+            ready: false,
+            address: adapter.status.address,
+            lastError: discord.lastError ?? discord.state.name,
           ),
         // The bot's name is the address from the start: ready while polling.
         final TelegramCarrierChannel telegram
@@ -30951,6 +31032,7 @@ class MessengerController extends ChangeNotifier {
     TransportKind.tor,
     TransportKind.xmpp,
     TransportKind.telegram,
+    TransportKind.discord,
     // Through the target's inbox (bitchatInboxKey): its pair ids need keys
     // it does not have before the request.
     TransportKind.bitchat,
@@ -30991,6 +31073,7 @@ class MessengerController extends ChangeNotifier {
     TransportKind.deltaChat,
     TransportKind.matrix,
     TransportKind.telegram,
+    TransportKind.discord,
   };
 
   /// The carrier addresses this device publishes to members of its groups.
@@ -36123,6 +36206,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.groupFileRelayV1,
       ApplicationCapability.xmppCarrierV1,
       ApplicationCapability.telegramCarrierV1,
+      ApplicationCapability.discordCarrierV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,

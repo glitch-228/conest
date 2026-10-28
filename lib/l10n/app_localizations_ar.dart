@@ -6288,4 +6288,24 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get onbTelegramInstead => 'استخدمه كعميل تيليجرام بدلًا من ذلك';
+
+  @override
+  String get routeDiscordDescription =>
+      'يُنقل عبر بوتات ديسكورد، ومشفّر من طرف إلى طرف بواسطة Conest؛ يرى ديسكورد البوتين والوقت.';
+
+  @override
+  String get discordCarrierSubtitle => 'نقل الرسائل عبر بوت ديسكورد أنشأته';
+
+  @override
+  String get discordBotHelp =>
+      'أنشئ بوتًا في بوابة مطوري ديسكورد وأضفه إلى خادم خاص تشاركه مع بوتات جهات اتصالك والصق الرمز ومعرّف القناة. استخدم بوتًا يقرؤه Conest فقط.';
+
+  @override
+  String get discordBotTokenField => 'رمز البوت';
+
+  @override
+  String get discordChannelField => 'معرّف القناة';
+
+  @override
+  String get discordChangeBot => 'تغيير البوت';
 }

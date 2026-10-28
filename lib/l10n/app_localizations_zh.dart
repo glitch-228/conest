@@ -5893,4 +5893,24 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get onbTelegramInstead => '改用作 Telegram 客户端';
+
+  @override
+  String get routeDiscordDescription =>
+      '通过 Discord 机器人传送，仍由 Conest 端到端加密；Discord 能看到两个机器人以及时间。';
+
+  @override
+  String get discordCarrierSubtitle => '通过你创建的 Discord 机器人传送消息';
+
+  @override
+  String get discordBotHelp =>
+      '在 Discord 开发者门户创建机器人，把它加入你与联系人的机器人共用的私人服务器，然后粘贴令牌和该频道的 ID。该机器人只供 Conest 使用。';
+
+  @override
+  String get discordBotTokenField => '机器人令牌';
+
+  @override
+  String get discordChannelField => '频道 ID';
+
+  @override
+  String get discordChangeBot => '更换机器人';
 }

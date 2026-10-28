@@ -23,6 +23,9 @@ enum TransportKind {
 
   /// A Telegram bot (bot-to-bot messages) carrying frames (M30).
   telegram,
+
+  /// A Discord bot posting frames in a private channel (M31).
+  discord,
 }
 
 enum TransportPolicy { automatic, preferred, disabled, askBeforeUse }
@@ -60,6 +63,7 @@ extension TransportKindLabel on TransportKind {
     TransportKind.tor => 'Tor',
     TransportKind.xmpp => 'XMPP',
     TransportKind.telegram => 'Telegram',
+    TransportKind.discord => 'Discord',
   };
 }
 
@@ -74,7 +78,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.nostr ||
     TransportKind.tor ||
     TransportKind.xmpp ||
-    TransportKind.telegram => true,
+    TransportKind.telegram ||
+    TransportKind.discord => true,
     _ => false,
   };
 
@@ -90,7 +95,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.bitchat ||
     TransportKind.tor ||
     TransportKind.xmpp ||
-    TransportKind.telegram => true,
+    TransportKind.telegram ||
+    TransportKind.discord => true,
     _ => false,
   };
 
@@ -121,7 +127,8 @@ extension TransportKindTraits on TransportKind {
     TransportKind.bitchat ||
     TransportKind.tor ||
     TransportKind.xmpp ||
-    TransportKind.telegram => true,
+    TransportKind.telegram ||
+    TransportKind.discord => true,
     _ => false,
   };
 
@@ -137,6 +144,7 @@ extension TransportKindTraits on TransportKind {
     TransportKind.deltaChat => 32,
     TransportKind.xmpp => 33,
     TransportKind.telegram => 34,
+    TransportKind.discord => 35,
     TransportKind.bitchat => 40,
     TransportKind.reticulum ||
     TransportKind.meshtastic ||

@@ -124,6 +124,9 @@ import 'support/fake_rns_bus.dart';
 import 'support/fake_tor.dart';
 import 'support/fake_xmpp_server.dart';
 import 'support/fake_telegram_bots.dart';
+import 'support/fake_discord.dart';
+import 'package:conest/src/discord/discord_api.dart';
+import 'package:conest/src/discord/discord_carrier.dart';
 import 'package:conest/src/telegram/td_engine.dart';
 import 'package:conest/src/telegram/telegram_api_keys.dart';
 import 'package:conest/src/telegram/telegram_client.dart';
@@ -143,6 +146,7 @@ part 'delta_controller_content_tests.dart';
 part 'l10n_controller_cases.dart';
 part 'xmpp_controller_cases.dart';
 part 'telegram_controller_cases.dart';
+part 'discord_controller_cases.dart';
 
 final _unreachableXmppNetwork = XmppNetwork(
   connector: (host, port, {required tls, alpn}) =>
@@ -151,6 +155,8 @@ final _unreachableXmppNetwork = XmppNetwork(
       Future.error(const SocketException('no XMPP in tests')),
   webSocketLookup: null,
 );
+
+final _unreachableDiscordNetwork = FakeDiscord().network;
 
 final _unreachableTelegramNetwork = TelegramNetwork(
   botApi: (token) => FakeTelegramBots().network.botApi(token),
@@ -1170,6 +1176,7 @@ Future<MessengerController> _createController({
   bool keepErrorHistory = false,
   XmppNetwork? xmppNetwork,
   TelegramNetwork? telegramNetwork,
+  DiscordNetwork? discordNetwork,
   TelegramApiKeys? telegramApiKeys,
   TdEngine? Function()? tdEngineFactory,
   Future<Directory> Function()? telegramDirectory,
@@ -1181,6 +1188,7 @@ Future<MessengerController> _createController({
     // No real Telegram is ever contacted from tests (an empty hub: every
     // token is refused).
     telegramNetwork: telegramNetwork ?? _unreachableTelegramNetwork,
+    discordNetwork: discordNetwork ?? _unreachableDiscordNetwork,
     // The Telegram client is off unless a test gives it keys and an engine.
     telegramApiKeys: telegramApiKeys,
     tdEngineFactory: tdEngineFactory ?? () => null,
@@ -1532,6 +1540,7 @@ void main() {
   _localizationControllerTests();
   _xmppControllerTests();
   _telegramControllerTests();
+  _discordControllerTests();
   test('a desktop notifies only while Conest is not in front', () async {
     final relay = _FakeRelayClient();
     final recorder = _RecordingPlatformBridge();

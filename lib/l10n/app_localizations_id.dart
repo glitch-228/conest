@@ -6148,4 +6148,25 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get onbTelegramInstead => 'Pakai sebagai klien Telegram saja';
+
+  @override
+  String get routeDiscordDescription =>
+      'Dibawa oleh bot Discord, tetap dienkripsi ujung ke ujung oleh Conest; Discord melihat kedua bot dan waktunya.';
+
+  @override
+  String get discordCarrierSubtitle =>
+      'Bawa pesan lewat bot Discord yang Anda buat';
+
+  @override
+  String get discordBotHelp =>
+      'Buat bot di portal pengembang Discord, tambahkan ke server pribadi yang dipakai bersama bot kontak Anda, lalu tempel token dan id kanalnya. Pakai bot yang hanya dibaca Conest.';
+
+  @override
+  String get discordBotTokenField => 'Token bot';
+
+  @override
+  String get discordChannelField => 'Id kanal';
+
+  @override
+  String get discordChangeBot => 'Ganti bot';
 }

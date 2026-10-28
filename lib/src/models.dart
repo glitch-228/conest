@@ -698,6 +698,7 @@ class GlobalConnectivityPreferences {
       TransportKind.tor: TransportPolicy.automatic,
       TransportKind.xmpp: TransportPolicy.automatic,
       TransportKind.telegram: TransportPolicy.automatic,
+      TransportKind.discord: TransportPolicy.automatic,
     },
   });
 
@@ -849,6 +850,7 @@ class ContactRoutingPreferences {
       TransportKind.tor: TransportPolicy.automatic,
       TransportKind.xmpp: TransportPolicy.automatic,
       TransportKind.telegram: TransportPolicy.automatic,
+      TransportKind.discord: TransportPolicy.automatic,
     },
   });
 
@@ -2707,7 +2709,10 @@ enum MessageRoute {
   xmppCarrier,
 
   /// Sealed and carried by a Telegram bot.
-  telegramCarrier;
+  telegramCarrier,
+
+  /// Sealed and carried by a Discord bot.
+  discordCarrier;
 
   String get label => switch (this) {
     lanDirect => 'LAN direct',
@@ -2730,6 +2735,7 @@ enum MessageRoute {
     viaOwnDevice => 'Via your other device',
     xmppCarrier => 'XMPP',
     telegramCarrier => 'Telegram',
+    discordCarrier => 'Discord',
   };
 
   String get description => switch (this) {
@@ -2784,6 +2790,9 @@ enum MessageRoute {
     telegramCarrier =>
       'Carried by Telegram bots, still end-to-end encrypted by '
           'Conest; Telegram sees both bots and when.',
+    discordCarrier =>
+      'Carried by Discord bots, still end-to-end encrypted by '
+          'Conest; Discord sees both bots and when.',
   };
 
   /// The carrier this route goes over, if it is one.
@@ -2807,6 +2816,7 @@ enum MessageRoute {
     TransportKind.tor => torOnion,
     TransportKind.xmpp => xmppCarrier,
     TransportKind.telegram => telegramCarrier,
+    TransportKind.discord => discordCarrier,
     _ => null,
   };
 

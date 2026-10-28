@@ -1624,5 +1624,11 @@
   "telegramPermCommands": "добавлять команды",
   "telegramDownloads": "Загрузки",
   "telegramLoadOlder": "Загрузить более старые сообщения",
-  "onbTelegramInstead": "Использовать как клиент Telegram"
+  "onbTelegramInstead": "Использовать как клиент Telegram",
+  "routeDiscordDescription": "Передаётся ботами Discord, по-прежнему со сквозным шифрованием Conest; Discord видит обоих ботов и время.",
+  "discordCarrierSubtitle": "Передавать сообщения через созданного вами бота Discord",
+  "discordBotHelp": "Создайте бота на портале разработчиков Discord, добавьте его на закрытый сервер, общий с ботами ваших контактов, и вставьте токен и id канала. Бот должен использоваться только Conest.",
+  "discordBotTokenField": "Токен бота",
+  "discordChannelField": "Id канала",
+  "discordChangeBot": "Сменить бота"
 }

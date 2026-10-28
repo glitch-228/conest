@@ -6161,4 +6161,25 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get onbTelegramInstead => 'Use as a Telegram client instead';
+
+  @override
+  String get routeDiscordDescription =>
+      'Carried by Discord bots, still end-to-end encrypted by Conest; Discord sees both bots and when.';
+
+  @override
+  String get discordCarrierSubtitle =>
+      'Carry messages through a Discord bot you made';
+
+  @override
+  String get discordBotHelp =>
+      'Make a bot in the Discord developer portal, add it to a private server you share with your contacts\' bots, and paste its token and that channel\'s id. Use a bot only Conest reads.';
+
+  @override
+  String get discordBotTokenField => 'Bot token';
+
+  @override
+  String get discordChannelField => 'Channel id';
+
+  @override
+  String get discordChangeBot => 'Change bot';
 }

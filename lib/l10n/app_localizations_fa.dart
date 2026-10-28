@@ -6161,4 +6161,25 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get onbTelegramInstead => 'استفاده به‌عنوان کلاینت تلگرام';
+
+  @override
+  String get routeDiscordDescription =>
+      'از طریق ربات‌های دیسکورد منتقل می‌شود و همچنان با رمزنگاری سرتاسری Conest است؛ دیسکورد هر دو ربات و زمان را می‌بیند.';
+
+  @override
+  String get discordCarrierSubtitle =>
+      'انتقال پیام‌ها از طریق رباتی در دیسکورد که ساخته‌اید';
+
+  @override
+  String get discordBotHelp =>
+      'در پورتال توسعه‌دهندگان دیسکورد یک ربات بسازید، آن را به سروری خصوصی که با ربات مخاطبانتان مشترک است اضافه کنید و توکن و شناسه کانال را بچسبانید. رباتی را به کار ببرید که فقط Conest می‌خواند.';
+
+  @override
+  String get discordBotTokenField => 'توکن ربات';
+
+  @override
+  String get discordChannelField => 'شناسه کانال';
+
+  @override
+  String get discordChangeBot => 'تغییر ربات';
 }

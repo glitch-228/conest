@@ -47,6 +47,9 @@ enum ApplicationCapability {
   /// Understands Telegram bot carrier addresses (bot usernames) and frames
   /// (M30).
   telegramCarrierV1,
+
+  /// Understands Discord bot carrier addresses (`botId|channelId`) (M31).
+  discordCarrierV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

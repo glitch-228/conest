@@ -9100,5 +9100,29 @@
   "onbTelegramInstead": "Use as a Telegram client instead",
   "@onbTelegramInstead": {
     "description": "Onboarding: use the app as a Telegram client instead."
+  },
+  "routeDiscordDescription": "Carried by Discord bots, still end-to-end encrypted by Conest; Discord sees both bots and when.",
+  "@routeDiscordDescription": {
+    "description": "Presentation text for message route information: the Discord carrier."
+  },
+  "discordCarrierSubtitle": "Carry messages through a Discord bot you made",
+  "@discordCarrierSubtitle": {
+    "description": "Settings: subtitle of the Discord bot carrier switch."
+  },
+  "discordBotHelp": "Make a bot in the Discord developer portal, add it to a private server you share with your contacts' bots, and paste its token and that channel's id. Use a bot only Conest reads.",
+  "@discordBotHelp": {
+    "description": "Settings: how to set up the Discord bot carrier."
+  },
+  "discordBotTokenField": "Bot token",
+  "@discordBotTokenField": {
+    "description": "Settings: Discord bot token field."
+  },
+  "discordChannelField": "Channel id",
+  "@discordChannelField": {
+    "description": "Settings: Discord channel id field."
+  },
+  "discordChangeBot": "Change bot",
+  "@discordChangeBot": {
+    "description": "Settings: change the Discord bot."
   }
 }

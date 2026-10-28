@@ -1624,5 +1624,11 @@
   "telegramPermCommands": "menambah perintah",
   "telegramDownloads": "Unduhan",
   "telegramLoadOlder": "Muat pesan lebih lama",
-  "onbTelegramInstead": "Pakai sebagai klien Telegram saja"
+  "onbTelegramInstead": "Pakai sebagai klien Telegram saja",
+  "routeDiscordDescription": "Dibawa oleh bot Discord, tetap dienkripsi ujung ke ujung oleh Conest; Discord melihat kedua bot dan waktunya.",
+  "discordCarrierSubtitle": "Bawa pesan lewat bot Discord yang Anda buat",
+  "discordBotHelp": "Buat bot di portal pengembang Discord, tambahkan ke server pribadi yang dipakai bersama bot kontak Anda, lalu tempel token dan id kanalnya. Pakai bot yang hanya dibaca Conest.",
+  "discordBotTokenField": "Token bot",
+  "discordChannelField": "Id kanal",
+  "discordChangeBot": "Ganti bot"
 }

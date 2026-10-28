@@ -6287,4 +6287,25 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get onbTelegramInstead => 'Использовать как клиент Telegram';
+
+  @override
+  String get routeDiscordDescription =>
+      'Передаётся ботами Discord, по-прежнему со сквозным шифрованием Conest; Discord видит обоих ботов и время.';
+
+  @override
+  String get discordCarrierSubtitle =>
+      'Передавать сообщения через созданного вами бота Discord';
+
+  @override
+  String get discordBotHelp =>
+      'Создайте бота на портале разработчиков Discord, добавьте его на закрытый сервер, общий с ботами ваших контактов, и вставьте токен и id канала. Бот должен использоваться только Conest.';
+
+  @override
+  String get discordBotTokenField => 'Токен бота';
+
+  @override
+  String get discordChannelField => 'Id канала';
+
+  @override
+  String get discordChangeBot => 'Сменить бота';
 }

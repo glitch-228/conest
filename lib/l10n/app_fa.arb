@@ -1624,5 +1624,11 @@
   "telegramPermCommands": "افزودن دستورها",
   "telegramDownloads": "دانلودها",
   "telegramLoadOlder": "بارگذاری پیام‌های قدیمی‌تر",
-  "onbTelegramInstead": "استفاده به‌عنوان کلاینت تلگرام"
+  "onbTelegramInstead": "استفاده به‌عنوان کلاینت تلگرام",
+  "routeDiscordDescription": "از طریق ربات‌های دیسکورد منتقل می‌شود و همچنان با رمزنگاری سرتاسری Conest است؛ دیسکورد هر دو ربات و زمان را می‌بیند.",
+  "discordCarrierSubtitle": "انتقال پیام‌ها از طریق رباتی در دیسکورد که ساخته‌اید",
+  "discordBotHelp": "در پورتال توسعه‌دهندگان دیسکورد یک ربات بسازید، آن را به سروری خصوصی که با ربات مخاطبانتان مشترک است اضافه کنید و توکن و شناسه کانال را بچسبانید. رباتی را به کار ببرید که فقط Conest می‌خواند.",
+  "discordBotTokenField": "توکن ربات",
+  "discordChannelField": "شناسه کانال",
+  "discordChangeBot": "تغییر ربات"
 }
