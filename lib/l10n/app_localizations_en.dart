@@ -6354,4 +6354,17 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'Not in use on this network.';
+
+  @override
+  String linkKeepsThisDevice(int chats, int contacts, int groups) {
+    return 'This device keeps its $chats chats, $contacts contacts, $groups groups and settings. Contacts you both have keep the names and routing you chose here. The account\'s contacts, groups and chat history are added.';
+  }
+
+  @override
+  String linkLeavesAccount(int devices) {
+    return 'This device is part of another account with $devices other devices. Linking moves it out of that account. Those devices keep listing it until you remove it there.';
+  }
+
+  @override
+  String get linkLeaveAndContinue => 'Leave that account and continue';
 }

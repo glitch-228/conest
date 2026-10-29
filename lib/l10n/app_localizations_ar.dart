@@ -6479,4 +6479,17 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'غير مستخدم على هذه الشبكة.';
+
+  @override
+  String linkKeepsThisDevice(int chats, int contacts, int groups) {
+    return 'يحتفظ هذا الجهاز بمحادثاته ($chats) وجهات اتصاله ($contacts) ومجموعاته ($groups) وإعداداته. جهات الاتصال المشتركة تحتفظ بالأسماء والمسارات التي اخترتها هنا. تُضاف جهات اتصال الحساب ومجموعاته وسجل محادثاته.';
+  }
+
+  @override
+  String linkLeavesAccount(int devices) {
+    return 'هذا الجهاز جزء من حساب آخر فيه $devices أجهزة أخرى. الربط ينقله خارج ذلك الحساب. تبقى تلك الأجهزة تعرضه حتى تزيله من هناك.';
+  }
+
+  @override
+  String get linkLeaveAndContinue => 'مغادرة ذلك الحساب والمتابعة';
 }

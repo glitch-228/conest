@@ -6075,4 +6075,17 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => '在此网络上未使用。';
+
+  @override
+  String linkKeepsThisDevice(int chats, int contacts, int groups) {
+    return '此设备保留它的 $chats 个聊天、$contacts 个联系人、$groups 个群组和设置。你们共有的联系人保留你在此设置的名称和路线。账号的联系人、群组和聊天记录将被添加。';
+  }
+
+  @override
+  String linkLeavesAccount(int devices) {
+    return '此设备属于另一个有 $devices 台其他设备的账号。关联会把它移出该账号。那些设备会继续列出它，直到你在那里将其移除。';
+  }
+
+  @override
+  String get linkLeaveAndContinue => '退出该账号并继续';
 }

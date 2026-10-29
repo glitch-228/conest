@@ -10264,6 +10264,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Not in use on this network.'**
   String get circumventionIdleHere;
+
+  /// Link dialog: what stays on this device.
+  ///
+  /// In en, this message translates to:
+  /// **'This device keeps its {chats} chats, {contacts} contacts, {groups} groups and settings. Contacts you both have keep the names and routing you chose here. The account\'s contacts, groups and chat history are added.'**
+  String linkKeepsThisDevice(int chats, int contacts, int groups);
+
+  /// Link dialog warning: the device is in another account now.
+  ///
+  /// In en, this message translates to:
+  /// **'This device is part of another account with {devices} other devices. Linking moves it out of that account. Those devices keep listing it until you remove it there.'**
+  String linkLeavesAccount(int devices);
+
+  /// Link dialog button: leave the old account and link.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave that account and continue'**
+  String get linkLeaveAndContinue;
 }
 
 class _AppLocalizationsDelegate

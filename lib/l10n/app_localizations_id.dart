@@ -6349,4 +6349,17 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'Tidak dipakai di jaringan ini.';
+
+  @override
+  String linkKeepsThisDevice(int chats, int contacts, int groups) {
+    return 'Perangkat ini mempertahankan $chats obrolan, $contacts kontak, $groups grup, dan pengaturannya. Kontak yang sama-sama Anda miliki mempertahankan nama dan rute yang Anda pilih di sini. Kontak, grup, dan riwayat obrolan akun ditambahkan.';
+  }
+
+  @override
+  String linkLeavesAccount(int devices) {
+    return 'Perangkat ini bagian dari akun lain dengan $devices perangkat lain. Menautkan memindahkannya keluar dari akun itu. Perangkat tersebut tetap mencantumkannya sampai Anda menghapusnya di sana.';
+  }
+
+  @override
+  String get linkLeaveAndContinue => 'Keluar dari akun itu dan lanjutkan';
 }

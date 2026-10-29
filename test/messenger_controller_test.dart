@@ -20133,6 +20133,156 @@ void main() {
     });
   });
 
+  group('Linking a device that already has data', () {
+    Future<(MessengerController, MessengerController, MessengerController)>
+    make3(List<String> names) async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final list = <MessengerController>[];
+      for (final name in names) {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        list.add(controller);
+      }
+      return (list[0], list[1], list[2]);
+    }
+
+    Future<void> link(
+      MessengerController existing,
+      MessengerController added,
+      List<MessengerController> others, {
+      bool leaveAccount = false,
+    }) async {
+      final qr = await added.startLinkAsNewDevice(
+        leaveCurrentAccount: leaveAccount,
+      );
+      await existing.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => added.linkCode != null && existing.linkCode != null,
+        reason: 'the codes did not show',
+      );
+      await added.confirmLinkCode();
+      await existing.confirmLinkCode();
+      await _waitForIroh(() {
+        for (final c in [existing, added, ...others]) {
+          unawaited(c.pollNow());
+        }
+        return added.linkState == LinkState.linked;
+      }, reason: 'the device was not linked');
+    }
+
+    test('a contact both devices know keeps one chat with every message '
+        'once, and this device\'s own alias for them', () async {
+      final (alice, bob, phone) = await make3(['Alice', 'Bob', 'Phone']);
+      await _pairControllers(alice, bob);
+      await _pairControllers(phone, bob);
+      final bobId = bob.identity!.deviceId;
+      await phone.updateContactProfile(
+        deviceId: bobId,
+        alias: 'Bobby',
+        bio: '',
+      );
+      await phone.updateContactRoutingPreferences(
+        bobId,
+        const ContactRoutingPreferences(carryForContact: true),
+      );
+      await alice.sendMessage(
+        contact: alice.contacts.single,
+        body: 'from alice',
+      );
+      await phone.sendMessage(
+        contact: phone.contacts.single,
+        body: 'from phone',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.messagesFor(alice.identity!.deviceId).isNotEmpty &&
+            bob.messagesFor(phone.identity!.deviceId).isNotEmpty;
+      });
+      await link(alice, phone, [bob]);
+      await _waitForIroh(() {
+        unawaited(phone.pollNow());
+        unawaited(alice.pollNow());
+        return phone.messagesFor(bobId).any((m) => m.body == 'from alice');
+      }, reason: 'the history did not arrive');
+      final mine = phone.contacts.where((c) => c.deviceId == bobId).toList();
+      expect(mine, hasLength(1), reason: 'one record for Bob');
+      expect(mine.single.alias, 'Bobby', reason: 'the device\'s own alias');
+      expect(mine.single.routing.carryForContact, isTrue);
+      final bodies = phone.messagesFor(bobId).map((m) => m.body).toList();
+      expect(bodies.where((b) => b == 'from alice'), hasLength(1));
+      expect(bodies.where((b) => b == 'from phone'), hasLength(1));
+      final ids = phone.messagesFor(bobId).map((m) => m.id).toList();
+      expect(ids.toSet().length, ids.length, reason: 'no duplicates');
+      // Bob knew both devices as separate contacts: now one person with
+      // two devices, in one chat.
+      final aliceId = alice.identity!.deviceId;
+      final phoneId = phone.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.linkedDevicesOf(aliceId).any((d) => d.deviceId == phoneId);
+      }, reason: 'Bob did not learn the phone');
+      expect(bob.contacts.map((c) => c.deviceId), [aliceId]);
+      final atBob = bob.messagesFor(aliceId).map((m) => m.body);
+      expect(atBob, containsAll(['from alice', 'from phone']));
+      expect(
+        bob.messagesFor(phoneId),
+        isEmpty,
+        reason: 'no second chat for the phone',
+      );
+    });
+
+    test('a device that belongs to another account is refused until the '
+        'user confirms leaving it', () async {
+      final (alice, other, phone) = await make3(['Alice', 'Other', 'Phone']);
+      await link(other, phone, [alice]);
+      final oldAccount = phone.identity!.accountId;
+      expect(phone.ownDevices, hasLength(1));
+      expect(phone.deviceLinkPreview().joinsOtherAccount, isTrue);
+      await expectLater(
+        phone.startLinkAsNewDevice(),
+        throwsA(isA<LinkLeavesAccountException>()),
+      );
+      await link(alice, phone, [other], leaveAccount: true);
+      expect(phone.identity!.accountId, alice.identity!.accountId);
+      expect(phone.identity!.accountId, isNot(oldAccount));
+      expect(
+        phone.ownDevices.map((d) => d.deviceId),
+        [alice.identity!.deviceId],
+        reason: 'the old account\'s devices are no longer its own',
+      );
+    });
+
+    test('a group both devices were in is one group, and the link screen '
+        'says what happens first', () async {
+      final (alice, bob, phone) = await make3(['Alice', 'Bob', 'Phone']);
+      await _pairControllers(alice, bob);
+      await _pairControllers(phone, bob);
+      final group = await bob.createGroup(title: 'Both', members: bob.contacts);
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return alice.groups.any((g) => g.groupId == group.groupId) &&
+            phone.groups.any((g) => g.groupId == group.groupId);
+      }, reason: 'both devices should be in the group');
+      final preview = phone.deviceLinkPreview();
+      expect(preview.contacts, 1);
+      expect(preview.groups, 1);
+      expect(preview.joinsOtherAccount, isFalse);
+      await link(alice, phone, [bob]);
+      expect(
+        phone.groups.where((g) => g.groupId == group.groupId),
+        hasLength(1),
+      );
+      final shown = phone.groups.firstWhere((g) => g.groupId == group.groupId);
+      expect(phone.isActiveInGroup(shown), isTrue);
+    });
+  });
+
   group('Accounts with several devices', () {
     Future<
       (
@@ -22569,6 +22719,11 @@ void main() {
       expect(find.text('Laptop'), findsOneWidget);
       expect(find.text('This device'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('link-this-device')));
+      await tester.pump();
+      // First it says what linking does to this device.
+      expect(find.textContaining('keeps its 0 chats'), findsOneWidget);
+      expect(find.byKey(const ValueKey('link-leaves-account')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('link-continue')));
       await tester.pump();
       for (
         var i = 0;

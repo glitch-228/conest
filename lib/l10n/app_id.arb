@@ -1683,5 +1683,8 @@
   "circumventionAlways": "Selalu",
   "circumventionNever": "Mati",
   "circumventionActiveHere": "Dipakai di jaringan ini.",
-  "circumventionIdleHere": "Tidak dipakai di jaringan ini."
+  "circumventionIdleHere": "Tidak dipakai di jaringan ini.",
+  "linkKeepsThisDevice": "Perangkat ini mempertahankan {chats} obrolan, {contacts} kontak, {groups} grup, dan pengaturannya. Kontak yang sama-sama Anda miliki mempertahankan nama dan rute yang Anda pilih di sini. Kontak, grup, dan riwayat obrolan akun ditambahkan.",
+  "linkLeavesAccount": "Perangkat ini bagian dari akun lain dengan {devices} perangkat lain. Menautkan memindahkannya keluar dari akun itu. Perangkat tersebut tetap mencantumkannya sampai Anda menghapusnya di sana.",
+  "linkLeaveAndContinue": "Keluar dari akun itu dan lanjutkan"
 }

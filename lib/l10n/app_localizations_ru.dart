@@ -6486,4 +6486,17 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'Не используется в этой сети.';
+
+  @override
+  String linkKeepsThisDevice(int chats, int contacts, int groups) {
+    return 'На этом устройстве остаются $chats чатов, $contacts контактов, $groups групп и настройки. У общих контактов сохраняются имена и маршруты, выбранные здесь. Контакты, группы и история чатов аккаунта добавляются.';
+  }
+
+  @override
+  String linkLeavesAccount(int devices) {
+    return 'Это устройство входит в другой аккаунт, где есть ещё устройств: $devices. Подключение выведет его из того аккаунта. Те устройства будут показывать его, пока вы не удалите его там.';
+  }
+
+  @override
+  String get linkLeaveAndContinue => 'Выйти из того аккаунта и продолжить';
 }

@@ -366,17 +366,46 @@ class LinkNewDeviceDialog extends StatefulWidget {
 class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
   String? _qr;
 
-  @override
-  void initState() {
-    super.initState();
+  /// The user read what linking does to this device and agreed.
+  bool _started = false;
+
+  void _start({bool leaveAccount = false}) {
+    setState(() => _started = true);
     // After the first frame: starting notifies listeners, which must not
     // happen while this dialog is being built.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      widget.controller.startLinkAsNewDevice().then((qr) {
-        if (mounted) setState(() => _qr = qr);
-      });
+      widget.controller
+          .startLinkAsNewDevice(leaveCurrentAccount: leaveAccount)
+          .then((qr) {
+            if (mounted) setState(() => _qr = qr);
+          });
     });
+  }
+
+  Widget _beforeLinking(BuildContext context, DeviceLinkPreview preview) {
+    final l10n = l10nOf(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          l10n.linkKeepsThisDevice(
+            preview.chats,
+            preview.contacts,
+            preview.groups,
+          ),
+        ),
+        if (preview.joinsOtherAccount) ...[
+          const SizedBox(height: 12),
+          Text(
+            l10n.linkLeavesAccount(preview.otherAccountDevices),
+            key: const ValueKey('link-leaves-account'),
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
+      ],
+    );
   }
 
   @override
@@ -387,10 +416,12 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
         final state = widget.controller.linkState;
         final code = widget.controller.linkCode;
         final qr = _qr;
+        final preview = widget.controller.deviceLinkPreview();
         return AlertDialog(
           title: Text(l10nOf(context).uiLinkThisDeviceBF5E5C),
           content: SingleChildScrollView(
             child: switch (state) {
+              LinkState.none when !_started => _beforeLinking(context, preview),
               LinkState.linked => Text(
                 l10nOf(context).uiThisDeviceIsNowLinked7EA826,
               ),
@@ -428,6 +459,17 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
             },
           ),
           actions: [
+            if (!_started && state == LinkState.none)
+              FilledButton(
+                key: const ValueKey('link-continue'),
+                onPressed: () =>
+                    _start(leaveAccount: preview.joinsOtherAccount),
+                child: Text(
+                  preview.joinsOtherAccount
+                      ? l10nOf(context).linkLeaveAndContinue
+                      : l10nOf(context).actionContinue,
+                ),
+              ),
             TextButton(
               onPressed: () {
                 if (state != LinkState.linked) widget.controller.cancelLink();

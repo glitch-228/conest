@@ -1683,5 +1683,8 @@
   "circumventionAlways": "始终",
   "circumventionNever": "关闭",
   "circumventionActiveHere": "在此网络上使用中。",
-  "circumventionIdleHere": "在此网络上未使用。"
+  "circumventionIdleHere": "在此网络上未使用。",
+  "linkKeepsThisDevice": "此设备保留它的 {chats} 个聊天、{contacts} 个联系人、{groups} 个群组和设置。你们共有的联系人保留你在此设置的名称和路线。账号的联系人、群组和聊天记录将被添加。",
+  "linkLeavesAccount": "此设备属于另一个有 {devices} 台其他设备的账号。关联会把它移出该账号。那些设备会继续列出它，直到你在那里将其移除。",
+  "linkLeaveAndContinue": "退出该账号并继续"
 }

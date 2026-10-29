@@ -9344,5 +9344,33 @@
   "circumventionIdleHere": "Not in use on this network.",
   "@circumventionIdleHere": {
     "description": "Censorship circumvention: not in use on this network."
+  },
+  "linkKeepsThisDevice": "This device keeps its {chats} chats, {contacts} contacts, {groups} groups and settings. Contacts you both have keep the names and routing you chose here. The account's contacts, groups and chat history are added.",
+  "@linkKeepsThisDevice": {
+    "description": "Link dialog: what stays on this device.",
+    "placeholders": {
+      "chats": {
+        "type": "int"
+      },
+      "contacts": {
+        "type": "int"
+      },
+      "groups": {
+        "type": "int"
+      }
+    }
+  },
+  "linkLeavesAccount": "This device is part of another account with {devices} other devices. Linking moves it out of that account. Those devices keep listing it until you remove it there.",
+  "@linkLeavesAccount": {
+    "description": "Link dialog warning: the device is in another account now.",
+    "placeholders": {
+      "devices": {
+        "type": "int"
+      }
+    }
+  },
+  "linkLeaveAndContinue": "Leave that account and continue",
+  "@linkLeaveAndContinue": {
+    "description": "Link dialog button: leave the old account and link."
   }
 }
