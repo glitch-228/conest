@@ -377,4 +377,20 @@ void main() {
     final long = trouble.keys.singleWhere((k) => k.startsWith('p3: '));
     expect(long.length, lessThanOrEqualTo('p3: send failed: '.length + 60));
   });
+
+  test('each frame starts at a different member', () async {
+    final net = await network(4);
+    await net.connect(net.peers.keys);
+    final before = net.datagrams.length;
+    for (var i = 0; i < 3; i++) {
+      await net.peers['p0']!.service.sendAudio(Uint8List.fromList([i]));
+    }
+    final sent = net.datagrams.skip(before).where((d) => d.sender == 'p0');
+    final firsts = <String>{};
+    for (var i = 0; i + 2 < sent.length; i += 3) {
+      firsts.add(sent.elementAt(i).recipient);
+    }
+    expect(sent.length, 9);
+    expect(firsts.length, greaterThan(1));
+  });
 }

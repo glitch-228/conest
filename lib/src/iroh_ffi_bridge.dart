@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'iroh_transport.dart';
 
@@ -486,18 +487,30 @@ class FfiNativeIrohBridge
 Future<({Isolate isolate, SendPort port})> _spawnIrohSendWorker(
   String libraryPath,
   int workerIndex,
-) async {
+) => spawnIrohSendWorker(libraryPath, workerIndex);
+
+/// Starts a send worker. A worker that never answers fails after [timeout]
+/// (and is killed), so a respawn cannot hold the media queue forever.
+@visibleForTesting
+Future<({Isolate isolate, SendPort port})> spawnIrohSendWorker(
+  String libraryPath,
+  int workerIndex, {
+  void Function(List<Object?>) entry = _irohSendWorkerMain,
+  Duration timeout = const Duration(seconds: 5),
+}) async {
   final ready = ReceivePort();
-  final isolate = await Isolate.spawn<List<Object?>>(
-    _irohSendWorkerMain,
-    <Object?>[libraryPath, ready.sendPort],
-    debugName: 'conest-iroh-send-$workerIndex',
-  );
+  final isolate = await Isolate.spawn<List<Object?>>(entry, <Object?>[
+    libraryPath,
+    ready.sendPort,
+  ], debugName: 'conest-iroh-send-$workerIndex');
   try {
-    final response = await ready.first;
+    final response = await ready.first.timeout(timeout);
     if (response is SendPort) return (isolate: isolate, port: response);
     isolate.kill(priority: Isolate.immediate);
     throw StateError('Unable to start Iroh send worker: $response');
+  } on TimeoutException {
+    isolate.kill(priority: Isolate.immediate);
+    throw StateError('Iroh send worker did not start in time.');
   } finally {
     ready.close();
   }

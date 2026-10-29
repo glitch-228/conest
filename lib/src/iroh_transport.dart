@@ -335,12 +335,25 @@ class IrohTransportAdapter implements IrohCallMediaAdapter {
       return Future<T>.error(StateError('Iroh media sends backed up.'));
     }
     _datagramsQueued++;
-    final result = _datagramTail.then((_) => job()).whenComplete(() {
-      _datagramsQueued--;
-    });
+    final queuedAt = Stopwatch()..start();
+    final result = _datagramTail
+        .then((_) {
+          // Late audio is worse than lost audio.
+          if (queuedAt.elapsed > maxDatagramQueueWait) {
+            throw StateError('expired frame');
+          }
+          return job();
+        })
+        .whenComplete(() {
+          _datagramsQueued--;
+        });
     _datagramTail = result.then<void>((_) {}, onError: (Object _) {});
     return result;
   }
+
+  /// How long a call datagram may wait for the media worker before it is
+  /// dropped unsent.
+  static const Duration maxDatagramQueueWait = Duration(milliseconds: 50);
 
   @override
   Future<DeliveryReceipt> sendCallDatagram({
