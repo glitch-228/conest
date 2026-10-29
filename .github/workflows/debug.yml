@@ -85,6 +85,8 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
       - run: flutter pub get
+      - name: Verify the device-lab tools (release gate, deadlines, energy)
+        run: python3 -m unittest tool/device_lab/test_gate.py tool/device_lab/test_deadlines.py tool/device_lab/test_energy_summary.py
       - name: Verify desktop Bluetooth links and hostile-input negative checks
         run: |
           flutter test test/desktop_bitchat_links_test.dart

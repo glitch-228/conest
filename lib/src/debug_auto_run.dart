@@ -57,6 +57,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'group_call/group_call_service.dart';
+import 'group_file_download.dart';
 import 'messenger_controller.dart';
 import 'models.dart';
 
@@ -1605,6 +1606,16 @@ List<Map<String, Object?>> _chatReport(
         },
     ],
     'bytes': ?(message.attachment?.sizeBytes ?? message.groupFile?.sizeBytes),
+    // A file that came in: whether all of it is here (the release gate
+    // counts files that never finished).
+    if (!message.outbound && message.attachment != null)
+      'available': controller.attachmentAvailableLocally(
+        message.attachment!.id,
+      ),
+    if (!message.outbound && message.groupFile != null)
+      'available':
+          controller.groupFileDownloadState(message.id) ==
+          GroupFileDownloadState.complete,
     if (!message.outbound)
       'arrivedAt': message.arrivedAt.toUtc().toIso8601String(),
     'recipients': {

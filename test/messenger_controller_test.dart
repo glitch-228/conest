@@ -24874,6 +24874,14 @@ void main() {
         ),
         hasLength(1),
       );
+      // A file that came in says whether all of it is here.
+      final received = [
+        for (final chat in phone['chats'] as List)
+          for (final m in chat['messages'] as List)
+            if (m['outbound'] == false && m['file'] != null) m,
+      ];
+      expect(received.map((m) => m['file']), contains('lab-65536.bin'));
+      expect(received.map((m) => m['available']), everyElement(isTrue));
       expect(phone['events'], isNotEmpty);
     },
     timeout: const Timeout(Duration(minutes: 3)),
