@@ -5,6 +5,8 @@
 mod api;
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
 mod audio;
+#[cfg(target_os = "linux")]
+mod audio_pulse;
 pub mod beam;
 mod crash;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
