@@ -10,6 +10,7 @@ import 'package:conest/src/relay_link.dart';
 import 'package:conest/src/relay_v2/frames.dart';
 import 'package:conest/src/relay_v2/noise_nk.dart';
 import 'package:conest/src/relay_v2/session.dart';
+import 'package:conest/src/relay_v2/subscription_backoff.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -857,4 +858,17 @@ void main() {
     )..add(header(4000, RelayV2FrameType.response, 9));
     expect(foreign.next, throwsFormatException);
   });
+
+  test(
+    'repeated slow-consumer cut-offs wait longer, up to a minute, and a real '
+    'batch starts over',
+    () {
+      final backoff = SubscriptionBackoff();
+      final waits = [for (var i = 0; i < 8; i++) backoff.cutOff('r').inSeconds];
+      expect(waits, [2, 4, 8, 16, 32, 60, 60, 60]);
+      expect(backoff.cutOff('other').inSeconds, 2, reason: 'per route');
+      backoff.delivered('r');
+      expect(backoff.cutOff('r').inSeconds, 2);
+    },
+  );
 }

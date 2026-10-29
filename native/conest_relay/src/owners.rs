@@ -279,61 +279,7 @@ impl RelayState {
         key: [u8; 32],
         source: &str,
     ) -> Result<bool, String> {
-        let day = today();
-        let group = peer_group(source);
-        {
-            let mut owners = self.owners.lock().expect("owner lock should not poison");
-            let lapsed = day.saturating_sub(self.config.ext.owner_idle_days);
-            if let Some(entry) = owners.by_mailbox.get(mailbox)
-                && entry.used_day >= lapsed
-            {
-                return if entry.key == key {
-                    Ok(false)
-                } else {
-                    Err("mailbox is claimed by another key".to_owned())
-                };
-            }
-            if owners.by_mailbox.len() >= self.config.ext.max_owners
-                && !owners.by_mailbox.contains_key(mailbox)
-            {
-                return Err("relay takes no more mailbox claims".to_owned());
-            }
-            owners.claims.retain(|_, (claim_day, _)| *claim_day == day);
-            if owners.claims.len() >= self.config.max_rate_keys
-                && !owners.claims.contains_key(&group)
-            {
-                return Err("mailbox claims are used up for today".to_owned());
-            }
-            let counted = owners.claims.entry(group).or_insert((day, 0));
-            if counted.1 >= self.config.ext.mailbox_claims_per_day {
-                return Err("mailbox claims from this address are used up for today".to_owned());
-            }
-            counted.1 += 1;
-            owners
-                .by_mailbox
-                .insert(
-                    mailbox.to_owned(),
-                    OwnerEntry {
-                        key,
-                        device_key: None,
-                        used_day: day,
-                        claimed_millis: now_millis(),
-                    },
-                );
-        }
-        let database = self
-            .database
-            .lock()
-            .expect("relay database lock should not poison");
-        database
-            .execute(
-                "INSERT OR REPLACE INTO mailbox_owners
-                   (mailbox, auth_key, claimed_millis, used_day)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![mailbox, key.to_vec(), now_millis(), day],
-            )
-            .map_err(|error| format!("recording a mailbox claim: {error}"))?;
-        Ok(true)
+        self.session_claim(mailbox, key, None, source)
     }
 
     /// Whether [request] may run: a claimed mailbox needs its owner's proof
@@ -382,8 +328,13 @@ impl RelayState {
             // Claimed now; past this address's claims, the request still
             // runs as v1 would, and its proof is not remembered (it
             // claimed nothing).
-            if self.claim_mailbox(mailbox, key, source).is_err() {
-                return Ok(());
+            // Someone else claimed it in the meantime: refuse. Past this
+            // address's claim budget the request still runs as v1 would,
+            // and its proof is not remembered (it claimed nothing).
+            match self.claim_mailbox(mailbox, key, source) {
+                Ok(_) => {}
+                Err(error) if error.contains("claimed by another key") => return Err(error),
+                Err(_) => return Ok(()),
             }
         } else {
             self.touch_owner(mailbox);
@@ -531,7 +482,7 @@ impl RelayState {
         key: [u8; 32],
         device: Option<[u8; 32]>,
         source: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let day = today();
         let group = peer_group(source);
         let mut owners = self.owners.lock().expect("owner lock should not poison");
@@ -541,7 +492,8 @@ impl RelayState {
             .get(mailbox)
             .filter(|entry| entry.used_day >= lapsed)
             .cloned();
-        let entry = match existing {
+        let mut charged = false;
+        let entry = match existing.clone() {
             Some(entry) if entry.key == key => {
                 let device_key = match (entry.device_key, device) {
                     (Some(known), Some(given)) if known != given => {
@@ -550,15 +502,22 @@ impl RelayState {
                     (Some(known), _) => Some(known),
                     (None, given) => given,
                 };
-                OwnerEntry {
+                let updated = OwnerEntry {
                     key,
                     device_key,
                     used_day: day,
                     claimed_millis: entry.claimed_millis,
+                };
+                // Nothing changed (the usual proof): no database write; the
+                // day's touch is the only one.
+                if updated.device_key == entry.device_key && entry.used_day == day {
+                    return Ok(false);
                 }
+                updated
             }
             Some(entry) if device.is_some() && entry.device_key.is_none() => {
-                self.charge_claim(&mut owners, &group, day)?;
+                self.check_claim_budget(&owners, &group, day)?;
+                charged = true;
                 OwnerEntry {
                     key,
                     device_key: device,
@@ -573,7 +532,8 @@ impl RelayState {
                 {
                     return Err("relay takes no more mailbox claims".to_owned());
                 }
-                self.charge_claim(&mut owners, &group, day)?;
+                self.check_claim_budget(&owners, &group, day)?;
+                charged = true;
                 OwnerEntry {
                     key,
                     device_key: device,
@@ -583,7 +543,8 @@ impl RelayState {
             }
         };
         // Recorded while the owners lock is still held (owners, then
-        // database: the one order used everywhere).
+        // database; only startup's load_owners takes them the other way,
+        // before anything else runs).
         let database = self
             .database
             .lock()
@@ -602,7 +563,27 @@ impl RelayState {
                 ],
             )
             .map_err(|error| format!("recording a mailbox claim: {error}"))?;
+        drop(database);
+        // Charged only now that the claim is recorded.
+        if charged {
+            let _ = self.charge_claim(&mut owners, &group, day);
+        }
+        let was_new = existing.is_none_or(|old| old.key != key);
         owners.by_mailbox.insert(mailbox.to_owned(), entry);
+        Ok(was_new)
+    }
+
+    fn check_claim_budget(&self, owners: &Owners, group: &str, day: u64) -> Result<(), String> {
+        let counted = owners.claims.get(group).filter(|(claim_day, _)| *claim_day == day);
+        let used = counted.map_or(0, |(_, count)| *count);
+        if counted.is_none()
+            && owners.claims.values().filter(|(d, _)| *d == day).count() >= self.config.max_rate_keys
+        {
+            return Err("mailbox claims are used up for today".to_owned());
+        }
+        if used >= self.config.ext.mailbox_claims_per_day {
+            return Err("mailbox claims from this address are used up for today".to_owned());
+        }
         Ok(())
     }
 
@@ -1229,24 +1210,68 @@ pub(crate) mod tests {
             config,
             crate::identity::RelayIdentity::from_seed_bytes([7_u8; 32]),
         );
-        for id in ["dev-a", "dev-b", "dev-c"] {
+        // Three provisional claims, each from another address.
+        for (index, id) in ["dev-a", "dev-b", "dev-c"].into_iter().enumerate() {
             state
-                .claim_mailbox(id, owner_key(70).verifying_key().to_bytes(), "198.51.100.200")
-                .ok();
+                .claim_mailbox(
+                    id,
+                    owner_key(70).verifying_key().to_bytes(),
+                    &format!("198.51.100.{}", 200 + index),
+                )
+                .expect("a provisional claim");
         }
-        // The provisional claims came from elsewhere; the thief's address
-        // has two claims a day, and each takeover uses one.
+        // The thief's address has two claims a day, and each takeover of a
+        // provisional claim uses one.
         let thief = "198.51.100.9";
         let vouch = Some(owner_key(71).verifying_key().to_bytes());
         let key = owner_key(72).verifying_key().to_bytes();
-        let mut state_ids = Vec::new();
         for id in ["dev-a", "dev-b"] {
             state.session_claim(id, key, vouch, thief).expect("within budget");
-            state_ids.push(id);
         }
-        // The third takeover (a claim that exists) is refused for budget.
+        // The third takeover is refused for budget, and changes nothing.
         let refused = state.session_claim("dev-c", key, vouch, thief).unwrap_err();
         assert!(refused.contains("used up for today"), "{refused}");
+        assert_eq!(
+            state.owner_of("dev-c"),
+            Some(owner_key(70).verifying_key().to_bytes())
+        );
+    }
+
+    #[test]
+    fn a_v1_claim_cannot_undo_a_vouched_takeover_on_disk_and_unchanged_proofs_write_nothing() {
+        let path = std::env::temp_dir().join(format!(
+            "conest-claims-{}-{}.sqlite3",
+            std::process::id(),
+            now_millis()
+        ));
+        let mut config = parity_config();
+        config.database_path = path.clone();
+        let identity = crate::identity::RelayIdentity::from_seed_bytes([7_u8; 32]);
+        let squatter = owner_key(90).verifying_key().to_bytes();
+        let real = owner_key(91).verifying_key().to_bytes();
+        let device = owner_key(92).verifying_key().to_bytes();
+        {
+            let state = RelayState::new(config.clone(), identity.clone());
+            state.claim_mailbox("dev-disk", squatter, "198.51.100.1").unwrap();
+            state
+                .session_claim("dev-disk", real, Some(device), "198.51.100.2")
+                .unwrap();
+            // The squatter's v1 claim arrives afterwards: refused, and the
+            // row on disk stays the vouched one.
+            assert!(state.claim_mailbox("dev-disk", squatter, "198.51.100.1").is_err());
+            // The same proof again writes nothing.
+            let before = state.database.lock().unwrap().total_changes();
+            for _ in 0..5 {
+                state
+                    .session_claim("dev-disk", real, Some(device), "198.51.100.2")
+                    .unwrap();
+            }
+            assert_eq!(state.database.lock().unwrap().total_changes(), before);
+        }
+        let restarted = RelayState::new(config, identity);
+        assert_eq!(restarted.owner_of("dev-disk"), Some(real));
+        assert_eq!(restarted.vouch_status("dev-disk", Some(device)), "matches");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

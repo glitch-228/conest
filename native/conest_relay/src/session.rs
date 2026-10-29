@@ -283,7 +283,8 @@ pub(crate) struct Session {
     /// Set once the session shows it is a real user: it proved a mailbox
     /// whose claim is days old (not a throwaway one; mail stored to one's own
     /// mailbox proves nothing). (Claiming a fresh id with a throwaway key proves nothing.)
-    trusted: std::sync::atomic::AtomicBool,
+    /// ...and which mailbox earned it: lost when that mailbox is taken over.
+    trusted_by: Mutex<Option<String>>,
     /// Mailboxes whose owner proved itself on this session.
     proved: Mutex<ProvedMailboxes>,
 }
@@ -309,7 +310,7 @@ where
         out,
         streams: Mutex::new(HashMap::new()),
         subscriptions: AtomicUsize::new(0),
-        trusted: std::sync::atomic::AtomicBool::new(false),
+        trusted_by: Mutex::new(None),
         proved: Mutex::new(ProvedMailboxes::new()),
     });
     let result = read_frames(&mut reader, &transport, &session).await;
@@ -512,7 +513,13 @@ impl Session {
             return self.run_subscription(stream, &payload).await;
         }
         if action == "mailbox_auth" {
-            return self.prove_mailbox(&payload);
+            // SQLite work: off the async worker threads, like register.
+            let session = Arc::clone(self);
+            return self
+                .state
+                .blocking(move |_| session.prove_mailbox(&payload))
+                .await
+                .unwrap_or_else(|error| error_json(error));
         }
         if action == "register" {
             if !self.state.allow_request(&self.peer) {
@@ -601,7 +608,12 @@ impl Session {
     /// Whether this session has a valid registration token in [payload]'s
     /// request, or showed itself a user (see [Session::trusted]).
     fn session_is_trusted(&self, payload: &[u8]) -> bool {
-        if self.trusted.load(Ordering::Acquire) {
+        let earned = self
+            .trusted_by
+            .lock()
+            .expect("trusted lock should not poison")
+            .clone();
+        if earned.is_some_and(|mailbox| self.has_proved(&mailbox)) {
             return true;
         }
         serde_json::from_slice::<Value>(payload)
@@ -649,7 +661,10 @@ impl Session {
                 // Judged after the claim: a takeover starts the owner's
                 // clock again, so it is never "established" at once.
                 if self.state.owner_is_established(&mailbox, &key) {
-                    self.trusted.store(true, Ordering::Release);
+                    *self
+                        .trusted_by
+                        .lock()
+                        .expect("trusted lock should not poison") = Some(mailbox.clone());
                 }
                 self.proved
                     .lock()
