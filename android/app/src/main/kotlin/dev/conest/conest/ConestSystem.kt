@@ -34,6 +34,9 @@ object ConestSystem {
     private const val GROUP_KEY_MESSAGES = "dev.conest.conest.messages"
     private const val SUMMARY_NOTIFICATION_ID = 0x100b1ade
 
+    /// The error code for a request that needs an activity to ask on.
+    const val NEEDS_SCREEN = "needs_screen"
+
     /// Answers [call] when it needs no activity; false when it does.
     fun handle(context: Context, call: MethodCall, result: MethodChannel.Result): Boolean {
         when (call.method) {
@@ -146,6 +149,15 @@ object ConestSystem {
             "requestBatteryOptimizationExemption" ->
                 result.success(requestBatteryOptimizationExemption(context))
             "deviceManufacturer" -> result.success(Build.MANUFACTURER ?: "")
+            // These need a screen to ask on: without one they say so, never
+            // "not implemented".
+            "requestBluetoothPermissions",
+            "requestVoiceCallMicrophonePermission",
+            "requestNotificationPermission" -> result.error(
+                NEEDS_SCREEN,
+                "Open Conest to allow this.",
+                null
+            )
             else -> return false
         }
         return true

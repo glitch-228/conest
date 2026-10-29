@@ -71,8 +71,23 @@ abstract final class AndroidRadioLinks {
   }
 
   /// Asks for Bluetooth access where Android requires it; true when given.
-  static Future<bool> requestBluetoothPermission() async =>
-      await _system.invokeMethod<bool>('requestBluetoothPermissions') ?? false;
+  ///
+  /// Without a screen (the app runs in the background) Android cannot ask:
+  /// that throws a [StateError] saying to open Conest, not the raw
+  /// platform exception.
+  static Future<bool> requestBluetoothPermission() async {
+    try {
+      return await _system.invokeMethod<bool>('requestBluetoothPermissions') ??
+          false;
+    } on PlatformException catch (error) {
+      if (error.code == 'needs_screen') {
+        throw StateError(error.message ?? 'Open Conest to allow this.');
+      }
+      rethrow;
+    } on MissingPluginException {
+      throw StateError('Open Conest to allow this.');
+    }
+  }
 
   static Future<List<AndroidBleDevice>> scanBle({
     Duration timeout = const Duration(seconds: 5),
