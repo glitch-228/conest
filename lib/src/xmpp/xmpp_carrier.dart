@@ -6,14 +6,17 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../carrier.dart';
+import '../circumvention/circumvention.dart';
 import '../transport_models.dart';
+import 'xmpp_registration.dart';
+import 'xmpp_servers.dart';
 import 'xmpp_session.dart';
 import 'xmpp_socket.dart';
 import 'xmpp_xml.dart';
 
-/// Public servers where Conest can create an account by itself: in-band
-/// registration with only a name and a password, no CAPTCHA (checked
-/// October 2026). Servers close registration from time to time, so setup
+/// A few servers where Conest can create an account by itself, for when
+/// the bundled list (assets/xmpp/servers.json, see [loadXmppServers])
+/// cannot be read. Servers close registration from time to time, so setup
 /// tries them in the order they answer and falls back to "use my account".
 const List<String> defaultXmppServers = [
   'trashserver.net',
@@ -197,6 +200,7 @@ Future<String?> lookupXmppWebSocket(String domain) async {
   final client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 10)
     ..userAgent = null;
+  await Circumvention.instance.configure(client);
   try {
     final request = await client
         .getUrl(Uri.https(domain, '/.well-known/host-meta.json'))
@@ -243,6 +247,87 @@ String? parseHostMetaWebSocket(String json) {
   return null;
 }
 
+/// How a server answered when Conest tried to create an account on it.
+enum XmppServerStatus {
+  /// It did not answer on any port here.
+  noAnswer,
+
+  /// It answered, and does not offer sign-up in the app.
+  closed,
+
+  /// It asks for a CAPTCHA.
+  captcha,
+
+  /// It signs people up on a web page ([XmppServerOutcome.url]).
+  webSignup,
+
+  /// It refused the sign-up (forbidden, a policy).
+  forbidden,
+
+  /// It asks for more than a name and password (an email address).
+  needsMore,
+
+  /// Something else went wrong.
+  failed,
+}
+
+/// What one server answered.
+class XmppServerOutcome {
+  const XmppServerOutcome(this.domain, this.status, {this.url, this.detail});
+
+  final String domain;
+  final XmppServerStatus status;
+
+  /// The web page for [XmppServerStatus.webSignup] (always `https`).
+  final String? url;
+  final String? detail;
+
+  /// For the user, in a word or two.
+  String get summary => switch (status) {
+    XmppServerStatus.noAnswer => 'no answer',
+    XmppServerStatus.closed => 'sign-up closed',
+    XmppServerStatus.captcha =>
+      detail == null ? 'asks for a CAPTCHA' : 'asks for a CAPTCHA ($detail)',
+    XmppServerStatus.webSignup => 'sign-up on its website',
+    XmppServerStatus.forbidden => 'forbidden',
+    XmppServerStatus.needsMore => 'asks for more than a name and password',
+    XmppServerStatus.failed => detail == null ? 'failed' : 'failed ($detail)',
+  };
+}
+
+/// No server let Conest create an account; says what each one answered.
+class XmppAccountCreationException extends StateError {
+  XmppAccountCreationException(Iterable<XmppServerOutcome> outcomes)
+    : outcomes = List.unmodifiable(outcomes),
+      super(_message(outcomes));
+
+  final List<XmppServerOutcome> outcomes;
+
+  /// The servers that sign people up on a web page, with their links.
+  List<XmppServerOutcome> get webSignups => [
+    for (final outcome in outcomes)
+      if (outcome.status == XmppServerStatus.webSignup && outcome.url != null)
+        outcome,
+  ];
+
+  static const int _listed = 8;
+
+  static String _message(Iterable<XmppServerOutcome> outcomes) {
+    final all = outcomes.toList();
+    final shown = all.take(_listed).map((o) => '${o.domain}: ${o.summary}');
+    return 'No XMPP server here lets Conest create an account'
+        '${all.isEmpty ? '' : '. What each one answered: ${shown.join('; ')}'
+                  '${all.length > _listed ? '; and ${all.length - _listed} more' : ''}'}'
+        '. Use your own account.';
+  }
+}
+
+/// Thrown inside the probe for a server that answered without offering
+/// sign-up.
+class _NoRegistration implements Exception {
+  const _NoRegistration();
+}
+
 /// A server that answered the probe: where, and whether it lets Conest
 /// create an account.
 class XmppServerProbe {
@@ -255,7 +340,9 @@ class XmppServerProbe {
 /// Of [domains], the servers that answer here over TLS, fastest first: all
 /// standard ports of a server at once (and its WebSocket when
 /// [webSocketLookup] finds one), a few servers at a time with head starts,
-/// as the chatmail probe does. Stops once [enough] answered.
+/// as the chatmail probe does. Stops once [enough] answered. With
+/// [outcomes], the servers that did not answer, or do not offer sign-up,
+/// are recorded in it.
 Future<List<XmppServerProbe>> reachableXmppServers(
   List<String> domains, {
   XmppSocketConnector connector = connectXmppSocket,
@@ -267,6 +354,7 @@ Future<List<XmppServerProbe>> reachableXmppServers(
   int parallel = 3,
   Duration headStart = const Duration(seconds: 4),
   bool needRegistration = false,
+  Map<String, XmppServerOutcome>? outcomes,
   void Function(String line)? log,
 }) async {
   if (domains.isEmpty) return const [];
@@ -299,6 +387,7 @@ Future<List<XmppServerProbe>> reachableXmppServers(
       final watch = Stopwatch()..start();
       var won = false;
       var outstanding = 0;
+      var withoutSignUp = false;
       void attempt(Future<XmppEndpoint?> endpointFuture) {
         outstanding++;
         endpointFuture
@@ -320,7 +409,7 @@ Future<List<XmppServerProbe>> reachableXmppServers(
               );
               if (won) return;
               if (needRegistration && !features.register) {
-                throw StateError('no in-band registration');
+                throw const _NoRegistration();
               }
               won = true;
               if (!done.isCompleted) {
@@ -337,8 +426,15 @@ Future<List<XmppServerProbe>> reachableXmppServers(
               free();
             })
             .catchError((Object error) {
+              if (error is _NoRegistration) withoutSignUp = true;
               if (--outstanding == 0 && !won) {
                 log?.call('$domain did not answer: $error');
+                outcomes?[domain] = XmppServerOutcome(
+                  domain,
+                  withoutSignUp
+                      ? XmppServerStatus.closed
+                      : XmppServerStatus.noAnswer,
+                );
                 pending--;
                 settle();
                 free();
@@ -375,19 +471,64 @@ Future<List<XmppServerProbe>> reachableXmppServers(
 }
 
 /// Creates an account on the first of [servers] that registers one; returns
-/// its configuration. A taken name is retried with another.
+/// its configuration. A taken name is retried with another. A server that
+/// asks for a CAPTCHA is tried last, and only when there is a
+/// [captchaSolver] to show it to the user. When none works, throws an
+/// [XmppAccountCreationException] saying what each one answered (they are
+/// also left in [outcomes]).
 Future<XmppCarrierConfig> createXmppCarrierAccount(
   List<XmppServerProbe> servers, {
   required String resource,
   XmppSocketConnector connector = connectXmppSocket,
   XmppWebSocketConnector webSocketConnector = connectXmppWebSocket,
+  XmppCaptchaSolver? captchaSolver,
+  Map<String, XmppServerOutcome>? outcomes,
   Random? random,
   void Function(String line)? log,
 }) async {
-  Object? lastError;
-  for (final server in servers) {
-    if (!server.register) continue;
-    for (var attempt = 0; attempt < 3; attempt++) {
+  final answers = outcomes ?? <String, XmppServerOutcome>{};
+  final config = await _registerOnAny(
+    servers,
+    resource: resource,
+    connector: connector,
+    webSocketConnector: webSocketConnector,
+    captchaSolver: captchaSolver,
+    outcomes: answers,
+    random: random,
+    log: log,
+  );
+  if (config != null) return config;
+  throw XmppAccountCreationException(answers.values);
+}
+
+/// One pass over [servers]; the account, or null with [outcomes] filled in.
+Future<XmppCarrierConfig?> _registerOnAny(
+  List<XmppServerProbe> servers, {
+  required String resource,
+  required XmppSocketConnector connector,
+  required XmppWebSocketConnector webSocketConnector,
+  required XmppCaptchaSolver? captchaSolver,
+  required Map<String, XmppServerOutcome> outcomes,
+  Random? random,
+  void Function(String line)? log,
+}) async {
+  Future<XmppCarrierConfig?> attempt(
+    XmppServerProbe server,
+    XmppCaptchaSolver? solver,
+  ) async {
+    var captchaTried = false;
+    final asking = solver == null
+        ? null
+        : (XmppCaptchaChallenge challenge) {
+            captchaTried = true;
+            return solver(challenge);
+          };
+    XmppServerOutcome outcome(
+      XmppServerStatus status, {
+      String? url,
+      String? detail,
+    }) => XmppServerOutcome(server.domain, status, url: url, detail: detail);
+    for (var tries = 0; tries < 3; tries++) {
       final config = XmppCarrierConfig.newAccount(
         server.domain,
         resource: resource,
@@ -402,24 +543,168 @@ Future<XmppCarrierConfig> createXmppCarrierAccount(
           password: config.password,
           connector: connector,
           webSocketConnector: webSocketConnector,
+          captchaSolver: asking,
         );
         log?.call('XMPP: created an account on ${server.domain}');
+        outcomes.remove(server.domain);
         return config;
       } on XmppStanzaError catch (error) {
-        lastError = error;
         log?.call('XMPP: ${server.domain} did not register: $error');
-        if (error.condition != 'conflict') break;
+        if (error.condition == 'conflict') {
+          outcomes[server.domain] = outcome(
+            XmppServerStatus.failed,
+            detail: 'name taken',
+          );
+          continue;
+        }
+        outcomes[server.domain] = switch (error.condition) {
+          'forbidden' ||
+          'registration-required' ||
+          'policy-violation' => outcome(XmppServerStatus.forbidden),
+          'not-allowed' => outcome(XmppServerStatus.closed),
+          // The server took the form and did not like the answer.
+          _ when captchaTried => outcome(
+            XmppServerStatus.captcha,
+            detail: 'answer not accepted',
+          ),
+          _ => outcome(XmppServerStatus.failed, detail: error.condition),
+        };
+        return null;
+      } on XmppRegistrationRedirect catch (error) {
+        log?.call('XMPP: ${server.domain} signs up on its website');
+        outcomes[server.domain] = outcome(
+          XmppServerStatus.webSignup,
+          url: error.url,
+        );
+        return null;
+      } on XmppCaptchaRequired {
+        log?.call('XMPP: ${server.domain} asks for a CAPTCHA');
+        outcomes[server.domain] = outcome(
+          XmppServerStatus.captcha,
+          detail: solver == null ? null : 'not answered',
+        );
+        return null;
+      } on XmppRegistrationNeedsMore catch (error) {
+        log?.call(
+          'XMPP: ${server.domain} also needs ${error.fields.join(', ')}',
+        );
+        outcomes[server.domain] = outcome(
+          XmppServerStatus.needsMore,
+          detail: error.fields.isEmpty ? null : error.fields.join(', '),
+        );
+        return null;
       } catch (error) {
-        lastError = error;
         log?.call('XMPP: ${server.domain} did not register: $error');
-        break;
+        outcomes[server.domain] = outcome(
+          XmppServerStatus.failed,
+          detail: error is XmppProtocolException ? error.message : null,
+        );
+        return null;
       }
     }
+    return null;
   }
-  throw StateError(
-    'No XMPP server here lets Conest create an account'
-    '${lastError == null ? '' : ' ($lastError)'}. Use your own account.',
-  );
+
+  for (final server in servers) {
+    if (!server.register) continue;
+    final config = await attempt(server, null);
+    if (config != null) return config;
+  }
+  if (captchaSolver != null) {
+    for (final server in servers) {
+      if (outcomes[server.domain]?.status != XmppServerStatus.captcha) continue;
+      final config = await attempt(server, captchaSolver);
+      if (config != null) return config;
+    }
+  }
+  return null;
+}
+
+/// Creates an account on one of the public [servers], looking at a few at a
+/// time until one lets Conest in: servers that answer here (over every
+/// port, and through the censorship-circumvention connector when it is in
+/// use), then sign-up in the app. Servers that sign up on a web page, ask
+/// for a CAPTCHA with no [captchaSolver], or refuse are noted for the error
+/// ([XmppAccountCreationException]).
+Future<XmppCarrierConfig> setUpXmppCarrierAccount(
+  List<XmppServerEntry> servers, {
+  required String resource,
+  XmppSocketConnector connector = connectXmppSocket,
+  XmppWebSocketConnector webSocketConnector = connectXmppWebSocket,
+  Future<String?> Function(String domain)? webSocketLookup =
+      lookupXmppWebSocket,
+  XmppCaptchaSolver? captchaSolver,
+  int roundSize = 9,
+  int maxRounds = 3,
+  Duration headStart = const Duration(seconds: 4),
+  Duration probeTimeout = const Duration(seconds: 25),
+  Random? random,
+  void Function(String line)? log,
+}) async {
+  final outcomes = <String, XmppServerOutcome>{};
+  // Web-only servers are not probed: their link is shown if nothing else
+  // works.
+  final webOnly = <XmppServerOutcome>[
+    for (final server in servers)
+      if (server.web case final url?)
+        XmppServerOutcome(server.domain, XmppServerStatus.webSignup, url: url),
+  ];
+  // Those without a CAPTCHA first (the list comes in that order).
+  final inApp = [
+    for (final server in servers)
+      if (server.web == null && !server.captcha) server,
+    for (final server in servers)
+      if (server.web == null && server.captcha) server,
+  ];
+  final tried = <XmppServerProbe>[];
+  for (var round = 0; round < maxRounds; round++) {
+    final batch = [
+      for (final server in inApp.skip(round * roundSize).take(roundSize))
+        server.domain,
+    ];
+    if (batch.isEmpty) break;
+    final probed = await reachableXmppServers(
+      batch,
+      connector: connector,
+      webSocketConnector: webSocketConnector,
+      webSocketLookup: webSocketLookup,
+      needRegistration: true,
+      headStart: headStart,
+      timeout: probeTimeout,
+      outcomes: outcomes,
+      log: log,
+    );
+    tried.addAll(probed);
+    final config = await _registerOnAny(
+      probed,
+      resource: resource,
+      connector: connector,
+      webSocketConnector: webSocketConnector,
+      captchaSolver: null,
+      outcomes: outcomes,
+      random: random,
+      log: log,
+    );
+    if (config != null) return config;
+  }
+  if (captchaSolver != null) {
+    final config = await _registerOnAny(
+      [
+        for (final server in tried)
+          if (outcomes[server.domain]?.status == XmppServerStatus.captcha)
+            server,
+      ],
+      resource: resource,
+      connector: connector,
+      webSocketConnector: webSocketConnector,
+      captchaSolver: captchaSolver,
+      outcomes: outcomes,
+      random: random,
+      log: log,
+    );
+    if (config != null) return config;
+  }
+  throw XmppAccountCreationException([...outcomes.values, ...webOnly]);
 }
 
 /// Checks that [config]'s account signs in, without keeping a connection.
@@ -710,9 +995,14 @@ class XmppNetwork {
     this.connector = connectXmppSocket,
     this.webSocketConnector = connectXmppWebSocket,
     this.webSocketLookup = lookupXmppWebSocket,
+    this.serverList = loadXmppServers,
   });
 
   final XmppSocketConnector connector;
   final XmppWebSocketConnector webSocketConnector;
   final Future<String?> Function(String domain)? webSocketLookup;
+
+  /// The public servers where an account can be created (null: the short
+  /// built-in list).
+  final Future<List<XmppServerEntry>?> Function() serverList;
 }

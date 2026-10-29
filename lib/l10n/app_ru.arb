@@ -1683,5 +1683,9 @@
   "circumventionAlways": "Всегда",
   "circumventionNever": "Выкл.",
   "circumventionActiveHere": "Используется в этой сети.",
-  "circumventionIdleHere": "Не используется в этой сети."
+  "circumventionIdleHere": "Не используется в этой сети.",
+  "xmppCaptchaTitle": "Сервер просит ввести CAPTCHA",
+  "xmppCaptchaAnswerField": "Что написано на картинке",
+  "xmppSignUpOnWebsite": "Эти серверы регистрируют на своём сайте. Зарегистрируйтесь там, затем выберите «Использовать свою учётную запись XMPP».",
+  "xmppOpenWebsite": "Открыть сайт"
 }

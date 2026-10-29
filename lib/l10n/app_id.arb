@@ -1683,5 +1683,9 @@
   "circumventionAlways": "Selalu",
   "circumventionNever": "Mati",
   "circumventionActiveHere": "Dipakai di jaringan ini.",
-  "circumventionIdleHere": "Tidak dipakai di jaringan ini."
+  "circumventionIdleHere": "Tidak dipakai di jaringan ini.",
+  "xmppCaptchaTitle": "Server meminta CAPTCHA",
+  "xmppCaptchaAnswerField": "Isi gambar",
+  "xmppSignUpOnWebsite": "Server ini mendaftarkan akun di situs webnya. Daftar di sana, lalu pilih \"Gunakan akun XMPP saya sendiri\".",
+  "xmppOpenWebsite": "Buka situs"
 }

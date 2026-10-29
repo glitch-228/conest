@@ -1,0 +1,266 @@
+{
+ "source": "https://providers.xmpp.net",
+ "fetched": "2026-10-29",
+ "servers": [
+  {
+   "domain": "chat.between-us.online",
+   "captcha": false
+  },
+  {
+   "domain": "jabber.de",
+   "captcha": false
+  },
+  {
+   "domain": "jabber.vg",
+   "captcha": false
+  },
+  {
+   "domain": "lain.rocks",
+   "captcha": false
+  },
+  {
+   "domain": "xmpp.party",
+   "captcha": false
+  },
+  {
+   "domain": "yax.im",
+   "captcha": false
+  },
+  {
+   "domain": "carnetnoir.fr",
+   "captcha": false
+  },
+  {
+   "domain": "jabber.foo",
+   "captcha": false
+  },
+  {
+   "domain": "jabber-germany.de",
+   "captcha": false
+  },
+  {
+   "domain": "jabber.world",
+   "captcha": false
+  },
+  {
+   "domain": "07f.de",
+   "captcha": true
+  },
+  {
+   "domain": "hookipa.net",
+   "captcha": true
+  },
+  {
+   "domain": "jabjab.de",
+   "captcha": true
+  },
+  {
+   "domain": "magicbroccoli.de",
+   "captcha": true
+  },
+  {
+   "domain": "nixnet.services",
+   "captcha": true
+  },
+  {
+   "domain": "og.im",
+   "captcha": true
+  },
+  {
+   "domain": "openim.nl",
+   "captcha": true
+  },
+  {
+   "domain": "projectsegfau.lt",
+   "captcha": true
+  },
+  {
+   "domain": "priv.vc",
+   "captcha": true
+  },
+  {
+   "domain": "rows.im",
+   "captcha": true
+  },
+  {
+   "domain": "chalec.org",
+   "captcha": true
+  },
+  {
+   "domain": "chapril.org",
+   "captcha": true
+  },
+  {
+   "domain": "chatterboxtown.us",
+   "captcha": true
+  },
+  {
+   "domain": "conversations.im",
+   "captcha": true
+  },
+  {
+   "domain": "jabber.ru",
+   "captcha": true
+  },
+  {
+   "domain": "jabbim.com",
+   "captcha": true
+  },
+  {
+   "domain": "jabbxi.de",
+   "captcha": true
+  },
+  {
+   "domain": "potato.mx",
+   "captcha": true
+  },
+  {
+   "domain": "step.im",
+   "captcha": true
+  },
+  {
+   "domain": "yourdata.forsale",
+   "captcha": true
+  },
+  {
+   "domain": "5222.de",
+   "captcha": false,
+   "web": "https://5222.de/register-on-5222.de/"
+  },
+  {
+   "domain": "anoxinon.me",
+   "captcha": false,
+   "web": "https://anoxinon.de/dienste/anoxinonmessenger/#register"
+  },
+  {
+   "domain": "based.pt",
+   "captcha": false,
+   "web": "https://based.pt/"
+  },
+  {
+   "domain": "draugr.de",
+   "captcha": false,
+   "web": "https://www.draugr.de/registrierung/"
+  },
+  {
+   "domain": "durare.org",
+   "captcha": false,
+   "web": "https://app.formbricks.com/s/cmh2lbx7a06fyad01nbv1i58l"
+  },
+  {
+   "domain": "jabber.hot-chilli.net",
+   "captcha": false,
+   "web": "https://jabber.hot-chilli.net/forms/create/"
+  },
+  {
+   "domain": "monocles.eu",
+   "captcha": false,
+   "web": "https://ocean.monocles.eu/apps/registration/"
+  },
+  {
+   "domain": "movim.eu",
+   "captcha": false,
+   "web": "https://join.movim.eu/register"
+  },
+  {
+   "domain": "psifactor.pl",
+   "captcha": false,
+   "web": "https://psifactor.pl/?go=newaccount"
+  },
+  {
+   "domain": "redlibre.es",
+   "captcha": false,
+   "web": "https://www.redlibre.es/registro/"
+  },
+  {
+   "domain": "suchat.org",
+   "captcha": false,
+   "web": "https://www.suchat.org/crear-una-cuenta/"
+  },
+  {
+   "domain": "woodpeckersnest.space",
+   "captcha": false,
+   "web": "https://xmpp.woodpeckersnest.space/account-register/"
+  },
+  {
+   "domain": "worlio.com",
+   "captcha": false,
+   "web": "https://community.worlio.com/register"
+  },
+  {
+   "domain": "xmpp.is",
+   "captcha": false,
+   "web": "https://xmpp.is/account/register/"
+  },
+  {
+   "domain": "chinwag.im",
+   "captcha": false,
+   "web": "https://xmpp.chinwag.im/register/"
+  },
+  {
+   "domain": "decent.im",
+   "captcha": false,
+   "web": "https://decent.im/register/"
+  },
+  {
+   "domain": "peripheria.org",
+   "captcha": false,
+   "web": "https://www.peripheria.org/creer-un-compte/"
+  },
+  {
+   "domain": "xmp.pm",
+   "captcha": false,
+   "web": "https://xmp.pm/request"
+  },
+  {
+   "domain": "xmpp.lt",
+   "captcha": false,
+   "web": "https://xmpp.lt"
+  },
+  {
+   "domain": "chatrix.one",
+   "captcha": false,
+   "web": "https://chatrix.one/join"
+  },
+  {
+   "domain": "gayfr.live",
+   "captcha": false,
+   "web": "https://gayfr.online/contact"
+  },
+  {
+   "domain": "jabber.club",
+   "captcha": false,
+   "web": "https://jabber.club/register"
+  },
+  {
+   "domain": "jabber.weimarnetz.de",
+   "captcha": false,
+   "web": "https://jabber.weimarnetz.de:5443/register/new"
+  },
+  {
+   "domain": "jix.im",
+   "captcha": false,
+   "web": "https://jix.im/signup/"
+  },
+  {
+   "domain": "liberta.casa",
+   "captcha": false,
+   "web": "https://sso.casa/"
+  },
+  {
+   "domain": "rimkus.it",
+   "captcha": false,
+   "web": "https://rimkus.it/xmpp/register"
+  },
+  {
+   "domain": "xmpp.jp",
+   "captcha": false,
+   "web": "https://www.xmpp.jp/signup"
+  },
+  {
+   "domain": "xmpp.sinelabs.ca",
+   "captcha": false,
+   "web": "https://sinelabs.ca/xmpp"
+  }
+ ]
+}

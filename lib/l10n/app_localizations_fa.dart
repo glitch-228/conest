@@ -6354,4 +6354,17 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'در این شبکه استفاده نمی‌شود.';
+
+  @override
+  String get xmppCaptchaTitle => 'کارساز کپچا می‌خواهد';
+
+  @override
+  String get xmppCaptchaAnswerField => 'آنچه در تصویر نوشته شده';
+
+  @override
+  String get xmppSignUpOnWebsite =>
+      'این کارسازها ثبت‌نام را در وب‌سایت خود انجام می‌دهند. آنجا ثبت‌نام کنید، سپس «استفاده از حساب XMPP خودم» را انتخاب کنید.';
+
+  @override
+  String get xmppOpenWebsite => 'باز کردن وب‌سایت';
 }

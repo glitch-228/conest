@@ -6479,4 +6479,17 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'غير مستخدم على هذه الشبكة.';
+
+  @override
+  String get xmppCaptchaTitle => 'يطلب الخادم رمز CAPTCHA';
+
+  @override
+  String get xmppCaptchaAnswerField => 'ما هو مكتوب في الصورة';
+
+  @override
+  String get xmppSignUpOnWebsite =>
+      'تسجّل هذه الخوادم الحسابات على موقعها. سجّل هناك ثم اختر «استخدام حساب XMPP الخاص بي».';
+
+  @override
+  String get xmppOpenWebsite => 'فتح الموقع';
 }

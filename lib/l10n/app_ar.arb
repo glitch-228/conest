@@ -1683,5 +1683,9 @@
   "circumventionAlways": "دائمًا",
   "circumventionNever": "متوقف",
   "circumventionActiveHere": "قيد الاستخدام على هذه الشبكة.",
-  "circumventionIdleHere": "غير مستخدم على هذه الشبكة."
+  "circumventionIdleHere": "غير مستخدم على هذه الشبكة.",
+  "xmppCaptchaTitle": "يطلب الخادم رمز CAPTCHA",
+  "xmppCaptchaAnswerField": "ما هو مكتوب في الصورة",
+  "xmppSignUpOnWebsite": "تسجّل هذه الخوادم الحسابات على موقعها. سجّل هناك ثم اختر «استخدام حساب XMPP الخاص بي».",
+  "xmppOpenWebsite": "فتح الموقع"
 }

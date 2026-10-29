@@ -1683,5 +1683,9 @@
   "circumventionAlways": "始终",
   "circumventionNever": "关闭",
   "circumventionActiveHere": "在此网络上使用中。",
-  "circumventionIdleHere": "在此网络上未使用。"
+  "circumventionIdleHere": "在此网络上未使用。",
+  "xmppCaptchaTitle": "服务器要求输入验证码",
+  "xmppCaptchaAnswerField": "图片中的字符",
+  "xmppSignUpOnWebsite": "这些服务器在其网站上注册。请先在那里注册，然后选择“使用我自己的 XMPP 账号”。",
+  "xmppOpenWebsite": "打开网站"
 }

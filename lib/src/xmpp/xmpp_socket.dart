@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../circumvention/circumvention.dart';
 import 'xmpp_xml.dart';
 
 /// How a connection to an XMPP server is made.
@@ -142,12 +143,18 @@ Future<XmppByteSocket> connectXmppSocket(
   required bool tls,
   String? alpn,
 }) async {
+  // Through the circumvention connector: the name over DoH and the TLS
+  // greeting in pieces when those are in use here, plain connects otherwise.
   if (!tls) {
     return _IoXmppSocket(
-      await Socket.connect(host, port, timeout: _connectTimeout),
+      await Circumvention.instance.connect(
+        host,
+        port,
+        timeout: _connectTimeout,
+      ),
     );
   }
-  final connecting = SecureSocket.connect(
+  final connecting = Circumvention.instance.secureConnect(
     host,
     port,
     timeout: _connectTimeout,
@@ -165,7 +172,13 @@ Future<XmppByteSocket> connectXmppSocket(
 
 /// Opens a WebSocket with the `xmpp` subprotocol.
 Future<XmppWebSocket> connectXmppWebSocket(Uri url) async {
-  final connecting = WebSocket.connect(url.toString(), protocols: ['xmpp']);
+  final client = HttpClient();
+  await Circumvention.instance.configure(client);
+  final connecting = WebSocket.connect(
+    url.toString(),
+    protocols: ['xmpp'],
+    customClient: client,
+  );
   try {
     final socket = await connecting.timeout(_connectTimeout);
     if (socket.protocol != 'xmpp') {

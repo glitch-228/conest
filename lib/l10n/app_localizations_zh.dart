@@ -6075,4 +6075,17 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => '在此网络上未使用。';
+
+  @override
+  String get xmppCaptchaTitle => '服务器要求输入验证码';
+
+  @override
+  String get xmppCaptchaAnswerField => '图片中的字符';
+
+  @override
+  String get xmppSignUpOnWebsite =>
+      '这些服务器在其网站上注册。请先在那里注册，然后选择“使用我自己的 XMPP 账号”。';
+
+  @override
+  String get xmppOpenWebsite => '打开网站';
 }

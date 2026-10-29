@@ -5,6 +5,7 @@ import 'dart:io' show SocketException;
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'xmpp_registration.dart';
 import 'xmpp_sasl.dart';
 import 'xmpp_socket.dart';
 import 'xmpp_xml.dart';
@@ -340,9 +341,10 @@ Future<void> _authenticate(
 
 /// In-band registration (XEP-0077) of [username] with [password] on the
 /// server behind [endpoint]. Throws [XmppStanzaError] (`conflict` when the
-/// name is taken, `not-allowed` when the server only registers on its web
-/// page) or [XmppProtocolException] when the server needs more than a name
-/// and password (a CAPTCHA).
+/// name is taken, `not-allowed` or `forbidden` when sign-up is closed),
+/// [XmppRegistrationRedirect] when the server registers on its web page,
+/// [XmppCaptchaRequired] when it asks for a CAPTCHA and [captchaSolver] gave
+/// no answer, or [XmppRegistrationNeedsMore] when it needs more than that.
 Future<void> registerXmppAccount({
   required XmppEndpoint endpoint,
   required String domain,
@@ -350,6 +352,7 @@ Future<void> registerXmppAccount({
   required String password,
   XmppSocketConnector connector = connectXmppSocket,
   XmppWebSocketConnector webSocketConnector = connectXmppWebSocket,
+  XmppCaptchaSolver? captchaSolver,
 }) async {
   final wire = await openXmppWire(
     endpoint,
@@ -381,44 +384,45 @@ Future<void> registerXmppAccount({
       }
     }
 
-    final form = await iq(
+    final answer = await iq(
       'get',
       XmppElement('query', xmlns: XmppNs.register),
       'reg1',
     );
-    final query = form.child('query', XmppNs.register);
-    if (query == null ||
-        query.child('username') == null ||
-        query.child('password') == null) {
+    final query = answer.child('query', XmppNs.register);
+    if (query == null) {
       throw const XmppProtocolException(
         'The server needs more than a name and password to register.',
       );
     }
-    // A data form with more required fields (a CAPTCHA, an email) cannot
-    // be filled in automatically.
-    final dataForm = query.child('x', XmppNs.dataForms);
-    if (dataForm != null) {
-      for (final field in dataForm.all('field')) {
-        final name = field.attr('var');
-        if (field.child('required') != null &&
-            name != 'username' &&
-            name != 'password' &&
-            name != 'FORM_TYPE') {
-          throw const XmppProtocolException(
-            'The server needs more than a name and password to register.',
-          );
-        }
+    final form = parseRegistrationForm(query);
+    if (!form.hasNameAndPassword) {
+      // Signing up happens on a web page.
+      if (form.redirect case final url?) throw XmppRegistrationRedirect(url);
+      throw const XmppProtocolException(
+        'The server needs more than a name and password to register.',
+      );
+    }
+    // More required fields (an email address, an invite) cannot be filled
+    // in automatically.
+    if (form.unsupported.isNotEmpty) {
+      throw XmppRegistrationNeedsMore(form.unsupported);
+    }
+    String? captchaAnswer;
+    if (form.captcha case final challenge?) {
+      if (captchaSolver == null) throw const XmppCaptchaRequired();
+      captchaAnswer = (await captchaSolver(challenge))?.trim();
+      if (captchaAnswer == null || captchaAnswer.isEmpty) {
+        throw const XmppCaptchaRequired();
       }
     }
     await iq(
       'set',
-      XmppElement(
-        'query',
-        xmlns: XmppNs.register,
-        children: [
-          XmppElement('username', text: username),
-          XmppElement('password', text: password),
-        ],
+      registrationSubmission(
+        form,
+        username: username,
+        password: password,
+        answer: captchaAnswer,
       ),
       'reg2',
     );

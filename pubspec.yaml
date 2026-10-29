@@ -69,6 +69,7 @@ flutter:
   # Link filters (ClearURLs, embed-fixer list); see assets/filters/SOURCES.md.
   assets:
     - assets/filters/
+    - assets/xmpp/servers.json
   # Signature redesign typography — bundled OFL fonts (offline/deterministic,
   # no runtime fetch). Space Grotesk = display/body, JetBrains Mono = the mono
   # labels/chips/receipts. See assets/fonts/OFL.txt for licenses.

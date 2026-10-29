@@ -5,6 +5,7 @@ import '../messenger_controller.dart';
 import '../network_errors.dart';
 import '../transport_models.dart';
 import '../xmpp/xmpp_carrier.dart';
+import '../xmpp/xmpp_registration.dart';
 import 'carrier_switch.dart';
 
 /// The XMPP carrier in Settings → Connectivity: an account Conest creates
@@ -29,6 +30,9 @@ class _XmppCarrierPanelState extends State<XmppCarrierPanel> {
   bool _editing = false;
   String? _error;
 
+  // Servers that sign people up on a website, after a failed set-up.
+  List<XmppServerOutcome> _webSignups = const [];
+
   @override
   void initState() {
     super.initState();
@@ -52,11 +56,19 @@ class _XmppCarrierPanelState extends State<XmppCarrierPanel> {
     setState(() {
       _busy = true;
       _error = null;
+      _webSignups = const [];
     });
     try {
       await action();
     } catch (error) {
-      if (mounted) setState(() => _error = describeActionError(error));
+      if (mounted) {
+        setState(() {
+          _error = describeActionError(error);
+          if (error is XmppAccountCreationException) {
+            _webSignups = error.webSignups.take(5).toList();
+          }
+        });
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -71,7 +83,8 @@ class _XmppCarrierPanelState extends State<XmppCarrierPanel> {
       );
     } else {
       await widget.controller.enableXmppCarrier(
-        servers: server.isEmpty ? defaultXmppServers : [server],
+        servers: server.isEmpty ? null : [server],
+        captchaSolver: _askCaptcha,
       );
     }
     if (mounted) {
@@ -79,6 +92,66 @@ class _XmppCarrierPanelState extends State<XmppCarrierPanel> {
         _editing = false;
         _password.clear();
       });
+    }
+  }
+
+  /// Shows a server's CAPTCHA picture; what the user typed, or null.
+  Future<String?> _askCaptcha(XmppCaptchaChallenge challenge) async {
+    if (!mounted) return null;
+    final l10n = l10nOf(context);
+    final answer = TextEditingController();
+    try {
+      return await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: Text(l10n.xmppCaptchaTitle),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (challenge.instructions case final text?) ...[
+                Text(text),
+                const SizedBox(height: 8),
+              ],
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 140),
+                child: Image.memory(
+                  challenge.image,
+                  key: const ValueKey('xmpp-captcha-image'),
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const ValueKey('xmpp-captcha-answer'),
+                controller: answer,
+                autofocus: true,
+                autocorrect: false,
+                decoration: InputDecoration(
+                  labelText: l10n.xmppCaptchaAnswerField,
+                  isDense: true,
+                ),
+                onSubmitted: (value) => Navigator.pop(context, value),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(l10n.actionCancel),
+            ),
+            FilledButton(
+              key: const ValueKey('xmpp-captcha-send'),
+              onPressed: () => Navigator.pop(context, answer.text),
+              child: Text(l10n.actionContinue),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      answer.dispose();
     }
   }
 
@@ -212,6 +285,23 @@ class _XmppCarrierPanelState extends State<XmppCarrierPanel> {
         ],
         if (_error != null)
           Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+        if (_webSignups.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(l10n.xmppSignUpOnWebsite),
+          for (final server in _webSignups)
+            ListTile(
+              key: ValueKey('xmpp-web-signup-${server.domain}'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: Text(server.domain),
+              subtitle: SelectableText(server.url!),
+              trailing: TextButton(
+                onPressed: () =>
+                    controller.openExternalUrl(Uri.parse(server.url!)),
+                child: Text(l10n.xmppOpenWebsite),
+              ),
+            ),
+        ],
       ],
     );
   }

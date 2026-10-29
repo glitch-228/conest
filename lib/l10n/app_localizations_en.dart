@@ -6354,4 +6354,17 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'Not in use on this network.';
+
+  @override
+  String get xmppCaptchaTitle => 'The server asks for a CAPTCHA';
+
+  @override
+  String get xmppCaptchaAnswerField => 'What the picture says';
+
+  @override
+  String get xmppSignUpOnWebsite =>
+      'These servers sign you up on a website. Sign up there, then choose \"Use my own XMPP account\".';
+
+  @override
+  String get xmppOpenWebsite => 'Open website';
 }

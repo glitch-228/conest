@@ -1683,5 +1683,9 @@
   "circumventionAlways": "همیشه",
   "circumventionNever": "خاموش",
   "circumventionActiveHere": "در این شبکه در حال استفاده است.",
-  "circumventionIdleHere": "در این شبکه استفاده نمی‌شود."
+  "circumventionIdleHere": "در این شبکه استفاده نمی‌شود.",
+  "xmppCaptchaTitle": "کارساز کپچا می‌خواهد",
+  "xmppCaptchaAnswerField": "آنچه در تصویر نوشته شده",
+  "xmppSignUpOnWebsite": "این کارسازها ثبت‌نام را در وب‌سایت خود انجام می‌دهند. آنجا ثبت‌نام کنید، سپس «استفاده از حساب XMPP خودم» را انتخاب کنید.",
+  "xmppOpenWebsite": "باز کردن وب‌سایت"
 }

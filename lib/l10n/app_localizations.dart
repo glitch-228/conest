@@ -10264,6 +10264,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Not in use on this network.'**
   String get circumventionIdleHere;
+
+  /// Settings, XMPP setup: title of the dialog showing a CAPTCHA picture.
+  ///
+  /// In en, this message translates to:
+  /// **'The server asks for a CAPTCHA'**
+  String get xmppCaptchaTitle;
+
+  /// Settings, XMPP setup: label of the field for the CAPTCHA answer.
+  ///
+  /// In en, this message translates to:
+  /// **'What the picture says'**
+  String get xmppCaptchaAnswerField;
+
+  /// Settings, XMPP setup: shown above links to servers that sign people up on a website.
+  ///
+  /// In en, this message translates to:
+  /// **'These servers sign you up on a website. Sign up there, then choose \"Use my own XMPP account\".'**
+  String get xmppSignUpOnWebsite;
+
+  /// Settings, XMPP setup: button opening a server's sign-up website.
+  ///
+  /// In en, this message translates to:
+  /// **'Open website'**
+  String get xmppOpenWebsite;
 }
 
 class _AppLocalizationsDelegate
