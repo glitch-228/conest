@@ -1225,12 +1225,21 @@ class GroupCallService {
     }
   }
 
+  int _dispatchRotation = 0;
+
   void _dispatchFrame(
     GroupCallRoom room,
     Set<String> recipients,
     Uint8List frame,
   ) {
-    for (final peer in recipients.take(groupCallMaxParticipants)) {
+    // Start at a different member each frame, so when the sends back up
+    // the dropped frames are spread over everyone, not one fixed peer.
+    final order = recipients.take(groupCallMaxParticipants).toList();
+    if (order.length > 1) {
+      final shift = _dispatchRotation++ % order.length;
+      order.setAll(0, [...order.skip(shift), ...order.take(shift)]);
+    }
+    for (final peer in order) {
       if (peer == localDeviceId ||
           !room.participants.any((p) => p.deviceId == peer)) {
         continue;
@@ -1266,9 +1275,9 @@ class GroupCallService {
                   release();
                   GroupCallRoom._count(room.framesSent, peer);
                 },
-                onError: (Object _) {
+                onError: (Object error) {
                   release();
-                  room.noteFrameTrouble(peer, 'send failed');
+                  room.noteFrameTrouble(peer, _sendFailure(error));
                 },
               ),
         );
@@ -1276,6 +1285,18 @@ class GroupCallService {
         release();
       }
     }
+  }
+
+  /// A short, secret-free reason for a failed send: the message of the
+  /// error a transport raised on purpose, else just the kind of error.
+  static String _sendFailure(Object error) {
+    final text = error is StateError
+        ? error.message.toString()
+        : error is TimeoutException
+        ? 'timed out'
+        : error.runtimeType.toString();
+    final clean = text.replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+    return 'send failed: ${clean.length > 60 ? clean.substring(0, 60) : clean}';
   }
 
   Future<void> receiveDatagram(

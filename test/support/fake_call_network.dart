@@ -106,6 +106,9 @@ class FakeCallNetwork {
   final currentMembers = <String>{};
   final unsupported = <String>{};
   final noRoute = <String>{};
+
+  /// Recipients whose datagram sends throw this error.
+  final sendErrors = <String, Object>{};
   final dropped = <String>{};
   final blockedLinks = <(String, String)>{};
   final droppedSignals = <(String, String, String)>{};
@@ -277,6 +280,8 @@ class _Transport implements GroupCallTransport {
     String recipientDeviceId,
     Uint8List bytes,
   ) async {
+    final failure = network.sendErrors[recipientDeviceId];
+    if (failure != null) throw failure;
     final copied = Uint8List.fromList(bytes);
     network.datagrams.add(FakeCallDatagram(sender, recipientDeviceId, copied));
     network.enqueue(

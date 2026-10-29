@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
@@ -360,5 +361,36 @@ void main() {
     expect(sender.framesSent['p1'], 1);
     expect(sender.frameTrouble['p2: no direct route'], 1);
     expect(net.peers['p1']!.service.active!.framesHeard['p0'], 1);
+  });
+
+  test('a failed send records why, short and without secrets', () async {
+    final net = await network(4);
+    await net.connect(net.peers.keys);
+    net.sendErrors['p1'] = StateError('No direct call route.');
+    net.sendErrors['p2'] = TimeoutException('slow');
+    net.sendErrors['p3'] = StateError('secret ' * 40);
+    await net.peers['p0']!.service.sendAudio(Uint8List.fromList([1]));
+    await net.flush();
+    final trouble = net.peers['p0']!.service.active!.frameTrouble;
+    expect(trouble['p1: send failed: No direct call route.'], 1);
+    expect(trouble['p2: send failed: timed out'], 1);
+    final long = trouble.keys.singleWhere((k) => k.startsWith('p3: '));
+    expect(long.length, lessThanOrEqualTo('p3: send failed: '.length + 60));
+  });
+
+  test('each frame starts at a different member', () async {
+    final net = await network(4);
+    await net.connect(net.peers.keys);
+    final before = net.datagrams.length;
+    for (var i = 0; i < 3; i++) {
+      await net.peers['p0']!.service.sendAudio(Uint8List.fromList([i]));
+    }
+    final sent = net.datagrams.skip(before).where((d) => d.sender == 'p0');
+    final firsts = <String>{};
+    for (var i = 0; i + 2 < sent.length; i += 3) {
+      firsts.add(sent.elementAt(i).recipient);
+    }
+    expect(sent.length, 9);
+    expect(firsts.length, greaterThan(1));
   });
 }
