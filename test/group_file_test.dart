@@ -515,4 +515,36 @@ void main() {
       },
     );
   }
+
+  test(
+    'the write queue takes a download window and its hedged pieces',
+    () async {
+      final root = await Directory.systemTemp.createTemp('group-queue-');
+      try {
+        final bytes = Uint8List.fromList([9]);
+        final hash = sha256.convert(bytes).toString();
+        final store = GroupFileStore(
+          root: root,
+          manifest: GroupFileManifest(
+            fileName: 'data',
+            mimeType: 'application/octet-stream',
+            sizeBytes: 1,
+            fileHash: hash,
+            pieceHashes: [hash],
+          ),
+        );
+        // Six at once (four pieces and two hedges) are taken.
+        final writes = [for (var i = 0; i < 6; i++) store.writePiece(0, bytes)];
+        await Future.wait(writes);
+        // A flood beyond the cap is refused.
+        final flood = [
+          for (var i = 0; i < GroupFileStore.maxQueuedWrites + 3; i++)
+            store.writePiece(0, bytes).then((_) => true, onError: (_) => false),
+        ];
+        expect((await Future.wait(flood)).where((ok) => !ok), isNotEmpty);
+      } finally {
+        await root.delete(recursive: true);
+      }
+    },
+  );
 }

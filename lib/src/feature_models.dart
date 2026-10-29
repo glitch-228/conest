@@ -40,6 +40,20 @@ enum ApplicationCapability {
   /// Takes group file frames over relays and Tor too (group_file_part),
   /// not only LAN and Iroh.
   groupFileRelayV1,
+
+  /// Sends a file's blocks over several routes at once (the sender stripes
+  /// them by measured speed); advertised as a fact about this app.
+  multiRouteBlocksV1,
+
+  /// Shows files from the account's other devices and serves its own to
+  /// them (own devices only).
+  ownDeviceFilesV1,
+
+  /// Reserved: groups whose members are accounts (member_device_add).
+  groupAccountsV1,
+
+  /// Reserved: own devices share settings and transports.
+  sharedSettingsV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -23,7 +24,11 @@ class GroupFileDownload {
     required this.allowed,
     required this.authorize,
     this.onChanged,
-  }) : scheduler = GroupFileScheduler(store.manifest);
+    Duration? hedgeMinDelay,
+  }) : scheduler = GroupFileScheduler(
+         store.manifest,
+         minHedgeDelay: hedgeMinDelay ?? const Duration(seconds: 3),
+       );
 
   final GroupFileStore store;
   final GroupFileScheduler scheduler;
@@ -161,7 +166,7 @@ class GroupFileDownload {
         onChanged?.call();
         // Await the full bounded batch before reserving replacements. A timeout
         // must not accumulate unbounded, still-live transport operations.
-        await Future.wait(requests.map(_receive));
+        await Future.wait(requests.map(_receiveHedged));
       }
       if (!_paused && scheduler.complete) {
         completedFile = await store.assemble();
@@ -174,8 +179,69 @@ class GroupFileDownload {
     } finally {
       if (_paused) state = GroupFileDownloadState.paused;
       onChanged?.call();
+      // Requests that lost to another provider end before the session does.
+      await Future.wait(_stragglers.toList());
     }
   }
+
+  /// [request], and a second request for the same piece to another provider
+  /// if the first is late: whichever finishes first counts. Returns once the
+  /// piece is done, or both requests are over. A request that lost the race
+  /// is not waited for here but by the pump when it ends, so no transport
+  /// operation outlives the download (at most [_maxStragglers] run on).
+  Future<void> _receiveHedged(GroupPieceRequest request) {
+    final settled = Completer<void>();
+    var primaryDone = false;
+    var secondDone = true;
+    Timer? timer;
+    final live = <Future<void>>[];
+    void check() {
+      if (settled.isCompleted) return;
+      if (scheduler.isVerified(request.piece) || (primaryDone && secondDone)) {
+        timer?.cancel();
+        settled.complete();
+        for (final loser in live) {
+          _stragglers.add(loser);
+          loser.whenComplete(() => _stragglers.remove(loser));
+        }
+      }
+    }
+
+    final primary = _receive(request);
+    live.add(primary);
+    primary.whenComplete(() {
+      primaryDone = true;
+      live.remove(primary);
+      // Nothing left to wait for the hedge on.
+      if (secondDone) timer?.cancel();
+      check();
+    });
+    timer = Timer(scheduler.hedgeDelayFor(request), () {
+      if (_paused ||
+          settled.isCompleted ||
+          _stragglers.length >= _maxStragglers) {
+        return;
+      }
+      final hedge = scheduler.hedge(
+        request,
+        DateTime.now().toUtc(),
+        allowed: allowed,
+      );
+      if (hedge == null) return;
+      secondDone = false;
+      final second = _receive(hedge);
+      live.add(second);
+      second.whenComplete(() {
+        secondDone = true;
+        live.remove(second);
+        check();
+      });
+    });
+    return settled.future;
+  }
+
+  final Set<Future<void>> _stragglers = {};
+  static const int _maxStragglers = 2;
 
   Future<void> _receive(GroupPieceRequest request) async {
     try {
@@ -186,6 +252,8 @@ class GroupFileDownload {
         return;
       }
       final bytes = await fetch(request);
+      // The piece came from another provider meanwhile: nothing to do.
+      if (!scheduler.isCurrent(request)) return;
       // Authorization may change while data is in flight. Do not commit or
       // advertise those bytes after learning about a removal.
       if (_paused ||
