@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection' show Queue;
 import '../circumvention/circumvention.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -287,9 +288,11 @@ class RelayV2Session {
   @visibleForTesting
   static int pausedBytesLimit = 4 * 1024 * 1024;
   final Map<int, int> _heldBytes = {};
+  final Map<int, Queue<int>> _heldSizes = {};
 
   void _cutOff(int stream, StreamController<Map<String, dynamic>> controller) {
     _heldBytes.remove(stream);
+    _heldSizes.remove(stream);
     if (_subscriptions.remove(stream) == null) return;
     controller
       ..addError(const RelayV2Unavailable('Subscription consumer too slow.'))
@@ -378,10 +381,12 @@ class RelayV2Session {
           // that has paused its subscription and lets events pile up past
           // a bound is cut off with an error instead: it resubscribes, and
           // the relay redelivers what was never acknowledged.
-          if (subscription.isPaused) {
-            final held = (_heldBytes[frame.stream] ?? 0) + frame.payload.length;
-            _heldBytes[frame.stream] = held;
-            if (held > pausedBytesLimit) _cutOff(frame.stream, subscription);
+          // What counts is received minus delivered (see [subscribe]).
+          final held = (_heldBytes[frame.stream] ?? 0) + frame.payload.length;
+          _heldBytes[frame.stream] = held;
+          (_heldSizes[frame.stream] ??= Queue<int>()).add(frame.payload.length);
+          if (subscription.isPaused && held > pausedBytesLimit) {
+            _cutOff(frame.stream, subscription);
           }
         }
       case RelayV2FrameType.ping:
@@ -518,9 +523,9 @@ class RelayV2Session {
           }
         });
       },
-      onResume: () => _heldBytes.remove(id),
       onCancel: () {
         _heldBytes.remove(id);
+        _heldSizes.remove(id);
         if (id != 0 && _subscriptions.remove(id) != null && !_closed) {
           unawaited(
             _send(
@@ -532,7 +537,14 @@ class RelayV2Session {
         }
       },
     );
-    return controller.stream;
+    // Delivery to the listener is what frees an event's bytes.
+    return controller.stream.map((event) {
+      final sizes = _heldSizes[id];
+      if (sizes != null && sizes.isNotEmpty) {
+        _heldBytes[id] = (_heldBytes[id] ?? 0) - sizes.removeFirst();
+      }
+      return event;
+    });
   }
 
   void _fail(Object error) {

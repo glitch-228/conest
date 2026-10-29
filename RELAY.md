@@ -107,6 +107,13 @@ Details worth knowing:
   vouches takes a provisional mailbox over; a vouched claim is never taken
   over. Old devices that never vouch are therefore avoided by new senders
   on relays that keep owners, until they update.
+- Taking over a provisional claim is charged to the taker's address like a
+  claim (`mailbox-claims-per-day`), and happens under one lock together
+  with the vouch, so two sessions cannot leave one's key next to the
+  other's vouch. A session that proved a mailbox loses it the moment the
+  owner changes. **Clients of versions without vouching are not protected
+  against takeover of their mailbox** (their claim is provisional until
+  they vouch): they should update.
 - `mailbox_owner` without `expected_key` still tells whether the mailbox
   is claimed (`other`/`unvouched` versus `unclaimed`): existence is not a
   secret here, only the keys are.

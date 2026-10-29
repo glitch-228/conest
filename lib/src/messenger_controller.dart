@@ -112,6 +112,7 @@ export 'beam_protocol.dart'
         PreparedBeamTransfer,
         conestBeamMaximumPayloadBytes;
 import 'relay_client.dart';
+import 'relay_v2/session.dart' show RelayV2Unavailable;
 import 'relay_link.dart';
 import 'relay_defaults.dart';
 import 'route_health_tracker.dart';
@@ -18359,6 +18360,7 @@ class MessengerController extends ChangeNotifier {
           latency: stopwatch.elapsed,
         );
         stopwatch.reset();
+        _subscriptionCutOffs.remove(route.routeKey);
         final envelopes = batch.envelopes;
         if (envelopes.isNotEmpty) {
           try {
@@ -18405,6 +18407,15 @@ class MessengerController extends ChangeNotifier {
         await Future<void>.delayed(const Duration(seconds: 2));
       }
     } catch (error) {
+      if (error is RelayV2Unavailable && error.message.contains('too slow')) {
+        // This device was the slow one: not the relay's fault, and not to
+        // be retried at once. The wait grows each time, up to a minute.
+        final cutOffs = _subscriptionCutOffs[route.routeKey] =
+            (_subscriptionCutOffs[route.routeKey] ?? 0) + 1;
+        final seconds = (2 << (cutOffs - 1).clamp(0, 5)).clamp(2, 60);
+        await Future<void>.delayed(Duration(seconds: seconds));
+        return;
+      }
       _routeHealthTracker.recordFailure(route, error: error.toString());
       if (_debugBuildId != null) {
         appendDebugLog('Relay subscription to ${route.host} ended: $error');
@@ -18412,6 +18423,9 @@ class MessengerController extends ChangeNotifier {
       await Future<void>.delayed(const Duration(seconds: 2));
     }
   }
+
+  /// How often a subscription was cut off for being slow, by route.
+  final Map<String, int> _subscriptionCutOffs = {};
 
   ConversationRecord _draftConversation(ConversationKind kind, String id) {
     return switch (kind) {

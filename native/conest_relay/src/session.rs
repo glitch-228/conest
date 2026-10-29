@@ -610,11 +610,16 @@ impl Session {
             .is_some_and(|token| self.state.valid_token(&token).is_some())
     }
 
+    /// Whether this session proved [mailbox] with the key that owns it
+    /// now: a session whose mailbox was taken over loses it at once.
     fn has_proved(&self, mailbox: &str) -> bool {
-        self.proved
+        let proved = self
+            .proved
             .lock()
             .expect("proved lock should not poison")
-            .contains(mailbox)
+            .get(mailbox)
+            .copied();
+        proved.is_some_and(|key| self.state.owner_of(mailbox) == Some(key))
     }
 
     /// `{"action":"mailbox_auth","mailbox":…,"auth_key":…,"signature":…}`:
@@ -636,21 +641,20 @@ impl Session {
         {
             return error_json("too many mailboxes on one session");
         }
-        let mailbox_text = request.get("mailbox").and_then(Value::as_str);
-        let owned_before =
-            mailbox_text.is_some_and(|mailbox| self.state.owner_is_established(mailbox));
         match self
             .state
             .authorize_session(&request, &self.handshake_hash, &self.peer)
         {
-            Ok(mailbox) => {
-                if owned_before {
+            Ok((mailbox, key)) => {
+                // Judged after the claim: a takeover starts the owner's
+                // clock again, so it is never "established" at once.
+                if self.state.owner_is_established(&mailbox, &key) {
                     self.trusted.store(true, Ordering::Release);
                 }
                 self.proved
                     .lock()
                     .expect("proved lock should not poison")
-                    .insert(mailbox);
+                    .insert(mailbox, key);
                 json!({"ok": true, "stored": false, "messages": [], "error": null, "stats": null})
             }
             Err(error) => error_json(error),

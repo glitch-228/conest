@@ -21,7 +21,7 @@
 //! takes is end-to-end encrypted). Claims are bounded per address and day,
 //! lapse after a while unused, and new clients claim on first use.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -474,7 +474,7 @@ impl RelayState {
         request: &Value,
         handshake_hash: &[u8],
         source: &str,
-    ) -> Result<String, String> {
+    ) -> Result<(String, [u8; 32]), String> {
         let mailbox = request
             .get("mailbox")
             .and_then(Value::as_str)
@@ -513,91 +513,122 @@ impl RelayState {
             (None, None) => None,
             _ => return Err("a device vouch needs its key and signature".to_owned()),
         };
-        match self.owner_of(mailbox) {
-            Some(owner) if owner == key => self.touch_owner(mailbox),
-            // A claim nobody vouched for (a v1 auto-claim, an old claim) is
-            // provisional: a session that vouches takes the mailbox over.
-            Some(_) if device_key.is_some() && self.is_unvouched(mailbox) => {
-                self.replace_owner(mailbox, key)?;
+        self.session_claim(mailbox, key, device_key, source)?;
+        Ok((mailbox.to_owned(), key))
+    }
+
+    /// A session's claim, vouch or takeover, decided and recorded under one
+    /// lock so two sessions cannot interleave their steps:
+    /// - the owner key proves again (a device vouch is recorded, once);
+    /// - a claim nobody vouched for is provisional, and a vouching session
+    ///   takes it over (charged to the address's claim budget like a claim);
+    /// - a vouched claim is never taken over;
+    /// - an unclaimed mailbox is claimed (vouched at once when it comes
+    ///   with a vouch).
+    fn session_claim(
+        &self,
+        mailbox: &str,
+        key: [u8; 32],
+        device: Option<[u8; 32]>,
+        source: &str,
+    ) -> Result<(), String> {
+        let day = today();
+        let group = peer_group(source);
+        let mut owners = self.owners.lock().expect("owner lock should not poison");
+        let lapsed = day.saturating_sub(self.config.ext.owner_idle_days);
+        let existing = owners
+            .by_mailbox
+            .get(mailbox)
+            .filter(|entry| entry.used_day >= lapsed)
+            .cloned();
+        let entry = match existing {
+            Some(entry) if entry.key == key => {
+                let device_key = match (entry.device_key, device) {
+                    (Some(known), Some(given)) if known != given => {
+                        return Err("mailbox is vouched for by another device key".to_owned());
+                    }
+                    (Some(known), _) => Some(known),
+                    (None, given) => given,
+                };
+                OwnerEntry {
+                    key,
+                    device_key,
+                    used_day: day,
+                    claimed_millis: entry.claimed_millis,
+                }
+            }
+            Some(entry) if device.is_some() && entry.device_key.is_none() => {
+                self.charge_claim(&mut owners, &group, day)?;
+                OwnerEntry {
+                    key,
+                    device_key: device,
+                    used_day: day,
+                    claimed_millis: now_millis(),
+                }
             }
             Some(_) => return Err("mailbox is claimed by another key".to_owned()),
             None => {
-                self.claim_mailbox(mailbox, key, source)?;
+                if owners.by_mailbox.len() >= self.config.ext.max_owners
+                    && !owners.by_mailbox.contains_key(mailbox)
+                {
+                    return Err("relay takes no more mailbox claims".to_owned());
+                }
+                self.charge_claim(&mut owners, &group, day)?;
+                OwnerEntry {
+                    key,
+                    device_key: device,
+                    used_day: day,
+                    claimed_millis: now_millis(),
+                }
             }
-        }
-        if let Some(device) = device_key {
-            self.vouch_device(mailbox, device)?;
-        }
-        Ok(mailbox.to_owned())
-    }
-
-    fn is_unvouched(&self, mailbox: &str) -> bool {
-        self.owners
-            .lock()
-            .expect("owner lock should not poison")
-            .by_mailbox
-            .get(mailbox)
-            .is_some_and(|entry| entry.device_key.is_none())
-    }
-
-    /// A vouching session takes over a mailbox whose claim was never vouched.
-    fn replace_owner(&self, mailbox: &str, key: [u8; 32]) -> Result<(), String> {
-        {
-            let mut owners = self.owners.lock().expect("owner lock should not poison");
-            if let Some(entry) = owners.by_mailbox.get_mut(mailbox) {
-                entry.key = key;
-                entry.device_key = None;
-                entry.used_day = today();
-                entry.claimed_millis = now_millis();
-            }
-        }
+        };
+        // Recorded while the owners lock is still held (owners, then
+        // database: the one order used everywhere).
         let database = self
             .database
             .lock()
             .expect("relay database lock should not poison");
         database
             .execute(
-                "UPDATE mailbox_owners SET auth_key = ?1, device_key = NULL, claimed_millis = ?2, used_day = ?3 WHERE mailbox = ?4",
-                params![key.to_vec(), now_millis(), today(), mailbox],
+                "INSERT OR REPLACE INTO mailbox_owners
+                   (mailbox, auth_key, claimed_millis, used_day, device_key)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    mailbox,
+                    entry.key.to_vec(),
+                    entry.claimed_millis,
+                    entry.used_day,
+                    entry.device_key.map(|key| key.to_vec())
+                ],
             )
-            .map_err(|error| format!("replacing a provisional claim: {error}"))?;
+            .map_err(|error| format!("recording a mailbox claim: {error}"))?;
+        owners.by_mailbox.insert(mailbox.to_owned(), entry);
         Ok(())
     }
 
-    /// Whether [mailbox]'s claim is old enough for its owner's session to
-    /// count as a user's.
-    pub(crate) fn owner_is_established(&self, mailbox: &str) -> bool {
+    /// Counts one claim (or takeover) against [group]'s budget for today.
+    fn charge_claim(&self, owners: &mut Owners, group: &str, day: u64) -> Result<(), String> {
+        owners.claims.retain(|_, (claim_day, _)| *claim_day == day);
+        if owners.claims.len() >= self.config.max_rate_keys && !owners.claims.contains_key(group) {
+            return Err("mailbox claims are used up for today".to_owned());
+        }
+        let counted = owners.claims.entry(group.to_owned()).or_insert((day, 0));
+        if counted.1 >= self.config.ext.mailbox_claims_per_day {
+            return Err("mailbox claims from this address are used up for today".to_owned());
+        }
+        counted.1 += 1;
+        Ok(())
+    }
+
+    /// Whether [key]'s claim on [mailbox] is old enough for its session to
+    /// count as a user's: only time this same key has held it counts (a
+    /// takeover starts the clock again).
+    pub(crate) fn owner_is_established(&self, mailbox: &str, key: &[u8; 32]) -> bool {
         let owners = self.owners.lock().expect("owner lock should not poison");
         owners.by_mailbox.get(mailbox).is_some_and(|entry| {
-            now_millis().saturating_sub(entry.claimed_millis) >= TRUSTED_OWNER_AGE_MILLIS
+            entry.key == *key
+                && now_millis().saturating_sub(entry.claimed_millis) >= TRUSTED_OWNER_AGE_MILLIS
         })
-    }
-
-    /// Records the device key behind [mailbox]'s owner key. The first
-    /// vouch wins; a different one later is refused.
-    fn vouch_device(&self, mailbox: &str, device: [u8; 32]) -> Result<(), String> {
-        {
-            let mut owners = self.owners.lock().expect("owner lock should not poison");
-            let Some(entry) = owners.by_mailbox.get_mut(mailbox) else {
-                return Ok(());
-            };
-            match entry.device_key {
-                Some(known) if known == device => return Ok(()),
-                Some(_) => return Err("mailbox is vouched for by another device key".to_owned()),
-                None => entry.device_key = Some(device),
-            }
-        }
-        let database = self
-            .database
-            .lock()
-            .expect("relay database lock should not poison");
-        database
-            .execute(
-                "UPDATE mailbox_owners SET device_key = ?1 WHERE mailbox = ?2",
-                params![device.to_vec(), mailbox],
-            )
-            .map_err(|error| format!("recording a device vouch: {error}"))?;
-        Ok(())
     }
 
     /// Answers a sender's "does this mailbox belong to [expected]'s
@@ -629,7 +660,8 @@ impl RelayState {
 /// Mailboxes a session proved, bounded.
 pub(crate) const MAX_SESSION_MAILBOXES: usize = 64;
 
-pub(crate) type ProvedMailboxes = HashSet<String>;
+/// The mailboxes a session proved, with the key it proved each with.
+pub(crate) type ProvedMailboxes = std::collections::HashMap<String, [u8; 32]>;
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -1143,5 +1175,121 @@ pub(crate) mod tests {
             .unwrap()
             .claimed_millis -= 60 * 60 * 1000;
         assert_eq!(relay.state.vouch_status("dev-plain", None), "unvouched");
+    }
+
+    #[test]
+    fn racing_takeovers_never_leave_one_sessions_key_with_anothers_vouch() {
+        for round in 0..20_u8 {
+            let state = state();
+            let squatter = owner_key(60).verifying_key().to_bytes();
+            state.claim_mailbox("dev-race", squatter, "198.51.100.1").unwrap();
+            let pairs: Vec<([u8; 32], [u8; 32])> = (0..6_u8)
+                .map(|n| {
+                    (
+                        owner_key(100 + n).verifying_key().to_bytes(),
+                        owner_key(150 + n + round).verifying_key().to_bytes(),
+                    )
+                })
+                .collect();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(pairs.len()));
+            let handles: Vec<_> = pairs
+                .iter()
+                .enumerate()
+                .map(|(n, (key, device))| {
+                    let (state, barrier) = (state.clone(), barrier.clone());
+                    let (key, device) = (*key, *device);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        let _ = state.session_claim(
+                            "dev-race",
+                            key,
+                            Some(device),
+                            &format!("198.51.100.{}", 10 + n),
+                        );
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+            let owners = state.owners.lock().unwrap();
+            let entry = owners.by_mailbox.get("dev-race").unwrap();
+            assert!(
+                pairs.contains(&(entry.key, entry.device_key.unwrap())),
+                "a key was left next to another session's vouch"
+            );
+        }
+    }
+
+    #[test]
+    fn takeovers_are_charged_to_the_claim_budget() {
+        let mut config = parity_config();
+        config.ext.mailbox_claims_per_day = 2;
+        let state = RelayState::new(
+            config,
+            crate::identity::RelayIdentity::from_seed_bytes([7_u8; 32]),
+        );
+        for id in ["dev-a", "dev-b", "dev-c"] {
+            state
+                .claim_mailbox(id, owner_key(70).verifying_key().to_bytes(), "198.51.100.200")
+                .ok();
+        }
+        // The provisional claims came from elsewhere; the thief's address
+        // has two claims a day, and each takeover uses one.
+        let thief = "198.51.100.9";
+        let vouch = Some(owner_key(71).verifying_key().to_bytes());
+        let key = owner_key(72).verifying_key().to_bytes();
+        let mut state_ids = Vec::new();
+        for id in ["dev-a", "dev-b"] {
+            state.session_claim(id, key, vouch, thief).expect("within budget");
+            state_ids.push(id);
+        }
+        // The third takeover (a claim that exists) is refused for budget.
+        let refused = state.session_claim("dev-c", key, vouch, thief).unwrap_err();
+        assert!(refused.contains("used up for today"), "{refused}");
+    }
+
+    #[test]
+    fn a_displaced_session_loses_the_mailbox_and_a_takeover_is_not_established() {
+        let relay = start_tokio(parity_config());
+        let key = relay_public(&relay.state);
+        let identity_public = relay.state.identity.signing_key.verifying_key().to_bytes();
+        // The squatter's session proves a provisional claim made days ago.
+        let squatter = owner_key(80);
+        relay
+            .state
+            .claim_mailbox("dev-moved", squatter.verifying_key().to_bytes(), "198.51.100.5")
+            .unwrap();
+        relay
+            .state
+            .owners
+            .lock()
+            .unwrap()
+            .by_mailbox
+            .get_mut("dev-moved")
+            .unwrap()
+            .claimed_millis -= 5 * 24 * 60 * 60 * 1000;
+        let mut old = TestClient::connect(relay.tcp, &key);
+        let hash = old.handshake_hash.clone();
+        let proved = prove(&mut old, 1, "dev-moved", &squatter, &hash);
+        assert_eq!(proved["ok"], true, "{proved}");
+        old.request(3, &json!({"action": "fetch", "recipient_device_id": "dev-moved"}));
+        assert_eq!(old.next_json().1["ok"], true);
+        // The real device takes the mailbox over, vouching.
+        let mut real = TestClient::connect(relay.tcp, &key);
+        let taken = prove_vouched(
+            &mut real, 1, "dev-moved", &owner_key(81), &owner_key(82), &identity_public,
+        );
+        assert_eq!(taken["ok"], true, "{taken}");
+        // The displaced session can no longer read it...
+        old.request(5, &json!({"action": "fetch", "recipient_device_id": "dev-moved"}));
+        assert_eq!(
+            old.next_json().1["error"],
+            "this mailbox needs its owner's signature"
+        );
+        // ...and the taker is not "established" by the squatter's age.
+        assert!(!relay
+            .state
+            .owner_is_established("dev-moved", &owner_key(81).verifying_key().to_bytes()));
     }
 }
