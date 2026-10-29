@@ -31,6 +31,9 @@ class FakeTdEngine implements TdEngine {
   final List<Map<String, dynamic>> sponsored = [];
   bool closed = false;
   bool failSends = false;
+
+  /// Downloads finish only once this completes (they stay at 40% until then).
+  Completer<void> downloadsFinish = Completer<void>()..complete();
   int _nextId = 1000;
   int _nextLocalId = 1;
   bool _started = false;
@@ -359,21 +362,23 @@ class FakeTdEngine implements TdEngine {
             },
           },
         });
-        Timer(const Duration(milliseconds: 5), () {
-          emit({
-            '@type': 'updateFile',
-            'file': {
-              'id': id,
-              'size': 100,
-              'local': {
-                'path': '/tmp/fake/$id.bin',
-                'is_downloading_active': false,
-                'downloaded_size': 100,
-                'is_downloading_completed': true,
+        unawaited(
+          downloadsFinish.future.then((_) {
+            emit({
+              '@type': 'updateFile',
+              'file': {
+                'id': id,
+                'size': 100,
+                'local': {
+                  'path': '/tmp/fake/$id.bin',
+                  'is_downloading_active': false,
+                  'downloaded_size': 100,
+                  'is_downloading_completed': true,
+                },
               },
-            },
-          });
-        });
+            });
+          }),
+        );
         return {'@type': 'file', 'id': id};
       case 'getChatSponsoredMessages':
         return {'@type': 'sponsoredMessages', 'messages': sponsored};

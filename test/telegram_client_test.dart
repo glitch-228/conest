@@ -439,7 +439,7 @@ void main() {
 
   group('files', () {
     test('a download shows progress, then its path', () async {
-      final (client, _) = await signedIn(
+      final (client, engine) = await signedIn(
         seed: (engine) {
           engine.history[10]!.add(
             FakeTdEngine.message(
@@ -464,9 +464,11 @@ void main() {
           .content
           .file!;
       expect(file.downloaded, isFalse);
+      engine.downloadsFinish = Completer<void>();
       await client.download(file);
       await until(() => client.activeDownloads.isNotEmpty);
       expect(client.activeDownloads.single.downloadedBytes, 40);
+      engine.downloadsFinish.complete();
       await until(
         () => client
             .messagesOf(10)

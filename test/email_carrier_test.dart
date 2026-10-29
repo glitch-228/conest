@@ -143,9 +143,15 @@ void main() {
     // A burst of connections was held back like a port scan on the lab.
     var inFlight = 0;
     var most = 0;
+    // Both ports of a server answer together: one answering frees its slot
+    // while the other may still be connecting, which is not a new server.
+    final answers = <String, Future<void>>{};
     Future<MailSocket> slow(String host) async {
       most = max(most, ++inFlight);
-      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await answers.putIfAbsent(
+        host,
+        () => Future<void>.delayed(const Duration(milliseconds: 150)),
+      );
       inFlight--;
       return server.connect(host, 993, tls: false);
     }
