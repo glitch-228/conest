@@ -109,6 +109,9 @@ class LocalRelayNode {
   final Set<Socket> _attachmentSockets = {};
 
   bool get isRunning => _server != null || _udpSocket != null;
+
+  /// The UDP socket, for tests that close it under the node.
+  RawDatagramSocket? get udpSocketForTesting => _udpSocket;
   int? get port => _port;
 
   /// Start and stop run one at a time: two overlapping starts (a poll and
@@ -144,7 +147,34 @@ class LocalRelayNode {
     }
     _port = port;
     unawaited(_acceptLoop(_server!));
-    _udpSubscription = _udpSocket!.listen(_handleUdpEvent);
+    _listenUdp(_udpSocket!);
+  });
+
+  void _listenUdp(RawDatagramSocket socket) {
+    _udpSubscription = socket.listen(
+      _handleUdpEvent,
+      // A send that fails (an answer too large, or Android blocking a
+      // backgrounded app's network) comes here, not as a throw from send,
+      // and Dart then closes the socket.
+      onError: (Object _) {},
+      onDone: () => unawaited(_udpClosed(socket)),
+    );
+  }
+
+  /// The system closed the UDP socket while the node runs: bind it again,
+  /// or LAN peers asking over UDP get no answer until a restart.
+  Future<void> _udpClosed(RawDatagramSocket socket) => _serialized(() async {
+    final port = _port;
+    if (!identical(_udpSocket, socket) || port == null) return;
+    _udpSocket = null;
+    _udpSubscription = null;
+    try {
+      final again = await RawDatagramSocket.bind(InternetAddress.anyIPv4, port);
+      _udpSocket = again;
+      _listenUdp(again);
+    } on SocketException {
+      // The port went elsewhere; TCP still serves.
+    }
   });
 
   Future<void> stop() => _serialized(_stopNow);
@@ -511,9 +541,8 @@ class LocalRelayNode {
           datagram.port,
         );
       } on SocketException {
-        // The answer is lost, as UDP can be anyway: Android refuses sends
-        // ("Operation not permitted") while it blocks a backgrounded app's
-        // network, and an uncaught throw here ended in the crash log.
+        // The answer is lost, as UDP can be anyway. Most send failures do
+        // not throw here but reach the socket's onError (see _listenUdp).
       }
     }
   }
@@ -527,7 +556,11 @@ class LocalRelayNode {
       if (request is! Map<String, dynamic>) {
         throw const FormatException('UDP relay request must be a JSON object.');
       }
-      return _handleRequest(request, peer: datagram.address.address);
+      return _handleRequest(
+        request,
+        peer: datagram.address.address,
+        answerBytes: maxUdpAnswerBytes,
+      );
     } catch (error) {
       return {
         'ok': false,
@@ -538,9 +571,15 @@ class LocalRelayNode {
     }
   }
 
+  /// The most a UDP answer may hold: one datagram, with room to spare.
+  static const maxUdpAnswerBytes = 60 * 1024;
+
+  /// [answerBytes]: a fetch over UDP takes only the envelopes that fit in
+  /// one answer; the rest stay queued for the next fetch.
   Map<String, dynamic> _handleRequest(
     Map<String, dynamic> request, {
     required String peer,
+    int? answerBytes,
   }) {
     _cleanup();
     if (!_allowRequest(peer)) {
@@ -572,6 +611,7 @@ class LocalRelayNode {
           final messages = _fetch(
             recipientDeviceId,
             limit,
+            maxBytes: answerBytes,
           ).map((envelope) => envelope.toJson()).toList(growable: false);
           return {'ok': true, 'stored': false, 'messages': messages};
         case 'fetch_leased':
@@ -585,6 +625,7 @@ class LocalRelayNode {
             recipientDeviceId,
             limit,
             Duration(milliseconds: leaseMs),
+            maxBytes: answerBytes,
           );
           return {
             'ok': true,
@@ -809,7 +850,11 @@ class LocalRelayNode {
     });
   }
 
-  List<RelayEnvelope> _fetch(String recipientDeviceId, int requestedLimit) {
+  List<RelayEnvelope> _fetch(
+    String recipientDeviceId,
+    int requestedLimit, {
+    int? maxBytes,
+  }) {
     _validateMailboxId(recipientDeviceId);
     final limit = requestedLimit.clamp(1, maxFetchLimit);
     final queue = _queues.putIfAbsent(recipientDeviceId, Queue.new);
@@ -817,8 +862,11 @@ class LocalRelayNode {
     final entries = queue.toList(growable: false);
     queue.clear();
     _releaseExpiredLeases(entries);
+    final fits = _AnswerBudget(maxBytes);
     for (final entry in entries) {
-      if (entry.leaseId == null && messages.length < limit) {
+      if (entry.leaseId == null &&
+          messages.length < limit &&
+          fits.take(entry.envelope)) {
         messages.add(entry.envelope);
         if (entry.envelope.kind == 'pairing_announcement') {
           queue.add(entry);
@@ -847,8 +895,9 @@ class LocalRelayNode {
   (List<RelayEnvelope>, String?) _fetchLeased(
     String recipientDeviceId,
     int requestedLimit,
-    Duration leaseFor,
-  ) {
+    Duration leaseFor, {
+    int? maxBytes,
+  }) {
     _validateMailboxId(recipientDeviceId);
     final limit = requestedLimit.clamp(1, maxFetchLimit);
     final queue = _queues.putIfAbsent(recipientDeviceId, Queue.new);
@@ -860,8 +909,10 @@ class LocalRelayNode {
     final until = _nowProvider().toUtc().add(leaseFor);
     final messages = <RelayEnvelope>[];
     var leased = false;
+    final fits = _AnswerBudget(maxBytes);
     for (final entry in queue) {
       if (entry.leaseId != null || messages.length >= limit) continue;
+      if (!fits.take(entry.envelope)) continue;
       messages.add(entry.envelope);
       if (entry.envelope.kind != 'pairing_announcement') {
         entry
@@ -1122,4 +1173,28 @@ bool isLocalNetworkAddress(String address) {
         (bytes[0] == 192 && bytes[1] == 168);
   }
   return (bytes[0] & 0xfe) == 0xfc;
+}
+
+/// Envelopes taken into one answer while they fit in [maxBytes] (no limit
+/// when null). Once one does not fit, none after it is taken, so the queue
+/// keeps its order.
+class _AnswerBudget {
+  _AnswerBudget(int? maxBytes)
+    : _left = maxBytes == null ? null : maxBytes - 512;
+
+  int? _left;
+  bool _full = false;
+
+  bool take(RelayEnvelope envelope) {
+    final left = _left;
+    if (left == null) return true;
+    if (_full) return false;
+    final size = utf8.encode(jsonEncode(envelope.toJson())).length + 1;
+    if (size > left) {
+      _full = true;
+      return false;
+    }
+    _left = left - size;
+    return true;
+  }
 }
