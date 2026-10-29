@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart' show AssetBundle, rootBundle;
 
+import 'xmpp_registration.dart' show isPublicHttpsUrl;
+
 /// A public XMPP server where an account can be created.
 class XmppServerEntry {
   const XmppServerEntry(this.domain, {this.captcha = false, this.web});
@@ -55,14 +57,7 @@ List<XmppServerEntry> parseXmppServers(String json) {
   return List.unmodifiable(servers);
 }
 
-bool _isHttps(String url) {
-  final uri = Uri.tryParse(url);
-  return url.length <= 512 &&
-      uri != null &&
-      uri.scheme == 'https' &&
-      uri.host.isNotEmpty &&
-      uri.userInfo.isEmpty;
-}
+bool _isHttps(String url) => isPublicHttpsUrl(url);
 
 /// The bundled list; null when it cannot be read.
 Future<List<XmppServerEntry>?> loadXmppServers({AssetBundle? bundle}) async {

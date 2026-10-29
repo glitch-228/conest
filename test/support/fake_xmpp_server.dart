@@ -9,6 +9,39 @@ import 'package:conest/src/xmpp/xmpp_socket.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
 import 'package:crypto/crypto.dart';
 
+/// The first bytes of a PNG that says it is [width] x [height].
+List<int> pngHeader(int width, int height) => [
+  137,
+  80,
+  78,
+  71,
+  13,
+  10,
+  26,
+  10,
+  0,
+  0,
+  0,
+  13,
+  73,
+  72,
+  68,
+  82,
+  width >> 24 & 255,
+  width >> 16 & 255,
+  width >> 8 & 255,
+  width & 255,
+  height >> 24 & 255,
+  height >> 16 & 255,
+  height >> 8 & 255,
+  height & 255,
+  8,
+  6,
+  0,
+  0,
+  0,
+];
+
 const _pubsubNs = 'http://jabber.org/protocol/pubsub';
 
 /// An in-memory XMPP server for tests: stream negotiation with STARTTLS,
@@ -34,7 +67,12 @@ class FakeXmppServer {
 
   /// Sign-up needs this CAPTCHA answer (the picture is [captchaImage]).
   String? captchaAnswer;
-  List<int> captchaImage = const [137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3];
+
+  /// A PNG header declaring 100 x 40 (what a CAPTCHA picture needs to be).
+  List<int> captchaImage = pngHeader(100, 40);
+
+  /// After the sign-up form, send this many stanzas nobody asked for.
+  int floodAfterForm = 0;
 
   /// Sign-up happens on this web page: the form only says so.
   String? registrationWebPage;
@@ -962,6 +1000,9 @@ class _FakeConnection {
             ),
           ]),
         );
+        for (var i = 0; i < server.floodAfterForm; i++) {
+          _send(XmppElement('message', attributes: {'id': 'x$i'}));
+        }
         return;
       }
       if (server.forbidRegistration) {

@@ -107,6 +107,36 @@ void _xmppControllerTests() {
       expect(bob.contacts.single.carrierAddress(TransportKind.xmpp), isNull);
     });
 
+    test('only one XMPP set-up runs at a time', () async {
+      final server = FakeXmppServer()..captchaAnswer = 'abc';
+      final relay = _FakeRelayClient();
+      final alice = await person(server, relay, 'Alice');
+      final asked = Completer<void>();
+      final answer = Completer<String?>();
+      final first = alice.enableXmppCarrier(
+        servers: ['xmpp.test'],
+        captchaSolver: (_) {
+          asked.complete();
+          return answer.future;
+        },
+      );
+      await asked.future;
+      await expectLater(
+        alice.enableXmppCarrier(servers: ['xmpp.test']),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('already being set up'),
+          ),
+        ),
+      );
+      answer.complete('abc');
+      await first;
+      expect(alice.xmppCarrierConfig, isNotNull);
+      await alice.disableXmppCarrier();
+    });
+
     test('a mutual add works over XMPP alone', () async {
       final server = FakeXmppServer();
       final relay = _FakeRelayClient();

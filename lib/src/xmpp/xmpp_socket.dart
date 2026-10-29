@@ -173,11 +173,19 @@ Future<XmppByteSocket> connectXmppSocket(
 /// Opens a WebSocket with the `xmpp` subprotocol.
 Future<XmppWebSocket> connectXmppWebSocket(Uri url) async {
   final client = HttpClient();
-  await Circumvention.instance.configure(client);
+  if (Circumvention.instance.anyActive) {
+    await Circumvention.instance.configure(client);
+  }
   final connecting = WebSocket.connect(
     url.toString(),
     protocols: ['xmpp'],
     customClient: client,
+  );
+  // The client has done its job once the upgrade is done or failed.
+  unawaited(
+    connecting
+        .then<void>((_) {}, onError: (Object _) {})
+        .whenComplete(client.close),
   );
   try {
     final socket = await connecting.timeout(_connectTimeout);

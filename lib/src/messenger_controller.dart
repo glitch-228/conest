@@ -5686,6 +5686,26 @@ class MessengerController extends ChangeNotifier {
     if (!_carrierAllowed(TransportKind.xmpp)) {
       throw StateError('Turn on Online and XMPP in Connectivity first.');
     }
+    // Setting up can take minutes (probing, a CAPTCHA): one at a time.
+    if (_xmppSetupRunning) {
+      throw StateError('XMPP is already being set up.');
+    }
+    _xmppSetupRunning = true;
+    try {
+      return await _enableXmppCarrier(jid, password, servers, captchaSolver);
+    } finally {
+      _xmppSetupRunning = false;
+    }
+  }
+
+  bool _xmppSetupRunning = false;
+
+  Future<String> _enableXmppCarrier(
+    String? jid,
+    String? password,
+    List<String>? servers,
+    XmppCaptchaSolver? captchaSolver,
+  ) async {
     final resource = newXmppResource();
     final XmppCarrierConfig config;
     if (jid != null) {
@@ -5724,6 +5744,10 @@ class MessengerController extends ChangeNotifier {
         captchaSolver: captchaSolver,
         log: (line) => appendDebugLog('XMPP setup: $line'),
       );
+    }
+    // Turned off while this ran: nothing is saved or started.
+    if (_disposed || !_carrierAllowed(TransportKind.xmpp)) {
+      throw StateError('XMPP was turned off during set-up.');
     }
     await unregisterCarrierTransport(TransportKind.xmpp);
     _snapshot = _snapshot.copyWith(

@@ -78,6 +78,11 @@ class _EventQueue {
         if (_waiter case final waiter?) {
           _waiter = null;
           waiter.complete(event);
+        } else if (_buffer.length >= _maxBuffered) {
+          // Nobody is reading (the user is answering a question) and the
+          // server keeps talking: the attempt fails.
+          _error ??= const XmppProtocolException('The server sent too much.');
+          unawaited(_subscription.cancel());
         } else {
           _buffer.add(event);
         }
@@ -98,6 +103,9 @@ class _EventQueue {
       },
     );
   }
+
+  /// Most stream events held while nobody reads.
+  static const int _maxBuffered = 64;
 
   late final StreamSubscription<XmppStreamEvent> _subscription;
   final Queue<XmppStreamEvent> _buffer = Queue();
@@ -131,6 +139,12 @@ class _EventQueue {
     };
   }
 
+  /// Throws what already went wrong with the stream (too much was sent
+  /// while nobody was reading, or it closed).
+  void ensureHealthy() {
+    if (_error case final error?) throw error;
+  }
+
   Future<void> cancel() => _subscription.cancel();
 }
 
@@ -141,18 +155,14 @@ XmppElement _checkStreamError(XmppElement element) {
         .firstOrNull
         ?.name;
     throw XmppStreamError(
-      condition ?? 'undefined-condition',
+      condition == null ? 'undefined-condition' : serverText(condition, 64),
       _bounded(element.childText('text', XmppNs.streams)),
     );
   }
   return element;
 }
 
-String? _bounded(String? text) => text == null
-    ? null
-    : text.length > 200
-    ? text.substring(0, 200)
-    : text;
+String? _bounded(String? text) => text == null ? null : serverText(text);
 
 /// The condition of an error stanza.
 XmppStanzaError stanzaErrorOf(XmppElement stanza) {
@@ -162,7 +172,7 @@ XmppStanzaError stanzaErrorOf(XmppElement stanza) {
       .firstOrNull
       ?.name;
   return XmppStanzaError(
-    condition ?? 'undefined-condition',
+    condition == null ? 'undefined-condition' : serverText(condition, 64),
     _bounded(error?.childText('text', XmppNs.stanzas)),
   );
 }
@@ -202,6 +212,8 @@ Future<XmppWire> openXmppWire(
 }
 
 const Duration _answerTimeout = Duration(seconds: 30);
+const Duration _registrationDeadline = Duration(seconds: 60);
+const int _maxUnrelated = 32;
 
 /// Opens the stream and upgrades it with STARTTLS when it is not secure;
 /// returns the features of the (secure) stream. Without TLS, only a
@@ -376,8 +388,18 @@ Future<void> registerXmppAccount({
           children: [query],
         ),
       );
+      // One answer in 30 s at most 60 s in all (the user's time at a
+      // CAPTCHA is not part of it), and a few unrelated stanzas.
+      final deadline = DateTime.now().add(_registrationDeadline);
+      var others = 0;
       while (true) {
-        final answer = await queue.element(_answerTimeout);
+        final left = deadline.difference(DateTime.now());
+        if (left <= Duration.zero || ++others > _maxUnrelated) {
+          throw TimeoutException('The XMPP server did not answer.');
+        }
+        final answer = await queue.element(
+          left < _answerTimeout ? left : _answerTimeout,
+        );
         if (answer.name != 'iq' || answer.attr('id') != id) continue;
         if (answer.attr('type') == 'error') throw stanzaErrorOf(answer);
         return answer;
@@ -411,10 +433,14 @@ Future<void> registerXmppAccount({
     String? captchaAnswer;
     if (form.captcha case final challenge?) {
       if (captchaSolver == null) throw const XmppCaptchaRequired();
-      captchaAnswer = (await captchaSolver(challenge))?.trim();
-      if (captchaAnswer == null || captchaAnswer.isEmpty) {
-        throw const XmppCaptchaRequired();
-      }
+      captchaAnswer = (await captchaSolver(
+        challenge.forDomain(domain),
+      ))?.trim();
+      // No answer is the user giving up: setup stops.
+      if (captchaAnswer == null) throw const XmppRegistrationCancelled();
+      if (captchaAnswer.isEmpty) throw const XmppCaptchaRequired();
+      // Nothing is sent to a server that misbehaved meanwhile.
+      queue.ensureHealthy();
     }
     await iq(
       'set',

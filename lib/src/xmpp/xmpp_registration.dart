@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show InternetAddress;
 import 'dart:typed_data';
 
 import 'xmpp_xml.dart';
@@ -18,7 +19,121 @@ const int maxCaptchaImageBytes = 256 * 1024;
 /// The most hidden fields sent back.
 const int _maxHiddenFields = 16;
 
-const Set<String> _imageTypes = {'image/png', 'image/jpeg', 'image/gif'};
+const Set<String> _imageTypes = {
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+};
+
+/// The largest CAPTCHA picture taken, by side and by area.
+const int maxCaptchaSide = 1024;
+const int maxCaptchaPixels = 4 * 1000 * 1000;
+
+/// The MIME type and size of an image, read from its header without
+/// decoding (PNG, JPEG, GIF, WebP only); null for anything else or a
+/// damaged header.
+({String mime, int width, int height})? readImageHeader(Uint8List b) {
+  int le16(int i) => b[i] | b[i + 1] << 8;
+  if (b.length >= 24 &&
+      b[0] == 0x89 &&
+      b[1] == 0x50 &&
+      b[2] == 0x4e &&
+      b[3] == 0x47 &&
+      b[4] == 0x0d &&
+      b[5] == 0x0a &&
+      b[6] == 0x1a &&
+      b[7] == 0x0a &&
+      b[12] == 0x49 && // IHDR
+      b[13] == 0x48 &&
+      b[14] == 0x44 &&
+      b[15] == 0x52) {
+    return (
+      mime: 'image/png',
+      width: b[16] << 24 | b[17] << 16 | b[18] << 8 | b[19],
+      height: b[20] << 24 | b[21] << 16 | b[22] << 8 | b[23],
+    );
+  }
+  if (b.length >= 10 &&
+      b[0] == 0x47 &&
+      b[1] == 0x49 &&
+      b[2] == 0x46 &&
+      b[3] == 0x38 &&
+      (b[4] == 0x37 || b[4] == 0x39) &&
+      b[5] == 0x61) {
+    return (mime: 'image/gif', width: le16(6), height: le16(8));
+  }
+  if (b.length >= 4 && b[0] == 0xff && b[1] == 0xd8) {
+    var i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] != 0xff) {
+        i++;
+        continue;
+      }
+      final marker = b[i + 1];
+      if (marker == 0xff) {
+        i++;
+        continue;
+      }
+      if (marker == 0xd8 ||
+          marker == 0x01 ||
+          (marker >= 0xd0 && marker <= 0xd7)) {
+        i += 2;
+        continue;
+      }
+      final length = b[i + 2] << 8 | b[i + 3];
+      // Start of frame (not DHT, JPG or DAC).
+      if (marker >= 0xc0 &&
+          marker <= 0xcf &&
+          marker != 0xc4 &&
+          marker != 0xc8 &&
+          marker != 0xcc) {
+        return (
+          mime: 'image/jpeg',
+          height: b[i + 5] << 8 | b[i + 6],
+          width: b[i + 7] << 8 | b[i + 8],
+        );
+      }
+      if (length < 2) return null;
+      i += 2 + length;
+    }
+    return null;
+  }
+  if (b.length >= 30 &&
+      b[0] == 0x52 &&
+      b[1] == 0x49 &&
+      b[2] == 0x46 &&
+      b[3] == 0x46 &&
+      b[8] == 0x57 &&
+      b[9] == 0x45 &&
+      b[10] == 0x42 &&
+      b[11] == 0x50) {
+    final kind = String.fromCharCodes(b.sublist(12, 16));
+    if (kind == 'VP8X') {
+      return (
+        mime: 'image/webp',
+        width: 1 + (b[24] | b[25] << 8 | b[26] << 16),
+        height: 1 + (b[27] | b[28] << 8 | b[29] << 16),
+      );
+    }
+    if (kind == 'VP8L' && b[20] == 0x2f) {
+      final bits = b[21] | b[22] << 8 | b[23] << 16 | b[24] << 24;
+      return (
+        mime: 'image/webp',
+        width: 1 + (bits & 0x3fff),
+        height: 1 + ((bits >> 14) & 0x3fff),
+      );
+    }
+    if (kind == 'VP8 ' && b[23] == 0x9d && b[24] == 0x01 && b[25] == 0x2a) {
+      return (
+        mime: 'image/webp',
+        width: le16(26) & 0x3fff,
+        height: le16(28) & 0x3fff,
+      );
+    }
+  }
+  return null;
+}
 
 /// A CAPTCHA the user answers by reading an image.
 class XmppCaptchaChallenge {
@@ -27,7 +142,19 @@ class XmppCaptchaChallenge {
     required this.mimeType,
     required this.fieldVar,
     this.instructions,
+    this.domain = '',
   });
+
+  /// The server the answer goes to (set when the user is asked).
+  final String domain;
+
+  XmppCaptchaChallenge forDomain(String domain) => XmppCaptchaChallenge(
+    image: image,
+    mimeType: mimeType,
+    fieldVar: fieldVar,
+    instructions: instructions,
+    domain: domain,
+  );
 
   final Uint8List image;
   final String mimeType;
@@ -52,6 +179,14 @@ class XmppRegistrationRedirect implements Exception {
 
   @override
   String toString() => 'XMPP: sign-up is on the server\'s website ($url)';
+}
+
+/// The user cancelled the sign-up (at a CAPTCHA): setup stops.
+class XmppRegistrationCancelled implements Exception {
+  const XmppRegistrationCancelled();
+
+  @override
+  String toString() => 'Sign-up cancelled.';
 }
 
 /// The server asks for a CAPTCHA and none was answered.
@@ -100,24 +235,49 @@ class XmppRegistrationForm {
   final List<(String, String)> hidden;
 }
 
-String _plain(String text, int max) {
-  final cleaned = text.replaceAll(RegExp(r'[\x00-\x08\x0b-\x1f\x7f]'), '');
+final RegExp _unsafeText = RegExp(
+  r'[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]',
+);
+
+/// Text from a server made safe to show or log: no control, bidi or
+/// zero-width characters, at most [max] characters.
+String serverText(String text, [int max = 200]) {
+  final cleaned = text.replaceAll(_unsafeText, '');
   return cleaned.length > max ? cleaned.substring(0, max) : cleaned;
+}
+
+String _plain(String text, int max) => serverText(text, max);
+
+/// Whether [url] is an `https` address of a public host name that is safe
+/// to offer: no IP address, no user info, no local or single-label name.
+bool isPublicHttpsUrl(String url) {
+  if (url.isEmpty || url.length > 512) return false;
+  final uri = Uri.tryParse(url);
+  if (uri == null ||
+      uri.scheme != 'https' ||
+      uri.userInfo.isNotEmpty ||
+      uri.host.isEmpty) {
+    return false;
+  }
+  final host = uri.host.toLowerCase();
+  if (InternetAddress.tryParse(host) != null ||
+      host.contains(':') ||
+      !host.contains('.') ||
+      host == 'localhost' ||
+      RegExp(
+        r'\.(local|localhost|localdomain|internal|lan|home|corp|intranet|onion|arpa)\.?$',
+      ).hasMatch(host) ||
+      RegExp(r'^[0-9.]+$').hasMatch(host)) {
+    return false;
+  }
+  return true;
 }
 
 /// An `https` address the server named, or null.
 String? _httpsUrl(String? text) {
-  if (text == null) return null;
-  final trimmed = text.trim();
-  if (trimmed.isEmpty || trimmed.length > 512) return null;
-  final uri = Uri.tryParse(trimmed);
-  if (uri == null ||
-      uri.scheme != 'https' ||
-      uri.host.isEmpty ||
-      uri.userInfo.isNotEmpty) {
-    return null;
-  }
-  return uri.toString();
+  final trimmed = text?.trim();
+  if (trimmed == null || !isPublicHttpsUrl(trimmed)) return null;
+  return Uri.parse(trimmed).toString();
 }
 
 XmppCaptchaChallenge? _challenge(
@@ -147,6 +307,19 @@ XmppCaptchaChallenge? _challenge(
       try {
         final bytes = base64.decode(encoded);
         if (bytes.isEmpty || bytes.length > maxCaptchaImageBytes) continue;
+        // What the bytes are, and how big, from the header alone: the
+        // declared type is not trusted, and nothing is decoded that
+        // would need more than a few megapixels.
+        final header = readImageHeader(Uint8List.fromList(bytes));
+        if (header == null ||
+            header.mime != type ||
+            header.width < 1 ||
+            header.height < 1 ||
+            header.width > maxCaptchaSide ||
+            header.height > maxCaptchaSide ||
+            header.width * header.height > maxCaptchaPixels) {
+          continue;
+        }
         final label = field.attr('label');
         final instructions = form?.childText('instructions') ?? '';
         final text = [

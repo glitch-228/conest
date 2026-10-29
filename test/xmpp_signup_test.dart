@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:conest/src/xmpp/xmpp_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_registration.dart';
 import 'package:conest/src/xmpp/xmpp_servers.dart';
+import 'package:conest/src/xmpp/xmpp_session.dart' show stanzaErrorOf;
 import 'package:conest/src/xmpp/xmpp_socket.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -129,7 +131,7 @@ void main() {
           {'captcha.test': server},
           solver: (_) async => null,
         ),
-        throwsA(isA<XmppAccountCreationException>()),
+        throwsA(isA<XmppRegistrationCancelled>()),
       );
       expect(server.passwords, isEmpty);
     });
@@ -266,12 +268,17 @@ void main() {
           'data',
           xmlns: 'urn:xmpp:bob',
           attributes: {'cid': 'a', 'type': type},
-          text: base64.encode(List.filled(bytes, 1)),
+          text: base64.encode(
+            bytes == 0
+                ? const <int>[]
+                : [...pngHeader(100, 40), ...List.filled(bytes, 1)],
+          ),
         ),
       ]);
       expect(parseRegistrationForm(form('image/png', 100)).captcha, isNotNull);
       for (final bad in [
         form('image/png', maxCaptchaImageBytes + 1),
+        form('image/jpeg', 100),
         form('text/html', 100),
         form('image/png', 0),
       ]) {
@@ -280,6 +287,199 @@ void main() {
         // A CAPTCHA that cannot be read cannot be answered.
         expect(parsed.unsupported, contains('captcha'));
       }
+    });
+  });
+
+  group('hostile CAPTCHA pictures', () {
+    XmppElement formWith(List<int> bytes, String type) => XmppElement(
+      'query',
+      xmlns: XmppNs.register,
+      children: [
+        XmppElement('username'),
+        XmppElement('password'),
+        XmppElement(
+          'x',
+          xmlns: XmppNs.dataForms,
+          children: [
+            XmppElement(
+              'field',
+              xmlns: XmppNs.dataForms,
+              attributes: {'var': 'ocr'},
+              children: [
+                XmppElement(
+                  'media',
+                  xmlns: 'urn:xmpp:media-element',
+                  children: [
+                    XmppElement(
+                      'uri',
+                      xmlns: 'urn:xmpp:media-element',
+                      text: 'cid:a',
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+        XmppElement(
+          'data',
+          xmlns: 'urn:xmpp:bob',
+          attributes: {'cid': 'a', 'type': type},
+          text: base64.encode(bytes),
+        ),
+      ],
+    );
+
+    test('only small pictures whose bytes match their type are taken', () {
+      bool taken(List<int> bytes, String type) =>
+          parseRegistrationForm(formWith(bytes, type)).captcha != null;
+      expect(taken(pngHeader(300, 100), 'image/png'), isTrue);
+      // 30000 x 30000 in a few bytes would take gigabytes to decode.
+      expect(taken(pngHeader(30000, 30000), 'image/png'), isFalse);
+      expect(taken(pngHeader(1025, 10), 'image/png'), isFalse);
+      expect(taken(pngHeader(0, 10), 'image/png'), isFalse);
+      // Declared PNG, but the bytes are something else.
+      expect(
+        taken(utf8.encode('<html>${'x' * 40}</html>'), 'image/png'),
+        isFalse,
+      );
+      expect(taken(pngHeader(10, 10), 'image/gif'), isFalse);
+      // GIF and JPEG headers are read too.
+      final gif = [...utf8.encode('GIF89a'), 200, 0, 50, 0, 0, 0, 0, 0];
+      expect(taken(gif, 'image/gif'), isTrue);
+      final hugeGif = [...utf8.encode('GIF89a'), 255, 255, 255, 255, 0, 0];
+      expect(taken(hugeGif, 'image/gif'), isFalse);
+      final jpeg = [
+        0xff,
+        0xd8,
+        0xff,
+        0xc0,
+        0,
+        17,
+        8,
+        0,
+        60,
+        0,
+        120,
+        3,
+        1,
+        0x22,
+        0,
+        2,
+        0x11,
+        0,
+        3,
+        0x11,
+        0,
+      ];
+      expect(readImageHeader(Uint8List.fromList(jpeg))?.width, 120);
+      expect(taken(jpeg, 'image/jpeg'), isTrue);
+    });
+  });
+
+  group('what servers say', () {
+    test('text from a server is cleaned and cut', () {
+      expect(serverText('a\u202eb\u200bc\u0085d\x00e'), 'abcde');
+      expect(serverText('x' * 1000).length, 200);
+      expect(serverText('x' * 1000, 64).length, 64);
+    });
+
+    test('a long error condition from a server stays short', () async {
+      // The condition is the name of an element the server chose.
+      final server = FakeXmppServer(domain: 'long.test');
+      final long = XmppElement(
+        'iq',
+        attributes: {'type': 'error'},
+        children: [
+          XmppElement(
+            'error',
+            children: [XmppElement('c' * 5000, xmlns: XmppNs.stanzas)],
+          ),
+        ],
+      );
+      expect(server.domain, isNotEmpty);
+      expect(stanzaErrorOf(long).condition.length, 64);
+    });
+
+    test('website links must be public https names', () {
+      for (final good in [
+        'https://signup.example.org/join',
+        'https://a.b.c/x?y=1',
+      ]) {
+        expect(isPublicHttpsUrl(good), isTrue, reason: good);
+      }
+      for (final bad in [
+        'http://example.org/',
+        'https://127.0.0.1/',
+        'https://192.168.1.1/x',
+        'https://[::1]/',
+        'https://localhost/',
+        'https://printer.local/',
+        'https://intranet/',
+        'https://user@example.org/',
+        'https://10.0.0.1.example.org.internal/',
+        'ftp://example.org/',
+        '',
+      ]) {
+        expect(isPublicHttpsUrl(bad), isFalse, reason: bad);
+      }
+    });
+  });
+
+  group('while the user answers a CAPTCHA', () {
+    test('a server that keeps talking fails the attempt', () async {
+      final server = FakeXmppServer(domain: 'chatty.test')
+        ..captchaAnswer = 'x'
+        ..floodAfterForm = 500;
+      await expectLater(
+        _setUp(
+          const [XmppServerEntry('chatty.test', captcha: true)],
+          {'chatty.test': server},
+          solver: (_) async {
+            await Future<void>.delayed(const Duration(milliseconds: 200));
+            return 'x';
+          },
+        ),
+        throwsA(isA<XmppAccountCreationException>()),
+      );
+      expect(server.passwords, isEmpty);
+    });
+
+    test('cancelling stops the set-up at once', () async {
+      final a = FakeXmppServer(domain: 'a.test')..captchaAnswer = 'x';
+      final b = FakeXmppServer(domain: 'b.test')..captchaAnswer = 'x';
+      var asked = 0;
+      await expectLater(
+        _setUp(
+          const [
+            XmppServerEntry('a.test', captcha: true),
+            XmppServerEntry('b.test', captcha: true),
+          ],
+          {'a.test': a, 'b.test': b},
+          solver: (_) async {
+            asked++;
+            return null;
+          },
+        ),
+        throwsA(isA<XmppRegistrationCancelled>()),
+      );
+      expect(asked, 1);
+      expect(a.passwords, isEmpty);
+      expect(b.passwords, isEmpty);
+    });
+
+    test('the dialog names the server the answer goes to', () async {
+      final server = FakeXmppServer(domain: 'named.test')..captchaAnswer = 'x';
+      XmppCaptchaChallenge? shown;
+      await _setUp(
+        const [XmppServerEntry('named.test', captcha: true)],
+        {'named.test': server},
+        solver: (challenge) async {
+          shown = challenge;
+          return 'x';
+        },
+      );
+      expect(shown!.domain, 'named.test');
     });
   });
 

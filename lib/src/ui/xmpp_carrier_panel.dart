@@ -105,7 +105,9 @@ class _XmppCarrierPanelState extends State<XmppCarrierPanel> {
         context: context,
         barrierDismissible: false,
         builder: (context) => AlertDialog(
-          title: Text(l10n.xmppCaptchaTitle),
+          title: Text(
+            '${l10n.xmppCaptchaTitle}: ${serverText(challenge.domain, 80)}',
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,

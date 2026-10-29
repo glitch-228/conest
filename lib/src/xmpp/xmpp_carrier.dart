@@ -200,8 +200,12 @@ Future<String?> lookupXmppWebSocket(String domain) async {
   final client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 10)
     ..userAgent = null;
-  await Circumvention.instance.configure(client);
   try {
+    // Only through the circumvention proxy while it is in use; otherwise
+    // the environment's proxy settings stay as they were.
+    if (Circumvention.instance.anyActive) {
+      await Circumvention.instance.configure(client);
+    }
     final request = await client
         .getUrl(Uri.https(domain, '/.well-known/host-meta.json'))
         .timeout(const Duration(seconds: 15));
@@ -360,6 +364,7 @@ Future<List<XmppServerProbe>> reachableXmppServers(
   if (domains.isEmpty) return const [];
   final answered = <XmppServerProbe>[];
   final done = Completer<void>();
+  var finished = false;
   var pending = domains.length;
   void settle() {
     if (!done.isCompleted && (answered.length >= enough || pending == 0)) {
@@ -429,12 +434,14 @@ Future<List<XmppServerProbe>> reachableXmppServers(
               if (error is _NoRegistration) withoutSignUp = true;
               if (--outstanding == 0 && !won) {
                 log?.call('$domain did not answer: $error');
-                outcomes?[domain] = XmppServerOutcome(
-                  domain,
-                  withoutSignUp
-                      ? XmppServerStatus.closed
-                      : XmppServerStatus.noAnswer,
-                );
+                if (!finished) {
+                  outcomes?[domain] = XmppServerOutcome(
+                    domain,
+                    withoutSignUp
+                        ? XmppServerStatus.closed
+                        : XmppServerStatus.noAnswer,
+                  );
+                }
                 pending--;
                 settle();
                 free();
@@ -463,7 +470,15 @@ Future<List<XmppServerProbe>> reachableXmppServers(
   }
 
   launch();
-  await done.future.timeout(timeout, onTimeout: () {});
+  // When time is up the round is over: nothing more is dialled, and late
+  // answers are dropped.
+  await done.future.timeout(
+    timeout,
+    onTimeout: () {
+      if (!done.isCompleted) done.complete();
+    },
+  );
+  finished = true;
   for (final timer in timers) {
     timer.cancel();
   }
@@ -567,9 +582,14 @@ Future<XmppCarrierConfig?> _registerOnAny(
             XmppServerStatus.captcha,
             detail: 'answer not accepted',
           ),
-          _ => outcome(XmppServerStatus.failed, detail: error.condition),
+          _ => outcome(
+            XmppServerStatus.failed,
+            detail: serverText(error.condition, 64),
+          ),
         };
         return null;
+      } on XmppRegistrationCancelled {
+        rethrow;
       } on XmppRegistrationRedirect catch (error) {
         log?.call('XMPP: ${server.domain} signs up on its website');
         outcomes[server.domain] = outcome(
@@ -704,7 +724,7 @@ Future<XmppCarrierConfig> setUpXmppCarrierAccount(
     );
     if (config != null) return config;
   }
-  throw XmppAccountCreationException([...outcomes.values, ...webOnly]);
+  throw XmppAccountCreationException([...webOnly, ...outcomes.values]);
 }
 
 /// Checks that [config]'s account signs in, without keeping a connection.
