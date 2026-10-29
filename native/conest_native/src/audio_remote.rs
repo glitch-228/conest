@@ -25,6 +25,19 @@ pub(super) struct ReceiveStats {
     pub jitter_ms: f64,
 }
 
+impl ReceiveStats {
+    fn add(&mut self, stream: &RemoteStream) {
+        self.received += stream.received;
+        self.late_or_duplicate += stream.late_or_duplicate;
+        self.lost += stream.jitter.lost;
+        self.concealed_frames += stream.concealed_frames;
+        self.gaps += stream.gaps;
+        self.jitter_ms = self
+            .jitter_ms
+            .max(stream.jitter.jitter().as_secs_f64() * 1000.0);
+    }
+}
+
 struct RemoteStream {
     decoder: Decoder,
     jitter: PacketJitterBuffer,
@@ -98,6 +111,9 @@ pub(super) struct RemoteMixer {
     streams: BTreeMap<u16, RemoteStream>,
     /// Each participant's volume as set on this device (1 when unset).
     volumes: BTreeMap<u16, f32>,
+    /// What streams that ended (a participant left or restarted) counted,
+    /// so the call's totals keep them.
+    ended: ReceiveStats,
 }
 
 impl RemoteMixer {
@@ -105,6 +121,7 @@ impl RemoteMixer {
         let mut mixer = Self {
             streams: BTreeMap::new(),
             volumes: BTreeMap::new(),
+            ended: ReceiveStats::default(),
         };
         // The unchanged public 1:1 ABI always addresses stream zero.
         mixer.set_active(0, true)?;
@@ -116,7 +133,9 @@ impl RemoteMixer {
             return Ok(false);
         }
         if !active {
-            self.streams.remove(&participant);
+            if let Some(stream) = self.streams.remove(&participant) {
+                self.ended.add(&stream);
+            }
             return Ok(true);
         }
         if !self.streams.contains_key(&participant) {
@@ -155,18 +174,12 @@ impl RemoteMixer {
         true
     }
 
-    /// Summed over the streams now playing; the jitter is the worst one.
+    /// Summed over every stream of the call, the ended ones included; the
+    /// jitter is the worst one.
     pub fn stats(&self) -> ReceiveStats {
-        let mut stats = ReceiveStats::default();
+        let mut stats = self.ended;
         for stream in self.streams.values() {
-            stats.received += stream.received;
-            stats.late_or_duplicate += stream.late_or_duplicate;
-            stats.lost += stream.jitter.lost;
-            stats.concealed_frames += stream.concealed_frames;
-            stats.gaps += stream.gaps;
-            stats.jitter_ms = stats
-                .jitter_ms
-                .max(stream.jitter.jitter().as_secs_f64() * 1000.0);
+            stats.add(stream);
         }
         stats
     }
@@ -310,6 +323,25 @@ mod tests {
         // After the last packet, the silence that follows is one gap.
         assert!(stats.concealed_frames >= GAP_FRAMES as u64);
         assert_eq!(stats.gaps, 1);
+    }
+
+    #[test]
+    fn a_participant_who_left_still_counts_in_the_call_totals() {
+        let mut mixer = RemoteMixer::new().unwrap();
+        let start = Instant::now();
+        let bytes = packet();
+        assert!(mixer.set_active(3, true).unwrap());
+        assert!(mixer.push(3, 1, &bytes, start));
+        assert!(mixer.push(3, 2, &bytes, start + Duration::from_millis(20)));
+        assert!(mixer.push(0, 1, &bytes, start));
+        // The others leave before the last one reads the call's statistics.
+        assert!(mixer.set_active(3, false).unwrap());
+        assert!(mixer.set_active(0, false).unwrap());
+        assert_eq!(mixer.stats().received, 3);
+        // A stream that starts again adds to what it had.
+        assert!(mixer.set_active(3, true).unwrap());
+        assert!(mixer.push(3, 1, &bytes, start + Duration::from_millis(40)));
+        assert_eq!(mixer.stats().received, 4);
     }
 
     #[test]
