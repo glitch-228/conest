@@ -1,50 +1,134 @@
-## Conest 0.4.1 nightly (October 21)
+## Conest 0.4.3 nightly (October 29)
 
-Everything in the October 20 nightly is included.
+The first nightly after v0.4.2. Everything in v0.4.2 is included.
 
-### New
+### Before you update
 
-- Link previews: a link in a message shows the site's title, a short
-  description and a small picture under it, and a tap opens the link.
-  In chats with your contacts and in your groups they come by
-  themselves; in other chats you tap "Show link preview" first, because
-  fetching one shows the site your IP address. In battery saver or
-  when roaming they always wait for a tap.
-- How previews are made is up to you, in Settings > Privacy > "Link
-  previews":
-  - "Each receiver fetches them" (the default);
-  - "Sent with the message", so the people you write to never contact
-    the site; their app shows it as "preview from the sender";
-  - "Both";
-  - "Off".
-  While writing, "Send without the preview" removes the one about to
-  be sent.
-- "Fetch previews through Tor" (on by default once Tor is set up):
-  sites see a Tor exit instead of your address. While Tor is not
-  connected, no previews are fetched.
+- Contacts on v0.4.2 and older keep working. Newer features (files over
+  two routes at once, files through your own devices, relay sessions)
+  are used only with contacts and relays that have them.
+- Relays: this version adds a new relay protocol. Older relays still
+  work. Relays that update themselves move to it on their next
+  maintenance hour.
+- On relays running this version, your mailbox belongs to your device,
+  and your contacts' apps vouch for it, so nobody else can take it over.
+  Contacts still on v0.4.2 or older do not do this yet, so their
+  mailboxes on such relays are not protected until they update. Please
+  ask your contacts to update.
 
-### Fixes
+### Calls
 
-- Email: on networks that block or stall some mail servers, Conest no
-  longer picks a server that only seems to work. When setting up email
-  it checks that a server really passes messages through. If Conest
-  picked your server and it stops passing them later, your account
-  moves to another one that does, and your contacts learn the new
-  address by themselves.
-- Relays: when many messages are sent at once from several devices on
-  one network, a relay could start refusing them, and then nothing was
-  sent for a while, files included. Conest now waits a moment before
-  asking that relay again, and sends the rest another way meanwhile.
-  Relays running this version also allow more before refusing.
-- With LAN turned off, parts of a file could still be sent over the
-  local network and were then thrown away on arrival, so the file did
-  not finish. They now go another way.
+- Group calls stay one call on slow networks. Before, members who
+  heard the host late could start a second call of their own, and the
+  two never joined again.
+- Fixed: in group calls, sound from one member could reach only the
+  first other member and nobody after them.
+- Sound that arrives too late to play is dropped instead of piling up.
+
+### Voice settings
+
+- New: Settings > Voice, with:
+  - your microphone and speaker;
+  - microphone and speaker volume;
+  - a microphone test with a level meter, and optionally hearing
+    yourself;
+  - voice activity (with a sensitivity setting) or push-to-talk, in
+    one-to-one and group calls;
+  - noise suppression, echo cancellation and automatic volume, each on
+    or off;
+  - call sounds on or off.
+- In group calls you can change each person's volume, for you only.
+
+### Notifications
+
+- Quiet hours: pick a start and end time. Notifications still appear,
+  without sound or vibration. Calls can still ring.
+- Mute a chat or group for 1 hour, 8 hours, 1 day, or until you unmute
+  it.
+- Groups: mention people with @. A group can notify you for every
+  message, only for mentions (a reply to your message counts), or not
+  at all.
+- Android: groups, calls and file transfers have their own notification
+  categories, so each can have its own sound in the phone's settings.
+- Android: an incoming call shows full screen, also on the lock screen,
+  with Answer and Decline.
+- Linux: Reply and Mark as read straight from a notification.
+
+### Files
+
+- A file to a contact can travel over the local network and over Iroh
+  at the same time. Each route gets a share that fits its speed. If one
+  route stalls, the other takes over.
+- Group files are downloaded faster from members who send faster. A
+  piece that is late is also asked from someone else.
+- Large group files come over the local network without asking first.
+  Over Iroh, relays and Tor they still wait for you to accept them.
+
+### Your own devices
+
+- Files you send or receive on one device now show on your other
+  devices too. They fetch the file from whichever of your devices has
+  it.
+- Older history fetched from another of your devices now includes its
+  files, which you download when you want them.
+- A device that was away catches up faster: your devices compare what
+  each has and send only what is missing.
+
+### Relays and censored networks
+
+- Relays now use an encrypted session and send new messages to you as
+  soon as they arrive, instead of waiting for Conest to ask.
+- A relay can have an address on port 443 that looks like an ordinary
+  website. Visitors without the key see that website. Relay owners can
+  also hide a relay behind a real site's secure connection.
+- Relay owners can require registration, an invite code or a password
+  before others use the relay for more than messages.
+- New: Settings > Censorship circumvention:
+  - private name lookups (DNS over HTTPS);
+  - splitting secure-connection greetings, which hides from simple
+    filters which server you connect to;
+  - quiet nearby-device discovery, which finds devices on your network
+    with a scrambled signal instead of a recognisable one.
+  "Automatic" turns these on only on networks where Conest is blocked.
+
+### New networks
+
+- XMPP (Jabber):
+  - Conest can carry its messages through an XMPP account, either one
+    it makes for you on a public server or your own. Your other XMPP
+    apps do not see these messages.
+  - XMPP chats: chat with people on XMPP apps such as Conversations,
+    Dino, Gajim or Monocles, in one-to-one chats and group chats, with
+    files, replies, reactions and corrections.
+  - OMEMO encryption for XMPP chats, with keys you can verify by QR
+    code. Older OMEMO, used by many current apps, is off by default and
+    marked experimental.
+  - An "XMPP only" mode.
+- Telegram: Conest can carry its messages through a Telegram bot you
+  make with @BotFather. The Telegram client itself is not in this
+  nightly yet.
+- Discord:
+  - Conest can carry its messages through a Discord bot you make, in a
+    private server you share with your contact.
+  - Optional: use your own Discord account in Conest, as Vencord and
+    Vesktop do. This is against Discord's terms and can get your account
+    banned. Conest says so before you turn it on.
+  - A "Discord only" mode.
+- Conest still encrypts its messages end to end through all of these.
+  The network can see who is talking to whom, and when.
 
 ### Please check
 
-- Link previews in a chat with a contact, in a group, and in a chat
-  with someone who is not a contact (it should wait for a tap).
-- Each preview setting, and "Fetch previews through Tor" with Tor on.
-- Email on your usual networks, especially where it did not work
-  before.
-- Sending files with LAN turned off in Settings.
+- A group call with three people on different networks: one call, and
+  everyone hears everyone.
+- Settings > Voice: switching microphone and speaker, the microphone
+  test, push-to-talk.
+- Quiet hours, muting for a while, and @mentions in a group.
+- Android: an incoming call on a locked phone.
+- Linux: replying from a notification.
+- A large file to a contact on the same network with Iroh on.
+- A file sent on one of your devices showing on another.
+- Relays: messages arriving promptly; a relay's port-443 address on a
+  censored network.
+- XMPP chats with Conversations or Dino, with and without encryption.
+- Telegram and Discord bot carriers between two contacts.
