@@ -224,6 +224,43 @@ void main() {
       expect(await response.transform(utf8.decoder).join(), 'through');
     });
 
+    test('a tunnel whose far side resets ends without a stray error', () async {
+      // A site that leaves what it got unread and then drops the
+      // connection, so it is reset (as a censor's filter does mid-way).
+      final site = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(site.close);
+      site.listen((socket) {
+        socket.add(Uint8List(1024));
+        Timer(const Duration(milliseconds: 300), socket.destroy);
+      });
+      final stray = <Object>[];
+      await runZonedGuarded(() async {
+        final proxy = FragmentingProxy(
+          resolve: (_) async => [InternetAddress.loopbackIPv4],
+        );
+        await proxy.start();
+        addTearDown(proxy.stop);
+        final socket = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          proxy.port!,
+        );
+        addTearDown(socket.destroy);
+        // The app's own socket fails once the tunnel ends: not the proxy's.
+        socket.listen((_) {}, onError: (_) {});
+        socket.done.then<void>((_) {}, onError: (Object _) {});
+        socket.write(
+          'CONNECT relay.test:${site.port} HTTP/1.1\r\n'
+          'Proxy-Authorization: ${proxy.authorization}\r\n\r\n',
+        );
+        // The app keeps its side open and sending.
+        for (var i = 0; i < 20; i++) {
+          socket.add(Uint8List(4096));
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+      }, (error, _) => stray.add(error));
+      expect(stray, isEmpty);
+    });
+
     test('the server name is found in a real ClientHello and the split '
         'keeps it out of each piece', () async {
       final capture = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);

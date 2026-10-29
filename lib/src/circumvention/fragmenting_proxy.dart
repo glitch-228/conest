@@ -281,7 +281,11 @@ class FragmentingProxy {
       } on Object {
         // Loopback without the option still works.
       }
-      final down = client.addStream(remote).catchError((Object _) {});
+      // A Future<Socket> underneath: an error handler returning nothing
+      // would itself throw, so the result is dropped instead.
+      final down = client
+          .addStream(remote)
+          .then<void>((_) {}, onError: (Object _) {});
       if (fragment) {
         final pieces = splitClientHello(first);
         for (var index = 0; index < pieces.length; index++) {
