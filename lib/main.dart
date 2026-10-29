@@ -387,6 +387,18 @@ Future<void> _runConestWithProfile(
   final platformBridge = PlatformBridge();
   final controller = MessengerController(
     vaultStore: vaultStore,
+    // Attachments, voice recordings and Telegram's data follow the profile:
+    // a portable copy beside the app (the lab's, say) must not share them
+    // with this machine's other Conest.
+    dataRoot: () async => profile.dataRoot,
+    legacyAttachmentRoot: profile.mode == AppStorageMode.portable
+        ? () async => Directory(
+            p.join(
+              (await getApplicationSupportDirectory()).path,
+              'attachments',
+            ),
+          )
+        : null,
     relayClient: const RelayClient(),
     platformBridge: platformBridge,
     // nightly.9: enable the LocalSend-style direct PUT fast-path for LAN

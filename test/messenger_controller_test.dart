@@ -1207,6 +1207,8 @@ Future<MessengerController> _createController({
   TelegramApiKeys? telegramApiKeys,
   TdEngine? Function()? tdEngineFactory,
   Future<Directory> Function()? telegramDirectory,
+  Future<Directory> Function()? dataRoot,
+  Future<Directory> Function()? legacyAttachmentRoot,
 }) async {
   final controller = MessengerController(
     keepErrorHistory: keepErrorHistory,
@@ -1220,6 +1222,8 @@ Future<MessengerController> _createController({
     telegramApiKeys: telegramApiKeys,
     tdEngineFactory: tdEngineFactory ?? () => null,
     telegramDirectory: telegramDirectory,
+    dataRoot: dataRoot,
+    legacyAttachmentRoot: legacyAttachmentRoot,
     energyPolicy: energyPolicy,
     torApi: torApi,
     bitchatConnector: bitchatConnector,
@@ -1256,15 +1260,17 @@ Future<MessengerController> _createController({
         ),
     attachmentRootProvider:
         attachmentRootProvider ??
-        () async {
-          // Isolated per-test tmpdir so concurrent tests don't share an
-          // attachment cache and so a passed `path_provider` isn't
-          // required in the test runner.
-          final base = Directory.systemTemp.createTempSync(
-            'conest_test_attachments_',
-          );
-          return base;
-        },
+        (dataRoot != null
+            ? null
+            : () async {
+                // Isolated per-test tmpdir so concurrent tests don't share an
+                // attachment cache and so a passed `path_provider` isn't
+                // required in the test runner.
+                final base = Directory.systemTemp.createTempSync(
+                  'conest_test_attachments_',
+                );
+                return base;
+              }),
   );
   await controller.initialize();
   if (createIdentity) {
@@ -25135,6 +25141,197 @@ void main() {
     }
 
     registerFilePrivacyControllerTests(pair: pair, received: received);
+
+    test('a copy keeps its files in its own data folder, and copies the '
+        'ones it still needs from the shared one', () async {
+      final shared = await Directory.systemTemp.createTemp('conest_shared_');
+      final own = await Directory.systemTemp.createTemp('conest_own_');
+      addTearDown(() async {
+        for (final root in [shared, own]) {
+          if (await root.exists()) await root.delete(recursive: true);
+        }
+      });
+      final vault = _MemoryVaultStore();
+      final relay = _FakeRelayClient();
+      // Before: its files went to the folder every copy shared.
+      final before = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: vault,
+        attachmentRootProvider: () async => shared,
+      );
+      final me = before.identity!.deviceId;
+      await before.sendAttachment(
+        contact: before.savedMessagesContact!,
+        bytes: Uint8List.fromList(List<int>.generate(4000, (i) => i % 251)),
+        fileName: 'kept.pdf',
+        mimeType: 'application/pdf',
+      );
+      final file = before
+          .messagesFor(me)
+          .singleWhere((m) => m.hasAttachment)
+          .attachment!;
+      final sharedPath = (await before.attachmentCachePathFor(file.id))!;
+      before.dispose();
+
+      final after = await _createController(
+        relayClient: relay,
+        displayName: 'unused',
+        createIdentity: false,
+        vaultStore: vault,
+        dataRoot: () async => own,
+        legacyAttachmentRoot: () async => shared,
+      );
+      addTearDown(after.dispose);
+      expect(after.attachmentAvailableLocally(file.id), isTrue);
+      final ownPath = (await after.attachmentCachePathFor(file.id))!;
+      expect(p.isWithin(p.join(own.path, 'attachments'), ownPath), isTrue);
+      expect(
+        await File(ownPath).readAsBytes(),
+        await File(sharedPath).readAsBytes(),
+      );
+      expect(await File(sharedPath).exists(), isTrue, reason: 'copied, kept');
+    });
+
+    test('the startup sweep keeps a recent file no message names, for a '
+        'while', () async {
+      final root = await Directory.systemTemp.createTemp('conest_sweep_');
+      addTearDown(() => root.delete(recursive: true));
+      final vault = _MemoryVaultStore();
+      final relay = _FakeRelayClient();
+      final first = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: vault,
+        attachmentRootProvider: () async => root,
+      );
+      first.dispose();
+      final cache = Directory(p.join(root.path, 'cache'));
+      await cache.create(recursive: true);
+      final recent = File(p.join(cache.path, 'a' * 64))
+        ..writeAsBytesSync([1, 2, 3]);
+      final old = File(p.join(cache.path, 'b' * 64))
+        ..writeAsBytesSync([4, 5, 6])
+        ..setLastModifiedSync(DateTime.now().subtract(const Duration(days: 8)));
+      final unfinished = File(p.join(cache.path, '${'c' * 64}.tmp'))
+        ..writeAsBytesSync([7]);
+      final restarted = await _createController(
+        relayClient: relay,
+        displayName: 'unused',
+        createIdentity: false,
+        vaultStore: vault,
+        attachmentRootProvider: () async => root,
+      );
+      addTearDown(restarted.dispose);
+      expect(await recent.exists(), isTrue);
+      expect(await old.exists(), isFalse);
+      expect(await unfinished.exists(), isFalse);
+    });
+
+    test('received files are still there after a restart', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final roots = [
+        await Directory.systemTemp.createTemp('conest_keep_a-'),
+        await Directory.systemTemp.createTemp('conest_keep_b-'),
+      ];
+      addTearDown(() async {
+        for (final root in roots) {
+          if (await root.exists()) await root.delete(recursive: true);
+        }
+      });
+      final bobVault = _MemoryVaultStore();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        internetRelayHost: null,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => roots[0],
+      );
+      addTearDown(alice.dispose);
+      Future<MessengerController> startBob({bool create = true}) =>
+          _createController(
+            relayClient: relay,
+            displayName: 'Bob',
+            internetRelayHost: null,
+            createIdentity: create,
+            vaultStore: bobVault,
+            transportRegistryFactory: network.registry,
+            attachmentRootProvider: () async => roots[1],
+          );
+      final bob = await startBob();
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      final contact = alice.contacts.single;
+      StagedAttachment staged(String name, String mime, int size) {
+        final file = File('${roots[0].path}/$name')
+          ..writeAsBytesSync(List<int>.generate(size, (i) => (i * 7) % 251));
+        return StagedAttachment(
+          id: 'keep-$name',
+          fileName: name,
+          mimeType: mime,
+          sizeBytes: size,
+          filePath: file.path,
+        );
+      }
+
+      await alice.sendAttachmentSource(
+        contact: contact,
+        source: staged('single.bin', 'application/octet-stream', 40 * 1024),
+      );
+      await alice.sendAttachmentSource(
+        contact: contact,
+        source: staged('large.bin', 'application/octet-stream', 3 << 20),
+      );
+      alice.stageAttachments(
+        contact: contact,
+        items: [
+          staged('a1.png', 'image/png', 20 * 1024),
+          staged('a2.png', 'image/png', 30 * 1024),
+        ],
+      );
+      await alice.sendStagedBundle(contact: contact);
+      List<ChatMessage> files(MessengerController controller) => controller
+          .messagesFor(alice.identity!.deviceId)
+          .where((m) => m.attachment != null)
+          .toList();
+      await _waitForIroh(() {
+        final got = files(bob);
+        for (final message in got) {
+          final id = message.attachment!.id;
+          if (bob.attachmentAwaitingAcceptance(id)) {
+            unawaited(bob.acceptIncomingAttachment(id));
+          }
+        }
+        return got.length == 4 &&
+            got.every((m) => bob.attachmentAvailableLocally(m.attachment!.id));
+      }, reason: 'all four files arrive');
+      final before = {
+        for (final message in files(bob))
+          message.attachment!.fileName: await File(
+            (await bob.attachmentCachePathFor(message.attachment!.id))!,
+          ).readAsBytes(),
+      };
+
+      bob.dispose();
+      final restarted = await startBob(create: false);
+      addTearDown(restarted.dispose);
+      final after = files(restarted);
+      expect(after, hasLength(4));
+      for (final message in after) {
+        final id = message.attachment!.id;
+        final name = message.attachment!.fileName;
+        expect(
+          restarted.attachmentAvailableLocally(id),
+          isTrue,
+          reason: '$name is still available',
+        );
+        final path = await restarted.attachmentCachePathFor(id);
+        expect(path, isNotNull, reason: '$name has a file');
+        expect(await File(path!).readAsBytes(), before[name], reason: name);
+      }
+    });
 
     test('a file records how much of it each route carried, on both '
         'sides', () async {

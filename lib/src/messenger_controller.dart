@@ -154,14 +154,16 @@ const bool experimentalAndroidBackgroundRuntimeAvailable = bool.fromEnvironment(
   defaultValue: true,
 );
 
-/// Fallback attachment cache root used when the constructor caller
-/// doesn't supply one (i.e. production where the bootstrap profile
-/// chose a non-portable data root). Mirrors what `app_storage.dart`
-/// would have picked for the device profile.
-Future<Directory> _defaultAttachmentRootProvider() async {
-  final root = await path_provider.getApplicationSupportDirectory();
-  return Directory(p.join(root.path, 'attachments'));
-}
+/// The attachment folder inside a data folder: the storage profile's own,
+/// or the app-support folder when none is given.
+Future<Directory> Function() _attachmentsUnder(
+  Future<Directory> Function() dataRoot,
+) =>
+    () async => Directory(p.join((await dataRoot()).path, 'attachments'));
+
+/// Unreferenced files the startup sweep leaves alone for a while: another
+/// copy, or a vault that missed its last save, may still need them.
+const Duration _unreferencedAttachmentGrace = Duration(days: 7);
 
 const int _maxInviteRouteHints = 8;
 const int _maxInviteLanHosts = 3;
@@ -579,6 +581,8 @@ class MessengerController extends ChangeNotifier {
     DateTime Function()? nowProvider,
     Future<SignedRelayDefaults?> Function()? signedRelayDefaultsLoader,
     Future<Directory> Function()? attachmentRootProvider,
+    Future<Directory> Function()? dataRoot,
+    Future<Directory> Function()? legacyAttachmentRoot,
     StorageCapacityProvider? storageCapacityProvider,
     bool enableLongPoll = true,
     bool enablePairingBeacon = true,
@@ -618,7 +622,9 @@ class MessengerController extends ChangeNotifier {
        _tdEngineIsDefault = tdEngineFactory == null,
        _tdEngineFactory = tdEngineFactory ?? NativeTdEngine.tryCreate,
        _telegramDirectoryProvider =
-           telegramDirectory ?? path_provider.getApplicationSupportDirectory,
+           telegramDirectory ??
+           dataRoot ??
+           path_provider.getApplicationSupportDirectory,
        _groupCallMediaOverride = groupCallMedia,
        _groupCallLinkPolicy = groupCallLinkPolicy,
        _vaultStore = vaultStore,
@@ -643,8 +649,14 @@ class MessengerController extends ChangeNotifier {
        _lanAddressProvider = lanAddressProvider ?? discoverLanAddresses,
        _nowProvider = nowProvider ?? DateTime.now,
        _signedRelayDefaultsLoader = signedRelayDefaultsLoader,
+       _dataRootProvider =
+           dataRoot ?? path_provider.getApplicationSupportDirectory,
        _attachmentRootProvider =
-           attachmentRootProvider ?? _defaultAttachmentRootProvider,
+           attachmentRootProvider ??
+           _attachmentsUnder(
+             dataRoot ?? path_provider.getApplicationSupportDirectory,
+           ),
+       _legacyAttachmentRootProvider = legacyAttachmentRoot,
        _storageCapacityProvider =
            storageCapacityProvider ?? defaultStorageCapacityProvider,
        _longPollEnabled = enableLongPoll,
@@ -673,7 +685,10 @@ class MessengerController extends ChangeNotifier {
                     ? PlatformBridgePowerSource(_platformBridge)
                     : null,
               ));
-    voiceMessageService = VoiceMessageService(platformBridge: _platformBridge);
+    voiceMessageService = VoiceMessageService(
+      platformBridge: _platformBridge,
+      applicationSupportDirectory: _dataRootProvider,
+    );
     _voiceCallSoundCues = VoiceCallSoundCues(
       voiceCallCuePlayer ??
           (!kIsWeb && PlatformVoiceCallCuePlayer.supported
@@ -902,6 +917,16 @@ class MessengerController extends ChangeNotifier {
   /// persisted, so the bubble can keep rendering the file row / image
   /// thumbnail after an app restart instead of regressing to "transferring".
   final Future<Directory> Function() _attachmentRootProvider;
+
+  /// This copy's own data folder (its storage profile). Two copies on one
+  /// machine (a portable one beside the app, the lab's) must never share
+  /// attachments: each one's startup sweep removes files it does not know.
+  final Future<Directory> Function() _dataRootProvider;
+
+  /// Where a portable copy's files were kept before they followed its
+  /// profile (the shared app-support folder): files it still needs are
+  /// copied from there, never moved, as another copy may use them.
+  final Future<Directory> Function()? _legacyAttachmentRootProvider;
   Future<Directory>? _attachmentRootFuture;
 
   /// nightly.9 LocalSend-style direct PUT channel. Null → fast-path is
@@ -4766,7 +4791,15 @@ class MessengerController extends ChangeNotifier {
       _startXmppChats();
       _syncTelegramClient();
       _syncDiscordClient();
-      await VoiceMessageService.cleanupAbandonedRecordings();
+      try {
+        await VoiceMessageService.cleanupAbandonedRecordings(
+          directory: Directory(
+            p.join((await _dataRootProvider()).path, 'voice-recordings'),
+          ),
+        );
+      } catch (_) {
+        // No data folder to clean (tests without a platform): nothing to do.
+      }
       await _recoverScheduledMessageTransitions();
       await _retireBundledRelayRoutes();
       final transportIdentityMigrated = await _ensureTransportIdentity();
@@ -9486,6 +9519,43 @@ class MessengerController extends ChangeNotifier {
     return true;
   }
 
+  /// A portable copy kept its files in the shared app-support folder before
+  /// they followed its profile: copies the ones its messages name and it
+  /// lacks. Nothing there is moved or removed.
+  Future<void> _copyFromLegacyAttachmentRoot(
+    Directory root,
+    Directory cacheDir,
+    Set<String> referencedCacheKeys,
+  ) async {
+    final legacyProvider = _legacyAttachmentRootProvider;
+    if (legacyProvider == null) return;
+    try {
+      final legacy = await legacyProvider();
+      if (p.equals(p.normalize(legacy.path), p.normalize(root.path))) return;
+      final legacyCache = Directory(p.join(legacy.path, 'cache'));
+      if (!await legacyCache.exists()) return;
+      var copied = 0;
+      for (final key in referencedCacheKeys) {
+        final target = File(p.join(cacheDir.path, key));
+        if (await target.exists()) continue;
+        final source = File(p.join(legacyCache.path, key));
+        if (!await source.exists()) continue;
+        final temporary = File('${target.path}.tmp');
+        await source.copy(temporary.path);
+        await temporary.rename(target.path);
+        copied++;
+      }
+      if (copied > 0) {
+        appendDebugLog(
+          'Copied $copied files from the shared attachment folder into this '
+          'copy\'s own.',
+        );
+      }
+    } catch (error) {
+      appendDebugLog('Copying files from the shared folder failed: $error');
+    }
+  }
+
   Future<void> _restoreTransferSessionsAndCleanAttachments() async {
     final root = await _attachmentRoot();
     final cacheDir = Directory(p.join(root.path, 'cache'));
@@ -9581,6 +9651,9 @@ class MessengerController extends ChangeNotifier {
           p.normalize(p.join(root.path, entry.attachmentPath!)),
     };
 
+    await _copyFromLegacyAttachmentRoot(root, cacheDir, referencedCacheKeys);
+    // File times are the real clock's, whatever this controller is told.
+    final graceStart = DateTime.now().subtract(_unreferencedAttachmentGrace);
     Future<void> cleanDirectory(
       Directory directory, {
       required bool cache,
@@ -9592,6 +9665,16 @@ class MessengerController extends ChangeNotifier {
         final keep = cache
             ? referencedCacheKeys.contains(basename)
             : referencedInternalPaths.contains(normalized);
+        // A file no message names is kept for a while: it may belong to a
+        // message the vault had not saved yet when the app last stopped.
+        final recent =
+            !keep &&
+            !basename.endsWith('.tmp') &&
+            await entity
+                .lastModified()
+                .then((at) => at.isAfter(graceStart))
+                .catchError((Object _) => false);
+        if (recent) continue;
         if (!keep || basename.endsWith('.tmp')) {
           try {
             await entity.delete();
