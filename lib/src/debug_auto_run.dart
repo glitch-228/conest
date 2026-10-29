@@ -56,6 +56,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'group_call/group_call_service.dart';
 import 'messenger_controller.dart';
 import 'models.dart';
 
@@ -462,14 +463,10 @@ Future<String> runDebugRequest(
             DateTime.now().difference(since) > const Duration(seconds: 10) &&
             leaving.add(room.callId)) {
           final service = controller.groupCallService!;
+          final entry = _groupCallEntry(controller, room);
           unawaited(
             service.leave().then<void>((_) {
-              calls.add({
-                'groupCall': room.callId,
-                'group': room.groupId,
-                'at': DateTime.now().toUtc().toIso8601String(),
-                'stats': controller.voiceCallStats,
-              });
+              calls.add(entry);
             }, onError: (Object _) {}),
           );
         }
@@ -817,13 +814,9 @@ Future<String> runDebugRequest(
     if (controller.groupCallService?.active case final room?
         when room.joined && leaving.add(room.callId)) {
       await step('leave group call', () async {
+        final entry = _groupCallEntry(controller, room);
         await controller.groupCallService!.leave();
-        calls.add({
-          'groupCall': room.callId,
-          'group': room.groupId,
-          'at': DateTime.now().toUtc().toIso8601String(),
-          'stats': controller.voiceCallStats,
-        });
+        calls.add(entry);
         return null;
       });
     }
@@ -1457,15 +1450,7 @@ Future<void> _callEveryone(
       'participants': room?.participants.length,
       'mostParticipants': most,
       'stats': stats,
-      if (room != null)
-        'frames': {
-          'sent': room.framesSent,
-          'heard': room.framesHeard,
-          'trouble': room.frameTrouble,
-          'authorityChanges': room.authorityChanges,
-          'term': room.term,
-          'coordinator': room.coordinator,
-        },
+      if (room != null) 'frames': _groupCallFrames(room),
     });
     return room?.participants.length;
   });
@@ -1718,3 +1703,25 @@ Future<void> _writeWhole(String path, String text) async {
   await temporary.writeAsString(text, flush: true);
   await temporary.rename(file.path);
 }
+
+/// What a group call's audio and frames did on this device, read before it
+/// leaves (leaving closes the audio and the room).
+Map<String, Object?> _groupCallEntry(
+  MessengerController controller,
+  GroupCallRoom room,
+) => {
+  'groupCall': room.callId,
+  'group': room.groupId,
+  'at': DateTime.now().toUtc().toIso8601String(),
+  'stats': controller.voiceCallStats,
+  'frames': _groupCallFrames(room),
+};
+
+Map<String, Object?> _groupCallFrames(GroupCallRoom room) => {
+  'sent': Map.of(room.framesSent),
+  'heard': Map.of(room.framesHeard),
+  'trouble': Map.of(room.frameTrouble),
+  'authorityChanges': room.authorityChanges,
+  'term': room.term,
+  'coordinator': room.coordinator,
+};

@@ -24389,6 +24389,12 @@ void main() {
         phoneCalls.map((c) => (c['stats'] as Map?)?['received']),
         everyElement(150),
       );
+      // A member writes down its frames too, not only who started the call.
+      final phoneGroup =
+          phoneCalls.firstWhere((c) => c['groupCall'] != null) as Map;
+      final frames = phoneGroup['frames'] as Map;
+      expect((frames['heard'] as Map)[laptop['deviceId']], greaterThan(0));
+      expect(frames['trouble'], isA<Map>());
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
