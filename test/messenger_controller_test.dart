@@ -71,6 +71,7 @@ import 'package:conest/src/meshtastic/radio.dart';
 import 'package:conest/src/radio_chats.dart';
 import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/matrix_service.dart';
+import 'package:conest/src/circumvention/lan_beacon_codec.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/delta_chats.dart';
 import 'package:conest/src/email/delta_mail.dart';
@@ -498,6 +499,25 @@ class _HangingLocalRelayNode extends LocalRelayNode {
     // Never completes — mimics a wedged native call.
     await Completer<void>().future;
     _running = false;
+  }
+}
+
+class _OwnerFakeRelayClient extends _FakeRelayClient {
+  /// What the relay answers about every mailbox: matches, unclaimed, other.
+  String vouch = 'unclaimed';
+  int asked = 0;
+
+  @override
+  Future<String?> mailboxVouch({
+    required String host,
+    required int port,
+    required String recipientDeviceId,
+    required String expectedSigningKeyBase64,
+    Duration timeout = const Duration(seconds: 4),
+    required String expectedIdentityPublicKeyBase64,
+  }) async {
+    asked++;
+    return vouch;
   }
 }
 
@@ -8172,6 +8192,93 @@ void main() {
     );
   }
 
+  test('a relay with v2 sessions pushes direct and group messages over '
+      'subscriptions, a member who is not a contact included', () async {
+    await RelayClient.resetSessionsForTesting();
+    addTearDown(RelayClient.resetSessionsForTesting);
+    final reservation = await ServerSocket.bind(
+      InternetAddress.loopbackIPv4,
+      0,
+    );
+    final relayPort = reservation.port;
+    await reservation.close();
+    final relay = LocalRelayNode(
+      maxRequestsPerMinute: 10000,
+      identitySeed: List<int>.generate(32, (index) => 200 - index),
+    );
+    await relay.start(relayPort);
+    addTearDown(relay.stop);
+    final peers = <MessengerController>[];
+    for (final name in ['Alice', 'Bob', 'Carol']) {
+      final peer = await _createController(
+        relayClient: RelayClient(),
+        displayName: name,
+        createIdentity: false,
+        enableLongPoll: true,
+        localRelayNode: _FakeLocalRelayNode(),
+        lanAddresses: [],
+        transportRegistryFactory: (_) async => null,
+      );
+      addTearDown(peer.dispose);
+      await peer.createIdentity(
+        displayName: name,
+        internetRelayHost: 'tcp://127.0.0.1',
+        internetRelayPort: relayPort,
+      );
+      await peer.updateGlobalConnectivity(
+        GlobalConnectivityPreferences(
+          lanEnabled: false,
+          onlineEnabled: true,
+          transportPolicies: {
+            TransportKind.lan: TransportPolicy.disabled,
+            TransportKind.iroh: TransportPolicy.disabled,
+            TransportKind.conestRelay: TransportPolicy.automatic,
+          },
+        ),
+      );
+      peers.add(peer);
+    }
+    final [alice, bob, carol] = peers;
+    await _pairControllers(alice, bob);
+    await _pairControllers(alice, carol);
+    // Every device watches its mailbox with a subscription.
+    await _waitForIroh(
+      () => peers.every(
+        (peer) => relay.subscribedMailboxes.contains(peer.identity!.deviceId),
+      ),
+      timeout: const Duration(seconds: 40),
+    );
+    expect(relay.sessionsServed, greaterThan(0));
+    await alice.sendMessage(
+      contact: alice.contactByDeviceId(bob.identity!.deviceId)!,
+      body: 'pushed to Bob',
+    );
+    await _waitForIroh(
+      () => bob
+          .messagesFor(alice.identity!.deviceId)
+          .any((message) => message.body == 'pushed to Bob'),
+      timeout: const Duration(seconds: 20),
+    );
+    final group = await alice.createGroup(
+      title: 'Session group',
+      members: alice.contacts,
+    );
+    await _waitForIroh(
+      () =>
+          bob.groups.any((entry) => entry.groupId == group.groupId) &&
+          carol.groups.any((entry) => entry.groupId == group.groupId),
+      timeout: const Duration(seconds: 20),
+    );
+    expect(bob.contactByDeviceId(carol.identity!.deviceId), isNull);
+    await bob.sendGroupMessage(groupId: group.groupId, body: 'over sessions');
+    await _waitForIroh(
+      () => carol
+          .messagesForGroup(group.groupId)
+          .any((message) => message.body == 'over sessions'),
+      timeout: const Duration(seconds: 20),
+    );
+  }, timeout: const Timeout(Duration(seconds: 120)));
+
   test(
     'Iroh bootstrap rejects spoofed endpoint bindings, signatures and unknown messages',
     () async {
@@ -8651,6 +8758,105 @@ void main() {
         receiver.recentPairingBeaconRoutes.map((route) => route.host),
         contains('192.168.50.22'),
       );
+    },
+  );
+
+  test(
+    'a sealed LAN beacon is accepted as the cleartext one was, and junk is not',
+    () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      addTearDown(controller.dispose);
+      final beacon = {
+        'app': 'conest',
+        'kind': 'pairing_route',
+        'version': 2,
+        'deviceId': 'dev-neighbour',
+        'relayPort': 7667,
+      };
+      // Sealed: no cleartext tell, and the route still gets noted.
+      final sealed = await LanBeaconCodec.seal(beacon);
+      expect(
+        utf8.decode(sealed, allowMalformed: true),
+        isNot(contains('conest')),
+      );
+      controller.receivePairingBeaconForTesting(
+        Datagram(sealed, InternetAddress('192.168.50.77'), 7668),
+      );
+      for (var i = 0; i < 60; i++) {
+        if (controller.recentPairingBeaconRoutes.any(
+          (route) => route.host == '192.168.50.77',
+        )) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(
+        controller.recentPairingBeaconRoutes.map((route) => route.host),
+        contains('192.168.50.77'),
+      );
+      // The old cleartext form still works.
+      controller.receivePairingBeaconForTesting(
+        Datagram(
+          utf8.encode(jsonEncode({...beacon, 'relayPort': 7700})),
+          InternetAddress('192.168.50.78'),
+          7668,
+        ),
+      );
+      expect(
+        controller.recentPairingBeaconRoutes.map((route) => route.host),
+        contains('192.168.50.78'),
+      );
+      // Damaged or random datagrams note nothing.
+      final damaged = Uint8List.fromList(
+        await LanBeaconCodec.seal({...beacon, 'relayPort': 7701}),
+      )..[20] ^= 1;
+      controller.receivePairingBeaconForTesting(
+        Datagram(damaged, InternetAddress('192.168.50.79'), 7668),
+      );
+      controller.receivePairingBeaconForTesting(
+        Datagram(
+          Uint8List.fromList(List<int>.generate(90, (i) => i * 3 + 1)),
+          InternetAddress('192.168.50.80'),
+          7668,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      final hosts = controller.recentPairingBeaconRoutes
+          .map((route) => route.host)
+          .toSet();
+      expect(hosts, isNot(contains('192.168.50.79')));
+      expect(hosts, isNot(contains('192.168.50.80')));
+    },
+  );
+
+  test(
+    'a flood of sealed LAN beacons is opened only up to a cap a second',
+    () async {
+      final controller = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      addTearDown(controller.dispose);
+      final sealed = await LanBeaconCodec.seal({
+        'app': 'conest',
+        'kind': 'pairing_route',
+        'deviceId': 'dev-flood',
+        'relayPort': 7667,
+      });
+      for (var i = 1; i <= 120; i++) {
+        controller.receivePairingBeaconForTesting(
+          Datagram(sealed, InternetAddress('192.168.61.$i'), 7668),
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 1000));
+      final hosts = controller.recentPairingBeaconRoutes
+          .map((route) => route.host)
+          .toSet();
+      expect(hosts, isNotEmpty);
+      expect(hosts.length, lessThan(120));
     },
   );
 
@@ -13084,6 +13290,85 @@ void main() {
       alice.addRelayFromLink('https://relay.link.test'),
       throwsArgumentError,
     );
+  });
+
+  test('a hidden address from a relay link is pinned to the link key', () async {
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+    final key = base64Encode(List<int>.filled(32, 7));
+    const hidden = 'wss://relay.link.test/s3cret-path_1';
+    await alice.addRelayFromLink(
+      'conest-relay://relay.link.test:7667?id=relay-1&key='
+      '${Uri.encodeQueryComponent(key)}&wss=${Uri.encodeQueryComponent(hidden)}',
+    );
+    final wss = alice.identity!.configuredRelays.singleWhere(
+      (route) => route.protocol == PeerRouteProtocol.wss,
+    );
+    expect(alice.pinnedRelayIdentityKeys[wss.routeKey], key);
+  });
+
+  test('a relay whose mailbox for a contact belongs to another key is not '
+      'used for that contact', () async {
+    final relay = _OwnerFakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      lanAddresses: const <String>[],
+    );
+    addTearDown(alice.dispose);
+    final bobKey = base64Encode(List<int>.filled(32, 5));
+    final invite = ContactInvite(
+      version: 2,
+      accountId: 'acc-bob',
+      deviceId: 'dev-bob',
+      displayName: 'Bob',
+      bio: 'test peer',
+      pairingNonce: 'bob-nonce',
+      pairingEpochMs: 1760000000000,
+      relayCapable: true,
+      publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+      signingPublicKeyBase64: bobKey,
+      routeHints: const <PeerEndpoint>[
+        PeerEndpoint(
+          kind: PeerRouteKind.relay,
+          host: 'relay.example',
+          port: defaultRelayPort,
+        ),
+      ],
+    );
+    final payload = invite.encodePayload();
+    await alice.addContactFromInvite(
+      alias: 'Bob',
+      payload: payload,
+      codephrase: currentPairingCodeSnapshotForPayload(payload).codephrase,
+    );
+    await alice.acceptContactPairingForTesting(alice.contacts.single.deviceId);
+    await alice.setContactSigningKeyForTesting('dev-bob', bobKey);
+    final contact = alice.contacts.single;
+    // A squatter stands behind Bob's mailbox on the relay.
+    relay.vouch = 'other';
+    // Pinned and known to keep owners, as a real health answer leaves it.
+    final identityKey = base64Encode(List<int>.filled(32, 3));
+    RelayClient.debugMarkKeepsOwners(
+      'relay.example',
+      defaultRelayPort,
+      identityKey,
+    );
+    relay.storeAttempts.clear();
+    try {
+      await alice.sendMessage(contact: contact, body: 'hi');
+    } on Object {
+      // No other route: the send fails or queues.
+    }
+    expect(relay.storeAttempts, isEmpty, reason: 'sent to a squatted mailbox');
+    // The right owner, or none: the relay is used.
+    relay.vouch = 'matches';
+    alice.forgetMailboxVouchingForTesting();
+    await alice.sendMessage(contact: contact, body: 'hello again');
+    expect(relay.storeAttempts, isNotEmpty);
   });
 
   test('what a network cuts is remembered, judged blocked there, and kept '

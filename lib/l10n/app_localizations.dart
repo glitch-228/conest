@@ -10096,6 +10096,174 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'An edit of this message was not applied: it could not be checked.'**
   String get xmppEditNotApplied;
+
+  /// Title of the dialog showing who may use a relay.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay access'**
+  String get relayAccessTitle;
+
+  /// Relay access: the relay did not say how it is run.
+  ///
+  /// In en, this message translates to:
+  /// **'This relay has not said who may use it (an older relay, or not checked yet).'**
+  String get relayAccessUnknown;
+
+  /// Relay access: the relay offers private (v2) connections.
+  ///
+  /// In en, this message translates to:
+  /// **'Private connection: who you fetch messages for stays hidden from the network.'**
+  String get relayAccessSessions;
+
+  /// Relay access: anyone may leave messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Anyone can leave messages here.'**
+  String get relayAccessMessagesOpen;
+
+  /// Relay access: only registered accounts may leave messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Only registered accounts can leave messages here.'**
+  String get relayAccessMessagesRegistered;
+
+  /// Relay access: the relay takes no new messages.
+  ///
+  /// In en, this message translates to:
+  /// **'This relay takes no new messages.'**
+  String get relayAccessMessagesOff;
+
+  /// Relay access: anyone may register.
+  ///
+  /// In en, this message translates to:
+  /// **'Anyone can register.'**
+  String get relayAccessRegistrationOpen;
+
+  /// Relay access: registering needs an invite code.
+  ///
+  /// In en, this message translates to:
+  /// **'Registering needs an invite code.'**
+  String get relayAccessRegistrationInvite;
+
+  /// Relay access: registering needs the relay's password.
+  ///
+  /// In en, this message translates to:
+  /// **'Registering needs the relay\'s password.'**
+  String get relayAccessRegistrationPassword;
+
+  /// Relay access: registration is closed.
+  ///
+  /// In en, this message translates to:
+  /// **'Registration is closed.'**
+  String get relayAccessRegistrationClosed;
+
+  /// Relay access: this device is registered until a date.
+  ///
+  /// In en, this message translates to:
+  /// **'Registered on this relay until {date}.'**
+  String relayAccessRegistered(String date);
+
+  /// Relay access: field for an invite code.
+  ///
+  /// In en, this message translates to:
+  /// **'Invite code'**
+  String get relayAccessInviteLabel;
+
+  /// Relay access: field for the relay's registration password.
+  ///
+  /// In en, this message translates to:
+  /// **'Password'**
+  String get relayAccessPasswordLabel;
+
+  /// Relay access: button to register on the relay.
+  ///
+  /// In en, this message translates to:
+  /// **'Register'**
+  String get relayAccessRegister;
+
+  /// Relay access: registration succeeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Registered.'**
+  String get relayAccessRegisteredNow;
+
+  /// Relay access: registration failed, with the relay's reason.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not register: {error}'**
+  String relayAccessFailed(String error);
+
+  /// Settings section: censorship circumvention.
+  ///
+  /// In en, this message translates to:
+  /// **'Censorship circumvention'**
+  String get circumventionTitle;
+
+  /// Censorship circumvention: what the section is for.
+  ///
+  /// In en, this message translates to:
+  /// **'For networks that block or filter Conest. Automatic turns these on only on networks where routes seem blocked.'**
+  String get circumventionIntro;
+
+  /// Censorship circumvention: DNS over HTTPS.
+  ///
+  /// In en, this message translates to:
+  /// **'Private name lookups (DNS over HTTPS)'**
+  String get circumventionPrivateDns;
+
+  /// Censorship circumvention: TLS ClientHello fragmentation.
+  ///
+  /// In en, this message translates to:
+  /// **'Split secure-connection greetings'**
+  String get circumventionSplitGreeting;
+
+  /// Censorship circumvention: what splitting does.
+  ///
+  /// In en, this message translates to:
+  /// **'Hides which server you connect to from simple filters.'**
+  String get circumventionSplitGreetingHint;
+
+  /// Censorship circumvention: sealed LAN beacons.
+  ///
+  /// In en, this message translates to:
+  /// **'Quiet nearby-device discovery'**
+  String get circumventionQuietLan;
+
+  /// Censorship circumvention: what quiet discovery does.
+  ///
+  /// In en, this message translates to:
+  /// **'Nearby devices find each other with a scrambled signal instead of a recognisable one.'**
+  String get circumventionQuietLanHint;
+
+  /// Censorship circumvention choice: automatic.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic'**
+  String get circumventionAutomatic;
+
+  /// Censorship circumvention choice: always.
+  ///
+  /// In en, this message translates to:
+  /// **'Always'**
+  String get circumventionAlways;
+
+  /// Censorship circumvention choice: off.
+  ///
+  /// In en, this message translates to:
+  /// **'Off'**
+  String get circumventionNever;
+
+  /// Censorship circumvention: in use on this network.
+  ///
+  /// In en, this message translates to:
+  /// **'In use on this network.'**
+  String get circumventionActiveHere;
+
+  /// Censorship circumvention: not in use on this network.
+  ///
+  /// In en, this message translates to:
+  /// **'Not in use on this network.'**
+  String get circumventionIdleHere;
 }
 
 class _AppLocalizationsDelegate

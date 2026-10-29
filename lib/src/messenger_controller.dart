@@ -44,6 +44,8 @@ import 'email/delta_content.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
+import 'circumvention/circumvention.dart';
+import 'circumvention/lan_beacon_codec.dart';
 import 'attachment_safety.dart';
 import 'attachment_file_io.dart';
 import 'media_sanitizer.dart';
@@ -127,6 +129,8 @@ export 'beam_protocol.dart'
         PreparedBeamTransfer,
         conestBeamMaximumPayloadBytes;
 import 'relay_client.dart';
+import 'relay_v2/session.dart' show RelayV2Unavailable;
+import 'relay_v2/subscription_backoff.dart';
 import 'relay_link.dart';
 import 'relay_defaults.dart';
 import 'route_health_tracker.dart';
@@ -1374,6 +1378,10 @@ class MessengerController extends ChangeNotifier {
       _reachability.recordByDeviceId(deviceId);
   ContactReachabilityState reachabilityStateFor(String deviceId) =>
       _reachability.stateFor(deviceId);
+  @visibleForTesting
+  void receivePairingBeaconForTesting(Datagram datagram) =>
+      _onPairingBeaconDatagram(datagram);
+
   @visibleForTesting
   void rememberPairingBeaconRouteForTesting(PeerEndpoint route) {
     _pairingBeaconRoutes[route.routeKey] = _PairingBeaconRoute(
@@ -4681,7 +4689,23 @@ class MessengerController extends ChangeNotifier {
       _networkHistory.failed(route, routeFailureKindOf(error), now);
     }
     _networkHistoryChanged = true;
+    _syncCircumvention();
   }
+
+  /// Censorship circumvention follows the preferences and what this
+  /// network seems to block (M38).
+  void _syncCircumvention() => Circumvention.instance.update(
+    preferences: _snapshot.identity?.connectivity.circumvention,
+    blockedHere: _networkHistory.blockedHere().isNotEmpty,
+  );
+
+  /// Whether private DNS or split TLS greetings are in use now.
+  ({bool privateDns, bool splitGreeting, bool quietLan})
+  get circumventionInUse => (
+    privateDns: Circumvention.instance.privateDnsActive,
+    splitGreeting: Circumvention.instance.splitGreetingActive,
+    quietLan: Circumvention.instance.quietLanActive,
+  );
 
   /// The network now in use ([label]: connectivity_plus's names, such as
   /// "wifi,vpn"), told apart by its kind and this device's LAN subnets.
@@ -4720,6 +4744,7 @@ class MessengerController extends ChangeNotifier {
       now: _now(),
     );
     _networkHistoryChanged = true;
+    _syncCircumvention();
     if (_disposed) return;
     unawaited(_saveSnapshotSilently(debounce: true).catchError((Object _) {}));
   }
@@ -10013,17 +10038,25 @@ class MessengerController extends ChangeNotifier {
     final result = <PeerEndpoint>[];
     for (final spec in specs) {
       if (spec.protocol != null) {
+        // A hidden address needs its secret path or site name.
+        if (isHiddenRouteProtocol(spec.protocol!) &&
+            !isValidHiddenRoutePath(spec.protocol!, spec.path)) {
+          continue;
+        }
         result.add(
           PeerEndpoint(
             kind: spec.kind,
             host: spec.host,
             port: spec.port,
             protocol: spec.protocol!,
+            path: isHiddenRouteProtocol(spec.protocol!) ? spec.path : null,
           ),
         );
         continue;
       }
       for (final protocol in PeerRouteProtocol.values) {
+        // Never guessed: a hidden address comes with its path.
+        if (isHiddenRouteProtocol(protocol)) continue;
         result.add(
           PeerEndpoint(
             kind: spec.kind,
@@ -11607,6 +11640,7 @@ class MessengerController extends ChangeNotifier {
         'Connectivity is fully off. The app will not send or receive.',
     };
     await _persist(label);
+    _syncCircumvention();
   }
 
   static const int recommendedIrohTransferLimitBytes = 100 * 1024 * 1024;
@@ -11851,6 +11885,22 @@ class MessengerController extends ChangeNotifier {
       },
     );
     await addRelay(host: link.host, port: link.port);
+    // Its hidden address too, when the link carries one (M38-A).
+    if (link.hiddenAddress case final hidden?) {
+      // Pinned to the link's identity before it is ever dialled.
+      final route = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: hidden,
+        port: 443,
+      );
+      _snapshot = _snapshot.copyWith(
+        pinnedRelayIdentityKeys: {
+          ..._snapshot.pinnedRelayIdentityKeys,
+          route.routeKey: link.identityKeyBase64,
+        },
+      );
+      await addRelay(host: hidden, port: 443);
+    }
   }
 
   Future<List<PeerEndpoint>> _relayRoutesFromInput({
@@ -11864,12 +11914,17 @@ class MessengerController extends ChangeNotifier {
     }
     validatePeerEndpointHostAndPort(parsed.host, parsed.port);
     if (parsed.hasExplicitProtocol) {
+      if (isHiddenRouteProtocol(parsed.protocol) &&
+          !isValidHiddenRoutePath(parsed.protocol, parsed.path)) {
+        throw ArgumentError('A hidden relay address needs its path or name.');
+      }
       return <PeerEndpoint>[
         PeerEndpoint(
           kind: PeerRouteKind.relay,
           host: parsed.host,
           port: parsed.port,
           protocol: parsed.protocol,
+          path: isHiddenRouteProtocol(parsed.protocol) ? parsed.path : null,
         ),
       ];
     }
@@ -18952,6 +19007,16 @@ class MessengerController extends ChangeNotifier {
         await Future<void>.delayed(const Duration(seconds: 5));
         continue;
       }
+      // A relay with v2 sessions pushes instead (M26): one subscription.
+      if (_relayClient.supportsSubscribe(
+        host: route.host,
+        port: route.port,
+        protocol: route.protocol,
+        expectedIdentityPublicKeyBase64: _pinnedIdentityKeyForRoute(route),
+      )) {
+        await _watchRelaySubscription(route, me, slot, generation);
+        continue;
+      }
       final stopwatch = Stopwatch()..start();
       RelayFetchBatch batch = const RelayFetchBatch(envelopes: []);
       try {
@@ -19037,6 +19102,100 @@ class MessengerController extends ChangeNotifier {
       instantEmpty = 0;
     }
   }
+
+  /// Takes what [route] pushes over a subscription (a relay with v2
+  /// sessions), processing and acknowledging each batch as a long poll
+  /// would, until the subscription ends, the loop stops, or another relay
+  /// should be watched in this slot (checked at least every heartbeat).
+  Future<void> _watchRelaySubscription(
+    PeerEndpoint route,
+    IdentityRecord me,
+    int slot,
+    int? generation,
+  ) async {
+    final stopwatch = Stopwatch()..start();
+    var stoppedOnPurpose = false;
+    try {
+      final expectedRelayKey = await _requireOperationalRelayPin(route);
+      await for (final batch in _relayClient.subscribeEnvelopes(
+        host: route.host,
+        port: route.port,
+        protocol: route.protocol,
+        recipientDeviceId: me.deviceId,
+        leaseFor: _relayLeaseFor(route),
+        expectedIdentityPublicKeyBase64: expectedRelayKey,
+      )) {
+        _routeHealthTracker.recordSuccess(
+          route,
+          fetch: true,
+          latency: stopwatch.elapsed,
+        );
+        stopwatch.reset();
+        final envelopes = batch.envelopes;
+        if (envelopes.isNotEmpty) {
+          try {
+            await _processEnvelopes(
+              envelopes,
+              failOnProcessingError: true,
+              route: _routeForPolled(route),
+            );
+            if (_needsEnvelopeDurability(envelopes)) {
+              await _saveSnapshotSilently(notify: false);
+            }
+            if (batch.leaseId case final leaseId?) {
+              await _relayClient.acknowledgeLease(
+                host: route.host,
+                port: route.port,
+                protocol: route.protocol,
+                recipientDeviceId: me.deviceId,
+                leaseId: leaseId,
+                expectedIdentityPublicKeyBase64: expectedRelayKey,
+              );
+            }
+            // A real batch, processed and acknowledged: the slow-consumer
+            // backoff starts over.
+            _subscriptionBackoff.delivered(route.routeKey);
+            if (_needsEnvelopeDurability(envelopes)) {
+              _markRuntimeActivity();
+              notifyListeners();
+            }
+          } catch (error) {
+            // The lease runs out and the relay pushes the batch again.
+            appendDebugLog('Relay lease retained after a pushed batch: $error');
+          }
+        }
+        final current = identity;
+        if (!_longPollRunning ||
+            current == null ||
+            (generation != null && generation != _longPollGeneration) ||
+            _pickPrimaryRelayForLongPoll(current, slot: slot)?.routeKey !=
+                route.routeKey) {
+          stoppedOnPurpose = true;
+          break;
+        }
+      }
+      // The relay ended the subscription cleanly: not again at once (a
+      // relay that does so in a loop must not be hammered).
+      if (!stoppedOnPurpose) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+    } catch (error) {
+      if (error is RelayV2Unavailable && error.message.contains('too slow')) {
+        // This device was the slow one: not the relay's fault, and not to
+        // be retried at once. The wait grows each time, up to a minute.
+        await Future<void>.delayed(_subscriptionBackoff.cutOff(route.routeKey));
+        return;
+      }
+      _routeHealthTracker.recordFailure(route, error: error.toString());
+      if (_debugBuildId != null) {
+        appendDebugLog('Relay subscription to ${route.host} ended: $error');
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+  }
+
+  /// How often a subscription was cut off for being slow, by route.
+  final SubscriptionBackoff _subscriptionBackoff = SubscriptionBackoff();
 
   ConversationRecord _draftConversation(ConversationKind kind, String id) {
     return switch (kind) {
@@ -20052,7 +20211,7 @@ class MessengerController extends ChangeNotifier {
           }
           Datagram? datagram;
           while ((datagram = socket.receive()) != null) {
-            _handlePairingBeaconDatagram(datagram!);
+            _onPairingBeaconDatagram(datagram!);
           }
         },
         onError: (_) {
@@ -20082,6 +20241,46 @@ class MessengerController extends ChangeNotifier {
     _pairingBeaconSocket?.close();
     _pairingBeaconSocket = null;
     _pairingBeaconRoutes.clear();
+  }
+
+  int _beaconOpenWindow = 0;
+  int _beaconOpensInWindow = 0;
+
+  /// A beacon datagram: the old cleartext form is handled as before; a
+  /// sealed one (M38-C) is opened first, at most 50 a second.
+  void _onPairingBeaconDatagram(Datagram datagram) {
+    final data = datagram.data;
+    if (data.isEmpty || data.length > LanBeaconCodec.maxDatagramBytes) return;
+    if (data[0] == 0x7b) {
+      _handlePairingBeaconDatagram(datagram);
+      return;
+    }
+    final window = _now().millisecondsSinceEpoch ~/ 1000;
+    if (window != _beaconOpenWindow) {
+      _beaconOpenWindow = window;
+      _beaconOpensInWindow = 0;
+    }
+    if (++_beaconOpensInWindow > 50) return;
+    unawaited(
+      LanBeaconCodec.open(data).then((message) {
+        if (message == null) return;
+        _handlePairingBeaconDatagram(
+          Datagram(
+            utf8.encode(jsonEncode(message)),
+            datagram.address,
+            datagram.port,
+          ),
+        );
+      }),
+    );
+  }
+
+  /// What goes on the wire for a beacon: the sealed form, and the old
+  /// cleartext form too unless the quiet LAN setting is in use.
+  Future<List<Uint8List>> _beaconPayloads(Map<String, dynamic> message) async {
+    final sealed = await LanBeaconCodec.seal(message);
+    if (Circumvention.instance.quietLanActive) return [sealed];
+    return [sealed, Uint8List.fromList(utf8.encode(jsonEncode(message)))];
   }
 
   void _handlePairingBeaconDatagram(Datagram datagram) {
@@ -20184,19 +20383,19 @@ class MessengerController extends ChangeNotifier {
     if (me == null || socket == null || !_localRelayNode.isRunning) {
       return;
     }
-    final bytes = utf8.encode(
-      jsonEncode({
-        'app': 'conest',
-        'kind': 'pairing_route',
-        'version': 2,
-        'deviceId': me.deviceId,
-        'relayPort': me.localRelayPort,
-        'protocols': ['tcp', 'udp'],
-      }),
-    );
+    final payloads = await _beaconPayloads({
+      'app': 'conest',
+      'kind': 'pairing_route',
+      'version': 2,
+      'deviceId': me.deviceId,
+      'relayPort': me.localRelayPort,
+      'protocols': ['tcp', 'udp'],
+    });
     if (targetAddress != null) {
       try {
-        socket.send(bytes, targetAddress, targetPort ?? _pairingBeaconPort);
+        for (final bytes in payloads) {
+          socket.send(bytes, targetAddress, targetPort ?? _pairingBeaconPort);
+        }
         _lastPairingBeaconSentAt = _now();
       } catch (_) {
         // Best-effort only.
@@ -20209,7 +20408,9 @@ class MessengerController extends ChangeNotifier {
     var sent = false;
     for (final target in _pairingBroadcastTargets(me)) {
       try {
-        socket.send(bytes, target, _pairingBeaconPort);
+        for (final bytes in payloads) {
+          socket.send(bytes, target, _pairingBeaconPort);
+        }
         sent = true;
       } catch (_) {
         // Best-effort only.
@@ -20227,18 +20428,18 @@ class MessengerController extends ChangeNotifier {
     if (me == null || socket == null) {
       return false;
     }
-    final bytes = utf8.encode(
-      jsonEncode({
-        'app': 'conest',
-        'kind': 'pairing_ping',
-        'version': 1,
-        'deviceId': me.deviceId,
-      }),
-    );
+    final payloads = await _beaconPayloads({
+      'app': 'conest',
+      'kind': 'pairing_ping',
+      'version': 1,
+      'deviceId': me.deviceId,
+    });
     var sent = false;
     for (final target in _pairingBroadcastTargets(me)) {
       try {
-        socket.send(bytes, target, _pairingBeaconPort);
+        for (final bytes in payloads) {
+          socket.send(bytes, target, _pairingBeaconPort);
+        }
         sent = true;
       } catch (_) {
         // Best-effort only.
@@ -30276,6 +30477,7 @@ class MessengerController extends ChangeNotifier {
     Duration? relayTimeout,
   }) async {
     _healthCallCount++;
+    _registerHiddenRoute(route);
     final timeout = switch (route.kind) {
       PeerRouteKind.lan => lanTimeout ?? const Duration(milliseconds: 800),
       PeerRouteKind.directInternet =>
@@ -30293,6 +30495,10 @@ class MessengerController extends ChangeNotifier {
         expectedIdentityPublicKeyBase64: expectedKey,
       );
       stopwatch.stop();
+      if (info.ok && route.kind == PeerRouteKind.relay) {
+        _adoptHiddenRelayAddress(route);
+        _adoptBorrowedRelayAddress(route);
+      }
       if (!info.ok) {
         throw StateError('Route health check failed.');
       }
@@ -30392,8 +30598,192 @@ class MessengerController extends ChangeNotifier {
     return relayId == null ? null : _snapshot.pinnedRelayIdentityKeys[relayId];
   }
 
+  /// What [relay] said about who may use it (null: not known yet, or an
+  /// older relay).
+  RelayV2Info? relayAccessFor(PeerEndpoint relay) =>
+      RelayClient.sessionInfoFor(relay.host, relay.port);
+
+  /// Until when this device is registered on [relay] (null: it is not).
+  DateTime? relayRegisteredUntil(PeerEndpoint relay) {
+    final key = _pinnedIdentityKeyForRoute(relay);
+    final token = key == null ? null : _snapshot.relayTokens[key];
+    return token == null ? null : RelayClient.tokenExpiry(token);
+  }
+
+  /// Registers this device on [relay] (with [invite] or [password] when
+  /// its policy asks) and keeps the token in the vault.
+  Future<void> registerWithRelay(
+    PeerEndpoint relay, {
+    String? invite,
+    String? password,
+  }) async {
+    final me = _requireIdentity();
+    final key = await _requireOperationalRelayPin(relay);
+    if (key == null) throw StateError('Relay identity is not known yet.');
+    final token = await _relayClient.register(
+      host: relay.host,
+      port: relay.port,
+      expectedIdentityPublicKeyBase64: key,
+      accountSecret: base64Decode(
+        me.signingPrivateKeyBase64 ??
+            (throw StateError('This installation has no signing key.')),
+      ),
+      invite: invite,
+      password: password,
+    );
+    _snapshot = _snapshot.copyWith(
+      relayTokens: {..._snapshot.relayTokens, key: token},
+    );
+    RelayClient.setRelayTokens(_snapshot.relayTokens);
+    await _saveSnapshotSilently();
+  }
+
+  /// A configured relay that told its hidden (wss) address inside a session
+  /// gets that address too, first in the list (so it is preferred), pinned
+  /// to the same identity (M38-A).
+  void _adoptHiddenRelayAddress(PeerEndpoint route) {
+    final me = identity;
+    final key = _pinnedIdentityKeyForRoute(route);
+    final info = RelayClient.sessionInfoFor(route.host, route.port);
+    final hidden = info?.hiddenAddress;
+    if (me == null ||
+        key == null ||
+        hidden == null ||
+        info?.identityPublicKeyBase64 != key) {
+      return;
+    }
+    if (!me.configuredRelays.any((relay) => relay.routeKey == route.routeKey)) {
+      return;
+    }
+    final PeerEndpoint wss;
+    try {
+      wss = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: hidden,
+        port: 443,
+      );
+    } on ArgumentError {
+      return;
+    }
+    if (me.configuredRelays.any((relay) => relay.routeKey == wss.routeKey)) {
+      return;
+    }
+    RelayClient.registerWssPath(wss.host, wss.port, wss.path!);
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(configuredRelays: [wss, ...me.configuredRelays]),
+      pinnedRelayIdentityKeys: {
+        ..._snapshot.pinnedRelayIdentityKeys,
+        wss.routeKey: key,
+      },
+    );
+    unawaited(_saveSnapshotSilently(debounce: true));
+  }
+
+  /// A configured relay that told its borrowed-handshake address inside a
+  /// session gets that address too, pinned to the same identity (M38-D).
+  /// It goes after the wss address, before the plain one.
+  void _adoptBorrowedRelayAddress(PeerEndpoint route) {
+    final me = identity;
+    final key = _pinnedIdentityKeyForRoute(route);
+    final info = RelayClient.sessionInfoFor(route.host, route.port);
+    final borrowed = info?.borrowed;
+    if (me == null ||
+        key == null ||
+        borrowed == null ||
+        info?.identityPublicKeyBase64 != key) {
+      return;
+    }
+    if (!me.configuredRelays.any((relay) => relay.routeKey == route.routeKey)) {
+      return;
+    }
+    final PeerEndpoint address;
+    try {
+      address = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: borrowed.host,
+        port: borrowed.port,
+        protocol: PeerRouteProtocol.borrowed,
+        path: borrowed.sni,
+      );
+    } on ArgumentError {
+      return;
+    }
+    if (me.configuredRelays.any(
+      (relay) => relay.routeKey == address.routeKey,
+    )) {
+      return;
+    }
+    RelayClient.registerBorrowedSite(address.host, address.port, borrowed.sni);
+    final relays = [...me.configuredRelays];
+    final firstPlain = relays.indexWhere(
+      (relay) => !isHiddenRouteProtocol(relay.protocol),
+    );
+    relays.insert(firstPlain < 0 ? relays.length : firstPlain, address);
+    _snapshot = _snapshot.copyWith(
+      identity: me.copyWith(configuredRelays: relays),
+      pinnedRelayIdentityKeys: {
+        ..._snapshot.pinnedRelayIdentityKeys,
+        address.routeKey: key,
+      },
+    );
+    unawaited(_saveSnapshotSilently(debounce: true));
+  }
+
+  /// Tells the relay client the secret paths of hidden (wss) relays.
+  void _registerHiddenRelayPaths(IdentityRecord me) {
+    for (final relay in me.configuredRelays) {
+      _registerHiddenRoute(relay);
+    }
+  }
+
+  void _registerHiddenRoute(PeerEndpoint route) {
+    final path = route.path;
+    if (path == null) return;
+    if (route.protocol == PeerRouteProtocol.wss) {
+      RelayClient.registerWssPath(route.host, route.port, path);
+    } else if (route.protocol == PeerRouteProtocol.borrowed) {
+      RelayClient.registerBorrowedSite(route.host, route.port, path);
+    }
+  }
+
+  /// Relays whose token was refreshed lately (at most once an hour each).
+  final Map<String, DateTime> _relayTokenRefreshes = {};
+
+  /// Refreshes [route]'s token when it runs out within three days.
+  void _refreshRelayTokenIfDue(PeerEndpoint route) {
+    final key = _pinnedIdentityKeyForRoute(route);
+    final token = key == null ? null : _snapshot.relayTokens[key];
+    final expiry = token == null ? null : RelayClient.tokenExpiry(token);
+    if (key == null || expiry == null) return;
+    final now = DateTime.now().toUtc();
+    if (expiry.difference(now) > const Duration(days: 3)) return;
+    final last = _relayTokenRefreshes[key];
+    if (last != null && now.difference(last) < const Duration(hours: 1)) {
+      return;
+    }
+    _relayTokenRefreshes[key] = now;
+    unawaited(
+      registerWithRelay(route).catchError((Object error) {
+        appendDebugLog('Relay token refresh failed: $error');
+      }),
+    );
+  }
+
   Future<String?> _requireOperationalRelayPin(PeerEndpoint route) async {
     if (route.kind != PeerRouteKind.relay) return null;
+    // Relays that keep mailbox owners get this device's proof, and those
+    // that take registered accounts only, its token (M26).
+    if (identity case final me?) {
+      // Only the Ed25519 signing seed is ever used for this (the other
+      // private key is an X25519 one, not to be used as a signing seed).
+      if (me.signingPrivateKeyBase64 case final seed?) {
+        RelayClient.registerMailboxSecret(me.deviceId, base64Decode(seed));
+      }
+      RelayClient.setRelayTokens(_snapshot.relayTokens);
+      _refreshRelayTokenIfDue(route);
+      _syncCircumvention();
+      _registerHiddenRelayPaths(me);
+    }
     var key = _pinnedIdentityKeyForRoute(route);
     if (key != null) return key;
     final health = await _checkRouteHealth(route);
@@ -30425,6 +30815,7 @@ class MessengerController extends ChangeNotifier {
       }
       try {
         final expectedRelayKey = await _requireOperationalRelayPin(route);
+        await _checkMailboxVouched(route, recipientDeviceId, expectedRelayKey);
         _storeCallCount++;
         final stopwatch = Stopwatch()..start();
         final stored = await _relayClient.storeEnvelope(
@@ -30460,6 +30851,103 @@ class MessengerController extends ChangeNotifier {
     }
     throw lastError ?? StateError('No reachable route for recipient.');
   }
+
+  /// "Contacts vouch" (M26): on a relay that keeps mailbox owners, the
+  /// recipient's mailbox must be vouched for by the signing key this device
+  /// knows for them (a contact's, or a group member's). The relay answers
+  /// `matches`, `unclaimed` or `other` and never tells a key; `other` means
+  /// a stranger claimed the mailbox first, and the relay is not used for
+  /// this recipient (mail left there would be the squatter's to drop).
+  /// Relays without owners or sessions, recipients whose key is unknown,
+  /// and unanswered questions pass. `matches` is remembered for an hour,
+  /// `unclaimed` for five minutes (a squatter may come later).
+  Future<void> _checkMailboxVouched(
+    PeerEndpoint route,
+    String recipientDeviceId,
+    String? relayKey,
+  ) async {
+    if (route.kind != PeerRouteKind.relay || relayKey == null) return;
+    final expected = _signingKeyKnownFor(recipientDeviceId);
+    if (expected == null) return;
+    if (RelayClient.sessionInfoFor(route.host, route.port)?.mailboxAuth !=
+        true) {
+      return;
+    }
+    final cacheKey = '${route.routeKey}|$recipientDeviceId';
+    final now = DateTime.now();
+    final seen = _mailboxVouched[cacheKey];
+    if (seen != null && now.difference(seen.at) < seen.keep) {
+      if (!seen.ok) throw StateError(_squattedMessage(route));
+      return;
+    }
+    final String? word;
+    try {
+      word = await _relayClient.mailboxVouch(
+        host: route.host,
+        port: route.port,
+        recipientDeviceId: recipientDeviceId,
+        expectedSigningKeyBase64: expected,
+        expectedIdentityPublicKeyBase64: relayKey,
+      );
+    } on Object {
+      return;
+    }
+    if (word == null) return;
+    // A claim nobody vouched for ('unvouched') is as untrustworthy as one
+    // vouched for by another key.
+    final ok = word == 'matches' || word == 'unclaimed';
+    if (_mailboxVouched.length >= 256) {
+      _mailboxVouched.remove(_mailboxVouched.keys.first);
+    }
+    _mailboxVouched[cacheKey] = (
+      ok: ok,
+      at: now,
+      keep: word == 'unclaimed'
+          ? const Duration(minutes: 5)
+          : const Duration(hours: 1),
+    );
+    if (!ok) throw StateError(_squattedMessage(route));
+  }
+
+  /// The signing key known for [deviceId]: a contact's, else a group
+  /// member's who is not a contact.
+  String? _signingKeyKnownFor(String deviceId) {
+    final contactKey = _contactByDeviceId(deviceId)?.signingPublicKeyBase64;
+    if (contactKey != null && contactKey.isNotEmpty) return contactKey;
+    for (final group in _snapshot.groups) {
+      for (final member in group.memberProfiles) {
+        if (member.deviceId == deviceId &&
+            member.signingPublicKeyBase64?.isNotEmpty == true) {
+          return member.signingPublicKeyBase64;
+        }
+      }
+    }
+    return null;
+  }
+
+  String _squattedMessage(PeerEndpoint route) =>
+      'The recipient\'s mailbox on ${route.label} is vouched for by another '
+      'key; not using this relay for them.';
+
+  final Map<String, ({bool ok, DateTime at, Duration keep})> _mailboxVouched =
+      {};
+
+  @visibleForTesting
+  Future<void> setContactSigningKeyForTesting(
+    String deviceId,
+    String key,
+  ) async {
+    final contacts = [
+      for (final contact in _snapshot.contacts)
+        contact.deviceId == deviceId
+            ? contact.copyWith(signingPublicKeyBase64: key)
+            : contact,
+    ];
+    _snapshot = _snapshot.copyWith(contacts: contacts);
+  }
+
+  @visibleForTesting
+  void forgetMailboxVouchingForTesting() => _mailboxVouched.clear();
 
   Future<ContactInvite> _resolveInviteByCodephrase(String codephrase) async {
     final me = _requireIdentity();
@@ -31945,7 +32433,10 @@ class MessengerController extends ChangeNotifier {
   }
 
   List<PeerEndpoint> _rankInviteRoutes(Iterable<PeerEndpoint> routes) {
-    final ranked = dedupePeerEndpoints(routes);
+    // A relay's hidden (wss) address is a secret: not handed around.
+    final ranked = dedupePeerEndpoints(
+      routes.where((route) => !isHiddenRouteProtocol(route.protocol)),
+    );
     ranked.sort((left, right) {
       final leftHealth = _routeHealthTracker.healthMap[left.routeKey];
       final rightHealth = _routeHealthTracker.healthMap[right.routeKey];
@@ -31976,6 +32467,8 @@ class MessengerController extends ChangeNotifier {
       PeerRouteProtocol.udp => 1,
       PeerRouteProtocol.https => 2,
       PeerRouteProtocol.http => 3,
+      PeerRouteProtocol.wss => 4,
+      PeerRouteProtocol.borrowed => 5,
     };
   }
 
@@ -39535,6 +40028,61 @@ class _ScoringRelayClient implements RelayClient {
     required this.nowProvider,
   });
 
+  @override
+  Future<String> register({
+    required String host,
+    required int port,
+    required String expectedIdentityPublicKeyBase64,
+    required List<int> accountSecret,
+    String? invite,
+    String? password,
+    Duration timeout = const Duration(seconds: 8),
+  }) => inner.register(
+    host: host,
+    port: port,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    accountSecret: accountSecret,
+    invite: invite,
+    password: password,
+    timeout: timeout,
+  );
+
+  @override
+  bool supportsSubscribe({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.supportsSubscribe(
+    host: host,
+    port: port,
+    protocol: protocol,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
+  @override
+  Stream<RelayFetchBatch> subscribeEnvelopes({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String recipientDeviceId,
+    int limit = 64,
+    Duration leaseFor = const Duration(seconds: 60),
+    Duration timeout = const Duration(seconds: 8),
+    Duration heartbeat = const Duration(seconds: 30),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.subscribeEnvelopes(
+    host: host,
+    port: port,
+    protocol: protocol,
+    recipientDeviceId: recipientDeviceId,
+    limit: limit,
+    leaseFor: leaseFor,
+    timeout: timeout,
+    heartbeat: heartbeat,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
   final RelayClient inner;
   final _RelayAttemptCallback onAttempt;
   final DateTime Function() nowProvider;
@@ -39745,6 +40293,23 @@ class _ScoringRelayClient implements RelayClient {
       ),
     );
   }
+
+  @override
+  Future<String?> mailboxVouch({
+    required String host,
+    required int port,
+    required String recipientDeviceId,
+    required String expectedSigningKeyBase64,
+    Duration timeout = const Duration(seconds: 4),
+    required String expectedIdentityPublicKeyBase64,
+  }) => inner.mailboxVouch(
+    host: host,
+    port: port,
+    recipientDeviceId: recipientDeviceId,
+    expectedSigningKeyBase64: expectedSigningKeyBase64,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
 
   @override
   Future<void> acknowledgeLease({

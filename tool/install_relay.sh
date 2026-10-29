@@ -31,6 +31,13 @@ SERVICE_USER="conest-relay"
 DATA_DIR="/var/lib/conest-relay"
 BUNDLE_DIR="/opt/conest-relay"
 MAINTENANCE_HOUR="3"
+# Hidden address (M38-A): TLS on 443 with a WebSocket on a secret path and a
+# decoy web site, when a domain and a certificate are given.
+DOMAIN=""
+TLS_CERT=""
+TLS_KEY=""
+NO_HIDDEN=0
+WS_PATH=""
 ASSUME_YES=0
 MODE="install"
 TAG=""
@@ -55,6 +62,11 @@ Conest relay installer
   --data-dir PATH       (default /var/lib/conest-relay)
   --bundle-dir PATH     (default /opt/conest-relay)
   --maintenance-hour H  hour (UTC, 0-23) updates may restart it (default 3)
+  --domain NAME         the server's domain: also serve on 443 as an ordinary
+                        web site that hides the relay (needs a certificate)
+  --cert PEM --key PEM  the certificate and key for that domain (default:
+                        Let's Encrypt's /etc/letsencrypt/live/NAME)
+  --no-hidden           keep 7667 only
   --tag TAG             a specific release instead of the newest
   --release-key BASE64  the release signing key (if this copy has none)
   --uninstall           stop and remove the service (keeps the data)
@@ -74,6 +86,10 @@ while [ $# -gt 0 ]; do
   --maintenance-hour) MAINTENANCE_HOUR="${2:?}"; shift ;;
   --tag) TAG="${2:?}"; shift ;;
   --release-key) RELEASE_PUBLIC_KEY="${2:?}"; shift ;;
+  --domain) DOMAIN="${2:?}"; shift ;;
+  --cert) TLS_CERT="${2:?}"; shift ;;
+  --key) TLS_KEY="${2:?}"; shift ;;
+  --no-hidden) NO_HIDDEN=1 ;;
   --uninstall) MODE="uninstall" ;;
   --help | -h)
     usage
@@ -146,6 +162,19 @@ as_root() {
 
 cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
+
+# A value that is safe to write into a root-run script or a config file:
+# plain path characters only.
+safe_value() {
+  case "$1" in
+  '' | *[!A-Za-z0-9._/@:+-]*) return 1 ;;
+  esac
+}
+
+# shq VALUE -> VALUE quoted for sh
+shq() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
 
 valid_port() {
   case "$1" in
@@ -286,6 +315,43 @@ if [ "$ASSUME_YES" -eq 0 ]; then
 fi
 valid_port "$PORT" || die "not a port: $PORT"
 
+# --- Hidden address on 443 ------------------------------------------------------
+# On when a domain with a certificate is at hand: the relay then also answers
+# on 443 as an ordinary web site, and Conest reaches it through a WebSocket
+# on a secret path (blocking it means blocking a web site).
+HIDDEN=0
+if [ "$NO_HIDDEN" -eq 0 ]; then
+  if [ -z "$DOMAIN" ] && [ "$ASSUME_YES" -eq 0 ]; then
+    DOMAIN=$(ask_value "Domain name of this server, to also serve on 443 hidden as a web site (empty = skip)" "")
+  fi
+  if [ -n "$DOMAIN" ]; then
+    case "$DOMAIN" in
+    *[!A-Za-z0-9.-]* | .* | *..*) die "not a domain name: $DOMAIN" ;;
+    esac
+    safe_value "$DOMAIN" || die "not a usable domain name: $DOMAIN"
+    LE_DIR="/etc/letsencrypt/live/$DOMAIN"
+    if [ -z "$TLS_CERT" ] && as_root test -r "$LE_DIR/fullchain.pem"; then
+      TLS_CERT="$LE_DIR/fullchain.pem"
+      TLS_KEY="$LE_DIR/privkey.pem"
+    fi
+    if [ -n "$TLS_CERT" ] || [ -n "$TLS_KEY" ]; then
+      if ! safe_value "$TLS_CERT" || ! safe_value "$TLS_KEY"; then
+        die "the certificate and key paths may only use letters, digits and . _ / @ : + -"
+      fi
+    fi
+    safe_value "$DATA_DIR" || die "the data directory may only use letters, digits and . _ / @ : + -"
+    if [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] &&
+      as_root test -r "$TLS_CERT" && as_root test -r "$TLS_KEY"; then
+      HIDDEN=1
+    else
+      say "No certificate for $DOMAIN yet, so 443 is skipped. To get one:"
+      say "  certbot certonly --standalone -d $DOMAIN      (or use acme.sh / your web server's ACME client)"
+      say "then run this installer again with --domain $DOMAIN"
+      say "(or --cert FULLCHAIN.pem --key PRIVKEY.pem)."
+    fi
+  fi
+fi
+
 # --- Account and folders --------------------------------------------------------
 USE_ACCOUNT=0
 if ask "Run it as its own system account ($SERVICE_USER) instead of root?" y; then
@@ -310,20 +376,59 @@ if [ "$USE_ACCOUNT" -eq 1 ]; then
 fi
 say "Installed in $BUNDLE_DIR; data in $DATA_DIR."
 
+if [ "$HIDDEN" -eq 1 ]; then
+  # The relay reads its certificate at start: keep a copy it may read (the
+  # original is root's), refreshed when the certificate renews.
+  CERT_OWNER=root
+  [ "$USE_ACCOUNT" -eq 1 ] && CERT_OWNER="$SERVICE_USER"
+  as_root mkdir -p "$DATA_DIR/tls"
+  as_root install -m 0600 -o "$CERT_OWNER" "$TLS_CERT" "$DATA_DIR/tls/fullchain.pem"
+  as_root install -m 0600 -o "$CERT_OWNER" "$TLS_KEY" "$DATA_DIR/tls/privkey.pem"
+  if [ -d /etc/letsencrypt/renewal-hooks/deploy ] && [ "$TLS_CERT" = "$LE_DIR/fullchain.pem" ]; then
+    as_root tee /etc/letsencrypt/renewal-hooks/deploy/conest-relay.sh >/dev/null <<HOOK
+#!/bin/sh
+# Refresh the Conest relay's copy of the certificate and restart it.
+install -m 0600 -o $(shq "$CERT_OWNER") $(shq "$TLS_CERT") $(shq "$DATA_DIR/tls/fullchain.pem")
+install -m 0600 -o $(shq "$CERT_OWNER") $(shq "$TLS_KEY") $(shq "$DATA_DIR/tls/privkey.pem")
+systemctl restart conest-relay.service
+HOOK
+    as_root chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/conest-relay.sh
+  fi
+  # relay.conf is the relay's settings file; keep what is there.
+  CONF="$DATA_DIR/relay.conf"
+  if ! as_root test -f "$CONF" || ! as_root grep -q '^tls-bind' "$CONF"; then
+    WS_PATH=$(head -c 24 /dev/urandom | base64 | tr '+/' 'ab' | tr -d '=\n' | head -c 24)
+    as_root tee -a "$CONF" >/dev/null <<CONF
+tls-bind = 0.0.0.0:443
+tls-cert = $DATA_DIR/tls/fullchain.pem
+tls-key = $DATA_DIR/tls/privkey.pem
+ws-path = $WS_PATH
+public-host = $DOMAIN
+CONF
+  else
+    WS_PATH=$(as_root sed -n 's/^ws-path *= *//p' "$CONF" | head -n 1)
+  fi
+  as_root chown "$CERT_OWNER:$CERT_OWNER" "$CONF" 2>/dev/null || as_root chown "$CERT_OWNER" "$CONF"
+  say "Hidden address on 443 set up for $DOMAIN (settings in $CONF)."
+fi
+
 # --- Firewall -----------------------------------------------------------------
 if need ufw && as_root ufw status 2>/dev/null | grep -q 'Status: active'; then
   if ask "Open port $PORT (TCP and UDP) in ufw?" y; then
     as_root ufw allow "$PORT/tcp"
     as_root ufw allow "$PORT/udp"
+    if [ "$HIDDEN" -eq 1 ]; then as_root ufw allow 443/tcp; fi
   fi
 elif need firewall-cmd && as_root firewall-cmd --state >/dev/null 2>&1; then
   if ask "Open port $PORT (TCP and UDP) in firewalld?" y; then
     as_root firewall-cmd --permanent --add-port="$PORT/tcp"
     as_root firewall-cmd --permanent --add-port="$PORT/udp"
+    if [ "$HIDDEN" -eq 1 ]; then as_root firewall-cmd --permanent --add-port=443/tcp; fi
     as_root firewall-cmd --reload
   fi
 else
   say "No ufw or firewalld running: make sure port $PORT (TCP and UDP) is reachable, including in your provider's firewall."
+  if [ "$HIDDEN" -eq 1 ]; then say "Also 443 (TCP), for the hidden address."; fi
 fi
 
 # --- Service --------------------------------------------------------------------
@@ -362,6 +467,9 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths=$DATA_DIR"
+  # The right to bind 443 only when the relay serves TLS there.
+  [ "$HIDDEN" -eq 1 ] && UNIT_USER="$UNIT_USER
+AmbientCapabilities=CAP_NET_BIND_SERVICE"
   as_root tee /etc/systemd/system/conest-relay.service >/dev/null <<EOF
 [Unit]
 Description=Conest Relay
@@ -410,6 +518,18 @@ say "  Address:      $ADDRESS:$PORT"
 say "  Relay id:     $ID"
 say "  Identity key: $KEY"
 say ""
+if [ "$HIDDEN" -eq 1 ]; then
+  if [ -n "$WS_PATH" ]; then
+    HIDDEN_URL="wss://$DOMAIN/$WS_PATH"
+    LINK="$LINK&wss=$(printf '%s' "$HIDDEN_URL" | sed 's#:#%3A#g; s#/#%2F#g')"
+    say "  Hidden:       $HIDDEN_URL"
+    say "                (secret: on 443 the relay looks like an ordinary web site;"
+    say "                 share this only with people who should use the relay)"
+  else
+    say "  Hidden:       on 443; the relay made its own secret path (see its log:"
+    say "                journalctl -u conest-relay | grep 'WebSocket path')"
+  fi
+fi
 say "In Conest: Settings > Relays > Add from link, and paste:"
 say "  $LINK"
 if need qrencode; then

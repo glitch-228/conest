@@ -33,6 +33,20 @@ fn run() -> Result<(), String> {
     if env::args().nth(1).as_deref() == Some("verify-manifest") {
         return verify_manifest_command(env::args().skip(2));
     }
+    if let Some(command) = env::args().nth(1)
+        && matches!(command.as_str(), "invite" | "account" | "quota")
+    {
+        let (binary, arguments) = admin_invocation(env::args().skip(1).collect())?;
+        let status = Command::new(&binary)
+            .args(&arguments)
+            .status()
+            .map_err(|error| format!("running {}: {error}", binary.display()))?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(format!("relay admin command failed ({status})"))
+        };
+    }
     let (command, config) = Config::from_args()?;
     match command.as_str() {
         "install" => install_service(&config),
@@ -554,6 +568,63 @@ fn verify_manifest_signature(manifest: &[u8], signature: &str, key: &str) -> Res
         .map_err(|_| "release manifest signature verification failed".to_owned())
 }
 
+/// Removes `name VALUE` from [words], returning the value.
+fn take_option(words: &mut Vec<String>, name: &str) -> Option<String> {
+    let index = words.iter().position(|word| word == name)?;
+    if index + 1 >= words.len() {
+        return None;
+    }
+    let value = words.remove(index + 1);
+    words.remove(index);
+    Some(value)
+}
+
+/// The relay binary and arguments for an operator command (`invite create
+/// [--uses N] [--expires-days D]`, `invite list`, `account list`, `account
+/// remove KEY`, `quota set KEY BYTES`), run against the relay's database.
+///
+/// The directories are never guessed relative to wherever the command is
+/// run from (that would open, or create, some other database): they come
+/// from `--data-dir`/`--bundle-dir`, the environment, or the installer's
+/// absolute defaults (Unix); they must be absolute paths.
+fn admin_invocation(mut words: Vec<String>) -> Result<(PathBuf, Vec<String>), String> {
+    let default = |unix: &str| {
+        if cfg!(unix) {
+            Some(unix.to_owned())
+        } else {
+            None
+        }
+    };
+    let data_dir = take_option(&mut words, "--data-dir")
+        .or_else(|| env::var("CONEST_RELAY_DATA_DIR").ok())
+        .or_else(|| default("/var/lib/conest-relay"))
+        .ok_or("operator commands need --data-dir")?;
+    let bundle_dir = take_option(&mut words, "--bundle-dir")
+        .or_else(|| env::var("CONEST_RELAY_BUNDLE_DIR").ok())
+        .or_else(|| default("/opt/conest-relay"))
+        .ok_or("operator commands need --bundle-dir")?;
+    for (name, dir) in [("--data-dir", &data_dir), ("--bundle-dir", &bundle_dir)] {
+        if !Path::new(dir).is_absolute() {
+            return Err(format!("{name} must be an absolute path (got {dir})"));
+        }
+    }
+    let binary = PathBuf::from(bundle_dir).join(if cfg!(windows) {
+        "conest_relay.exe"
+    } else {
+        "conest_relay"
+    });
+    let mut arguments = vec![
+        "admin".to_owned(),
+        "--database-path".to_owned(),
+        PathBuf::from(data_dir)
+            .join("relay.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    arguments.extend(words);
+    Ok((binary, arguments))
+}
+
 fn spawn_relay(config: &Config) -> Result<Child, String> {
     prepare_directories(config)?;
     let binary = config.relay_binary();
@@ -746,7 +817,9 @@ fn systemd_unit(config: &Config, exec_start: &str) -> String {
             .relay_bind
             .rsplit_once(':')
             .and_then(|(_, port)| port.parse::<u16>().ok());
-        if port.is_some_and(|port| port < 1024) {
+        if port.is_some_and(|port| port < 1024)
+            || tls_port_in_config(config).is_some_and(|port| port < 1024)
+        {
             service.push("AmbientCapabilities=CAP_NET_BIND_SERVICE".to_owned());
         }
     }
@@ -754,6 +827,21 @@ fn systemd_unit(config: &Config, exec_start: &str) -> String {
         "[Unit]\nDescription=Conest Relay Supervisor\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\n{}\n\n[Install]\nWantedBy=multi-user.target\n",
         service.join("\n")
     )
+}
+
+/// The port of `tls-bind` in the relay's `relay.conf` (M38-A): a relay
+/// that serves TLS on 443 needs the right to bind it.
+#[cfg(target_os = "linux")]
+fn tls_port_in_config(config: &Config) -> Option<u16> {
+    let text = fs::read_to_string(config.data_dir.join("relay.conf")).ok()?;
+    text.lines().find_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        if name.trim() != "tls-bind" {
+            return None;
+        }
+        let value = value.trim().trim_matches('"');
+        value.rsplit_once(':')?.1.parse().ok()
+    })
 }
 
 fn serve_arguments(config: &Config) -> Vec<String> {
@@ -1070,12 +1158,61 @@ fn now_millis() -> u64 {
 }
 
 fn usage() -> String {
-    "usage: conest_relay_supervisor <install|uninstall|start|stop|status|update-now|rollback|serve> [--data-dir PATH] [--bundle-dir PATH] [--bind HOST:PORT] [--channel stable|nightly] [--manifest-url HTTPS_URL|github:OWNER/REPO] [--release-public-key BASE64] [--maintenance-hour 0..23] [--service-user NAME]".to_owned()
+    "usage: conest_relay_supervisor <install|uninstall|start|stop|status|update-now|rollback|serve> [--data-dir PATH] [--bundle-dir PATH] [--bind HOST:PORT] [--channel stable|nightly] [--manifest-url HTTPS_URL|github:OWNER/REPO] [--release-public-key BASE64] [--maintenance-hour 0..23] [--service-user NAME]\n       conest_relay_supervisor invite create [--uses N] [--expires-days D] | invite list | account list | account remove KEY | quota set KEY BYTES_PER_MINUTE [--data-dir PATH] [--bundle-dir PATH]".to_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operator_commands_refuse_relative_directories() {
+        let refused = admin_invocation(
+            ["invite", "list", "--data-dir", "data", "--bundle-dir", "/opt/b"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert!(refused.is_err());
+        let refused = admin_invocation(
+            ["invite", "list", "--data-dir", "/srv/d", "--bundle-dir", "./b"]
+                .map(str::to_owned)
+                .to_vec(),
+        );
+        assert!(refused.is_err());
+    }
+
+    #[test]
+    fn operator_commands_run_the_relay_admin_on_its_database() {
+        let (binary, arguments) = admin_invocation(
+            ["invite", "create", "--data-dir", "/srv/data", "--uses", "3", "--bundle-dir", "/opt/b"]
+                .map(str::to_owned)
+                .to_vec(),
+        )
+        .expect("absolute directories");
+        assert_eq!(
+            binary,
+            PathBuf::from("/opt/b").join(if cfg!(windows) {
+                "conest_relay.exe"
+            } else {
+                "conest_relay"
+            })
+        );
+        assert_eq!(
+            arguments,
+            [
+                "admin".to_owned(),
+                "--database-path".to_owned(),
+                PathBuf::from("/srv/data")
+                    .join("relay.sqlite3")
+                    .to_string_lossy()
+                    .into_owned(),
+                "invite".to_owned(),
+                "create".to_owned(),
+                "--uses".to_owned(),
+                "3".to_owned(),
+            ]
+        );
+    }
 
     fn test_config() -> Config {
         Config {
@@ -1103,6 +1240,25 @@ mod tests {
         assert!(!unit.contains("CAP_NET_BIND_SERVICE"));
         config.relay_bind = "0.0.0.0:443".to_owned();
         assert!(systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tls_on_443_in_the_relay_conf_gets_the_bind_right_too() {
+        let mut config = test_config();
+        config.service_user = Some("conest-relay".to_owned());
+        config.data_dir = env::temp_dir().join(format!("conest-relay-tls-{}", std::process::id()));
+        fs::create_dir_all(&config.data_dir).unwrap();
+        assert!(!systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+        fs::write(
+            config.data_dir.join("relay.conf"),
+            "# c\ntls-bind = 0.0.0.0:443\n",
+        )
+        .unwrap();
+        assert!(systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+        fs::write(config.data_dir.join("relay.conf"), "tls-bind = 0.0.0.0:8443\n").unwrap();
+        assert!(!systemd_unit(&config, "/x serve").contains("CAP_NET_BIND_SERVICE"));
+        let _ = fs::remove_dir_all(&config.data_dir);
     }
 
     #[test]

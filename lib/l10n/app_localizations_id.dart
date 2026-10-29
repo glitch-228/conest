@@ -6251,4 +6251,102 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get xmppEditNotApplied =>
       'Suntingan pesan ini tidak diterapkan: tidak bisa diperiksa.';
+
+  @override
+  String get relayAccessTitle => 'Akses relay';
+
+  @override
+  String get relayAccessUnknown =>
+      'Relay ini belum menyebutkan siapa yang boleh memakainya (relay lama, atau belum diperiksa).';
+
+  @override
+  String get relayAccessSessions =>
+      'Koneksi privat: untuk siapa Anda mengambil pesan tetap tersembunyi dari jaringan.';
+
+  @override
+  String get relayAccessMessagesOpen =>
+      'Siapa pun dapat meninggalkan pesan di sini.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'Hanya akun terdaftar yang dapat meninggalkan pesan di sini.';
+
+  @override
+  String get relayAccessMessagesOff => 'Relay ini tidak menerima pesan baru.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'Siapa pun dapat mendaftar.';
+
+  @override
+  String get relayAccessRegistrationInvite =>
+      'Pendaftaran memerlukan kode undangan.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'Pendaftaran memerlukan kata sandi relay.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'Pendaftaran ditutup.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'Terdaftar di relay ini hingga $date.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'Kode undangan';
+
+  @override
+  String get relayAccessPasswordLabel => 'Kata sandi';
+
+  @override
+  String get relayAccessRegister => 'Daftar';
+
+  @override
+  String get relayAccessRegisteredNow => 'Terdaftar.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'Tidak dapat mendaftar: $error';
+  }
+
+  @override
+  String get circumventionTitle => 'Menghindari sensor';
+
+  @override
+  String get circumventionIntro =>
+      'Untuk jaringan yang memblokir atau menyaring Conest. Otomatis menyalakannya hanya di jaringan yang tampaknya memblokir rute.';
+
+  @override
+  String get circumventionPrivateDns =>
+      'Pencarian nama privat (DNS lewat HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting => 'Pecah salam koneksi aman';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'Menyembunyikan server yang Anda hubungi dari penyaring sederhana.';
+
+  @override
+  String get circumventionQuietLan => 'Penemuan perangkat terdekat yang senyap';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'Perangkat terdekat saling menemukan dengan sinyal yang diacak, bukan sinyal yang mudah dikenali.';
+
+  @override
+  String get circumventionAutomatic => 'Otomatis';
+
+  @override
+  String get circumventionAlways => 'Selalu';
+
+  @override
+  String get circumventionNever => 'Mati';
+
+  @override
+  String get circumventionActiveHere => 'Dipakai di jaringan ini.';
+
+  @override
+  String get circumventionIdleHere => 'Tidak dipakai di jaringan ini.';
 }

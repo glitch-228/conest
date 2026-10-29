@@ -1,3 +1,5 @@
+import 'src/ui/circumvention_settings.dart';
+import 'src/ui/relay_access_dialog.dart';
 import 'src/ui/localized_labels.dart';
 import 'src/ui/localized_ui_text.dart';
 import 'dart:async';
@@ -16075,6 +16077,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                 l10nOf(context).uiLetsMembersOfYourGroups9912A5,
                               ),
                             ),
+                            // Censorship circumvention (M38), Advanced mode.
+                            if (widget.controller.userMode.showsNetworkDetail)
+                              CircumventionSettingsSection(
+                                controller: widget.controller,
+                                busy: _busy,
+                              ),
                             ListTile(
                               contentPadding: EdgeInsets.zero,
                               title:  Text(l10nOf(context).uiAutomaticDownloads5E777B),
@@ -16419,6 +16427,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                         widget.controller.relayDisplayLabel(
                                           relay,
                                         ),
+                                      ),
+                                      // Who may use it; register (M26).
+                                      onPressed: () => showRelayAccessDialog(
+                                        context,
+                                        widget.controller,
+                                        relay,
                                       ),
                                       onDeleted: _busy
                                           ? null

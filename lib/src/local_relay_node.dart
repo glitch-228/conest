@@ -2,9 +2,14 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
+
 import 'models.dart';
+import 'relay_v2/frames.dart';
+import 'relay_v2/session_server.dart';
 
 const int _defaultMaxQueuePerMailbox = 512;
 const int _defaultMaxFetchLimit = 128;
@@ -22,8 +27,12 @@ class LocalRelayNode {
     this.maxRequestsPerMinute = _defaultMaxRequestsPerMinute,
     String? relayId,
     DateTime Function()? nowProvider,
+    List<int>? identitySeed,
   }) : relayId = relayId ?? 'local-${DateTime.now().microsecondsSinceEpoch}',
-       _nowProvider = nowProvider ?? DateTime.now {
+       _nowProvider = nowProvider ?? DateTime.now,
+       _identitySeed = identitySeed == null
+           ? null
+           : List<int>.unmodifiable(identitySeed) {
     if (maxQueuePerMailbox <= 0) {
       throw ArgumentError('maxQueuePerMailbox must be greater than zero.');
     }
@@ -46,6 +55,38 @@ class LocalRelayNode {
   final int maxRequestsPerMinute;
   final String relayId;
   final DateTime Function() _nowProvider;
+
+  /// With a seed, this relay has an identity like a standalone one: it
+  /// signs its answers, publishes a session key and serves v2 sessions
+  /// (the same seed derives the same keys as `conest_relay`).
+  final List<int>? _identitySeed;
+  Future<_LocalRelayIdentity>? _identity;
+
+  Future<_LocalRelayIdentity>? get _identityKeys {
+    final seed = _identitySeed;
+    if (seed == null) return null;
+    return _identity ??= _LocalRelayIdentity.fromSeed(seed).then((identity) {
+      _readyIdentity = identity;
+      return identity;
+    });
+  }
+
+  /// Subscriptions waiting on each mailbox (v2 sessions).
+  final Map<String, Set<_LocalWatcher>> _watchers = {};
+
+  /// Mailboxes a v2 subscription is waiting on (diagnostics and tests).
+  Set<String> get subscribedMailboxes => _watchers.keys.toSet();
+
+  /// v2 sessions this relay has taken (diagnostics and tests).
+  int get sessionsServed => _sessionsServed;
+  int _sessionsServed = 0;
+
+  /// Tests: drop v2 sessions on arrival (the relay still answers v1).
+  bool refuseSessions = false;
+
+  /// Cleartext v1 requests answered (tests).
+  int get v1RequestsSeen => _v1RequestsSeen;
+  int _v1RequestsSeen = 0;
   void Function(String recipientDeviceId, RelayEnvelope envelope)?
   onEnvelopeStored;
 
@@ -146,6 +187,20 @@ class LocalRelayNode {
       }
       final initial = prefix.takeBytes();
       final incoming = _remainingInput(initial, input);
+      final keys = _identityKeys;
+      if (keys != null &&
+          initial.length >= 4 &&
+          initial[0] == relayV2Magic[0] &&
+          initial[1] == relayV2Magic[1] &&
+          initial[2] == relayV2Magic[2] &&
+          initial[3] == relayV2Magic[3]) {
+        if (refuseSessions) {
+          socket.destroy();
+          return;
+        }
+        await _serveSession(socket, incoming, await keys);
+        return;
+      }
       final directPort = attachmentHttpPort;
       if (directPort != null &&
           initial.length >= 4 &&
@@ -158,9 +213,12 @@ class LocalRelayNode {
       }
       final wireRequest = await _readWireRequest(incoming);
       isHttp = wireRequest.isHttp;
-      final response = _handleRequest(
+      _v1RequestsSeen++;
+      // Health carries the identity once it is derived.
+      await _identityKeys;
+      final response = await _signed(
         wireRequest.request,
-        peer: socket.remoteAddress.address,
+        _handleRequest(wireRequest.request, peer: socket.remoteAddress.address),
       );
       if (isHttp) {
         _writeHttpResponse(socket, response);
@@ -430,7 +488,7 @@ class LocalRelayNode {
         'Content-Length: ${body.length}\r\n'
         'Cache-Control: no-store\r\n'
         'Access-Control-Allow-Origin: *\r\n'
-        'Access-Control-Allow-Headers: content-type, bypass-tunnel-reminder, ngrok-skip-browser-warning\r\n'
+        'Access-Control-Allow-Headers: content-type\r\n'
         'Connection: close\r\n'
         '\r\n',
       ),
@@ -516,7 +574,32 @@ class LocalRelayNode {
             limit,
           ).map((envelope) => envelope.toJson()).toList(growable: false);
           return {'ok': true, 'stored': false, 'messages': messages};
+        case 'fetch_leased':
+          final recipientDeviceId = request['recipient_device_id'] as String;
+          final limit = request['limit'] as int? ?? maxFetchLimit;
+          final leaseMs = (request['lease_ms'] as int? ?? 30000).clamp(
+            5000,
+            300000,
+          );
+          final (messages, leaseId) = _fetchLeased(
+            recipientDeviceId,
+            limit,
+            Duration(milliseconds: leaseMs),
+          );
+          return {
+            'ok': true,
+            'stored': false,
+            'messages': [for (final envelope in messages) envelope.toJson()],
+            'lease_id': ?leaseId,
+          };
+        case 'ack_lease':
+          _acknowledge(
+            request['recipient_device_id'] as String,
+            request['lease_id'] as String,
+          );
+          return {'ok': true, 'stored': false, 'messages': const []};
         case 'health':
+          final identity = _readyIdentity;
           return {
             'ok': true,
             'stored': false,
@@ -531,6 +614,10 @@ class LocalRelayNode {
               'ttl_seconds': ttl.inSeconds,
               'max_queue_per_mailbox': maxQueuePerMailbox,
               'max_fetch_limit': maxFetchLimit,
+              if (identity != null) ...{
+                'identity_public_key': identity.publicKeyBase64,
+                'v2': identity.v2Info,
+              },
             },
           };
         default:
@@ -592,6 +679,134 @@ class LocalRelayNode {
       _QueueEntry(queuedAt: _nowProvider().toUtc(), envelope: envelope),
     );
     onEnvelopeStored?.call(recipientDeviceId, envelope);
+    final watchers = _watchers[recipientDeviceId];
+    if (watchers != null && watchers.isNotEmpty) {
+      // A subscription takes it (one of them, as a fetch would).
+      scheduleMicrotask(() => _pushTo(watchers.first, recipientDeviceId));
+    }
+  }
+
+  /// The identity, once derived (health is answered synchronously; a
+  /// session or a signed answer derives it first).
+  _LocalRelayIdentity? _readyIdentity;
+
+  /// [response] to [request], signed as the standalone relay signs it when
+  /// the request asks (`nonce` with `sig_mode` detached) and this relay has
+  /// an identity.
+  Future<Map<String, dynamic>> _signed(
+    Map<String, dynamic> request,
+    Map<String, dynamic> response,
+  ) async {
+    final keys = _identityKeys;
+    final nonce = request['nonce'];
+    if (keys == null || nonce is! String || request['sig_mode'] != 'detached') {
+      return response;
+    }
+    final identity = await keys;
+    final List<int> nonceBytes;
+    try {
+      nonceBytes = base64Decode(nonce);
+    } on FormatException {
+      return response;
+    }
+    final body = jsonEncode(response);
+    final action = request['action'] as String? ?? '';
+    final signature = await Ed25519().sign([
+      ...utf8.encode(action),
+      ...nonceBytes,
+      ...utf8.encode(body),
+    ], keyPair: identity.signing);
+    return {
+      'sig_v': 2,
+      'body': body,
+      'nonce_echo': nonce,
+      'signature': base64Encode(signature.bytes),
+    };
+  }
+
+  Future<void> _serveSession(
+    Socket socket,
+    Stream<List<int>> incoming,
+    _LocalRelayIdentity identity,
+  ) async {
+    _sessionsServed++;
+    final server = RelaySessionServer(
+      staticKeyPair: identity.noise,
+      maxFramePayload: maxLineBytes + 4096,
+      onRequest: (request) async =>
+          _handleRequest(request, peer: socket.remoteAddress.address),
+      onSubscribe: _subscribeLocal,
+    );
+    await server.serve(input: incoming, write: socket.add, flush: socket.flush);
+  }
+
+  Stream<Map<String, dynamic>> _subscribeLocal(
+    List<String> mailboxes,
+    Map<String, dynamic> request,
+  ) {
+    try {
+      for (final mailbox in mailboxes) {
+        _validateMailboxId(mailbox);
+      }
+    } on ArgumentError catch (error) {
+      return Stream.error(StateError(error.message.toString()));
+    }
+    final leaseMs = request['lease_ms'];
+    final leaseFor = Duration(
+      milliseconds: (leaseMs is int ? leaseMs : 30000).clamp(5000, 300000),
+    );
+    late final _LocalWatcher watcher;
+    final controller = StreamController<Map<String, dynamic>>(
+      onListen: () {
+        for (final mailbox in mailboxes) {
+          _watchers.putIfAbsent(mailbox, () => <_LocalWatcher>{}).add(watcher);
+          _pushTo(watcher, mailbox);
+        }
+        // Leases that ran out come back this way.
+        watcher.recheck = Timer.periodic(const Duration(seconds: 20), (_) {
+          for (final mailbox in mailboxes) {
+            _pushTo(watcher, mailbox);
+          }
+        });
+      },
+      onCancel: () {
+        watcher.recheck?.cancel();
+        for (final mailbox in mailboxes) {
+          final set = _watchers[mailbox];
+          set?.remove(watcher);
+          if (set != null && set.isEmpty) _watchers.remove(mailbox);
+        }
+      },
+    );
+    watcher = _LocalWatcher(controller, leaseFor);
+    return controller.stream;
+  }
+
+  void _pushTo(_LocalWatcher watcher, String mailbox) {
+    if (watcher.controller.isClosed) return;
+    final fresh = <Map<String, dynamic>>[];
+    final (envelopes, leaseId) = _fetchLeased(
+      mailbox,
+      maxFetchLimit,
+      watcher.leaseFor,
+    );
+    for (final envelope in envelopes) {
+      if (envelope.kind == 'pairing_announcement') {
+        // They stay queued: pushed once each.
+        final key = '${envelope.senderDeviceId}/${envelope.messageId}';
+        if (!watcher.pushedPairing.add(key)) continue;
+        if (watcher.pushedPairing.length > 64) {
+          watcher.pushedPairing.remove(watcher.pushedPairing.first);
+        }
+      }
+      fresh.add(envelope.toJson());
+    }
+    if (fresh.isEmpty) return;
+    watcher.controller.add({
+      'mailbox': mailbox,
+      'messages': fresh,
+      'lease_id': leaseId,
+    });
   }
 
   List<RelayEnvelope> _fetch(String recipientDeviceId, int requestedLimit) {
@@ -601,8 +816,9 @@ class LocalRelayNode {
     final messages = <RelayEnvelope>[];
     final entries = queue.toList(growable: false);
     queue.clear();
+    _releaseExpiredLeases(entries);
     for (final entry in entries) {
-      if (messages.length < limit) {
+      if (entry.leaseId == null && messages.length < limit) {
         messages.add(entry.envelope);
         if (entry.envelope.kind == 'pairing_announcement') {
           queue.add(entry);
@@ -612,6 +828,59 @@ class LocalRelayNode {
       }
     }
     return messages;
+  }
+
+  void _releaseExpiredLeases(Iterable<_QueueEntry> entries) {
+    final now = _nowProvider().toUtc();
+    for (final entry in entries) {
+      final until = entry.leaseUntil;
+      if (until != null && !now.isBefore(until)) {
+        entry
+          ..leaseId = null
+          ..leaseUntil = null;
+      }
+    }
+  }
+
+  /// The durable fetch (as the standalone relay's `fetch_leased`): what is
+  /// returned stays queued, hidden, until [_acknowledge] or its lease ends.
+  (List<RelayEnvelope>, String?) _fetchLeased(
+    String recipientDeviceId,
+    int requestedLimit,
+    Duration leaseFor,
+  ) {
+    _validateMailboxId(recipientDeviceId);
+    final limit = requestedLimit.clamp(1, maxFetchLimit);
+    final queue = _queues.putIfAbsent(recipientDeviceId, Queue.new);
+    _releaseExpiredLeases(queue);
+    final random = Random.secure();
+    final leaseId = base64Encode(
+      List<int>.generate(18, (_) => random.nextInt(256)),
+    );
+    final until = _nowProvider().toUtc().add(leaseFor);
+    final messages = <RelayEnvelope>[];
+    var leased = false;
+    for (final entry in queue) {
+      if (entry.leaseId != null || messages.length >= limit) continue;
+      messages.add(entry.envelope);
+      if (entry.envelope.kind != 'pairing_announcement') {
+        entry
+          ..leaseId = leaseId
+          ..leaseUntil = until;
+        leased = true;
+      }
+    }
+    return (messages, leased ? leaseId : null);
+  }
+
+  void _acknowledge(String recipientDeviceId, String leaseId) {
+    _validateMailboxId(recipientDeviceId);
+    if (leaseId.length < 16 || leaseId.length > 128) {
+      throw ArgumentError('lease id has an invalid length');
+    }
+    _queues[recipientDeviceId]?.removeWhere(
+      (entry) => entry.leaseId == leaseId,
+    );
   }
 
   bool _allowRequest(String peer) {
@@ -670,6 +939,58 @@ class LocalRelayNode {
   }
 }
 
+/// The keys an in-app relay with an identity seed derives (as the
+/// standalone relay does: the same seed, the same keys).
+class _LocalRelayIdentity {
+  _LocalRelayIdentity({
+    required this.signing,
+    required this.publicKeyBase64,
+    required this.noise,
+    required this.v2Info,
+  });
+
+  final SimpleKeyPair signing;
+  final String publicKeyBase64;
+  final SimpleKeyPair noise;
+  final Map<String, dynamic> v2Info;
+
+  static Future<_LocalRelayIdentity> fromSeed(List<int> seed) async {
+    final ed25519 = Ed25519();
+    final signing = await ed25519.newKeyPairFromSeed(seed);
+    final publicKey = (await signing.extractPublicKey()).bytes;
+    final noiseSeed = (await Sha256().hash([
+      ...utf8.encode('conest-relay-noise-static-v1'),
+      ...seed,
+    ])).bytes;
+    final noise = await X25519().newKeyPairFromSeed(noiseSeed);
+    final noisePublic = (await noise.extractPublicKey()).bytes;
+    final binding = await ed25519.sign([
+      ...utf8.encode('conest-relay-noise-key-v1'),
+      ...noisePublic,
+    ], keyPair: signing);
+    return _LocalRelayIdentity(
+      signing: signing,
+      publicKeyBase64: base64Encode(publicKey),
+      noise: noise,
+      v2Info: {
+        'sessions': 1,
+        'noise': 'Noise_NK_25519_ChaChaPoly_SHA256',
+        'noise_key': base64Encode(noisePublic),
+        'noise_key_sig': base64Encode(binding.bytes),
+      },
+    );
+  }
+}
+
+class _LocalWatcher {
+  _LocalWatcher(this.controller, this.leaseFor);
+
+  final StreamController<Map<String, dynamic>> controller;
+  final Duration leaseFor;
+  Timer? recheck;
+  final Set<String> pushedPairing = <String>{};
+}
+
 class _RateBucket {
   _RateBucket({required this.windowStarted});
 
@@ -678,10 +999,14 @@ class _RateBucket {
 }
 
 class _QueueEntry {
-  const _QueueEntry({required this.queuedAt, required this.envelope});
+  _QueueEntry({required this.queuedAt, required this.envelope});
 
   final DateTime queuedAt;
   final RelayEnvelope envelope;
+
+  /// Handed out under a lease until acknowledged or [leaseUntil].
+  String? leaseId;
+  DateTime? leaseUntil;
 }
 
 class _RelayWireRequest {

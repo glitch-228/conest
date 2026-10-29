@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 
+import 'circumvention/circumvention.dart';
 import 'links/link_preview_data.dart';
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
@@ -76,7 +77,34 @@ enum ContactReachabilityState {
 
 enum PeerRouteKind { lan, directInternet, relay }
 
-enum PeerRouteProtocol { tcp, udp, http, https }
+/// `wss`: a relay's hidden address, TLS and a WebSocket on a secret path
+/// ([PeerEndpoint.path]); relay v2 runs inside (M26).
+///
+/// `borrowed`: a relay that plays a real site's TLS handshake (M38-D); the
+/// site's name ([PeerEndpoint.path]) goes in the SNI, and the relay's
+/// pinned identity is the only key needed.
+enum PeerRouteProtocol { tcp, udp, http, https, wss, borrowed }
+
+/// A hidden address kind (it carries a [PeerEndpoint.path]).
+bool isHiddenRouteProtocol(PeerRouteProtocol protocol) =>
+    protocol == PeerRouteProtocol.wss || protocol == PeerRouteProtocol.borrowed;
+
+/// Whether [path] suits a hidden [protocol]: a secret path for `wss`, a
+/// host name for `borrowed`.
+bool isValidHiddenRoutePath(PeerRouteProtocol protocol, String? path) =>
+    switch (protocol) {
+      PeerRouteProtocol.wss => isValidRelaySecretPath(path),
+      PeerRouteProtocol.borrowed => isValidBorrowedSni(path),
+      _ => false,
+    };
+
+/// The name a borrowed handshake puts in the SNI.
+bool isValidBorrowedSni(String? name) =>
+    name != null &&
+    name.length <= 253 &&
+    RegExp(
+      r'^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)+$',
+    ).hasMatch(name);
 
 class PeerEndpoint {
   const PeerEndpoint({
@@ -84,6 +112,7 @@ class PeerEndpoint {
     required this.host,
     required this.port,
     this.protocol = PeerRouteProtocol.tcp,
+    this.path,
   });
 
   factory PeerEndpoint.normalized({
@@ -91,6 +120,7 @@ class PeerEndpoint {
     required String host,
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    String? path,
   }) {
     final parsed = parsePeerEndpointInput(
       host: host,
@@ -98,11 +128,17 @@ class PeerEndpoint {
       defaultProtocol: protocol,
     );
     validatePeerEndpointHostAndPort(parsed.host, parsed.port);
+    final secretPath = parsed.path ?? path;
+    if (isHiddenRouteProtocol(parsed.protocol) &&
+        !isValidHiddenRoutePath(parsed.protocol, secretPath)) {
+      throw ArgumentError('A hidden relay address needs its path or name.');
+    }
     return PeerEndpoint(
       kind: kind,
       host: parsed.host,
       port: parsed.port,
       protocol: parsed.protocol,
+      path: isHiddenRouteProtocol(parsed.protocol) ? secretPath : null,
     );
   }
 
@@ -110,6 +146,10 @@ class PeerEndpoint {
   final String host;
   final int port;
   final PeerRouteProtocol protocol;
+
+  /// A `wss` relay's secret WebSocket path (null for the others). Kept out
+  /// of [label] and [routeKey]: it is a secret.
+  final String? path;
 
   String get routeKey => '${kind.name}:${protocol.name}:$host:$port';
   String get label => '${protocol.name}://$host:$port';
@@ -120,6 +160,7 @@ class PeerEndpoint {
       'host': host,
       'port': port,
       'protocol': protocol.name,
+      'path': ?path,
     };
   }
 
@@ -129,6 +170,7 @@ class PeerEndpoint {
       host: json['host'] as String,
       port: json['port'] as int,
       protocol: peerRouteProtocolFromString(json['protocol'] as String?),
+      path: json['path'] is String ? json['path'] as String : null,
     );
   }
 }
@@ -143,6 +185,11 @@ void validatePeerEndpointHostAndPort(String host, int port) {
 }
 
 bool isValidPeerEndpointPort(int port) => port >= 1 && port <= 65535;
+
+/// A relay's secret WebSocket path: `/` and 8..64 letters, digits, `-`
+/// or `_`.
+bool isValidRelaySecretPath(String? path) =>
+    path != null && RegExp(r'^/[A-Za-z0-9_-]{8,64}$').hasMatch(path);
 
 bool isValidPeerEndpointHost(String host) {
   if (host.isEmpty || host.trim() != host) {
@@ -166,9 +213,13 @@ class ParsedPeerEndpointInput {
     required this.protocol,
     required this.hasExplicitProtocol,
     required this.hasExplicitPort,
+    this.path,
   });
 
   final String host;
+
+  /// The path of a `wss://` address (its secret).
+  final String? path;
   final int port;
   final PeerRouteProtocol protocol;
   final bool hasExplicitProtocol;
@@ -180,6 +231,8 @@ PeerRouteProtocol peerRouteProtocolFromString(String? value) {
     'udp' || 'conest+udp' => PeerRouteProtocol.udp,
     'http' || 'conest+http' => PeerRouteProtocol.http,
     'https' || 'conest+https' => PeerRouteProtocol.https,
+    'wss' || 'conest+wss' => PeerRouteProtocol.wss,
+    'borrowed' || 'conest+borrowed' => PeerRouteProtocol.borrowed,
     _ => PeerRouteProtocol.tcp,
   };
 }
@@ -195,6 +248,7 @@ ParsedPeerEndpointInput parsePeerEndpointInput({
   var parsedProtocol = defaultProtocol;
   var hasExplicitProtocol = false;
   var hasExplicitPort = false;
+  String? parsedPath;
 
   final schemeIndex = value.indexOf('://');
   if (schemeIndex > 0) {
@@ -205,6 +259,12 @@ ParsedPeerEndpointInput parsePeerEndpointInput({
           ? peerRouteProtocolFromString(uri.scheme)
           : defaultProtocol;
       parsedHost = uri.host;
+      if (parsedProtocol == PeerRouteProtocol.wss && uri.path.isNotEmpty) {
+        parsedPath = uri.path;
+      }
+      if (parsedProtocol == PeerRouteProtocol.borrowed && uri.path.length > 1) {
+        parsedPath = uri.path.substring(1);
+      }
       if (uri.hasPort) {
         parsedPort = uri.port;
         hasExplicitPort = true;
@@ -241,6 +301,7 @@ ParsedPeerEndpointInput parsePeerEndpointInput({
     protocol: parsedProtocol,
     hasExplicitProtocol: hasExplicitProtocol,
     hasExplicitPort: hasExplicitPort,
+    path: parsedPath,
   );
 }
 
@@ -253,7 +314,11 @@ bool _isExplicitRouteProtocolScheme(String scheme) {
     'conest+tcp' ||
     'conest+udp' ||
     'conest+http' ||
-    'conest+https' => true,
+    'conest+https' ||
+    'wss' ||
+    'conest+wss' ||
+    'borrowed' ||
+    'conest+borrowed' => true,
     _ => false,
   };
 }
@@ -261,7 +326,9 @@ bool _isExplicitRouteProtocolScheme(String scheme) {
 int? _defaultPortForProtocol(PeerRouteProtocol protocol) {
   return switch (protocol) {
     PeerRouteProtocol.http => 80,
-    PeerRouteProtocol.https => 443,
+    PeerRouteProtocol.https ||
+    PeerRouteProtocol.wss ||
+    PeerRouteProtocol.borrowed => 443,
     PeerRouteProtocol.tcp || PeerRouteProtocol.udp => null,
   };
 }
@@ -683,6 +750,7 @@ class GlobalConnectivityPreferences {
     this.irohTransferLimitEnabled = true,
     this.shareIdentifyingCarriersWithGroups = false,
     this.contentRefusals = ContentRefusals.none,
+    this.circumvention = const CircumventionPreferences(),
     this.syncSpeed = SyncSpeed.steady,
     this.shareSettings = false,
     this.settingsChangedAt,
@@ -709,6 +777,9 @@ class GlobalConnectivityPreferences {
   final bool lanEnabled;
   final bool onlineEnabled;
   final bool irohRelayEnabled;
+
+  /// Censorship circumvention: private DNS and split TLS greetings (M38).
+  final CircumventionPreferences circumvention;
 
   /// Empty uses Iroh's standard N0 relay set. A non-empty list replaces it.
   final List<String> irohRelayUrls;
@@ -769,8 +840,10 @@ class GlobalConnectivityPreferences {
     bool? shareSettings,
     DateTime? settingsChangedAt,
     Map<TransportKind, TransportPolicy>? transportPolicies,
+    CircumventionPreferences? circumvention,
   }) {
     return GlobalConnectivityPreferences(
+      circumvention: circumvention ?? this.circumvention,
       shareSettings: shareSettings ?? this.shareSettings,
       settingsChangedAt: settingsChangedAt ?? this.settingsChangedAt,
       contentRefusals: contentRefusals ?? this.contentRefusals,
@@ -805,6 +878,7 @@ class GlobalConnectivityPreferences {
     if (shareIdentifyingCarriersWithGroups)
       'shareIdentifyingCarriersWithGroups': true,
     if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
+    if (!circumvention.isDefault) 'circumvention': circumvention.toJson(),
     if (syncSpeed != SyncSpeed.steady) 'syncSpeed': syncSpeed.name,
     if (shareSettings) 'shareSettings': true,
     if (settingsChangedAt != null)
@@ -829,6 +903,7 @@ class GlobalConnectivityPreferences {
       shareIdentifyingCarriersWithGroups:
           json['shareIdentifyingCarriersWithGroups'] == true,
       contentRefusals: ContentRefusals.fromJson(json['contentRefusals']),
+      circumvention: CircumventionPreferences.fromJson(json['circumvention']),
       shareSettings: json['shareSettings'] == true,
       settingsChangedAt: DateTime.tryParse(
         json['settingsChangedAt'] as String? ?? '',
@@ -1890,6 +1965,9 @@ String _encodeCompactRoute(PeerEndpoint route) {
     PeerRouteProtocol.udp => 'u',
     PeerRouteProtocol.http => 'h',
     PeerRouteProtocol.https => 's',
+    // Not decoded (a hidden address is not handed around in invites).
+    PeerRouteProtocol.wss => 'w',
+    PeerRouteProtocol.borrowed => 'b',
   };
   return '$kind$protocol${route.port.toRadixString(36)}:${Uri.encodeComponent(route.host)}';
 }
@@ -5260,6 +5338,7 @@ class VaultSnapshot {
     this.pendingGroupMembershipDeliveries =
         const <PendingGroupMembershipDelivery>[],
     this.pinnedRelayIdentityKeys = const <String, String>{},
+    this.relayTokens = const <String, String>{},
     this.pendingAckDeliveries = const <PendingAckDelivery>[],
     this.pendingForwards = const <PendingForward>[],
     this.seenMessageDigests = const <String, String>{},
@@ -5326,6 +5405,10 @@ class VaultSnapshot {
   /// don't verify against the pin are flagged as mismatches. The user
   /// (or the operator) decides whether to rotate via an explicit action.
   final Map<String, String> pinnedRelayIdentityKeys;
+
+  /// Registration tokens from relays that ask for one (M26), by the relay's
+  /// pinned identity key.
+  final Map<String, String> relayTokens;
 
   /// Outgoing delivery/read receipts that haven't successfully landed on
   /// their target yet. Drained by the controller's periodic retry loop
@@ -5491,6 +5574,7 @@ class VaultSnapshot {
     int? defaultRelayDefaultsVersion,
     List<PendingGroupMembershipDelivery>? pendingGroupMembershipDeliveries,
     Map<String, String>? pinnedRelayIdentityKeys,
+    Map<String, String>? relayTokens,
     List<PendingAckDelivery>? pendingAckDeliveries,
     List<PendingForward>? pendingForwards,
     Map<String, String>? seenMessageDigests,
@@ -5547,6 +5631,7 @@ class VaultSnapshot {
           this.pendingGroupMembershipDeliveries,
       pinnedRelayIdentityKeys:
           pinnedRelayIdentityKeys ?? this.pinnedRelayIdentityKeys,
+      relayTokens: relayTokens ?? this.relayTokens,
       pendingAckDeliveries: pendingAckDeliveries ?? this.pendingAckDeliveries,
       pendingForwards: pendingForwards ?? this.pendingForwards,
       seenMessageDigests: seenMessageDigests ?? this.seenMessageDigests,
@@ -5650,6 +5735,7 @@ class VaultSnapshot {
           .map((entry) => entry.toJson())
           .toList(),
       'pinnedRelayIdentityKeys': pinnedRelayIdentityKeys,
+      if (relayTokens.isNotEmpty) 'relayTokens': relayTokens,
       'groupFilePreferences': groupFilePreferences
           .map((entry) => entry.toJson())
           .toList(),
@@ -5806,6 +5892,15 @@ class VaultSnapshot {
                     const <String, dynamic>{})
                 .entries)
           if (entry.value is String) entry.key: entry.value as String,
+      },
+      relayTokens: <String, String>{
+        for (final entry
+            in (json['relayTokens'] as Map<String, dynamic>? ??
+                    const <String, dynamic>{})
+                .entries
+                .take(64))
+          if (entry.value is String && (entry.value as String).length <= 256)
+            entry.key: entry.value as String,
       },
       pendingAckDeliveries:
           (json['pendingAckDeliveries'] as List<dynamic>? ?? const [])

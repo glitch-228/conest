@@ -43,6 +43,7 @@ class FakeTorApi implements TorApi {
     webProxyCredentials.add((user, password));
     return webProxyPort;
   }
+
   List<String> lastBridges = const [];
 
   @override

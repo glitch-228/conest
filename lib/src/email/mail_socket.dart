@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../circumvention/circumvention.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -27,9 +28,11 @@ Future<MailSocket> connectMailSocket(
   // covers only reaching the port, and a network that lets the connection
   // open but stalls the handshake left the phone's account setup hanging.
   if (!tls) {
-    return _IoMailSocket(await Socket.connect(host, port, timeout: timeout));
+    return _IoMailSocket(
+      await Circumvention.instance.connect(host, port, timeout: timeout),
+    );
   }
-  final connecting = SecureSocket.connect(
+  final connecting = Circumvention.instance.secureConnect(
     host,
     port,
     timeout: timeout,

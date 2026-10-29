@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'circumvention/circumvention.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -47,6 +48,7 @@ class IoMatrixHttp implements MatrixHttp {
     List<int>? body,
     required Duration timeout,
   }) async {
+    await Circumvention.instance.configure(_client);
     final request = await _client.openUrl(method, uri).timeout(timeout);
     headers.forEach(request.headers.set);
     if (body != null) {

@@ -6387,4 +6387,103 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get xmppEditNotApplied =>
       'Правка этого сообщения не применена: её нельзя проверить.';
+
+  @override
+  String get relayAccessTitle => 'Доступ к ретранслятору';
+
+  @override
+  String get relayAccessUnknown =>
+      'Этот ретранслятор не сообщил, кто может им пользоваться (старая версия или ещё не проверен).';
+
+  @override
+  String get relayAccessSessions =>
+      'Защищённое соединение: чьи сообщения вы забираете, скрыто от сети.';
+
+  @override
+  String get relayAccessMessagesOpen =>
+      'Оставлять сообщения здесь может любой.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'Оставлять сообщения здесь могут только зарегистрированные.';
+
+  @override
+  String get relayAccessMessagesOff =>
+      'Этот ретранслятор не принимает новые сообщения.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'Зарегистрироваться может любой.';
+
+  @override
+  String get relayAccessRegistrationInvite =>
+      'Для регистрации нужен код приглашения.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'Для регистрации нужен пароль ретранслятора.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'Регистрация закрыта.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'Зарегистрировано на этом ретрансляторе до $date.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'Код приглашения';
+
+  @override
+  String get relayAccessPasswordLabel => 'Пароль';
+
+  @override
+  String get relayAccessRegister => 'Зарегистрироваться';
+
+  @override
+  String get relayAccessRegisteredNow => 'Зарегистрировано.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'Не удалось зарегистрироваться: $error';
+  }
+
+  @override
+  String get circumventionTitle => 'Обход цензуры';
+
+  @override
+  String get circumventionIntro =>
+      'Для сетей, которые блокируют или фильтруют Conest. «Автоматически» включает это только в сетях, где маршруты похоже заблокированы.';
+
+  @override
+  String get circumventionPrivateDns => 'Частный поиск имён (DNS через HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting =>
+      'Разделять приветствие защищённого соединения';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'Скрывает от простых фильтров, к какому серверу вы подключаетесь.';
+
+  @override
+  String get circumventionQuietLan => 'Скрытый поиск устройств рядом';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'Устройства рядом находят друг друга по зашифрованному сигналу, а не по узнаваемому.';
+
+  @override
+  String get circumventionAutomatic => 'Автоматически';
+
+  @override
+  String get circumventionAlways => 'Всегда';
+
+  @override
+  String get circumventionNever => 'Выкл.';
+
+  @override
+  String get circumventionActiveHere => 'Используется в этой сети.';
+
+  @override
+  String get circumventionIdleHere => 'Не используется в этой сети.';
 }

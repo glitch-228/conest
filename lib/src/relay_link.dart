@@ -10,6 +10,7 @@ class RelayLink {
     required this.port,
     required this.relayId,
     required this.identityKeyBase64,
+    this.hiddenAddress,
   });
 
   static const scheme = 'conest-relay';
@@ -19,6 +20,10 @@ class RelayLink {
   final int port;
   final String relayId;
   final String identityKeyBase64;
+
+  /// The relay's hidden address, `wss://host[:port]/<secret path>` (M38-A),
+  /// when its operator shares it: the app prefers it.
+  final String? hiddenAddress;
 
   static final _relayId = RegExp(r'^[A-Za-z0-9-]{1,64}$');
 
@@ -42,15 +47,29 @@ class RelayLink {
     } on FormatException {
       return null;
     }
+    final hidden = uri.queryParameters['wss'];
+    String? hiddenAddress;
+    if (hidden != null) {
+      final parsed = Uri.tryParse(hidden);
+      if (parsed == null ||
+          parsed.scheme != 'wss' ||
+          parsed.host.isEmpty ||
+          !RegExp(r'^/[A-Za-z0-9_-]{8,64}$').hasMatch(parsed.path)) {
+        return null;
+      }
+      hiddenAddress = hidden;
+    }
     return RelayLink(
       host: uri.host,
       port: port,
       relayId: id,
       identityKeyBase64: key,
+      hiddenAddress: hiddenAddress,
     );
   }
 
   @override
   String toString() =>
-      '$scheme://$host:$port?id=$relayId&key=${Uri.encodeQueryComponent(identityKeyBase64)}';
+      '$scheme://$host:$port?id=$relayId&key=${Uri.encodeQueryComponent(identityKeyBase64)}'
+      '${hiddenAddress == null ? '' : '&wss=${Uri.encodeQueryComponent(hiddenAddress!)}'}';
 }

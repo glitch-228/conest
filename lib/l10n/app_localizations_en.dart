@@ -6258,4 +6258,100 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get xmppEditNotApplied =>
       'An edit of this message was not applied: it could not be checked.';
+
+  @override
+  String get relayAccessTitle => 'Relay access';
+
+  @override
+  String get relayAccessUnknown =>
+      'This relay has not said who may use it (an older relay, or not checked yet).';
+
+  @override
+  String get relayAccessSessions =>
+      'Private connection: who you fetch messages for stays hidden from the network.';
+
+  @override
+  String get relayAccessMessagesOpen => 'Anyone can leave messages here.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'Only registered accounts can leave messages here.';
+
+  @override
+  String get relayAccessMessagesOff => 'This relay takes no new messages.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'Anyone can register.';
+
+  @override
+  String get relayAccessRegistrationInvite =>
+      'Registering needs an invite code.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'Registering needs the relay\'s password.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'Registration is closed.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'Registered on this relay until $date.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'Invite code';
+
+  @override
+  String get relayAccessPasswordLabel => 'Password';
+
+  @override
+  String get relayAccessRegister => 'Register';
+
+  @override
+  String get relayAccessRegisteredNow => 'Registered.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'Could not register: $error';
+  }
+
+  @override
+  String get circumventionTitle => 'Censorship circumvention';
+
+  @override
+  String get circumventionIntro =>
+      'For networks that block or filter Conest. Automatic turns these on only on networks where routes seem blocked.';
+
+  @override
+  String get circumventionPrivateDns => 'Private name lookups (DNS over HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting => 'Split secure-connection greetings';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'Hides which server you connect to from simple filters.';
+
+  @override
+  String get circumventionQuietLan => 'Quiet nearby-device discovery';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'Nearby devices find each other with a scrambled signal instead of a recognisable one.';
+
+  @override
+  String get circumventionAutomatic => 'Automatic';
+
+  @override
+  String get circumventionAlways => 'Always';
+
+  @override
+  String get circumventionNever => 'Off';
+
+  @override
+  String get circumventionActiveHere => 'In use on this network.';
+
+  @override
+  String get circumventionIdleHere => 'Not in use on this network.';
 }

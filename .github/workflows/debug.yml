@@ -650,6 +650,9 @@ jobs:
           cargo build -p conest_relay --locked
           flutter test test/messenger_controller_test.dart \
             --name "Iroh group admission|Iroh group history|Iroh group-only|real socket group-only"
+          # Relay v2 (M26): sessions, subscriptions, owners, registration
+          # and TLS against the real relay.
+          flutter test test/relay_v2_live_test.dart
       - uses: actions/upload-artifact@v4
         with:
           name: conest-debug-linux-x64-${{ github.run_number }}

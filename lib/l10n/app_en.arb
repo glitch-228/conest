@@ -9222,5 +9222,127 @@
   "xmppEditNotApplied": "An edit of this message was not applied: it could not be checked.",
   "@xmppEditNotApplied": {
     "description": "XMPP: an edit of an encrypted message was ignored."
+  },
+  "relayAccessTitle": "Relay access",
+  "@relayAccessTitle": {
+    "description": "Title of the dialog showing who may use a relay."
+  },
+  "relayAccessUnknown": "This relay has not said who may use it (an older relay, or not checked yet).",
+  "@relayAccessUnknown": {
+    "description": "Relay access: the relay did not say how it is run."
+  },
+  "relayAccessSessions": "Private connection: who you fetch messages for stays hidden from the network.",
+  "@relayAccessSessions": {
+    "description": "Relay access: the relay offers private (v2) connections."
+  },
+  "relayAccessMessagesOpen": "Anyone can leave messages here.",
+  "@relayAccessMessagesOpen": {
+    "description": "Relay access: anyone may leave messages."
+  },
+  "relayAccessMessagesRegistered": "Only registered accounts can leave messages here.",
+  "@relayAccessMessagesRegistered": {
+    "description": "Relay access: only registered accounts may leave messages."
+  },
+  "relayAccessMessagesOff": "This relay takes no new messages.",
+  "@relayAccessMessagesOff": {
+    "description": "Relay access: the relay takes no new messages."
+  },
+  "relayAccessRegistrationOpen": "Anyone can register.",
+  "@relayAccessRegistrationOpen": {
+    "description": "Relay access: anyone may register."
+  },
+  "relayAccessRegistrationInvite": "Registering needs an invite code.",
+  "@relayAccessRegistrationInvite": {
+    "description": "Relay access: registering needs an invite code."
+  },
+  "relayAccessRegistrationPassword": "Registering needs the relay's password.",
+  "@relayAccessRegistrationPassword": {
+    "description": "Relay access: registering needs the relay's password."
+  },
+  "relayAccessRegistrationClosed": "Registration is closed.",
+  "@relayAccessRegistrationClosed": {
+    "description": "Relay access: registration is closed."
+  },
+  "relayAccessRegistered": "Registered on this relay until {date}.",
+  "@relayAccessRegistered": {
+    "description": "Relay access: this device is registered until a date.",
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "relayAccessInviteLabel": "Invite code",
+  "@relayAccessInviteLabel": {
+    "description": "Relay access: field for an invite code."
+  },
+  "relayAccessPasswordLabel": "Password",
+  "@relayAccessPasswordLabel": {
+    "description": "Relay access: field for the relay's registration password."
+  },
+  "relayAccessRegister": "Register",
+  "@relayAccessRegister": {
+    "description": "Relay access: button to register on the relay."
+  },
+  "relayAccessRegisteredNow": "Registered.",
+  "@relayAccessRegisteredNow": {
+    "description": "Relay access: registration succeeded."
+  },
+  "relayAccessFailed": "Could not register: {error}",
+  "@relayAccessFailed": {
+    "description": "Relay access: registration failed, with the relay's reason.",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "circumventionTitle": "Censorship circumvention",
+  "@circumventionTitle": {
+    "description": "Settings section: censorship circumvention."
+  },
+  "circumventionIntro": "For networks that block or filter Conest. Automatic turns these on only on networks where routes seem blocked.",
+  "@circumventionIntro": {
+    "description": "Censorship circumvention: what the section is for."
+  },
+  "circumventionPrivateDns": "Private name lookups (DNS over HTTPS)",
+  "@circumventionPrivateDns": {
+    "description": "Censorship circumvention: DNS over HTTPS."
+  },
+  "circumventionSplitGreeting": "Split secure-connection greetings",
+  "@circumventionSplitGreeting": {
+    "description": "Censorship circumvention: TLS ClientHello fragmentation."
+  },
+  "circumventionSplitGreetingHint": "Hides which server you connect to from simple filters.",
+  "@circumventionSplitGreetingHint": {
+    "description": "Censorship circumvention: what splitting does."
+  },
+  "circumventionQuietLan": "Quiet nearby-device discovery",
+  "@circumventionQuietLan": {
+    "description": "Censorship circumvention: sealed LAN beacons."
+  },
+  "circumventionQuietLanHint": "Nearby devices find each other with a scrambled signal instead of a recognisable one.",
+  "@circumventionQuietLanHint": {
+    "description": "Censorship circumvention: what quiet discovery does."
+  },
+  "circumventionAutomatic": "Automatic",
+  "@circumventionAutomatic": {
+    "description": "Censorship circumvention choice: automatic."
+  },
+  "circumventionAlways": "Always",
+  "@circumventionAlways": {
+    "description": "Censorship circumvention choice: always."
+  },
+  "circumventionNever": "Off",
+  "@circumventionNever": {
+    "description": "Censorship circumvention choice: off."
+  },
+  "circumventionActiveHere": "In use on this network.",
+  "@circumventionActiveHere": {
+    "description": "Censorship circumvention: in use on this network."
+  },
+  "circumventionIdleHere": "Not in use on this network.",
+  "@circumventionIdleHere": {
+    "description": "Censorship circumvention: not in use on this network."
   }
 }

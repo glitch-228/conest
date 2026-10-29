@@ -6259,4 +6259,99 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get xmppEditNotApplied =>
       'ویرایش این پیام اعمال نشد: قابل بررسی نبود.';
+
+  @override
+  String get relayAccessTitle => 'دسترسی به رله';
+
+  @override
+  String get relayAccessUnknown =>
+      'این رله نگفته چه کسی می‌تواند از آن استفاده کند (رلهٔ قدیمی‌تر، یا هنوز بررسی نشده).';
+
+  @override
+  String get relayAccessSessions =>
+      'اتصال خصوصی: اینکه پیام‌های چه کسی را می‌گیرید از شبکه پنهان می‌ماند.';
+
+  @override
+  String get relayAccessMessagesOpen => 'هر کسی می‌تواند اینجا پیام بگذارد.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'فقط حساب‌های ثبت‌شده می‌توانند اینجا پیام بگذارند.';
+
+  @override
+  String get relayAccessMessagesOff => 'این رله پیام جدید نمی‌پذیرد.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'هر کسی می‌تواند ثبت‌نام کند.';
+
+  @override
+  String get relayAccessRegistrationInvite => 'ثبت‌نام به کد دعوت نیاز دارد.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'ثبت‌نام به گذرواژهٔ رله نیاز دارد.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'ثبت‌نام بسته است.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'تا $date در این رله ثبت شده است.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'کد دعوت';
+
+  @override
+  String get relayAccessPasswordLabel => 'گذرواژه';
+
+  @override
+  String get relayAccessRegister => 'ثبت‌نام';
+
+  @override
+  String get relayAccessRegisteredNow => 'ثبت شد.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'ثبت‌نام ممکن نشد: $error';
+  }
+
+  @override
+  String get circumventionTitle => 'دور زدن سانسور';
+
+  @override
+  String get circumventionIntro =>
+      'برای شبکه‌هایی که Conest را مسدود یا فیلتر می‌کنند. «خودکار» این‌ها را فقط در شبکه‌هایی روشن می‌کند که به نظر می‌رسد مسیرها مسدودند.';
+
+  @override
+  String get circumventionPrivateDns => 'جست‌وجوی خصوصی نام‌ها (DNS روی HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting => 'تکه‌تکه کردن سلامِ اتصال امن';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'از فیلترهای ساده پنهان می‌کند به کدام سرور وصل می‌شوید.';
+
+  @override
+  String get circumventionQuietLan => 'یافتن بی‌صدای دستگاه‌های نزدیک';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'دستگاه‌های نزدیک یکدیگر را با سیگنالی درهم‌ریخته می‌یابند، نه سیگنالی که شناخته شود.';
+
+  @override
+  String get circumventionAutomatic => 'خودکار';
+
+  @override
+  String get circumventionAlways => 'همیشه';
+
+  @override
+  String get circumventionNever => 'خاموش';
+
+  @override
+  String get circumventionActiveHere => 'در این شبکه در حال استفاده است.';
+
+  @override
+  String get circumventionIdleHere => 'در این شبکه استفاده نمی‌شود.';
 }

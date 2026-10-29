@@ -6384,4 +6384,99 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get xmppEditNotApplied =>
       'لم يُطبَّق تعديل هذه الرسالة: تعذّر التحقق منه.';
+
+  @override
+  String get relayAccessTitle => 'الوصول إلى المرحِّل';
+
+  @override
+  String get relayAccessUnknown =>
+      'لم يذكر هذا المرحِّل من يمكنه استخدامه (مرحِّل أقدم، أو لم يُفحص بعد).';
+
+  @override
+  String get relayAccessSessions =>
+      'اتصال خاص: من تجلب رسائله يبقى مخفيًا عن الشبكة.';
+
+  @override
+  String get relayAccessMessagesOpen => 'يمكن لأي شخص ترك الرسائل هنا.';
+
+  @override
+  String get relayAccessMessagesRegistered =>
+      'يمكن للحسابات المسجلة فقط ترك الرسائل هنا.';
+
+  @override
+  String get relayAccessMessagesOff => 'لا يقبل هذا المرحِّل رسائل جديدة.';
+
+  @override
+  String get relayAccessRegistrationOpen => 'يمكن لأي شخص التسجيل.';
+
+  @override
+  String get relayAccessRegistrationInvite => 'يتطلب التسجيل رمز دعوة.';
+
+  @override
+  String get relayAccessRegistrationPassword =>
+      'يتطلب التسجيل كلمة مرور المرحِّل.';
+
+  @override
+  String get relayAccessRegistrationClosed => 'التسجيل مغلق.';
+
+  @override
+  String relayAccessRegistered(String date) {
+    return 'مسجَّل على هذا المرحِّل حتى $date.';
+  }
+
+  @override
+  String get relayAccessInviteLabel => 'رمز الدعوة';
+
+  @override
+  String get relayAccessPasswordLabel => 'كلمة المرور';
+
+  @override
+  String get relayAccessRegister => 'تسجيل';
+
+  @override
+  String get relayAccessRegisteredNow => 'تم التسجيل.';
+
+  @override
+  String relayAccessFailed(String error) {
+    return 'تعذّر التسجيل: $error';
+  }
+
+  @override
+  String get circumventionTitle => 'تجاوز الرقابة';
+
+  @override
+  String get circumventionIntro =>
+      'للشبكات التي تحجب Conest أو ترشّحه. «تلقائي» يشغّلها فقط على الشبكات التي يبدو أن الطرق فيها محجوبة.';
+
+  @override
+  String get circumventionPrivateDns => 'بحث خاص عن الأسماء (DNS عبر HTTPS)';
+
+  @override
+  String get circumventionSplitGreeting => 'تقسيم تحية الاتصال الآمن';
+
+  @override
+  String get circumventionSplitGreetingHint =>
+      'يخفي عن المرشِّحات البسيطة الخادم الذي تتصل به.';
+
+  @override
+  String get circumventionQuietLan => 'اكتشاف هادئ للأجهزة القريبة';
+
+  @override
+  String get circumventionQuietLanHint =>
+      'تكتشف الأجهزة القريبة بعضها بإشارة مُشفَّرة بدل إشارة يسهل التعرف عليها.';
+
+  @override
+  String get circumventionAutomatic => 'تلقائي';
+
+  @override
+  String get circumventionAlways => 'دائمًا';
+
+  @override
+  String get circumventionNever => 'متوقف';
+
+  @override
+  String get circumventionActiveHere => 'قيد الاستخدام على هذه الشبكة.';
+
+  @override
+  String get circumventionIdleHere => 'غير مستخدم على هذه الشبكة.';
 }
