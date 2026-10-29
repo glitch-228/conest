@@ -6479,4 +6479,43 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'غير مستخدم على هذه الشبكة.';
+
+  @override
+  String linkKeepsThisDevice(int chats, int contacts, int groups) {
+    return 'يحتفظ هذا الجهاز بمحادثاته ($chats) وجهات اتصاله ($contacts) ومجموعاته ($groups) وإعداداته. جهات الاتصال المشتركة تحتفظ بالأسماء والمسارات التي اخترتها هنا. تُضاف جهات اتصال الحساب ومجموعاته وسجل محادثاته.';
+  }
+
+  @override
+  String linkLeavesAccount(int devices) {
+    return 'هذا الجهاز جزء من حساب آخر فيه $devices أجهزة أخرى. الربط ينقله خارج ذلك الحساب. تبقى تلك الأجهزة تعرضه حتى تزيله من هناك.';
+  }
+
+  @override
+  String get linkLeaveAndContinue => 'مغادرة ذلك الحساب والمتابعة';
+
+  @override
+  String get devicesSyncSpeed => 'المزامنة مع أجهزتي';
+
+  @override
+  String get devicesSyncSteady => 'ثابتة';
+
+  @override
+  String get devicesSyncFast => 'سريعة';
+
+  @override
+  String get devicesSyncPaused => 'متوقفة';
+
+  @override
+  String get devicesSyncFastWarning =>
+      'المزامنة السريعة تستهلك الكثير من البيانات والبطارية. تعمل فقط على الشبكات غير المحدودة بحجم، ويُطلب تأكيدك في كل مرة تشغّلها.';
+
+  @override
+  String get devicesSyncFastTurnOn => 'تشغيل المزامنة السريعة';
+
+  @override
+  String get devicesShareSettings => 'مشاركة الإعدادات مع أجهزتي الأخرى';
+
+  @override
+  String get devicesShareSettingsHint =>
+      'تتبع قواعد التنزيل وحدود التخزين أحدث تغيير. يعمل فقط بين أجهزة فعّلت هذا الخيار جميعها.';
 }

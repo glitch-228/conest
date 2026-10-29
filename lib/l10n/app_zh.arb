@@ -1683,5 +1683,16 @@
   "circumventionAlways": "始终",
   "circumventionNever": "关闭",
   "circumventionActiveHere": "在此网络上使用中。",
-  "circumventionIdleHere": "在此网络上未使用。"
+  "circumventionIdleHere": "在此网络上未使用。",
+  "linkKeepsThisDevice": "此设备保留它的 {chats} 个聊天、{contacts} 个联系人、{groups} 个群组和设置。你们共有的联系人保留你在此设置的名称和路线。账号的联系人、群组和聊天记录将被添加。",
+  "linkLeavesAccount": "此设备属于另一个有 {devices} 台其他设备的账号。关联会把它移出该账号。那些设备会继续列出它，直到你在那里将其移除。",
+  "linkLeaveAndContinue": "退出该账号并继续",
+  "devicesSyncSpeed": "与我的设备同步",
+  "devicesSyncSteady": "平稳",
+  "devicesSyncFast": "快速",
+  "devicesSyncPaused": "已暂停",
+  "devicesSyncFastWarning": "快速同步会消耗大量流量和电量。它只在不计流量的网络上运行，每次开启都会再次询问你。",
+  "devicesSyncFastTurnOn": "开启快速同步",
+  "devicesShareSettings": "与我的其他设备共享设置",
+  "devicesShareSettingsHint": "下载规则和存储限制以最新的更改为准。只有两台设备都开启时才有效。"
 }

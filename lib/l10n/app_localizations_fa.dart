@@ -6354,4 +6354,43 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get circumventionIdleHere => 'در این شبکه استفاده نمی‌شود.';
+
+  @override
+  String linkKeepsThisDevice(int chats, int contacts, int groups) {
+    return 'این دستگاه $chats گفتگو، $contacts مخاطب، $groups گروه و تنظیمات خود را نگه می‌دارد. مخاطبان مشترک نام‌ها و مسیرهایی را که اینجا انتخاب کرده‌اید حفظ می‌کنند. مخاطبان، گروه‌ها و تاریخچه گفتگوی حساب اضافه می‌شوند.';
+  }
+
+  @override
+  String linkLeavesAccount(int devices) {
+    return 'این دستگاه بخشی از حساب دیگری با $devices دستگاه دیگر است. اتصال، آن را از آن حساب بیرون می‌برد. آن دستگاه‌ها تا وقتی آن را آنجا حذف نکنید همچنان آن را نشان می‌دهند.';
+  }
+
+  @override
+  String get linkLeaveAndContinue => 'خروج از آن حساب و ادامه';
+
+  @override
+  String get devicesSyncSpeed => 'همگام‌سازی با دستگاه‌های من';
+
+  @override
+  String get devicesSyncSteady => 'پیوسته';
+
+  @override
+  String get devicesSyncFast => 'سریع';
+
+  @override
+  String get devicesSyncPaused => 'متوقف';
+
+  @override
+  String get devicesSyncFastWarning =>
+      'همگام‌سازی سریع داده و باتری زیادی مصرف می‌کند. فقط روی شبکه‌های بدون محدودیت حجم اجرا می‌شود و هر بار که روشنش کنید دوباره پرسیده می‌شود.';
+
+  @override
+  String get devicesSyncFastTurnOn => 'روشن کردن همگام‌سازی سریع';
+
+  @override
+  String get devicesShareSettings => 'اشتراک تنظیمات با دستگاه‌های دیگرم';
+
+  @override
+  String get devicesShareSettingsHint =>
+      'قوانین دانلود و محدودیت‌های فضا از جدیدترین تغییر پیروی می‌کنند. فقط بین دستگاه‌هایی کار می‌کند که هر دو این را روشن کرده‌اند.';
 }

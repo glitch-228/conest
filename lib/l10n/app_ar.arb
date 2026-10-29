@@ -1683,5 +1683,16 @@
   "circumventionAlways": "دائمًا",
   "circumventionNever": "متوقف",
   "circumventionActiveHere": "قيد الاستخدام على هذه الشبكة.",
-  "circumventionIdleHere": "غير مستخدم على هذه الشبكة."
+  "circumventionIdleHere": "غير مستخدم على هذه الشبكة.",
+  "linkKeepsThisDevice": "يحتفظ هذا الجهاز بمحادثاته ({chats}) وجهات اتصاله ({contacts}) ومجموعاته ({groups}) وإعداداته. جهات الاتصال المشتركة تحتفظ بالأسماء والمسارات التي اخترتها هنا. تُضاف جهات اتصال الحساب ومجموعاته وسجل محادثاته.",
+  "linkLeavesAccount": "هذا الجهاز جزء من حساب آخر فيه {devices} أجهزة أخرى. الربط ينقله خارج ذلك الحساب. تبقى تلك الأجهزة تعرضه حتى تزيله من هناك.",
+  "linkLeaveAndContinue": "مغادرة ذلك الحساب والمتابعة",
+  "devicesSyncSpeed": "المزامنة مع أجهزتي",
+  "devicesSyncSteady": "ثابتة",
+  "devicesSyncFast": "سريعة",
+  "devicesSyncPaused": "متوقفة",
+  "devicesSyncFastWarning": "المزامنة السريعة تستهلك الكثير من البيانات والبطارية. تعمل فقط على الشبكات غير المحدودة بحجم، ويُطلب تأكيدك في كل مرة تشغّلها.",
+  "devicesSyncFastTurnOn": "تشغيل المزامنة السريعة",
+  "devicesShareSettings": "مشاركة الإعدادات مع أجهزتي الأخرى",
+  "devicesShareSettingsHint": "تتبع قواعد التنزيل وحدود التخزين أحدث تغيير. يعمل فقط بين أجهزة فعّلت هذا الخيار جميعها."
 }

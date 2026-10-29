@@ -10264,6 +10264,72 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Not in use on this network.'**
   String get circumventionIdleHere;
+
+  /// Link dialog: what stays on this device.
+  ///
+  /// In en, this message translates to:
+  /// **'This device keeps its {chats} chats, {contacts} contacts, {groups} groups and settings. Contacts you both have keep the names and routing you chose here. The account\'s contacts, groups and chat history are added.'**
+  String linkKeepsThisDevice(int chats, int contacts, int groups);
+
+  /// Link dialog warning: the device is in another account now.
+  ///
+  /// In en, this message translates to:
+  /// **'This device is part of another account with {devices} other devices. Linking moves it out of that account. Those devices keep listing it until you remove it there.'**
+  String linkLeavesAccount(int devices);
+
+  /// Link dialog button: leave the old account and link.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave that account and continue'**
+  String get linkLeaveAndContinue;
+
+  /// Settings, Devices: label of the sync speed choice between own devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Syncing with my devices'**
+  String get devicesSyncSpeed;
+
+  /// Sync speed choice: gentle default.
+  ///
+  /// In en, this message translates to:
+  /// **'Steady'**
+  String get devicesSyncSteady;
+
+  /// Sync speed choice: fast.
+  ///
+  /// In en, this message translates to:
+  /// **'Fast'**
+  String get devicesSyncFast;
+
+  /// Sync speed choice: stopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Paused'**
+  String get devicesSyncPaused;
+
+  /// Confirmation text before fast sync.
+  ///
+  /// In en, this message translates to:
+  /// **'Fast sync uses a lot of data and battery. It only runs on networks that are not metered, and you are asked again each time you turn it on.'**
+  String get devicesSyncFastWarning;
+
+  /// Button confirming fast sync.
+  ///
+  /// In en, this message translates to:
+  /// **'Turn on fast sync'**
+  String get devicesSyncFastTurnOn;
+
+  /// Switch: share general settings with own devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Share settings with my other devices'**
+  String get devicesShareSettings;
+
+  /// Explains the share settings switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Download rules and storage limits follow the newest change. It only works between devices that both have this on.'**
+  String get devicesShareSettingsHint;
 }
 
 class _AppLocalizationsDelegate

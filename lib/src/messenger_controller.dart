@@ -34161,9 +34161,32 @@ class MessengerController extends ChangeNotifier {
   bool _linkExpired(DateTime startedAt) =>
       _now().toUtc().difference(startedAt) > _linkLifetime;
 
+  /// What linking this device does to what it holds now.
+  DeviceLinkPreview deviceLinkPreview() {
+    final others = ownDevices.length;
+    return DeviceLinkPreview(
+      contacts: [
+        for (final c in _snapshot.contacts)
+          if (!c.isHiddenDevice && !c.isArchived && !c.ownDevice) c,
+      ].length,
+      chats: [
+        for (final c in _snapshot.conversations)
+          if (c.messages.isNotEmpty) c,
+      ].length,
+      groups: _snapshot.groups.where((g) => !g.isDissolved).length,
+      joinsOtherAccount: others > 0,
+      otherAccountDevices: others,
+    );
+  }
+
   /// On the new device: the QR code for the existing device to scan.
-  Future<String> startLinkAsNewDevice() async {
+  Future<String> startLinkAsNewDevice({
+    bool leaveCurrentAccount = false,
+  }) async {
     final me = _requireIdentity();
+    if (!leaveCurrentAccount && deviceLinkPreview().joinsOtherAccount) {
+      throw const LinkLeavesAccountException();
+    }
     final signing = me.signingPublicKeyBase64;
     if (signing == null) throw StateError('This device has no signing key.');
     final invitation = LinkInvitation(
@@ -34174,7 +34197,11 @@ class MessengerController extends ChangeNotifier {
       linkSecret: LinkInvitation.newSecret(),
     );
     _linkAsExisting = null;
-    _linkAsNew = _LinkAsNew(invitation, _now().toUtc());
+    _linkAsNew = _LinkAsNew(
+      invitation,
+      _now().toUtc(),
+      mayLeaveAccount: leaveCurrentAccount,
+    );
     _armLinkExpiry();
     notifyListeners();
     return invitation.encode();
@@ -34266,6 +34293,10 @@ class MessengerController extends ChangeNotifier {
     final asNew = _linkAsNew;
     final offer = asNew?.offer;
     if (asNew != null && offer != null && asNew.code != null) {
+      if (!asNew.mayLeaveAccount && deviceLinkPreview().joinsOtherAccount) {
+        cancelLink();
+        throw const LinkLeavesAccountException();
+      }
       if (_linkExpired(asNew.startedAt)) {
         cancelLink();
         throw StateError('The link took too long. Start again.');
@@ -34608,6 +34639,9 @@ class MessengerController extends ChangeNotifier {
   ) async {
     if (link.done) return;
     final me = _requireIdentity();
+    // A device in another account is only moved out of it when the user
+    // said so when the link started.
+    if (!link.mayLeaveAccount && deviceLinkPreview().joinsOtherAccount) return;
     final accountId = grant['accountId'];
     final accountKey = grant['accountKeyPublic'];
     final accountPrivate = grant['accountKeyPrivate'];
@@ -34674,8 +34708,11 @@ class MessengerController extends ChangeNotifier {
             : null,
         accountDeviceList: list.toJson(),
       ),
-      // The account's contacts replace what this new device had.
-      contacts: _dedupeContacts([...contacts, ..._snapshot.contacts]),
+      // The account's contacts replace what this new device had, except the
+      // details only this device chose.
+      contacts: _dedupeContacts(
+        _mergeLinkedContacts(contacts, _snapshot.contacts),
+      ),
     );
     _reconcileOwnDevices(vouchedDeviceId: offer.deviceId);
     if (grant['groups'] case final List raw) {
@@ -34690,6 +34727,46 @@ class MessengerController extends ChangeNotifier {
     await _saveSnapshotSilently(notify: true);
     setStatus('This device is now linked to your account.');
     _advertiseProfileToContacts();
+  }
+
+  @visibleForTesting
+  List<ContactRecord> mergeLinkedContactsForTesting(
+    List<ContactRecord> granted,
+    List<ContactRecord> own,
+  ) => _mergeLinkedContacts(granted, own);
+
+  /// The account's [granted] contacts, each with this device's own alias
+  /// and routing choices where it knew the contact already, then the
+  /// contacts only this device has.
+  List<ContactRecord> _mergeLinkedContacts(
+    List<ContactRecord> granted,
+    List<ContactRecord> own,
+  ) {
+    final mine = {for (final c in own) c.deviceId: c};
+    return [
+      for (final c in granted)
+        // Only when it is the same device (same keys): a different key
+        // under the same id keeps the account's record and its name.
+        if (mine[c.deviceId] case final known?
+            when !known.ownDevice &&
+                known.publicKeyBase64 == c.publicKeyBase64 &&
+                known.signingPublicKeyBase64 == c.signingPublicKeyBase64)
+          c.copyWith(
+            alias: known.alias,
+            routing: known.routing,
+            accountDeviceListVersion: max(
+              known.accountDeviceListVersion,
+              c.accountDeviceListVersion,
+            ),
+            accountRevokedDeviceIds: {
+              ...known.accountRevokedDeviceIds,
+              ...c.accountRevokedDeviceIds,
+            }.toList(),
+          )
+        else
+          c,
+      ...own,
+    ];
   }
 
   /// The chat a contact's messages belong to: their main record's, for
@@ -35584,6 +35661,12 @@ class MessengerController extends ChangeNotifier {
           '${sender.deviceName ?? sender.alias}.';
       _setTransientStatus(_lastSharedSettingsNotice!);
     }
+  }
+
+  /// Turns sharing the general settings with own devices on or off.
+  Future<void> setShareSettings(bool on) async {
+    final me = _requireIdentity();
+    await updateGlobalConnectivity(me.connectivity.copyWith(shareSettings: on));
   }
 
   /// Chooses how fast to sync with own devices. Fast counts only when the
@@ -37295,6 +37378,7 @@ class MessengerController extends ChangeNotifier {
           contact,
     ];
     final added = <DeviceCert>[];
+    final joinedChats = <String>[];
     final mine = accountDevices;
     for (final cert in list.devices) {
       if (cert.deviceId == current.deviceId ||
@@ -37305,10 +37389,29 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       final index = contacts.indexWhere((c) => c.deviceId == cert.deviceId);
-      // A separate contact with that device id is left alone.
+      // A separate contact with that device id is left alone, unless it
+      // has the very keys the device proved with its own signature in the
+      // list: then it is the same device, now known as this person's
+      // (chats join below).
+      var absorbed = false;
       if (index >= 0 &&
           contacts[index].accountAnchorDeviceId != current.deviceId) {
-        continue;
+        final other = contacts[index];
+        // Only a live, accepted contact that is not known as part of any
+        // other account (a device's proof never expires, so an account it
+        // left must not be able to take it back).
+        if (other.ownDevice ||
+            other.isLinkedDevice ||
+            other.isArchived ||
+            other.pairingState != ContactPairingState.accepted ||
+            (other.accountKeyBase64 != null &&
+                other.accountKeyBase64 != update.accountKeyBase64) ||
+            linkedDevicesOf(other.deviceId).isNotEmpty ||
+            other.publicKeyBase64 != cert.encryptionKeyBase64 ||
+            other.signingPublicKeyBase64 != cert.signingKeyBase64) {
+          continue;
+        }
+        absorbed = true;
       }
       final record = _linkedDeviceRecord(
         updatedAnchor,
@@ -37322,12 +37425,60 @@ class MessengerController extends ChangeNotifier {
         contacts.add(record);
         added.add(cert);
       }
+      if (absorbed) joinedChats.add(cert.deviceId);
     }
     _snapshot = _snapshot.copyWith(contacts: contacts);
+    for (final device in joinedChats) {
+      _joinChats(device, into: current.deviceId);
+      setStatus(
+        '${current.alias} now shows one chat for their devices; one of '
+        'them was a separate contact.',
+      );
+    }
     await _saveSnapshotSilently(notify: true);
     for (final cert in added) {
       setStatus('${current.alias} added a device: ${cert.name}.');
     }
+  }
+
+  /// Moves the direct chat with [fromPeer] into the one with [into]: every
+  /// message once, in time order, with the newer read mark kept.
+  void _joinChats(String fromPeer, {required String into}) {
+    final from = _snapshot.conversations
+        .where(
+          (c) =>
+              c.kind == ConversationKind.direct && c.peerDeviceId == fromPeer,
+        )
+        .firstOrNull;
+    if (from == null) return;
+    final target = _conversationFor(into);
+    final known = {for (final m in target.messages) m.id};
+    final messages = [
+      ...target.messages,
+      for (final m in from.messages)
+        if (known.add(m.id)) m,
+    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    final read = [target.lastReadAt, from.lastReadAt].nonNulls.fold<DateTime?>(
+      null,
+      (a, b) => a == null || b.isAfter(a) ? b : a,
+    );
+    final joined = target.copyWith(messages: messages, lastReadAt: read);
+    _snapshot = _snapshot.copyWith(
+      conversations: [
+        for (final c in _snapshot.conversations)
+          if (c.kind == ConversationKind.direct && c.peerDeviceId == fromPeer)
+            ...const <ConversationRecord>[]
+          else if (c.kind == ConversationKind.direct && c.peerDeviceId == into)
+            joined
+          else
+            c,
+        if (!_snapshot.conversations.any(
+          (c) => c.kind == ConversationKind.direct && c.peerDeviceId == into,
+        ))
+          joined,
+      ],
+    );
+    _markConversationMutationForBatch();
   }
 
   /// A hidden record for [cert], another device of [anchor]'s account: the
@@ -40583,6 +40734,40 @@ class _MatrixClientCarrierChannel implements MatrixCarrierChannel {
   );
 }
 
+/// This device belongs to an account with other devices, and the user has
+/// not confirmed leaving it to join another.
+class LinkLeavesAccountException implements Exception {
+  const LinkLeavesAccountException();
+
+  @override
+  String toString() =>
+      'This device is part of another account. Linking it moves it out '
+      'of that account.';
+}
+
+/// What linking this device to an account changes here, shown before the
+/// user confirms.
+class DeviceLinkPreview {
+  const DeviceLinkPreview({
+    required this.contacts,
+    required this.chats,
+    required this.groups,
+    required this.joinsOtherAccount,
+    required this.otherAccountDevices,
+  });
+
+  /// Contacts here (merged with the account's: yours are kept by name).
+  final int contacts;
+
+  /// Chats with messages here (kept, with the account's history added).
+  final int chats;
+  final int groups;
+
+  /// This device is in an account with other devices now, and leaves it.
+  final bool joinsOtherAccount;
+  final int otherAccountDevices;
+}
+
 /// Where linking a device stands on this device.
 enum LinkState {
   none,
@@ -40664,10 +40849,13 @@ class _LinkOffer {
 }
 
 class _LinkAsNew {
-  _LinkAsNew(this.invitation, this.startedAt);
+  _LinkAsNew(this.invitation, this.startedAt, {this.mayLeaveAccount = false});
 
   final LinkInvitation invitation;
   final DateTime startedAt;
+
+  /// The user confirmed that this device leaves the account it is in now.
+  final bool mayLeaveAccount;
   _LinkOffer? offer;
   String? nonce;
   String? code;

@@ -1683,5 +1683,16 @@
   "circumventionAlways": "Selalu",
   "circumventionNever": "Mati",
   "circumventionActiveHere": "Dipakai di jaringan ini.",
-  "circumventionIdleHere": "Tidak dipakai di jaringan ini."
+  "circumventionIdleHere": "Tidak dipakai di jaringan ini.",
+  "linkKeepsThisDevice": "Perangkat ini mempertahankan {chats} obrolan, {contacts} kontak, {groups} grup, dan pengaturannya. Kontak yang sama-sama Anda miliki mempertahankan nama dan rute yang Anda pilih di sini. Kontak, grup, dan riwayat obrolan akun ditambahkan.",
+  "linkLeavesAccount": "Perangkat ini bagian dari akun lain dengan {devices} perangkat lain. Menautkan memindahkannya keluar dari akun itu. Perangkat tersebut tetap mencantumkannya sampai Anda menghapusnya di sana.",
+  "linkLeaveAndContinue": "Keluar dari akun itu dan lanjutkan",
+  "devicesSyncSpeed": "Sinkronisasi dengan perangkat saya",
+  "devicesSyncSteady": "Stabil",
+  "devicesSyncFast": "Cepat",
+  "devicesSyncPaused": "Dijeda",
+  "devicesSyncFastWarning": "Sinkronisasi cepat memakai banyak data dan baterai. Hanya berjalan di jaringan tanpa batas kuota, dan Anda ditanya lagi setiap kali menyalakannya.",
+  "devicesSyncFastTurnOn": "Nyalakan sinkronisasi cepat",
+  "devicesShareSettings": "Bagikan pengaturan ke perangkat saya yang lain",
+  "devicesShareSettingsHint": "Aturan unduhan dan batas penyimpanan mengikuti perubahan terbaru. Hanya berfungsi antar perangkat yang sama-sama mengaktifkannya."
 }

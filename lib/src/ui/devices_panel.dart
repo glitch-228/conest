@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../messenger_controller.dart';
+import '../transfer/own_device_sync_policy.dart' show SyncSpeed;
 
 /// Settings → Devices: this account's devices, linking a new one, and
 /// revoking a lost one.
@@ -59,6 +60,38 @@ class DevicesPanel extends StatelessWidget {
     if (confirmed != true) return;
     try {
       await controller.revokeAccountDevice(deviceId);
+    } catch (error) {
+      controller.setStatus('$error');
+    }
+  }
+
+  Future<void> _setSyncSpeed(BuildContext context, SyncSpeed speed) async {
+    var confirmed = false;
+    if (speed == SyncSpeed.fast) {
+      final l10n = l10nOf(context);
+      final answer = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(l10n.devicesSyncFast),
+          content: Text(l10n.devicesSyncFastWarning),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(l10n.actionCancel),
+            ),
+            FilledButton(
+              key: const ValueKey('sync-fast-confirm'),
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(l10n.devicesSyncFastTurnOn),
+            ),
+          ],
+        ),
+      );
+      if (answer != true) return;
+      confirmed = true;
+    }
+    try {
+      await controller.setOwnDeviceSyncSpeed(speed, confirmFast: confirmed);
     } catch (error) {
       controller.setStatus('$error');
     }
@@ -167,6 +200,40 @@ class DevicesPanel extends StatelessWidget {
               ),
             ],
           ),
+        if (devices.length > 1) ...[
+          const SizedBox(height: 8),
+          Text(l10nOf(context).devicesSyncSpeed, style: muted),
+          const SizedBox(height: 4),
+          SegmentedButton<SyncSpeed>(
+            key: const ValueKey('sync-speed'),
+            showSelectedIcon: false,
+            segments: [
+              ButtonSegment(
+                value: SyncSpeed.steady,
+                label: Text(l10nOf(context).devicesSyncSteady),
+              ),
+              ButtonSegment(
+                value: SyncSpeed.fast,
+                label: Text(l10nOf(context).devicesSyncFast),
+              ),
+              ButtonSegment(
+                value: SyncSpeed.paused,
+                label: Text(l10nOf(context).devicesSyncPaused),
+              ),
+            ],
+            selected: {me?.connectivity.syncSpeed ?? SyncSpeed.steady},
+            onSelectionChanged: (picked) =>
+                _setSyncSpeed(context, picked.single),
+          ),
+          SwitchListTile(
+            key: const ValueKey('share-settings'),
+            contentPadding: EdgeInsets.zero,
+            title: Text(l10nOf(context).devicesShareSettings),
+            subtitle: Text(l10nOf(context).devicesShareSettingsHint),
+            value: me?.connectivity.shareSettings ?? false,
+            onChanged: (on) => controller.setShareSettings(on),
+          ),
+        ],
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
@@ -182,16 +249,17 @@ class DevicesPanel extends StatelessWidget {
               icon: const Icon(Icons.add_link),
               label: Text(l10nOf(context).uiLinkADeviceE71635),
             ),
-            if (devices.length <= 1)
-              TextButton.icon(
-                key: const ValueKey('link-this-device'),
-                onPressed: () => showDialog<void>(
-                  context: context,
-                  builder: (_) => LinkNewDeviceDialog(controller: controller),
-                ),
-                icon: const Icon(Icons.qr_code),
-                label: Text(l10nOf(context).uiLinkThisDeviceToMy888A1A),
+            // Also with other devices: this one may move to another account
+            // (the dialog warns first).
+            TextButton.icon(
+              key: const ValueKey('link-this-device'),
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (_) => LinkNewDeviceDialog(controller: controller),
               ),
+              icon: const Icon(Icons.qr_code),
+              label: Text(l10nOf(context).uiLinkThisDeviceToMy888A1A),
+            ),
           ],
         ),
       ],
@@ -366,17 +434,46 @@ class LinkNewDeviceDialog extends StatefulWidget {
 class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
   String? _qr;
 
-  @override
-  void initState() {
-    super.initState();
+  /// The user read what linking does to this device and agreed.
+  bool _started = false;
+
+  void _start({bool leaveAccount = false}) {
+    setState(() => _started = true);
     // After the first frame: starting notifies listeners, which must not
     // happen while this dialog is being built.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      widget.controller.startLinkAsNewDevice().then((qr) {
-        if (mounted) setState(() => _qr = qr);
-      });
+      widget.controller
+          .startLinkAsNewDevice(leaveCurrentAccount: leaveAccount)
+          .then((qr) {
+            if (mounted) setState(() => _qr = qr);
+          });
     });
+  }
+
+  Widget _beforeLinking(BuildContext context, DeviceLinkPreview preview) {
+    final l10n = l10nOf(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          l10n.linkKeepsThisDevice(
+            preview.chats,
+            preview.contacts,
+            preview.groups,
+          ),
+        ),
+        if (preview.joinsOtherAccount) ...[
+          const SizedBox(height: 12),
+          Text(
+            l10n.linkLeavesAccount(preview.otherAccountDevices),
+            key: const ValueKey('link-leaves-account'),
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
+      ],
+    );
   }
 
   @override
@@ -387,10 +484,12 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
         final state = widget.controller.linkState;
         final code = widget.controller.linkCode;
         final qr = _qr;
+        final preview = widget.controller.deviceLinkPreview();
         return AlertDialog(
           title: Text(l10nOf(context).uiLinkThisDeviceBF5E5C),
           content: SingleChildScrollView(
             child: switch (state) {
+              LinkState.none when !_started => _beforeLinking(context, preview),
               LinkState.linked => Text(
                 l10nOf(context).uiThisDeviceIsNowLinked7EA826,
               ),
@@ -428,6 +527,17 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
             },
           ),
           actions: [
+            if (!_started && state == LinkState.none)
+              FilledButton(
+                key: const ValueKey('link-continue'),
+                onPressed: () =>
+                    _start(leaveAccount: preview.joinsOtherAccount),
+                child: Text(
+                  preview.joinsOtherAccount
+                      ? l10nOf(context).linkLeaveAndContinue
+                      : l10nOf(context).actionContinue,
+                ),
+              ),
             TextButton(
               onPressed: () {
                 if (state != LinkState.linked) widget.controller.cancelLink();

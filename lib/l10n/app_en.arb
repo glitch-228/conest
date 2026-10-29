@@ -9344,5 +9344,65 @@
   "circumventionIdleHere": "Not in use on this network.",
   "@circumventionIdleHere": {
     "description": "Censorship circumvention: not in use on this network."
+  },
+  "linkKeepsThisDevice": "This device keeps its {chats} chats, {contacts} contacts, {groups} groups and settings. Contacts you both have keep the names and routing you chose here. The account's contacts, groups and chat history are added.",
+  "@linkKeepsThisDevice": {
+    "description": "Link dialog: what stays on this device.",
+    "placeholders": {
+      "chats": {
+        "type": "int"
+      },
+      "contacts": {
+        "type": "int"
+      },
+      "groups": {
+        "type": "int"
+      }
+    }
+  },
+  "linkLeavesAccount": "This device is part of another account with {devices} other devices. Linking moves it out of that account. Those devices keep listing it until you remove it there.",
+  "@linkLeavesAccount": {
+    "description": "Link dialog warning: the device is in another account now.",
+    "placeholders": {
+      "devices": {
+        "type": "int"
+      }
+    }
+  },
+  "linkLeaveAndContinue": "Leave that account and continue",
+  "@linkLeaveAndContinue": {
+    "description": "Link dialog button: leave the old account and link."
+  },
+  "devicesSyncSpeed": "Syncing with my devices",
+  "@devicesSyncSpeed": {
+    "description": "Settings, Devices: label of the sync speed choice between own devices."
+  },
+  "devicesSyncSteady": "Steady",
+  "@devicesSyncSteady": {
+    "description": "Sync speed choice: gentle default."
+  },
+  "devicesSyncFast": "Fast",
+  "@devicesSyncFast": {
+    "description": "Sync speed choice: fast."
+  },
+  "devicesSyncPaused": "Paused",
+  "@devicesSyncPaused": {
+    "description": "Sync speed choice: stopped."
+  },
+  "devicesSyncFastWarning": "Fast sync uses a lot of data and battery. It only runs on networks that are not metered, and you are asked again each time you turn it on.",
+  "@devicesSyncFastWarning": {
+    "description": "Confirmation text before fast sync."
+  },
+  "devicesSyncFastTurnOn": "Turn on fast sync",
+  "@devicesSyncFastTurnOn": {
+    "description": "Button confirming fast sync."
+  },
+  "devicesShareSettings": "Share settings with my other devices",
+  "@devicesShareSettings": {
+    "description": "Switch: share general settings with own devices."
+  },
+  "devicesShareSettingsHint": "Download rules and storage limits follow the newest change. It only works between devices that both have this on.",
+  "@devicesShareSettingsHint": {
+    "description": "Explains the share settings switch."
   }
 }
