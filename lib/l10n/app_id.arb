@@ -1694,5 +1694,20 @@
   "devicesSyncFastWarning": "Sinkronisasi cepat memakai banyak data dan baterai. Hanya berjalan di jaringan tanpa batas kuota, dan Anda ditanya lagi setiap kali menyalakannya.",
   "devicesSyncFastTurnOn": "Nyalakan sinkronisasi cepat",
   "devicesShareSettings": "Bagikan pengaturan ke perangkat saya yang lain",
-  "devicesShareSettingsHint": "Aturan unduhan dan batas penyimpanan mengikuti perubahan terbaru. Hanya berfungsi antar perangkat yang sama-sama mengaktifkannya."
+  "devicesShareSettingsHint": "Aturan unduhan dan batas penyimpanan mengikuti perubahan terbaru. Hanya berfungsi antar perangkat yang sama-sama mengaktifkannya.",
+  "linkSummaryLine": "{side}: {contacts} kontak, {chats} obrolan, {groups} grup, {files} berkas",
+  "linkSideThisDevice": "Perangkat ini",
+  "linkSideAccount": "Akun",
+  "linkConflictContact": "{thisName} di sini, {accountName} di akun",
+  "linkConflictGroup": "Grup {name} ada di keduanya",
+  "linkModeMerge": "Gabungkan (disarankan)",
+  "linkModeMergeHint": "Kedua sisi menjadi milik akun. Kontak bersama tetap memakai nama yang Anda pilih di perangkat ini.",
+  "linkModeBringMine": "Bawa data perangkat ini ke akun",
+  "linkModeBringMineHint": "Seperti gabung, tetapi nama dan pengaturan perangkat ini menang.",
+  "linkModeReplace": "Ganti dengan data akun",
+  "linkModeReplaceHint": "Perangkat ini mengambil data akun. Obrolannya disimpan ke berkas dulu.",
+  "linkModeReplaceConfirm": "Obrolan dan kontak perangkat ini akan dihapus setelah disimpan ke berkas. Lanjutkan?",
+  "linkModeSeparate": "Profil terpisah (belum)",
+  "linkSettingsKeep": "Pertahankan pengaturan perangkat ini",
+  "linkSettingsTake": "Ambil pengaturan akun"
 }

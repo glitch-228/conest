@@ -6389,4 +6389,65 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'Aturan unduhan dan batas penyimpanan mengikuti perubahan terbaru. Hanya berfungsi antar perangkat yang sama-sama mengaktifkannya.';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: $contacts kontak, $chats obrolan, $groups grup, $files berkas';
+  }
+
+  @override
+  String get linkSideThisDevice => 'Perangkat ini';
+
+  @override
+  String get linkSideAccount => 'Akun';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName di sini, $accountName di akun';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'Grup $name ada di keduanya';
+  }
+
+  @override
+  String get linkModeMerge => 'Gabungkan (disarankan)';
+
+  @override
+  String get linkModeMergeHint =>
+      'Kedua sisi menjadi milik akun. Kontak bersama tetap memakai nama yang Anda pilih di perangkat ini.';
+
+  @override
+  String get linkModeBringMine => 'Bawa data perangkat ini ke akun';
+
+  @override
+  String get linkModeBringMineHint =>
+      'Seperti gabung, tetapi nama dan pengaturan perangkat ini menang.';
+
+  @override
+  String get linkModeReplace => 'Ganti dengan data akun';
+
+  @override
+  String get linkModeReplaceHint =>
+      'Perangkat ini mengambil data akun. Obrolannya disimpan ke berkas dulu.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'Obrolan dan kontak perangkat ini akan dihapus setelah disimpan ke berkas. Lanjutkan?';
+
+  @override
+  String get linkModeSeparate => 'Profil terpisah (belum)';
+
+  @override
+  String get linkSettingsKeep => 'Pertahankan pengaturan perangkat ini';
+
+  @override
+  String get linkSettingsTake => 'Ambil pengaturan akun';
 }

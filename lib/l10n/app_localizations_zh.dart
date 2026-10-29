@@ -6113,4 +6113,61 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get devicesShareSettingsHint => '下载规则和存储限制以最新的更改为准。只有两台设备都开启时才有效。';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side：$contacts 个联系人、$chats 个聊天、$groups 个群组、$files 个文件';
+  }
+
+  @override
+  String get linkSideThisDevice => '此设备';
+
+  @override
+  String get linkSideAccount => '账号';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '此处为 $thisName，账号中为 $accountName';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return '群组 $name 两边都有';
+  }
+
+  @override
+  String get linkModeMerge => '合并（推荐）';
+
+  @override
+  String get linkModeMergeHint => '双方都归入账号。共有的联系人保留你在此设备上设置的名称。';
+
+  @override
+  String get linkModeBringMine => '将此设备的数据带入账号';
+
+  @override
+  String get linkModeBringMineHint => '与合并相似，但以此设备的名称和设置为准。';
+
+  @override
+  String get linkModeReplace => '用账号的数据替换';
+
+  @override
+  String get linkModeReplaceHint => '此设备采用账号的数据。它自己的聊天会先保存到文件。';
+
+  @override
+  String get linkModeReplaceConfirm => '此设备自己的聊天和联系人在保存到文件后将被移除。继续吗？';
+
+  @override
+  String get linkModeSeparate => '独立档案（暂不可用）';
+
+  @override
+  String get linkSettingsKeep => '保留此设备的设置';
+
+  @override
+  String get linkSettingsTake => '采用账号的设置';
 }

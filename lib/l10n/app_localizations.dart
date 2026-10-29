@@ -10330,6 +10330,102 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Download rules and storage limits follow the newest change. It only works between devices that both have this on.'**
   String get devicesShareSettingsHint;
+
+  /// Link choice: counts on one side.
+  ///
+  /// In en, this message translates to:
+  /// **'{side}: {contacts} contacts, {chats} chats, {groups} groups, {files} files'**
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  );
+
+  /// Link choice: this device.
+  ///
+  /// In en, this message translates to:
+  /// **'This device'**
+  String get linkSideThisDevice;
+
+  /// Link choice: the account.
+  ///
+  /// In en, this message translates to:
+  /// **'The account'**
+  String get linkSideAccount;
+
+  /// Link choice: a contact with two names.
+  ///
+  /// In en, this message translates to:
+  /// **'{thisName} here, {accountName} in the account'**
+  String linkConflictContact(String thisName, String accountName);
+
+  /// Link choice: a group on both sides.
+  ///
+  /// In en, this message translates to:
+  /// **'Group {name} is on both'**
+  String linkConflictGroup(String name);
+
+  /// Link choice: merge.
+  ///
+  /// In en, this message translates to:
+  /// **'Merge (recommended)'**
+  String get linkModeMerge;
+
+  /// Link choice: merge explained.
+  ///
+  /// In en, this message translates to:
+  /// **'Both sides become the account\'s. Shared contacts keep the names you chose on this device.'**
+  String get linkModeMergeHint;
+
+  /// Link choice: bring this device's data.
+  ///
+  /// In en, this message translates to:
+  /// **'Bring this device\'s data into the account'**
+  String get linkModeBringMine;
+
+  /// Link choice: bring explained.
+  ///
+  /// In en, this message translates to:
+  /// **'Like merge, but this device\'s names and settings win.'**
+  String get linkModeBringMineHint;
+
+  /// Link choice: replace.
+  ///
+  /// In en, this message translates to:
+  /// **'Replace with the account\'s data'**
+  String get linkModeReplace;
+
+  /// Link choice: replace explained.
+  ///
+  /// In en, this message translates to:
+  /// **'This device takes the account\'s data. Its own chats are saved to a file first.'**
+  String get linkModeReplaceHint;
+
+  /// Link choice: second confirmation for replace.
+  ///
+  /// In en, this message translates to:
+  /// **'This device\'s own chats and contacts will be removed after they are saved to a file. Continue?'**
+  String get linkModeReplaceConfirm;
+
+  /// Link choice: separate profile, not yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Separate profile (not yet)'**
+  String get linkModeSeparate;
+
+  /// Link choice: keep this device's settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep this device\'s settings'**
+  String get linkSettingsKeep;
+
+  /// Link choice: take the account's settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Take the account\'s settings'**
+  String get linkSettingsTake;
 }
 
 class _AppLocalizationsDelegate

@@ -19,6 +19,7 @@ import 'group_call/group_call_media.dart';
 import 'group_call/group_call_policy.dart';
 import 'group_history_coordinator.dart';
 import 'group_history_event.dart';
+import 'link/link_choice.dart';
 import 'group_file_manifest.dart';
 import 'group_file_crypto.dart';
 import 'group_file_download.dart';
@@ -34243,6 +34244,7 @@ class MessengerController extends ChangeNotifier {
         'accountId': current.accountId,
         'accountKey': current.accountKeyPublicBase64,
         'name': current.displayName,
+        'summary': _linkSummaryForOffer(),
         'encryptionKey': current.publicKeyBase64,
         'signingKey': current.signingPublicKeyBase64,
         if (current.irohEndpointId != null)
@@ -34604,6 +34606,7 @@ class MessengerController extends ChangeNotifier {
       'accountKeyPrivate': me.accountKeyPrivateBase64,
       'accountUpgrade': me.accountUpgrade,
       'accountDeviceList': me.accountDeviceList,
+      'settings': _sharedSettingsOf(me.connectivity),
       'contacts': [
         for (final contact in _snapshot.contacts)
           if (!contact.isArchived && !contact.ownDevice) contact.toJson(),
@@ -34693,9 +34696,36 @@ class MessengerController extends ChangeNotifier {
     }
     final displayName = grant['displayName'];
     final bio = grant['bio'];
+    final replacing = link.mode == LinkMode.replace;
+    if (replacing && !link.replaceConfirmed) return;
+    if (replacing) await _archiveOwnChatsBeforeReplace();
     link.done = true;
+    var joinedConnectivity = me.connectivity;
+    if (link.settings == LinkSettingsChoice.takeAccount &&
+        grant['settings'] is Map) {
+      joinedConnectivity = _connectivityWithSharedValues(
+        joinedConnectivity,
+        grant['settings'] as Map,
+      );
+    }
+    if (replacing) {
+      _snapshot = _snapshot.copyWith(
+        conversations: [
+          for (final c in _snapshot.conversations)
+            if (c.kind != ConversationKind.direct &&
+                c.kind != ConversationKind.group)
+              c,
+        ],
+        groups: const [],
+        contacts: [
+          for (final c in _snapshot.contacts)
+            if (c.ownDevice) c,
+        ],
+      );
+    }
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(
+        connectivity: joinedConnectivity,
         accountId: accountId as String,
         displayName: displayName is String && displayName.length <= 128
             ? displayName
@@ -34711,7 +34741,15 @@ class MessengerController extends ChangeNotifier {
       // The account's contacts replace what this new device had, except the
       // details only this device chose.
       contacts: _dedupeContacts(
-        _mergeLinkedContacts(contacts, _snapshot.contacts),
+        _mergeLinkedContacts(
+          contacts,
+          _snapshot.contacts,
+          accountWins: link.mode == LinkMode.bringMine
+              ? const {}
+              : link.accountNamesFor,
+          accountWinsAll:
+              link.mode != LinkMode.bringMine && link.accountNamesForAll,
+        ),
       ),
     );
     _reconcileOwnDevices(vouchedDeviceId: offer.deviceId);
@@ -34729,6 +34767,162 @@ class MessengerController extends ChangeNotifier {
     _advertiseProfileToContacts();
   }
 
+  /// The account's general settings as another device sent them, onto
+  /// [base] (only known keys, with values they can have).
+  GlobalConnectivityPreferences _connectivityWithSharedValues(
+    GlobalConnectivityPreferences base,
+    Map values,
+  ) {
+    var next = base;
+    final preset = values['autoDownloadPreset'];
+    if (preset is String) {
+      final found = AutoDownloadPreset.values
+          .where((value) => value.name == preset)
+          .firstOrNull;
+      if (found != null) next = next.copyWith(autoDownloadPreset: found);
+    }
+    if (values['storageReserveEnabled'] case final bool value) {
+      next = next.copyWith(storageReserveEnabled: value);
+    }
+    if (values['irohTransferLimitEnabled'] case final bool value) {
+      next = next.copyWith(irohTransferLimitEnabled: value);
+    }
+    return next;
+  }
+
+  static const int _maxLinkSummaryItems = 256;
+
+  int get _fileCount => _snapshot.conversations.fold(
+    0,
+    (sum, c) => sum + c.messages.where((m) => m.attachment != null).length,
+  );
+
+  /// What this device holds, in short, for the new device's summary.
+  Map<String, Object> _linkSummaryForOffer() => {
+    'contacts': [
+      for (final c
+          in _snapshot.contacts
+              .where((c) => !c.isHiddenDevice && !c.isArchived)
+              .take(_maxLinkSummaryItems))
+        [c.deviceId, c.alias],
+    ],
+    'chats': _snapshot.conversations.where((c) => c.messages.isNotEmpty).length,
+    'groups': [
+      for (final g
+          in _snapshot.groups
+              .where((g) => !g.isDissolved)
+              .take(_maxLinkSummaryItems))
+        [g.groupId, g.title],
+    ],
+    'files': _fileCount,
+  };
+
+  /// Both sides in short, with what exists on both under different names:
+  /// shown on the new device after the codes match.
+  LinkSummary linkSummary() {
+    final account = _linkAsNew?.offer?.summary;
+    List<List<String>> pairs(Object? raw) => [
+      if (raw is List)
+        for (final item in raw.take(_maxLinkSummaryItems))
+          if (item is List &&
+              item.length == 2 &&
+              item[0] is String &&
+              item[1] is String)
+            [item[0] as String, item[1] as String],
+    ];
+    int count(Object? v) => v is int && v >= 0 ? v : 0;
+    final accountContacts = pairs(account?['contacts']);
+    final accountGroups = pairs(account?['groups']);
+    final mine = {
+      for (final c in _snapshot.contacts)
+        if (!c.isHiddenDevice && !c.isArchived) c.deviceId: c.alias,
+    };
+    final myGroups = {
+      for (final g in _snapshot.groups.where((g) => !g.isDissolved))
+        g.groupId: g.title,
+    };
+    return LinkSummary(
+      thisContacts: mine.length,
+      thisChats: _snapshot.conversations
+          .where((c) => c.messages.isNotEmpty)
+          .length,
+      thisGroups: myGroups.length,
+      thisFiles: _fileCount,
+      accountContacts: accountContacts.length,
+      accountChats: count(account?['chats']),
+      accountGroups: accountGroups.length,
+      accountFiles: count(account?['files']),
+      conflicts: [
+        for (final c in accountContacts)
+          if (mine[c.first] case final name? when name != c.last)
+            LinkConflict.contact(
+              id: c.first,
+              thisName: name,
+              accountName: c.last,
+            ),
+        for (final g in accountGroups)
+          if (myGroups.containsKey(g.first))
+            LinkConflict.group(id: g.first, thisName: myGroups[g.first]!),
+      ],
+    );
+  }
+
+  /// The user's choice for how this device joins (before confirming the
+  /// code). [keepAccountNames]: the account's names win for every shared
+  /// contact; [accountNamesFor]: only for these. Replace needs
+  /// [confirmReplace], the second confirmation.
+  void chooseLinkMode(
+    LinkMode mode, {
+    LinkSettingsChoice settings = LinkSettingsChoice.keepMine,
+    bool keepAccountNames = false,
+    Set<String> accountNamesFor = const {},
+    bool confirmReplace = false,
+  }) {
+    final link = _linkAsNew;
+    if (link == null || link.offer == null || link.confirmed) {
+      throw StateError('There is no link to choose for.');
+    }
+    if (mode == LinkMode.separateProfile) {
+      throw StateError('Not available yet.');
+    }
+    if (mode == LinkMode.replace && !confirmReplace) {
+      throw StateError('Replacing needs a second confirmation.');
+    }
+    link
+      ..mode = mode
+      ..settings = mode == LinkMode.bringMine
+          ? LinkSettingsChoice.keepMine
+          : settings
+      ..accountNamesForAll = keepAccountNames
+      ..accountNamesFor = Set.of(accountNamesFor)
+      ..replaceConfirmed = mode == LinkMode.replace;
+    notifyListeners();
+  }
+
+  /// Where the chats of this device were written before they were replaced.
+  String? linkArchivePath;
+
+  Future<void> _archiveOwnChatsBeforeReplace() async {
+    final root = await _attachmentRoot();
+    final file = File(
+      p.join(root.path, 'link-archive-${_now().millisecondsSinceEpoch}.json'),
+    );
+    await file.writeAsString(
+      jsonEncode({
+        'contacts': [
+          for (final c in _snapshot.contacts)
+            if (!c.isHiddenDevice) {'id': c.deviceId, 'alias': c.alias},
+        ],
+        'conversations': [
+          for (final c in _snapshot.conversations)
+            if (c.messages.isNotEmpty) c.toJson(),
+        ],
+      }),
+      flush: true,
+    );
+    linkArchivePath = file.path;
+  }
+
   @visibleForTesting
   List<ContactRecord> mergeLinkedContactsForTesting(
     List<ContactRecord> granted,
@@ -34740,8 +34934,10 @@ class MessengerController extends ChangeNotifier {
   /// contacts only this device has.
   List<ContactRecord> _mergeLinkedContacts(
     List<ContactRecord> granted,
-    List<ContactRecord> own,
-  ) {
+    List<ContactRecord> own, {
+    Set<String> accountWins = const {},
+    bool accountWinsAll = false,
+  }) {
     final mine = {for (final c in own) c.deviceId: c};
     return [
       for (final c in granted)
@@ -34749,6 +34945,8 @@ class MessengerController extends ChangeNotifier {
         // under the same id keeps the account's record and its name.
         if (mine[c.deviceId] case final known?
             when !known.ownDevice &&
+                !accountWinsAll &&
+                !accountWins.contains(c.deviceId) &&
                 known.publicKeyBase64 == c.publicKeyBase64 &&
                 known.signingPublicKeyBase64 == c.signingPublicKeyBase64)
           c.copyWith(
@@ -40798,7 +40996,11 @@ class _LinkOffer {
     required this.encryptionKeyBase64,
     required this.signingKeyBase64,
     this.irohEndpointId,
+    this.summary,
   });
+
+  /// What the offering device holds, in short (informational only).
+  final Map<String, dynamic>? summary;
 
   final String deviceId;
   final String accountId;
@@ -40844,6 +41046,9 @@ class _LinkOffer {
       encryptionKeyBase64: json['encryptionKey'] as String,
       signingKeyBase64: json['signingKey'] as String,
       irohEndpointId: iroh as String?,
+      summary: json['summary'] is Map<String, dynamic>
+          ? json['summary'] as Map<String, dynamic>
+          : null,
     );
   }
 }
@@ -40856,6 +41061,13 @@ class _LinkAsNew {
 
   /// The user confirmed that this device leaves the account it is in now.
   final bool mayLeaveAccount;
+
+  /// What the user chose on this device (see [MessengerController.chooseLinkMode]).
+  LinkMode mode = LinkMode.merge;
+  LinkSettingsChoice settings = LinkSettingsChoice.keepMine;
+  Set<String> accountNamesFor = const {};
+  bool accountNamesForAll = false;
+  bool replaceConfirmed = false;
   _LinkOffer? offer;
   String? nonce;
   String? code;

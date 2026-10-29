@@ -1694,5 +1694,20 @@
   "devicesSyncFastWarning": "快速同步会消耗大量流量和电量。它只在不计流量的网络上运行，每次开启都会再次询问你。",
   "devicesSyncFastTurnOn": "开启快速同步",
   "devicesShareSettings": "与我的其他设备共享设置",
-  "devicesShareSettingsHint": "下载规则和存储限制以最新的更改为准。只有两台设备都开启时才有效。"
+  "devicesShareSettingsHint": "下载规则和存储限制以最新的更改为准。只有两台设备都开启时才有效。",
+  "linkSummaryLine": "{side}：{contacts} 个联系人、{chats} 个聊天、{groups} 个群组、{files} 个文件",
+  "linkSideThisDevice": "此设备",
+  "linkSideAccount": "账号",
+  "linkConflictContact": "此处为 {thisName}，账号中为 {accountName}",
+  "linkConflictGroup": "群组 {name} 两边都有",
+  "linkModeMerge": "合并（推荐）",
+  "linkModeMergeHint": "双方都归入账号。共有的联系人保留你在此设备上设置的名称。",
+  "linkModeBringMine": "将此设备的数据带入账号",
+  "linkModeBringMineHint": "与合并相似，但以此设备的名称和设置为准。",
+  "linkModeReplace": "用账号的数据替换",
+  "linkModeReplaceHint": "此设备采用账号的数据。它自己的聊天会先保存到文件。",
+  "linkModeReplaceConfirm": "此设备自己的聊天和联系人在保存到文件后将被移除。继续吗？",
+  "linkModeSeparate": "独立档案（暂不可用）",
+  "linkSettingsKeep": "保留此设备的设置",
+  "linkSettingsTake": "采用账号的设置"
 }

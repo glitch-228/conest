@@ -6393,4 +6393,65 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'Download rules and storage limits follow the newest change. It only works between devices that both have this on.';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: $contacts contacts, $chats chats, $groups groups, $files files';
+  }
+
+  @override
+  String get linkSideThisDevice => 'This device';
+
+  @override
+  String get linkSideAccount => 'The account';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName here, $accountName in the account';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'Group $name is on both';
+  }
+
+  @override
+  String get linkModeMerge => 'Merge (recommended)';
+
+  @override
+  String get linkModeMergeHint =>
+      'Both sides become the account\'s. Shared contacts keep the names you chose on this device.';
+
+  @override
+  String get linkModeBringMine => 'Bring this device\'s data into the account';
+
+  @override
+  String get linkModeBringMineHint =>
+      'Like merge, but this device\'s names and settings win.';
+
+  @override
+  String get linkModeReplace => 'Replace with the account\'s data';
+
+  @override
+  String get linkModeReplaceHint =>
+      'This device takes the account\'s data. Its own chats are saved to a file first.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'This device\'s own chats and contacts will be removed after they are saved to a file. Continue?';
+
+  @override
+  String get linkModeSeparate => 'Separate profile (not yet)';
+
+  @override
+  String get linkSettingsKeep => 'Keep this device\'s settings';
+
+  @override
+  String get linkSettingsTake => 'Take the account\'s settings';
 }

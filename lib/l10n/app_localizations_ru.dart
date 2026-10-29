@@ -6526,4 +6526,65 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'Правила загрузки и лимиты хранилища следуют за последним изменением. Работает только между устройствами, где это включено.';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: контактов $contacts, чатов $chats, групп $groups, файлов $files';
+  }
+
+  @override
+  String get linkSideThisDevice => 'Это устройство';
+
+  @override
+  String get linkSideAccount => 'Аккаунт';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName здесь, $accountName в аккаунте';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'Группа $name есть и там и там';
+  }
+
+  @override
+  String get linkModeMerge => 'Объединить (рекомендуется)';
+
+  @override
+  String get linkModeMergeHint =>
+      'Обе стороны становятся данными аккаунта. У общих контактов остаются имена, выбранные на этом устройстве.';
+
+  @override
+  String get linkModeBringMine => 'Перенести данные этого устройства в аккаунт';
+
+  @override
+  String get linkModeBringMineHint =>
+      'Как объединение, но имена и настройки этого устройства главные.';
+
+  @override
+  String get linkModeReplace => 'Заменить данными аккаунта';
+
+  @override
+  String get linkModeReplaceHint =>
+      'Это устройство берёт данные аккаунта. Его чаты сначала сохраняются в файл.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'Чаты и контакты этого устройства будут удалены после сохранения в файл. Продолжить?';
+
+  @override
+  String get linkModeSeparate => 'Отдельный профиль (пока нет)';
+
+  @override
+  String get linkSettingsKeep => 'Оставить настройки этого устройства';
+
+  @override
+  String get linkSettingsTake => 'Взять настройки аккаунта';
 }

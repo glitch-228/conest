@@ -6518,4 +6518,65 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'تتبع قواعد التنزيل وحدود التخزين أحدث تغيير. يعمل فقط بين أجهزة فعّلت هذا الخيار جميعها.';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: $contacts جهة اتصال، $chats محادثة، $groups مجموعة، $files ملف';
+  }
+
+  @override
+  String get linkSideThisDevice => 'هذا الجهاز';
+
+  @override
+  String get linkSideAccount => 'الحساب';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName هنا، و$accountName في الحساب';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'المجموعة $name موجودة في الجانبين';
+  }
+
+  @override
+  String get linkModeMerge => 'دمج (موصى به)';
+
+  @override
+  String get linkModeMergeHint =>
+      'يصبح الجانبان للحساب. تحتفظ جهات الاتصال المشتركة بالأسماء التي اخترتها على هذا الجهاز.';
+
+  @override
+  String get linkModeBringMine => 'إحضار بيانات هذا الجهاز إلى الحساب';
+
+  @override
+  String get linkModeBringMineHint =>
+      'مثل الدمج، لكن أسماء هذا الجهاز وإعداداته هي الأولى.';
+
+  @override
+  String get linkModeReplace => 'الاستبدال ببيانات الحساب';
+
+  @override
+  String get linkModeReplaceHint =>
+      'يأخذ هذا الجهاز بيانات الحساب. تُحفظ محادثاته في ملف أولاً.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'ستُزال محادثات هذا الجهاز وجهات اتصاله بعد حفظها في ملف. المتابعة؟';
+
+  @override
+  String get linkModeSeparate => 'ملف منفصل (غير متاح بعد)';
+
+  @override
+  String get linkSettingsKeep => 'الاحتفاظ بإعدادات هذا الجهاز';
+
+  @override
+  String get linkSettingsTake => 'أخذ إعدادات الحساب';
 }

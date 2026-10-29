@@ -1694,5 +1694,20 @@
   "devicesSyncFastWarning": "المزامنة السريعة تستهلك الكثير من البيانات والبطارية. تعمل فقط على الشبكات غير المحدودة بحجم، ويُطلب تأكيدك في كل مرة تشغّلها.",
   "devicesSyncFastTurnOn": "تشغيل المزامنة السريعة",
   "devicesShareSettings": "مشاركة الإعدادات مع أجهزتي الأخرى",
-  "devicesShareSettingsHint": "تتبع قواعد التنزيل وحدود التخزين أحدث تغيير. يعمل فقط بين أجهزة فعّلت هذا الخيار جميعها."
+  "devicesShareSettingsHint": "تتبع قواعد التنزيل وحدود التخزين أحدث تغيير. يعمل فقط بين أجهزة فعّلت هذا الخيار جميعها.",
+  "linkSummaryLine": "{side}: {contacts} جهة اتصال، {chats} محادثة، {groups} مجموعة، {files} ملف",
+  "linkSideThisDevice": "هذا الجهاز",
+  "linkSideAccount": "الحساب",
+  "linkConflictContact": "{thisName} هنا، و{accountName} في الحساب",
+  "linkConflictGroup": "المجموعة {name} موجودة في الجانبين",
+  "linkModeMerge": "دمج (موصى به)",
+  "linkModeMergeHint": "يصبح الجانبان للحساب. تحتفظ جهات الاتصال المشتركة بالأسماء التي اخترتها على هذا الجهاز.",
+  "linkModeBringMine": "إحضار بيانات هذا الجهاز إلى الحساب",
+  "linkModeBringMineHint": "مثل الدمج، لكن أسماء هذا الجهاز وإعداداته هي الأولى.",
+  "linkModeReplace": "الاستبدال ببيانات الحساب",
+  "linkModeReplaceHint": "يأخذ هذا الجهاز بيانات الحساب. تُحفظ محادثاته في ملف أولاً.",
+  "linkModeReplaceConfirm": "ستُزال محادثات هذا الجهاز وجهات اتصاله بعد حفظها في ملف. المتابعة؟",
+  "linkModeSeparate": "ملف منفصل (غير متاح بعد)",
+  "linkSettingsKeep": "الاحتفاظ بإعدادات هذا الجهاز",
+  "linkSettingsTake": "أخذ إعدادات الحساب"
 }

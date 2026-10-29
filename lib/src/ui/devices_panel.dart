@@ -2,6 +2,7 @@ import '../app_locales.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../link/link_choice.dart';
 import '../messenger_controller.dart';
 import '../transfer/own_device_sync_policy.dart' show SyncSpeed;
 
@@ -436,6 +437,127 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
 
   /// The user read what linking does to this device and agreed.
   bool _started = false;
+  LinkMode _mode = LinkMode.merge;
+  LinkSettingsChoice _settings = LinkSettingsChoice.keepMine;
+
+  Future<void> _pickMode(LinkMode mode) async {
+    if (mode == LinkMode.replace) {
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          content: Text(l10nOf(context).linkModeReplaceConfirm),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(l10nOf(context).actionCancel),
+            ),
+            FilledButton(
+              key: const ValueKey('link-replace-confirm'),
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(l10nOf(context).actionContinue),
+            ),
+          ],
+        ),
+      );
+      if (yes != true) return;
+    }
+    setState(() => _mode = mode);
+    _applyChoice();
+  }
+
+  void _applyChoice() {
+    try {
+      widget.controller.chooseLinkMode(
+        _mode,
+        settings: _settings,
+        confirmReplace: _mode == LinkMode.replace,
+      );
+    } catch (_) {}
+  }
+
+  Widget _choices(BuildContext context) {
+    final l10n = l10nOf(context);
+    final summary = widget.controller.linkSummary();
+    String line(String side, int c, int ch, int g, int f) =>
+        l10n.linkSummaryLine(side, c, ch, g, f);
+    Widget mode(LinkMode value, String title, String? hint) => ListTile(
+      key: ValueKey('link-mode-${value.name}'),
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      leading: Icon(
+        _mode == value
+            ? Icons.radio_button_checked
+            : Icons.radio_button_unchecked,
+      ),
+      title: Text(title),
+      subtitle: hint == null ? null : Text(hint),
+      enabled: value != LinkMode.separateProfile,
+      onTap: value == LinkMode.separateProfile ? null : () => _pickMode(value),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          line(
+            l10n.linkSideThisDevice,
+            summary.thisContacts,
+            summary.thisChats,
+            summary.thisGroups,
+            summary.thisFiles,
+          ),
+        ),
+        Text(
+          line(
+            l10n.linkSideAccount,
+            summary.accountContacts,
+            summary.accountChats,
+            summary.accountGroups,
+            summary.accountFiles,
+          ),
+        ),
+        for (final c in summary.conflicts)
+          Text(
+            c.isGroup
+                ? l10n.linkConflictGroup(c.thisName)
+                : l10n.linkConflictContact(c.thisName, c.accountName),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        const SizedBox(height: 8),
+        mode(LinkMode.merge, l10n.linkModeMerge, l10n.linkModeMergeHint),
+        mode(
+          LinkMode.bringMine,
+          l10n.linkModeBringMine,
+          l10n.linkModeBringMineHint,
+        ),
+        mode(LinkMode.replace, l10n.linkModeReplace, l10n.linkModeReplaceHint),
+        mode(LinkMode.separateProfile, l10n.linkModeSeparate, null),
+        if (_mode != LinkMode.bringMine) ...[
+          const SizedBox(height: 4),
+          SegmentedButton<LinkSettingsChoice>(
+            key: const ValueKey('link-settings-choice'),
+            showSelectedIcon: false,
+            segments: [
+              ButtonSegment(
+                value: LinkSettingsChoice.keepMine,
+                label: Text(l10n.linkSettingsKeep),
+              ),
+              ButtonSegment(
+                value: LinkSettingsChoice.takeAccount,
+                label: Text(l10n.linkSettingsTake),
+              ),
+            ],
+            selected: {_settings},
+            onSelectionChanged: (picked) {
+              setState(() => _settings = picked.single);
+              _applyChoice();
+            },
+          ),
+        ],
+        const SizedBox(height: 12),
+      ],
+    );
+  }
 
   void _start({bool leaveAccount = false}) {
     setState(() => _started = true);
@@ -496,9 +618,15 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
               LinkState.waitingForOtherDevice => Text(
                 l10nOf(context).uiWaitingForTheOtherDeviceB39C3F,
               ),
-              LinkState.compareCode when code != null => _CompareCode(
-                code: code,
-                onConfirm: () => widget.controller.confirmLinkCode(),
+              LinkState.compareCode when code != null => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _choices(context),
+                  _CompareCode(
+                    code: code,
+                    onConfirm: () => widget.controller.confirmLinkCode(),
+                  ),
+                ],
               ),
               _ => Column(
                 mainAxisSize: MainAxisSize.min,

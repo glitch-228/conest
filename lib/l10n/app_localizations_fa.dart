@@ -6393,4 +6393,65 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'قوانین دانلود و محدودیت‌های فضا از جدیدترین تغییر پیروی می‌کنند. فقط بین دستگاه‌هایی کار می‌کند که هر دو این را روشن کرده‌اند.';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: $contacts مخاطب، $chats گفتگو، $groups گروه، $files فایل';
+  }
+
+  @override
+  String get linkSideThisDevice => 'این دستگاه';
+
+  @override
+  String get linkSideAccount => 'حساب';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName اینجا، $accountName در حساب';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'گروه $name در هر دو است';
+  }
+
+  @override
+  String get linkModeMerge => 'ادغام (پیشنهادی)';
+
+  @override
+  String get linkModeMergeHint =>
+      'هر دو طرف به حساب تعلق می‌گیرند. مخاطبان مشترک نام‌هایی را که در این دستگاه گذاشته‌اید نگه می‌دارند.';
+
+  @override
+  String get linkModeBringMine => 'آوردن داده‌های این دستگاه به حساب';
+
+  @override
+  String get linkModeBringMineHint =>
+      'مثل ادغام، اما نام‌ها و تنظیمات این دستگاه برتری دارند.';
+
+  @override
+  String get linkModeReplace => 'جایگزینی با داده‌های حساب';
+
+  @override
+  String get linkModeReplaceHint =>
+      'این دستگاه داده‌های حساب را می‌گیرد. گفتگوهای خودش ابتدا در یک فایل ذخیره می‌شوند.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'گفتگوها و مخاطبان این دستگاه پس از ذخیره در فایل حذف می‌شوند. ادامه؟';
+
+  @override
+  String get linkModeSeparate => 'نمایه جدا (هنوز نه)';
+
+  @override
+  String get linkSettingsKeep => 'نگه داشتن تنظیمات این دستگاه';
+
+  @override
+  String get linkSettingsTake => 'گرفتن تنظیمات حساب';
 }
