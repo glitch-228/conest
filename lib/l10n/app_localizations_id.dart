@@ -5734,4 +5734,521 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get notifyAllMessages => 'Beri tahu semua pesan';
+
+  @override
+  String get xmppEncOmemo2Unverified =>
+      'terenkripsi, belum diverifikasi (OMEMO)';
+
+  @override
+  String get xmppTrustPending => 'perangkat baru, belum dikonfirmasi';
+
+  @override
+  String get xmppUnconfirmedMsg =>
+      'Dari perangkat baru yang belum Anda konfirmasi.';
+
+  @override
+  String get xmppEncOmemo2 => 'terenkripsi (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'OMEMO lama (belum ditinjau)';
+
+  @override
+  String get xmppEncAuto => 'terenkripsi jika kontak mendukung';
+
+  @override
+  String get xmppEncRequired => 'selalu terenkripsi';
+
+  @override
+  String get xmppEncryptionMenu => 'Enkripsi dan kunci';
+
+  @override
+  String get xmppEncryptionTitle => 'Enkripsi';
+
+  @override
+  String get xmppEncryptionAuto => 'Saat kontak mendukung';
+
+  @override
+  String get xmppEncryptionOn => 'Selalu (jangan kirim jika tidak bisa)';
+
+  @override
+  String get xmppEncryptionOff => 'Tidak pernah';
+
+  @override
+  String get xmppKeysTitle => 'Kunci enkripsi';
+
+  @override
+  String get xmppKeysYours => 'Kunci Anda';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'Bandingkan sidik jari ini dengan kontak Anda, langsung atau lewat panggilan tepercaya, atau biarkan mereka memindai kodenya.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'Perangkat $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'Tidak ada perangkat OMEMO untuk kontak ini.';
+
+  @override
+  String get xmppTrustBlind => 'belum diverifikasi';
+
+  @override
+  String get xmppTrustVerified => 'terverifikasi';
+
+  @override
+  String get xmppTrustRefused => 'ditolak';
+
+  @override
+  String get xmppTrustVerify => 'Tandai terverifikasi';
+
+  @override
+  String get xmppTrustRefuse => 'Tolak perangkat ini';
+
+  @override
+  String get xmppTrustAllow => 'Izinkan lagi';
+
+  @override
+  String get xmppKeysScan => 'Pindai kode mereka';
+
+  @override
+  String get xmppKeysRefresh => 'Periksa perangkat';
+
+  @override
+  String get xmppKeysForget => 'Lupakan kunci perangkat ini';
+
+  @override
+  String get xmppKeysChanged =>
+      'Kuncinya berubah: tidak ada yang dikirim sampai Anda melupakan kunci lama.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return '$count perangkat terverifikasi.';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'Kode tidak cocok dengan kunci kontak ini. Jangan percayai.';
+
+  @override
+  String get xmppUnreadable => 'Pesan ini tidak dapat didekripsi.';
+
+  @override
+  String get xmppUntrustedMsg => 'Dari perangkat yang Anda tolak.';
+
+  @override
+  String get xmppLegacySwitch => 'OMEMO lama (eksperimental)';
+
+  @override
+  String get xmppLegacyHint =>
+      'Mengobrol terenkripsi dengan aplikasi lama seperti Conversations, Dino, dan Gajim. Belum ditinjau, jadi pesan semacam itu tidak ditandai terenkripsi.';
+
+  @override
+  String get routeXmppDescription =>
+      'Dibawa server XMPP, tetap terenkripsi ujung ke ujung oleh Conest; server melihat kedua akun dan waktunya.';
+
+  @override
+  String get xmppCarrierSubtitle => 'Bawa pesan melalui akun XMPP (Jabber)';
+
+  @override
+  String get xmppCreatedAccount => 'Akun dibuat oleh Conest';
+
+  @override
+  String get xmppOwnAccount => 'Akun Anda sendiri';
+
+  @override
+  String get xmppChangeAccount => 'Ganti akun';
+
+  @override
+  String get xmppServerField =>
+      'Server XMPP (kosong: yang pertama menjawab di sini)';
+
+  @override
+  String get xmppUseOwnAccount => 'Gunakan akun XMPP saya sendiri';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'Conest masuk sebagai perangkat tambahan; aplikasi XMPP Anda yang lain tidak melihat pesannya.';
+
+  @override
+  String get xmppAddressField => 'Alamat XMPP (nama@server)';
+
+  @override
+  String get xmppPasswordField => 'Kata sandi';
+
+  @override
+  String get xmppRetracted => 'Pesan ditarik';
+
+  @override
+  String get xmppFile => 'Berkas';
+
+  @override
+  String get xmppNewChat => 'Obrolan XMPP baru';
+
+  @override
+  String get xmppNewChatAddress => 'Alamat atau tautan xmpp:';
+
+  @override
+  String get xmppGroupChat => 'Obrolan grup';
+
+  @override
+  String get xmppNickname => 'Nama panggilan Anda';
+
+  @override
+  String get xmppOpenChat => 'Buka';
+
+  @override
+  String get xmppMetadataTitle => 'Beberapa detail tetap ada di berkas ini';
+
+  @override
+  String get xmppMetadataBody =>
+      'Conest tidak dapat menghapus semua detail tersembunyi (seperti lokasi atau perangkat) dari berkas ini. Tetap kirim?';
+
+  @override
+  String get xmppSendAnyway => 'Tetap kirim';
+
+  @override
+  String get xmppReply => 'Balas';
+
+  @override
+  String get xmppCopy => 'Salin';
+
+  @override
+  String get xmppEdit => 'Sunting';
+
+  @override
+  String get xmppRetract => 'Tarik';
+
+  @override
+  String get xmppChatGone => 'Obrolan ini sudah tidak ada.';
+
+  @override
+  String get xmppNotEncrypted => 'tidak terenkripsi';
+
+  @override
+  String get xmppLeaveRoom => 'Keluar dari obrolan grup';
+
+  @override
+  String get xmppDeleteChat => 'Hapus obrolan';
+
+  @override
+  String get xmppBlock => 'Blokir';
+
+  @override
+  String get xmppAccept => 'Terima';
+
+  @override
+  String get xmppRequest =>
+      'Seseorang yang bukan kontak Anda menulis kepada Anda. Balasan dan tanda baca dikirim hanya setelah Anda menerima.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'Anda diundang ke obrolan grup ini. Bergabung?';
+
+  @override
+  String get xmppAttach => 'Lampirkan berkas';
+
+  @override
+  String get xmppMessageHint => 'Pesan';
+
+  @override
+  String get xmppEdited => 'disunting';
+
+  @override
+  String get xmppChats => 'Obrolan XMPP';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'Mengobrol dengan siapa pun di XMPP (Jabber), di samping obrolan Conest';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'Gunakan akun lain selain yang dipakai Conest membawa pesan';
+
+  @override
+  String get xmppConnected => 'terhubung';
+
+  @override
+  String get xmppConnecting => 'menghubungkan';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'Gunakan Conest sebagai klien $network?';
+  }
+
+  @override
+  String get onbXmppInstead => 'Gunakan sebagai klien XMPP saja';
+
+  @override
+  String get xmppSignIn => 'Masuk ke akun XMPP Anda';
+
+  @override
+  String get xmppNoChats => 'Belum ada obrolan XMPP';
+
+  @override
+  String get xmppRequestShort => 'Permintaan obrolan';
+
+  @override
+  String get routeTelegramDescription =>
+      'Dibawa oleh bot Telegram, tetap dienkripsi ujung ke ujung oleh Conest; Telegram melihat kedua bot dan waktunya.';
+
+  @override
+  String get telegramCarrierSubtitle =>
+      'Bawa pesan lewat bot Telegram yang Anda buat';
+
+  @override
+  String get telegramChangeBot => 'Ganti bot';
+
+  @override
+  String get telegramBotHelp =>
+      'Buat bot dengan @BotFather, aktifkan pesan antar-bot untuknya, lalu tempel tokennya di sini. Pakai bot yang hanya dibaca Conest. Kontak Anda melakukan hal yang sama.';
+
+  @override
+  String get telegramBotTokenField => 'Token bot';
+
+  @override
+  String get telegramClientTitle => 'Klien Telegram';
+
+  @override
+  String get telegramClientSubtitle =>
+      'Pakai akun Telegram Anda di Conest (klien tidak resmi)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest adalah klien Telegram tidak resmi. Aturan Telegram berlaku untuk akun Anda.';
+
+  @override
+  String get telegramPhoneField => 'Nomor telepon (+…)';
+
+  @override
+  String get telegramCodeField => 'Kode masuk';
+
+  @override
+  String get telegramPasswordField => 'Kata sandi dua langkah';
+
+  @override
+  String get telegramQrLogin => 'Masuk dengan kode QR';
+
+  @override
+  String get telegramQrHint =>
+      'Di ponsel buka Telegram, Pengaturan, Perangkat, Tautkan Perangkat Desktop, lalu pindai kode ini.';
+
+  @override
+  String get telegramNoAccount =>
+      'Nomor ini tidak punya akun Telegram. Conest hanya untuk masuk; buat akun dulu di aplikasi Telegram resmi.';
+
+  @override
+  String get telegramLogOut => 'Keluar dan hapus';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'Masuk sebagai $name';
+  }
+
+  @override
+  String get telegramConnecting => 'Menyambung…';
+
+  @override
+  String get telegramMods => 'Pengaturan mod';
+
+  @override
+  String get telegramNoChats => 'Belum ada obrolan Telegram';
+
+  @override
+  String get telegramSaved => 'Pesan Tersimpan';
+
+  @override
+  String get telegramSponsored => 'Bersponsor';
+
+  @override
+  String get telegramDeletedBySender => 'Dihapus oleh pengirim';
+
+  @override
+  String get telegramAllChats => 'Semua obrolan';
+
+  @override
+  String get telegramArchive => 'Arsip';
+
+  @override
+  String get telegramChannelReadOnly =>
+      'Hanya admin yang dapat memposting di sini';
+
+  @override
+  String get telegramSendSilently => 'Kirim tanpa suara';
+
+  @override
+  String get telegramSchedule => 'Kirim nanti…';
+
+  @override
+  String get telegramTranslate => 'Terjemahkan';
+
+  @override
+  String get telegramExport => 'Ekspor pesan yang dimuat';
+
+  @override
+  String get telegramDeleteForAll => 'Hapus untuk semua';
+
+  @override
+  String get telegramDeleteForMe => 'Hapus untuk saya';
+
+  @override
+  String get telegramDownload => 'Unduh';
+
+  @override
+  String get telegramOpenSponsored => 'Buka tautan';
+
+  @override
+  String get telegramHiddenWords =>
+      'Sembunyikan pesan yang berisi kata ini (satu per baris)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'Tampilkan pemberitahuan saat seseorang menghapus pesan';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'Hanya pemberitahuan yang tersisa. Isi yang dihapus tidak disimpan.';
+
+  @override
+  String get telegramTranslateTo =>
+      'Terjemahkan ke (kode bahasa, kosong untuk bahasa aplikasi)';
+
+  @override
+  String get telegramPlugins => 'Plugin';
+
+  @override
+  String get telegramPluginHelp =>
+      'Plugin adalah berkas aturan kecil. Hanya dapat menyembunyikan pesan, mengubah teks yang Anda kirim, dan menambah perintah, sesuai izin yang dinyatakan.';
+
+  @override
+  String get telegramPluginInstall => 'Pasang plugin (tempel teksnya)';
+
+  @override
+  String get telegramPluginBad =>
+      'Itu bukan plugin yang valid, atau terlalu banyak yang terpasang.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'Boleh: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'menyembunyikan pesan';
+
+  @override
+  String get telegramPermEditOutgoing => 'mengubah yang Anda kirim';
+
+  @override
+  String get telegramPermCommands => 'menambah perintah';
+
+  @override
+  String get telegramDownloads => 'Unduhan';
+
+  @override
+  String get telegramLoadOlder => 'Muat pesan lebih lama';
+
+  @override
+  String get onbTelegramInstead => 'Pakai sebagai klien Telegram saja';
+
+  @override
+  String get routeDiscordDescription =>
+      'Dibawa oleh bot Discord, tetap dienkripsi ujung ke ujung oleh Conest; Discord melihat kedua bot dan waktunya.';
+
+  @override
+  String get discordCarrierSubtitle =>
+      'Bawa pesan lewat bot Discord yang Anda buat';
+
+  @override
+  String get discordBotHelp =>
+      'Buat bot di portal pengembang Discord, tambahkan ke server pribadi yang dipakai bersama bot kontak Anda, lalu tempel token dan id kanalnya. Pakai bot yang hanya dibaca Conest.';
+
+  @override
+  String get discordBotTokenField => 'Token bot';
+
+  @override
+  String get discordChannelField => 'Id kanal';
+
+  @override
+  String get discordChangeBot => 'Ganti bot';
+
+  @override
+  String get discordClientTitle =>
+      'Klien Discord (melanggar ketentuan Discord)';
+
+  @override
+  String get discordClientSubtitle =>
+      'Pakai akun Discord Anda di Conest, seperti Vencord dan Vesktop';
+
+  @override
+  String get discordWarningTitle => 'Akun Anda bisa diblokir';
+
+  @override
+  String get discordWarningBody =>
+      'Memakai token akun di aplikasi lain melanggar ketentuan Discord dan akun bisa diblokir. Conest hanya bertindak saat Anda bertindak: membaca yang Anda buka dan hanya mengirim yang Anda kirim. Token ini tidak dipakai untuk hal lain dan pembawa Conest tidak pernah memakainya.';
+
+  @override
+  String get discordWarningAccept => 'Saya mengerti, lanjutkan';
+
+  @override
+  String get discordAccountTokenField => 'Token akun';
+
+  @override
+  String get discordTokenHelp =>
+      'Cari di alat pengembang Discord di peramban (tab Network, header Authorization). Jangan bagikan.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'Masuk sebagai $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'Pesan langsung';
+
+  @override
+  String get discordNoChats => 'Belum ada obrolan Discord';
+
+  @override
+  String get discordServers => 'Server';
+
+  @override
+  String get discordLoadOlder => 'Muat pesan lebih lama';
+
+  @override
+  String get discordOnbInstead => 'Pakai sebagai klien Discord saja';
+
+  @override
+  String get telegramRelaySaved =>
+      'Teruskan Pesan Tersimpan ke perangkat saya yang lain';
+
+  @override
+  String get telegramRelayChat =>
+      'Teruskan obrolan ini ke perangkat saya yang lain';
+
+  @override
+  String get telegramRelayNote =>
+      'Hanya teks pesan yang dikirim, terenkripsi ujung ke ujung antar perangkat Anda. Login Telegram Anda tidak pernah meninggalkan perangkat ini.';
+
+  @override
+  String get telegramViaDevice => 'Telegram, lewat perangkat Anda yang lain';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'Hanya baca di sini. Balas di Telegram pada perangkat yang memilikinya.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return 'Pasang $name?';
+  }
+
+  @override
+  String get telegramPluginNoPermissions =>
+      'tidak ada (tidak bisa berbuat apa-apa)';
+
+  @override
+  String get telegramPluginInstallButton => 'Pasang';
+
+  @override
+  String get xmppEditNotApplied =>
+      'Suntingan pesan ini tidak diterapkan: tidak bisa diperiksa.';
 }

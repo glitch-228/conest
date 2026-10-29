@@ -700,6 +700,9 @@ class GlobalConnectivityPreferences {
       TransportKind.meshCore: TransportPolicy.automatic,
       TransportKind.bitchat: TransportPolicy.automatic,
       TransportKind.tor: TransportPolicy.automatic,
+      TransportKind.xmpp: TransportPolicy.automatic,
+      TransportKind.telegram: TransportPolicy.automatic,
+      TransportKind.discord: TransportPolicy.automatic,
     },
   });
 
@@ -878,6 +881,9 @@ class ContactRoutingPreferences {
       TransportKind.meshCore: TransportPolicy.automatic,
       TransportKind.bitchat: TransportPolicy.automatic,
       TransportKind.tor: TransportPolicy.automatic,
+      TransportKind.xmpp: TransportPolicy.automatic,
+      TransportKind.telegram: TransportPolicy.automatic,
+      TransportKind.discord: TransportPolicy.automatic,
     },
   });
 
@@ -2730,7 +2736,16 @@ enum MessageRoute {
   viaContact,
 
   /// Received by another of this account's devices, which passed it on.
-  viaOwnDevice;
+  viaOwnDevice,
+
+  /// Sealed and carried by an XMPP server.
+  xmppCarrier,
+
+  /// Sealed and carried by a Telegram bot.
+  telegramCarrier,
+
+  /// Sealed and carried by a Discord bot.
+  discordCarrier;
 
   String get label => switch (this) {
     lanDirect => 'LAN direct',
@@ -2751,6 +2766,9 @@ enum MessageRoute {
     torOnion => 'Tor',
     viaContact => 'Via a contact',
     viaOwnDevice => 'Via your other device',
+    xmppCarrier => 'XMPP',
+    telegramCarrier => 'Telegram',
+    discordCarrier => 'Discord',
   };
 
   String get description => switch (this) {
@@ -2799,6 +2817,15 @@ enum MessageRoute {
     viaOwnDevice =>
       'Received by another of your devices, which passed it on '
           'to this one, end-to-end encrypted.',
+    xmppCarrier =>
+      'Carried by XMPP servers, still end-to-end encrypted by '
+          'Conest; the servers see both accounts and when.',
+    telegramCarrier =>
+      'Carried by Telegram bots, still end-to-end encrypted by '
+          'Conest; Telegram sees both bots and when.',
+    discordCarrier =>
+      'Carried by Discord bots, still end-to-end encrypted by '
+          'Conest; Discord sees both bots and when.',
   };
 
   /// The carrier this route goes over, if it is one.
@@ -2820,6 +2847,9 @@ enum MessageRoute {
     TransportKind.meshCore => meshCore,
     TransportKind.bitchat => bitchat,
     TransportKind.tor => torOnion,
+    TransportKind.xmpp => xmppCarrier,
+    TransportKind.telegram => telegramCarrier,
+    TransportKind.discord => discordCarrier,
     _ => null,
   };
 
@@ -5173,6 +5203,20 @@ enum AppMode {
   /// A standalone Matrix client: Conest stays dormant and needs no
   /// identity.
   matrixOnly,
+
+  /// A standalone XMPP client (M51): Conest stays dormant.
+  xmppOnly,
+
+  /// A standalone Telegram client (M48): Conest stays dormant.
+  telegramOnly,
+
+  /// A standalone Discord client (M48): Conest stays dormant.
+  discordOnly,
+}
+
+extension AppModeTraits on AppMode {
+  /// A standalone client of another network: Conest stays dormant.
+  bool get clientOnly => this != AppMode.conest && this != AppMode.both;
 }
 
 /// How much of Conest a user sees. Append only.

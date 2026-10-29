@@ -62,6 +62,9 @@ String messageRouteLabel(BuildContext? context, MessageRoute value) =>
       MessageRoute.torOnion => l10nOf(context).uiTorED7088,
       MessageRoute.viaContact => l10nOf(context).routeViaContact,
       MessageRoute.viaOwnDevice => l10nOf(context).routeViaOwnDevice,
+      MessageRoute.xmppCarrier => 'XMPP',
+      MessageRoute.telegramCarrier => 'Telegram',
+      MessageRoute.discordCarrier => 'Discord',
     };
 
 String themeModeLabel(BuildContext? context, ConestThemeMode value) =>
@@ -124,6 +127,9 @@ String messageRouteDescription(BuildContext? context, MessageRoute value) =>
       MessageRoute.torOnion => l10nOf(context).routeTorDescription,
       MessageRoute.viaContact => l10nOf(context).routeContactDescription,
       MessageRoute.viaOwnDevice => l10nOf(context).routeOwnDeviceDescription,
+      MessageRoute.xmppCarrier => l10nOf(context).routeXmppDescription,
+      MessageRoute.telegramCarrier => l10nOf(context).routeTelegramDescription,
+      MessageRoute.discordCarrier => l10nOf(context).routeDiscordDescription,
     };
 
 String transportKindLabel(BuildContext? context, TransportKind value) =>

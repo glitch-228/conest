@@ -5872,4 +5872,519 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get notifyAllMessages => 'Уведомлять обо всех сообщениях';
+
+  @override
+  String get xmppEncOmemo2Unverified => 'зашифровано, не проверено (OMEMO)';
+
+  @override
+  String get xmppTrustPending => 'новое устройство, не подтверждено';
+
+  @override
+  String get xmppUnconfirmedMsg =>
+      'С нового устройства, которое вы не подтвердили.';
+
+  @override
+  String get xmppEncOmemo2 => 'зашифровано (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'старый OMEMO (ещё не проверен)';
+
+  @override
+  String get xmppEncAuto => 'шифруется, если контакт поддерживает';
+
+  @override
+  String get xmppEncRequired => 'всегда шифруется';
+
+  @override
+  String get xmppEncryptionMenu => 'Шифрование и ключи';
+
+  @override
+  String get xmppEncryptionTitle => 'Шифрование';
+
+  @override
+  String get xmppEncryptionAuto => 'Если контакт поддерживает';
+
+  @override
+  String get xmppEncryptionOn => 'Всегда (иначе ничего не отправлять)';
+
+  @override
+  String get xmppEncryptionOff => 'Никогда';
+
+  @override
+  String get xmppKeysTitle => 'Ключи шифрования';
+
+  @override
+  String get xmppKeysYours => 'Ваш ключ';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'Сравните этот отпечаток с контактом лично или в надёжном звонке, либо дайте ему отсканировать код.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'Устройства: $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'У этого контакта не найдено устройств OMEMO.';
+
+  @override
+  String get xmppTrustBlind => 'не проверено';
+
+  @override
+  String get xmppTrustVerified => 'проверено';
+
+  @override
+  String get xmppTrustRefused => 'отклонено';
+
+  @override
+  String get xmppTrustVerify => 'Отметить как проверенное';
+
+  @override
+  String get xmppTrustRefuse => 'Отклонить это устройство';
+
+  @override
+  String get xmppTrustAllow => 'Разрешить снова';
+
+  @override
+  String get xmppKeysScan => 'Сканировать их код';
+
+  @override
+  String get xmppKeysRefresh => 'Проверить устройства';
+
+  @override
+  String get xmppKeysForget => 'Забыть ключ этого устройства';
+
+  @override
+  String get xmppKeysChanged =>
+      'Его ключ изменился: ему ничего не отправляется, пока вы не забудете старый ключ.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return 'Проверено устройств: $count.';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'Код не совпадает с ключами контакта. Не доверяйте им.';
+
+  @override
+  String get xmppUnreadable => 'Это сообщение не удалось расшифровать.';
+
+  @override
+  String get xmppUntrustedMsg => 'С устройства, которое вы отклонили.';
+
+  @override
+  String get xmppLegacySwitch => 'Старый OMEMO (экспериментально)';
+
+  @override
+  String get xmppLegacyHint =>
+      'Зашифрованные чаты со старыми приложениями вроде Conversations, Dino и Gajim. Ещё не проверено, поэтому такие сообщения не помечаются как зашифрованные.';
+
+  @override
+  String get routeXmppDescription =>
+      'Передаётся серверами XMPP, по-прежнему со сквозным шифрованием Conest; серверы видят обе учётные записи и время.';
+
+  @override
+  String get xmppCarrierSubtitle =>
+      'Передавать сообщения через учётную запись XMPP (Jabber)';
+
+  @override
+  String get xmppCreatedAccount => 'Учётная запись создана Conest';
+
+  @override
+  String get xmppOwnAccount => 'Ваша учётная запись';
+
+  @override
+  String get xmppChangeAccount => 'Сменить учётную запись';
+
+  @override
+  String get xmppServerField =>
+      'Сервер XMPP (пусто: первый, что отвечает здесь)';
+
+  @override
+  String get xmppUseOwnAccount => 'Использовать свою учётную запись XMPP';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'Conest входит как ещё одно устройство; другие ваши приложения XMPP не видят его сообщений.';
+
+  @override
+  String get xmppAddressField => 'Адрес XMPP (имя@сервер)';
+
+  @override
+  String get xmppPasswordField => 'Пароль';
+
+  @override
+  String get xmppRetracted => 'Сообщение отозвано';
+
+  @override
+  String get xmppFile => 'Файл';
+
+  @override
+  String get xmppNewChat => 'Новый чат XMPP';
+
+  @override
+  String get xmppNewChatAddress => 'Адрес или ссылка xmpp:';
+
+  @override
+  String get xmppGroupChat => 'Групповой чат';
+
+  @override
+  String get xmppNickname => 'Ваш ник';
+
+  @override
+  String get xmppOpenChat => 'Открыть';
+
+  @override
+  String get xmppMetadataTitle => 'Часть сведений останется в файле';
+
+  @override
+  String get xmppMetadataBody =>
+      'Conest не смог удалить из файла все скрытые сведения (например, место или устройство). Всё равно отправить?';
+
+  @override
+  String get xmppSendAnyway => 'Всё равно отправить';
+
+  @override
+  String get xmppReply => 'Ответить';
+
+  @override
+  String get xmppCopy => 'Копировать';
+
+  @override
+  String get xmppEdit => 'Изменить';
+
+  @override
+  String get xmppRetract => 'Отозвать';
+
+  @override
+  String get xmppChatGone => 'Этого чата больше нет.';
+
+  @override
+  String get xmppNotEncrypted => 'без шифрования';
+
+  @override
+  String get xmppLeaveRoom => 'Покинуть групповой чат';
+
+  @override
+  String get xmppDeleteChat => 'Удалить чат';
+
+  @override
+  String get xmppBlock => 'Заблокировать';
+
+  @override
+  String get xmppAccept => 'Принять';
+
+  @override
+  String get xmppRequest =>
+      'Вам написал человек не из ваших контактов. Ответы и отметки о прочтении уйдут только после того, как вы примете.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'Вас пригласили в этот групповой чат. Войти?';
+
+  @override
+  String get xmppAttach => 'Прикрепить файл';
+
+  @override
+  String get xmppMessageHint => 'Сообщение';
+
+  @override
+  String get xmppEdited => 'изменено';
+
+  @override
+  String get xmppChats => 'Чаты XMPP';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'Общайтесь с кем угодно в XMPP (Jabber) рядом с чатами Conest';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'Использовать другую учётную запись, не ту, через которую Conest передаёт сообщения';
+
+  @override
+  String get xmppConnected => 'подключено';
+
+  @override
+  String get xmppConnecting => 'подключение';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'Использовать Conest как клиент $network?';
+  }
+
+  @override
+  String get onbXmppInstead => 'Использовать как клиент XMPP';
+
+  @override
+  String get xmppSignIn => 'Войдите в учётную запись XMPP';
+
+  @override
+  String get xmppNoChats => 'Чатов XMPP пока нет';
+
+  @override
+  String get xmppRequestShort => 'Запрос на чат';
+
+  @override
+  String get routeTelegramDescription =>
+      'Передаётся ботами Telegram, по-прежнему со сквозным шифрованием Conest; Telegram видит обоих ботов и время.';
+
+  @override
+  String get telegramCarrierSubtitle =>
+      'Передавать сообщения через созданного вами бота Telegram';
+
+  @override
+  String get telegramChangeBot => 'Сменить бота';
+
+  @override
+  String get telegramBotHelp =>
+      'Создайте бота через @BotFather, включите для него обмен сообщениями между ботами и вставьте токен сюда. Бот должен использоваться только Conest. Ваш контакт делает то же самое.';
+
+  @override
+  String get telegramBotTokenField => 'Токен бота';
+
+  @override
+  String get telegramClientTitle => 'Клиент Telegram';
+
+  @override
+  String get telegramClientSubtitle =>
+      'Использовать свой аккаунт Telegram в Conest (неофициальный клиент)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest — неофициальный клиент Telegram. К вашему аккаунту применяются правила Telegram.';
+
+  @override
+  String get telegramPhoneField => 'Номер телефона (+…)';
+
+  @override
+  String get telegramCodeField => 'Код входа';
+
+  @override
+  String get telegramPasswordField => 'Пароль двухэтапной проверки';
+
+  @override
+  String get telegramQrLogin => 'Войти по QR-коду';
+
+  @override
+  String get telegramQrHint =>
+      'На телефоне откройте Telegram, Настройки, Устройства, Подключить устройство и отсканируйте этот код.';
+
+  @override
+  String get telegramNoAccount =>
+      'У этого номера нет аккаунта Telegram. Conest только входит в аккаунт; сначала создайте его в официальном приложении Telegram.';
+
+  @override
+  String get telegramLogOut => 'Выйти и удалить';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'Вход выполнен как $name';
+  }
+
+  @override
+  String get telegramConnecting => 'Подключение…';
+
+  @override
+  String get telegramMods => 'Настройки модов';
+
+  @override
+  String get telegramNoChats => 'Чатов Telegram пока нет';
+
+  @override
+  String get telegramSaved => 'Избранное';
+
+  @override
+  String get telegramSponsored => 'Реклама';
+
+  @override
+  String get telegramDeletedBySender => 'Удалено отправителем';
+
+  @override
+  String get telegramAllChats => 'Все чаты';
+
+  @override
+  String get telegramArchive => 'Архив';
+
+  @override
+  String get telegramChannelReadOnly =>
+      'Писать здесь могут только администраторы';
+
+  @override
+  String get telegramSendSilently => 'Отправить без звука';
+
+  @override
+  String get telegramSchedule => 'Отправить позже…';
+
+  @override
+  String get telegramTranslate => 'Перевести';
+
+  @override
+  String get telegramExport => 'Экспортировать загруженные сообщения';
+
+  @override
+  String get telegramDeleteForAll => 'Удалить у всех';
+
+  @override
+  String get telegramDeleteForMe => 'Удалить у меня';
+
+  @override
+  String get telegramDownload => 'Скачать';
+
+  @override
+  String get telegramOpenSponsored => 'Открыть ссылку';
+
+  @override
+  String get telegramHiddenWords =>
+      'Скрывать сообщения с этими словами (по одному в строке)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'Показывать уведомление, когда кто-то удаляет сообщение';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'Остаётся только уведомление. Удалённое содержимое не сохраняется.';
+
+  @override
+  String get telegramTranslateTo =>
+      'Переводить на (код языка, пусто — язык приложения)';
+
+  @override
+  String get telegramPlugins => 'Плагины';
+
+  @override
+  String get telegramPluginHelp =>
+      'Плагины — небольшие файлы правил. Они могут только скрывать сообщения, менять отправляемый текст и добавлять команды, и только то, что заявлено.';
+
+  @override
+  String get telegramPluginInstall => 'Установить плагин (вставьте его текст)';
+
+  @override
+  String get telegramPluginBad =>
+      'Это не подходящий плагин, или установлено слишком много.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'Может: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'скрывать сообщения';
+
+  @override
+  String get telegramPermEditOutgoing => 'менять отправляемое';
+
+  @override
+  String get telegramPermCommands => 'добавлять команды';
+
+  @override
+  String get telegramDownloads => 'Загрузки';
+
+  @override
+  String get telegramLoadOlder => 'Загрузить более старые сообщения';
+
+  @override
+  String get onbTelegramInstead => 'Использовать как клиент Telegram';
+
+  @override
+  String get routeDiscordDescription =>
+      'Передаётся ботами Discord, по-прежнему со сквозным шифрованием Conest; Discord видит обоих ботов и время.';
+
+  @override
+  String get discordCarrierSubtitle =>
+      'Передавать сообщения через созданного вами бота Discord';
+
+  @override
+  String get discordBotHelp =>
+      'Создайте бота на портале разработчиков Discord, добавьте его на закрытый сервер, общий с ботами ваших контактов, и вставьте токен и id канала. Бот должен использоваться только Conest.';
+
+  @override
+  String get discordBotTokenField => 'Токен бота';
+
+  @override
+  String get discordChannelField => 'Id канала';
+
+  @override
+  String get discordChangeBot => 'Сменить бота';
+
+  @override
+  String get discordClientTitle => 'Клиент Discord (против правил Discord)';
+
+  @override
+  String get discordClientSubtitle =>
+      'Использовать свой аккаунт Discord в Conest, как Vencord и Vesktop';
+
+  @override
+  String get discordWarningTitle => 'Из-за этого аккаунт могут заблокировать';
+
+  @override
+  String get discordWarningBody =>
+      'Использование токена аккаунта в другом приложении нарушает правила Discord, и аккаунт могут заблокировать. Conest действует только по вашим действиям: читает то, что вы открываете, и отправляет только то, что отправляете вы. Токен больше ни для чего не используется, а переносчик Conest его не использует никогда.';
+
+  @override
+  String get discordWarningAccept => 'Понимаю, продолжить';
+
+  @override
+  String get discordAccountTokenField => 'Токен аккаунта';
+
+  @override
+  String get discordTokenHelp =>
+      'Его можно найти в инструментах разработчика Discord в браузере (вкладка Network, заголовок Authorization). Никому его не показывайте.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'Вход выполнен как $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'Личные сообщения';
+
+  @override
+  String get discordNoChats => 'Чатов Discord пока нет';
+
+  @override
+  String get discordServers => 'Серверы';
+
+  @override
+  String get discordLoadOlder => 'Загрузить более старые сообщения';
+
+  @override
+  String get discordOnbInstead => 'Использовать как клиент Discord';
+
+  @override
+  String get telegramRelaySaved =>
+      'Передавать Избранное на мои другие устройства';
+
+  @override
+  String get telegramRelayChat =>
+      'Передавать этот чат на мои другие устройства';
+
+  @override
+  String get telegramRelayNote =>
+      'Передаётся только текст сообщений, со сквозным шифрованием между вашими устройствами. Вход в Telegram не покидает это устройство.';
+
+  @override
+  String get telegramViaDevice => 'Telegram, через другое ваше устройство';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'Только чтение. Отвечайте в Telegram на устройстве, где он есть.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return 'Установить $name?';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => 'ничего (ничего не может)';
+
+  @override
+  String get telegramPluginInstallButton => 'Установить';
+
+  @override
+  String get xmppEditNotApplied =>
+      'Правка этого сообщения не применена: её нельзя проверить.';
 }

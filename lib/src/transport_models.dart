@@ -17,6 +17,15 @@ enum TransportKind {
   meshCore,
   bitchat,
   tor,
+
+  /// XMPP (Jabber): frames through an XMPP account (M51).
+  xmpp,
+
+  /// A Telegram bot (bot-to-bot messages) carrying frames (M30).
+  telegram,
+
+  /// A Discord bot posting frames in a private channel (M31).
+  discord,
 }
 
 enum TransportPolicy { automatic, preferred, disabled, askBeforeUse }
@@ -52,6 +61,9 @@ extension TransportKindLabel on TransportKind {
     TransportKind.meshCore => 'MeshCore',
     TransportKind.bitchat => 'Bluetooth mesh',
     TransportKind.tor => 'Tor',
+    TransportKind.xmpp => 'XMPP',
+    TransportKind.telegram => 'Telegram',
+    TransportKind.discord => 'Discord',
   };
 }
 
@@ -64,7 +76,10 @@ extension TransportKindTraits on TransportKind {
     TransportKind.deltaChat ||
     TransportKind.matrix ||
     TransportKind.nostr ||
-    TransportKind.tor => true,
+    TransportKind.tor ||
+    TransportKind.xmpp ||
+    TransportKind.telegram ||
+    TransportKind.discord => true,
     _ => false,
   };
 
@@ -78,7 +93,10 @@ extension TransportKindTraits on TransportKind {
     TransportKind.meshtastic ||
     TransportKind.meshCore ||
     TransportKind.bitchat ||
-    TransportKind.tor => true,
+    TransportKind.tor ||
+    TransportKind.xmpp ||
+    TransportKind.telegram ||
+    TransportKind.discord => true,
     _ => false,
   };
 
@@ -107,7 +125,10 @@ extension TransportKindTraits on TransportKind {
     TransportKind.meshtastic ||
     TransportKind.meshCore ||
     TransportKind.bitchat ||
-    TransportKind.tor => true,
+    TransportKind.tor ||
+    TransportKind.xmpp ||
+    TransportKind.telegram ||
+    TransportKind.discord => true,
     _ => false,
   };
 
@@ -121,6 +142,9 @@ extension TransportKindTraits on TransportKind {
     TransportKind.matrix => 30,
     TransportKind.nostr => 31,
     TransportKind.deltaChat => 32,
+    TransportKind.xmpp => 33,
+    TransportKind.telegram => 34,
+    TransportKind.discord => 35,
     TransportKind.bitchat => 40,
     TransportKind.reticulum ||
     TransportKind.meshtastic ||

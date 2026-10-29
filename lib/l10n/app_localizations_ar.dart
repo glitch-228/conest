@@ -5877,4 +5877,511 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get notifyAllMessages => 'الإشعار لكل الرسائل';
+
+  @override
+  String get xmppEncOmemo2Unverified => 'مشفّر، غير موثّق (OMEMO)';
+
+  @override
+  String get xmppTrustPending => 'جهاز جديد، غير مؤكَّد';
+
+  @override
+  String get xmppUnconfirmedMsg => 'من جهاز جديد لم تؤكده.';
+
+  @override
+  String get xmppEncOmemo2 => 'مشفّرة (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'OMEMO القديم (لم يُراجَع بعد)';
+
+  @override
+  String get xmppEncAuto => 'تُشفَّر إذا دعمتها جهة الاتصال';
+
+  @override
+  String get xmppEncRequired => 'مشفّرة دائمًا';
+
+  @override
+  String get xmppEncryptionMenu => 'التشفير والمفاتيح';
+
+  @override
+  String get xmppEncryptionTitle => 'التشفير';
+
+  @override
+  String get xmppEncryptionAuto => 'عندما تدعمه جهة الاتصال';
+
+  @override
+  String get xmppEncryptionOn => 'دائمًا (لا يُرسَل شيء بخلاف ذلك)';
+
+  @override
+  String get xmppEncryptionOff => 'أبدًا';
+
+  @override
+  String get xmppKeysTitle => 'مفاتيح التشفير';
+
+  @override
+  String get xmppKeysYours => 'مفتاحك';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'قارن هذه البصمة مع جهة الاتصال وجهًا لوجه أو عبر مكالمة تثق بها، أو دعها تمسح الرمز.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'أجهزة $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'لم يُعثر على أجهزة OMEMO لجهة الاتصال هذه.';
+
+  @override
+  String get xmppTrustBlind => 'غير مُتحقَّق منه';
+
+  @override
+  String get xmppTrustVerified => 'تم التحقق';
+
+  @override
+  String get xmppTrustRefused => 'مرفوض';
+
+  @override
+  String get xmppTrustVerify => 'وضع علامة تم التحقق';
+
+  @override
+  String get xmppTrustRefuse => 'رفض هذا الجهاز';
+
+  @override
+  String get xmppTrustAllow => 'السماح مجددًا';
+
+  @override
+  String get xmppKeysScan => 'امسح رمزهم';
+
+  @override
+  String get xmppKeysRefresh => 'تحقق من الأجهزة';
+
+  @override
+  String get xmppKeysForget => 'نسيان مفتاح هذا الجهاز';
+
+  @override
+  String get xmppKeysChanged =>
+      'تغيّر مفتاحه: لن يُرسَل إليه شيء حتى تنسى المفتاح القديم.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return 'تم التحقق من $count جهاز.';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'الرمز لا يطابق مفاتيح جهة الاتصال. لا تثق بها.';
+
+  @override
+  String get xmppUnreadable => 'تعذّر فك تشفير هذه الرسالة.';
+
+  @override
+  String get xmppUntrustedMsg => 'من جهاز رفضتَه.';
+
+  @override
+  String get xmppLegacySwitch => 'OMEMO القديم (تجريبي)';
+
+  @override
+  String get xmppLegacyHint =>
+      'محادثات مشفّرة مع تطبيقات أقدم مثل Conversations وDino وGajim. لم تُراجَع بعد، لذا لا تُوسَم هذه الرسائل بأنها مشفّرة.';
+
+  @override
+  String get routeXmppDescription =>
+      'تحمله خوادم XMPP، مع بقائه مشفّرًا من طرف إلى طرف بواسطة Conest؛ ترى الخوادم الحسابين والتوقيت.';
+
+  @override
+  String get xmppCarrierSubtitle => 'نقل الرسائل عبر حساب XMPP (Jabber)';
+
+  @override
+  String get xmppCreatedAccount => 'حساب أنشأه Conest';
+
+  @override
+  String get xmppOwnAccount => 'حسابك الخاص';
+
+  @override
+  String get xmppChangeAccount => 'تغيير الحساب';
+
+  @override
+  String get xmppServerField => 'خادم XMPP (فارغ: أول خادم يستجيب هنا)';
+
+  @override
+  String get xmppUseOwnAccount => 'استخدام حساب XMPP الخاص بي';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'يسجّل Conest الدخول كجهاز إضافي؛ لا ترى تطبيقات XMPP الأخرى رسائله.';
+
+  @override
+  String get xmppAddressField => 'عنوان XMPP (الاسم@الخادم)';
+
+  @override
+  String get xmppPasswordField => 'كلمة المرور';
+
+  @override
+  String get xmppRetracted => 'سُحبت الرسالة';
+
+  @override
+  String get xmppFile => 'ملف';
+
+  @override
+  String get xmppNewChat => 'محادثة XMPP جديدة';
+
+  @override
+  String get xmppNewChatAddress => 'العنوان أو رابط xmpp:';
+
+  @override
+  String get xmppGroupChat => 'محادثة جماعية';
+
+  @override
+  String get xmppNickname => 'اسمك المستعار';
+
+  @override
+  String get xmppOpenChat => 'فتح';
+
+  @override
+  String get xmppMetadataTitle => 'تبقى بعض التفاصيل في هذا الملف';
+
+  @override
+  String get xmppMetadataBody =>
+      'تعذّر على Conest إزالة كل التفاصيل المخفية (مثل الموقع أو الجهاز) من هذا الملف. أترسله رغم ذلك؟';
+
+  @override
+  String get xmppSendAnyway => 'أرسل على أي حال';
+
+  @override
+  String get xmppReply => 'رد';
+
+  @override
+  String get xmppCopy => 'نسخ';
+
+  @override
+  String get xmppEdit => 'تعديل';
+
+  @override
+  String get xmppRetract => 'سحب';
+
+  @override
+  String get xmppChatGone => 'لم تعد هذه المحادثة موجودة.';
+
+  @override
+  String get xmppNotEncrypted => 'غير مشفّرة';
+
+  @override
+  String get xmppLeaveRoom => 'مغادرة المحادثة الجماعية';
+
+  @override
+  String get xmppDeleteChat => 'حذف المحادثة';
+
+  @override
+  String get xmppBlock => 'حظر';
+
+  @override
+  String get xmppAccept => 'قبول';
+
+  @override
+  String get xmppRequest =>
+      'راسلك شخص ليس من جهات اتصالك. لا تُرسل الردود وعلامات القراءة إلا بعد قبولك.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'تمت دعوتك إلى هذه المحادثة الجماعية. هل تنضم؟';
+
+  @override
+  String get xmppAttach => 'إرفاق ملف';
+
+  @override
+  String get xmppMessageHint => 'رسالة';
+
+  @override
+  String get xmppEdited => 'معدّلة';
+
+  @override
+  String get xmppChats => 'محادثات XMPP';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'تحدث مع أي شخص على XMPP (Jabber) بجانب محادثات Conest';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'استخدام حساب غير الذي ينقل به Conest الرسائل';
+
+  @override
+  String get xmppConnected => 'متصل';
+
+  @override
+  String get xmppConnecting => 'جارٍ الاتصال';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'هل تستخدم Conest كعميل $network؟';
+  }
+
+  @override
+  String get onbXmppInstead => 'استخدمه كعميل XMPP بدلًا من ذلك';
+
+  @override
+  String get xmppSignIn => 'سجّل الدخول إلى حساب XMPP';
+
+  @override
+  String get xmppNoChats => 'لا توجد محادثات XMPP بعد';
+
+  @override
+  String get xmppRequestShort => 'طلب محادثة';
+
+  @override
+  String get routeTelegramDescription =>
+      'يُنقل عبر بوتات تيليجرام، ومشفّر من طرف إلى طرف بواسطة Conest؛ يرى تيليجرام البوتين والوقت.';
+
+  @override
+  String get telegramCarrierSubtitle => 'نقل الرسائل عبر بوت تيليجرام أنشأته';
+
+  @override
+  String get telegramChangeBot => 'تغيير البوت';
+
+  @override
+  String get telegramBotHelp =>
+      'أنشئ بوتًا عبر @BotFather وفعّل المراسلة بين البوتات له والصق الرمز هنا. استخدم بوتًا يقرؤه Conest فقط. ويفعل جهة اتصالك الشيء نفسه.';
+
+  @override
+  String get telegramBotTokenField => 'رمز البوت';
+
+  @override
+  String get telegramClientTitle => 'عميل تيليجرام';
+
+  @override
+  String get telegramClientSubtitle =>
+      'استخدم حسابك في تيليجرام داخل Conest (عميل غير رسمي)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest عميل غير رسمي لتيليجرام. تنطبق قواعد تيليجرام على حسابك.';
+
+  @override
+  String get telegramPhoneField => 'رقم الهاتف (+…)';
+
+  @override
+  String get telegramCodeField => 'رمز الدخول';
+
+  @override
+  String get telegramPasswordField => 'كلمة مرور التحقق بخطوتين';
+
+  @override
+  String get telegramQrLogin => 'تسجيل الدخول برمز QR بدلًا من ذلك';
+
+  @override
+  String get telegramQrHint =>
+      'على هاتفك افتح تيليجرام ثم الإعدادات ثم الأجهزة ثم ربط جهاز سطح المكتب وامسح هذا الرمز.';
+
+  @override
+  String get telegramNoAccount =>
+      'لا يوجد حساب تيليجرام لهذا الرقم. Conest يسجّل الدخول فقط؛ أنشئ الحساب أولًا في تطبيق تيليجرام الرسمي.';
+
+  @override
+  String get telegramLogOut => 'تسجيل الخروج والإزالة';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'تم تسجيل الدخول باسم $name';
+  }
+
+  @override
+  String get telegramConnecting => 'جارٍ الاتصال…';
+
+  @override
+  String get telegramMods => 'إعدادات التعديلات';
+
+  @override
+  String get telegramNoChats => 'لا توجد محادثات تيليجرام بعد';
+
+  @override
+  String get telegramSaved => 'الرسائل المحفوظة';
+
+  @override
+  String get telegramSponsored => 'مُموَّل';
+
+  @override
+  String get telegramDeletedBySender => 'حذفها المرسل';
+
+  @override
+  String get telegramAllChats => 'كل المحادثات';
+
+  @override
+  String get telegramArchive => 'الأرشيف';
+
+  @override
+  String get telegramChannelReadOnly => 'يمكن للمشرفين فقط النشر هنا';
+
+  @override
+  String get telegramSendSilently => 'إرسال بصمت';
+
+  @override
+  String get telegramSchedule => 'إرسال لاحقًا…';
+
+  @override
+  String get telegramTranslate => 'ترجمة';
+
+  @override
+  String get telegramExport => 'تصدير الرسائل المحمّلة';
+
+  @override
+  String get telegramDeleteForAll => 'حذف للجميع';
+
+  @override
+  String get telegramDeleteForMe => 'حذف لدي فقط';
+
+  @override
+  String get telegramDownload => 'تنزيل';
+
+  @override
+  String get telegramOpenSponsored => 'فتح الرابط';
+
+  @override
+  String get telegramHiddenWords =>
+      'إخفاء الرسائل التي تحتوي هذه الكلمات (كلمة في كل سطر)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'إظهار إشعار عندما يحذف أحدهم رسالة';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'يبقى الإشعار فقط. لا يُحتفظ بالمحتوى المحذوف.';
+
+  @override
+  String get telegramTranslateTo =>
+      'الترجمة إلى (رمز اللغة، فارغ للغة التطبيق)';
+
+  @override
+  String get telegramPlugins => 'الإضافات';
+
+  @override
+  String get telegramPluginHelp =>
+      'الإضافات ملفات قواعد صغيرة. تستطيع فقط إخفاء الرسائل وتغيير النص المرسل وإضافة أوامر، وبحسب ما تعلنه فقط.';
+
+  @override
+  String get telegramPluginInstall => 'تثبيت إضافة (الصق نصها)';
+
+  @override
+  String get telegramPluginBad =>
+      'هذه ليست إضافة صالحة أو أن عدد المثبتة كبير.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'يمكنها: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'إخفاء الرسائل';
+
+  @override
+  String get telegramPermEditOutgoing => 'تغيير ما ترسله';
+
+  @override
+  String get telegramPermCommands => 'إضافة أوامر';
+
+  @override
+  String get telegramDownloads => 'التنزيلات';
+
+  @override
+  String get telegramLoadOlder => 'تحميل رسائل أقدم';
+
+  @override
+  String get onbTelegramInstead => 'استخدمه كعميل تيليجرام بدلًا من ذلك';
+
+  @override
+  String get routeDiscordDescription =>
+      'يُنقل عبر بوتات ديسكورد، ومشفّر من طرف إلى طرف بواسطة Conest؛ يرى ديسكورد البوتين والوقت.';
+
+  @override
+  String get discordCarrierSubtitle => 'نقل الرسائل عبر بوت ديسكورد أنشأته';
+
+  @override
+  String get discordBotHelp =>
+      'أنشئ بوتًا في بوابة مطوري ديسكورد وأضفه إلى خادم خاص تشاركه مع بوتات جهات اتصالك والصق الرمز ومعرّف القناة. استخدم بوتًا يقرؤه Conest فقط.';
+
+  @override
+  String get discordBotTokenField => 'رمز البوت';
+
+  @override
+  String get discordChannelField => 'معرّف القناة';
+
+  @override
+  String get discordChangeBot => 'تغيير البوت';
+
+  @override
+  String get discordClientTitle => 'عميل ديسكورد (مخالف لشروط ديسكورد)';
+
+  @override
+  String get discordClientSubtitle =>
+      'استخدم حسابك في ديسكورد داخل Conest كما يفعل Vencord وVesktop';
+
+  @override
+  String get discordWarningTitle => 'قد يؤدي هذا إلى حظر حسابك';
+
+  @override
+  String get discordWarningBody =>
+      'استخدام رمز حسابك في تطبيق آخر مخالف لشروط ديسكورد وقد يحظر ديسكورد الحساب. لا يتصرف Conest إلا عندما تفعل أنت: يقرأ ما تفتحه ويرسل ما ترسله فقط. لا يستخدم هذا الرمز لأي شيء آخر ولا تستخدمه ناقلة Conest أبدًا.';
+
+  @override
+  String get discordWarningAccept => 'أفهم، تابع';
+
+  @override
+  String get discordAccountTokenField => 'رمز الحساب';
+
+  @override
+  String get discordTokenHelp =>
+      'ستجده في أدوات المطور لديسكورد في المتصفح (تبويب Network، ترويسة Authorization). لا تشاركه أبدًا.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'تم تسجيل الدخول باسم $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'الرسائل الخاصة';
+
+  @override
+  String get discordNoChats => 'لا توجد محادثات ديسكورد بعد';
+
+  @override
+  String get discordServers => 'الخوادم';
+
+  @override
+  String get discordLoadOlder => 'تحميل رسائل أقدم';
+
+  @override
+  String get discordOnbInstead => 'استخدمه كعميل ديسكورد بدلًا من ذلك';
+
+  @override
+  String get telegramRelaySaved => 'نقل الرسائل المحفوظة إلى أجهزتي الأخرى';
+
+  @override
+  String get telegramRelayChat => 'نقل هذه المحادثة إلى أجهزتي الأخرى';
+
+  @override
+  String get telegramRelayNote =>
+      'يُنقل نص الرسائل فقط، ومشفّر من طرف إلى طرف بين أجهزتك. لا يغادر تسجيل دخولك إلى تيليجرام هذا الجهاز.';
+
+  @override
+  String get telegramViaDevice => 'تيليجرام عبر جهازك الآخر';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'للقراءة فقط هنا. أجب في تيليجرام على الجهاز الذي يملكه.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return 'تثبيت $name؟';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => 'لا شيء (لا يستطيع فعل أي شيء)';
+
+  @override
+  String get telegramPluginInstallButton => 'تثبيت';
+
+  @override
+  String get xmppEditNotApplied =>
+      'لم يُطبَّق تعديل هذه الرسالة: تعذّر التحقق منه.';
 }

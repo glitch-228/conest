@@ -93,6 +93,23 @@ import 'route_test.dart';
 import 'voice_call_service.dart';
 import 'voice_call_sound_cues.dart';
 import 'voice_message_service.dart';
+import 'discord/discord_api.dart';
+import 'discord/discord_carrier.dart';
+import 'discord/discord_service.dart';
+import 'telegram/td_engine.dart';
+import 'telegram/telegram_api_keys.dart';
+import 'telegram/telegram_bridge.dart';
+import 'telegram/telegram_client.dart' show TgAuth;
+import 'telegram/telegram_bot_api.dart';
+import 'telegram/telegram_carrier.dart';
+import 'telegram/telegram_service.dart';
+import 'xmpp/xmpp_carrier.dart';
+import 'xmpp/xmpp_chat_client.dart';
+import 'xmpp/xmpp_chats.dart';
+import 'xmpp/xmpp_omemo.dart';
+import 'xmpp/xmpp_session.dart' show XmppSession;
+import 'xmpp/xmpp_socket.dart' show XmppEndpoint;
+import 'xmpp/xmpp_xml.dart' show isValidBareJid;
 import 'voice_settings.dart';
 import 'notification_rules.dart';
 
@@ -584,7 +601,21 @@ class MessengerController extends ChangeNotifier {
     BitchatConnector? bitchatConnector,
     TorApi? torApi,
     EnergyPolicy? energyPolicy,
-  }) : _groupCallMediaOverride = groupCallMedia,
+    XmppNetwork? xmppNetwork,
+    TelegramNetwork? telegramNetwork,
+    DiscordNetwork? discordNetwork,
+    TelegramApiKeys? telegramApiKeys,
+    TdEngine? Function()? tdEngineFactory,
+    Future<Directory> Function()? telegramDirectory,
+  }) : _xmppNetwork = xmppNetwork ?? const XmppNetwork(),
+       _telegramNetwork = telegramNetwork ?? const TelegramNetwork(),
+       _discordNetwork = discordNetwork ?? const DiscordNetwork(),
+       _telegramApiKeys = telegramApiKeys ?? TelegramApiKeys.fromEnvironment(),
+       _tdEngineIsDefault = tdEngineFactory == null,
+       _tdEngineFactory = tdEngineFactory ?? NativeTdEngine.tryCreate,
+       _telegramDirectoryProvider =
+           telegramDirectory ?? path_provider.getApplicationSupportDirectory,
+       _groupCallMediaOverride = groupCallMedia,
        _groupCallLinkPolicy = groupCallLinkPolicy,
        _vaultStore = vaultStore,
        _injectedEnergyPolicy = energyPolicy,
@@ -700,6 +731,13 @@ class MessengerController extends ChangeNotifier {
   final BitchatConnector? _bitchatConnector;
   TorApi? _torApi;
   bool _torApiResolved;
+  final XmppNetwork _xmppNetwork;
+  final TelegramNetwork _telegramNetwork;
+  final DiscordNetwork _discordNetwork;
+  final TelegramApiKeys? _telegramApiKeys;
+  final TdEngine? Function() _tdEngineFactory;
+  final bool _tdEngineIsDefault;
+  final Future<Directory> Function() _telegramDirectoryProvider;
   MatrixNativeApi? _matrixNativeApi;
   final bool _loadNativeMatrixClient;
   MatrixClientService? _matrixClient;
@@ -729,26 +767,29 @@ class MessengerController extends ChangeNotifier {
   /// Conest stays dormant instead of silently starting.
   AppMode get appMode {
     final stored = _snapshot.appMode;
-    if (stored == AppMode.matrixOnly) return AppMode.matrixOnly;
+    if (stored != null && stored.clientOnly) return stored;
     if (_matrixClient == null) return AppMode.conest;
     return stored ?? AppMode.both;
   }
 
   /// Whether Conest itself runs: in Matrix-only mode an existing identity
   /// stays dormant (no LAN, relay node, Iroh or polling).
-  bool get conestActive => appMode != AppMode.matrixOnly;
+  bool get conestActive => !appMode.clientOnly;
 
   /// Stores the mode and starts or stops Conest's own networking to match:
   /// entering Matrix-only mode stops it (an identity stays, dormant), and
   /// leaving it starts it again. Refused during a call.
   Future<void> setAppMode(AppMode mode) async {
-    if (mode == AppMode.matrixOnly) unawaited(_groupCallService?.leave());
-    if (mode == AppMode.matrixOnly && _voiceCallService?.active != null) {
+    if (mode.clientOnly) unawaited(_groupCallService?.leave());
+    if (mode.clientOnly && _voiceCallService?.active != null) {
       throw StateError('End the call before switching to Matrix only.');
     }
     final wasActive = conestActive;
     _snapshot = _snapshot.copyWith(appMode: mode);
     await _persist('App mode: ${mode.name}.');
+    _syncXmppChats();
+    _syncTelegramClient();
+    _syncDiscordClient();
     if (_snapshot.identity == null || wasActive == conestActive) return;
     if (conestActive) {
       await _startConestRuntime();
@@ -1409,6 +1450,7 @@ class MessengerController extends ChangeNotifier {
             message: message,
           );
   }
+
   @visibleForTesting
   Future<int> runHeartbeatPassNow() async =>
       (await _runHeartbeatPass(force: true)).sentCount;
@@ -1619,8 +1661,7 @@ class MessengerController extends ChangeNotifier {
     if (contact == null || !contact.canSendOutbound) {
       throw StateError('Voice calls require an approved contact.');
     }
-    if (signal.action == 'invite' &&
-        me.experimentalVoiceCallsEnabled != true) {
+    if (signal.action == 'invite' && me.experimentalVoiceCallsEnabled != true) {
       throw StateError(
         'Experimental voice calls are off. Enable them in Settings to call.',
       );
@@ -4163,6 +4204,7 @@ class MessengerController extends ChangeNotifier {
           ? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)
           : latest.reduce((a, b) => a.isAfter(b) ? a : b);
     }
+
     final candidates = [
       for (final contact in contacts)
         if (contact.canSendOutbound &&
@@ -4696,6 +4738,9 @@ class MessengerController extends ChangeNotifier {
       await _openRatchetSessions();
       _createMatrixTransport();
       unawaited(_restoreMatrixClient());
+      _startXmppChats();
+      _syncTelegramClient();
+      _syncDiscordClient();
       await VoiceMessageService.cleanupAbandonedRecordings();
       await _recoverScheduledMessageTransitions();
       await _retireBundledRelayRoutes();
@@ -5367,6 +5412,18 @@ class MessengerController extends ChangeNotifier {
         !_carrierTransports.containsKey(TransportKind.tor)) {
       await _startTorCarrier(advertise: false);
     }
+    if (xmppCarrierConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.xmpp)) {
+      await _startXmppCarrier(advertise: false);
+    }
+    if (telegramBotConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.telegram)) {
+      await _startTelegramCarrier(advertise: false);
+    }
+    if (discordBotConfig != null &&
+        !_carrierTransports.containsKey(TransportKind.discord)) {
+      await _startDiscordCarrier(advertise: false);
+    }
   }
 
   /// Tor through Arti in the native library, looked up once.
@@ -5545,6 +5602,609 @@ class MessengerController extends ChangeNotifier {
     );
     unawaited(_saveSnapshotSilently(notify: false));
     _advertiseProfileToContacts();
+  }
+
+  /// The XMPP carrier's saved account, if set up.
+  XmppCarrierConfig? get xmppCarrierConfig => XmppCarrierConfig.fromJson(
+    _snapshot.carrierAccounts[TransportKind.xmpp.name],
+  );
+
+  /// The running XMPP connection, for its state in settings.
+  XmppCarrierChannel? get xmppChannel => _xmppChannel;
+  XmppCarrierChannel? _xmppChannel;
+
+  /// Reaches contacts through an XMPP account: the user's own ([jid] and
+  /// [password]), or one Conest creates on a public server that answers on
+  /// this network. Returns the account's address.
+  Future<String> enableXmppCarrier({
+    String? jid,
+    String? password,
+    List<String> servers = defaultXmppServers,
+  }) async {
+    _requireIdentity();
+    if (!_carrierAllowed(TransportKind.xmpp)) {
+      throw StateError('Turn on Online and XMPP in Connectivity first.');
+    }
+    final resource = newXmppResource();
+    final XmppCarrierConfig config;
+    if (jid != null) {
+      final bare = jid.trim().toLowerCase();
+      if (!isValidBareJid(bare) || password == null || password.isEmpty) {
+        throw ArgumentError(
+          'Enter an XMPP address (name@server) and its '
+          'password.',
+        );
+      }
+      config = XmppCarrierConfig(
+        jid: bare,
+        password: password,
+        resource: resource,
+      );
+      await checkXmppLogin(
+        config,
+        connector: _xmppNetwork.connector,
+        webSocketConnector: _xmppNetwork.webSocketConnector,
+      );
+    } else {
+      final probed = await reachableXmppServers(
+        servers,
+        connector: _xmppNetwork.connector,
+        webSocketConnector: _xmppNetwork.webSocketConnector,
+        webSocketLookup: _xmppNetwork.webSocketLookup,
+        needRegistration: true,
+        log: (line) => appendDebugLog('XMPP setup: $line'),
+      );
+      config = await createXmppCarrierAccount(
+        probed,
+        resource: resource,
+        connector: _xmppNetwork.connector,
+        webSocketConnector: _xmppNetwork.webSocketConnector,
+        log: appendDebugLog,
+      );
+    }
+    await unregisterCarrierTransport(TransportKind.xmpp);
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.xmpp.name: config.toJson(),
+      },
+    );
+    await _persist('XMPP carrier set up as ${config.jid}.');
+    await _startXmppCarrier();
+    return config.jid;
+  }
+
+  /// Stops the XMPP carrier and forgets the account here (an account Conest
+  /// created is left on the server); contacts stop using it.
+  Future<void> disableXmppCarrier() async {
+    await unregisterCarrierTransport(TransportKind.xmpp);
+    _xmppChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.xmpp.name),
+    );
+    await _persist('XMPP carrier removed.');
+  }
+
+  Future<void> _startXmppCarrier({bool advertise = true}) async {
+    final config = xmppCarrierConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.xmpp] ??
+        createXmppCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = XmppCarrierChannel(
+      config: config,
+      onFrame: adapter.receiveFrame,
+      connector: _xmppNetwork.connector,
+      webSocketConnector: _xmppNetwork.webSocketConnector,
+      onStatusChanged: notifyListeners,
+      onEndpoint: _saveXmppEndpoint,
+      log: (line) => appendDebugLog(line),
+      now: _now,
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _xmppChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  /// The way in that worked is tried first next time.
+  void _saveXmppEndpoint(XmppEndpoint endpoint) {
+    final config = xmppCarrierConfig;
+    if (config == null || config.endpoints.firstOrNull == endpoint) return;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.xmpp.name: config
+            .copyWith(
+              endpoints: [
+                endpoint,
+                ...config.endpoints.where((other) => other != endpoint),
+              ].take(4).toList(),
+            )
+            .toJson(),
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
+  // Telegram bot carrier (M30): a bot the user made, whose token is kept in
+  // the vault. Frames go bot to bot.
+
+  /// The Telegram bot carrier's saved bot, if set up.
+  TelegramBotConfig? get telegramBotConfig => TelegramBotConfig.fromJson(
+    _snapshot.carrierAccounts[TransportKind.telegram.name],
+  );
+
+  /// The running Telegram bot connection, for its state in settings.
+  TelegramCarrierChannel? get telegramChannel => _telegramChannel;
+  TelegramCarrierChannel? _telegramChannel;
+
+  /// Reaches contacts through the bot with [token] (made with @BotFather).
+  /// Returns the bot's username.
+  Future<String> enableTelegramCarrier(String token) async {
+    _requireIdentity();
+    if (!_carrierAllowed(TransportKind.telegram)) {
+      throw StateError('Turn on Online and Telegram in Connectivity first.');
+    }
+    final config = await checkTelegramBot(token, _telegramNetwork);
+    await unregisterCarrierTransport(TransportKind.telegram);
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.telegram.name: config.toJson(),
+      },
+    );
+    await _persist('Telegram bot carrier set up as @${config.username}.');
+    await _startTelegramCarrier();
+    return config.username;
+  }
+
+  /// Stops the Telegram bot carrier and forgets the bot token here.
+  Future<void> disableTelegramCarrier() async {
+    await unregisterCarrierTransport(TransportKind.telegram);
+    _telegramChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.telegram.name),
+    );
+    await _persist('Telegram bot carrier removed.');
+  }
+
+  Future<void> _startTelegramCarrier({bool advertise = true}) async {
+    final config = telegramBotConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.telegram] ??
+        createTelegramCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = TelegramCarrierChannel(
+      config: config,
+      api: _telegramNetwork.botApi(config.token),
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+      log: (line) => appendDebugLog(line),
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _telegramChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  // Discord bot carrier (M31): a bot the user made, whose token is kept in
+  // the vault. The carrier never uses a user account token.
+
+  /// The Discord bot carrier's saved bot, if set up.
+  DiscordBotConfig? get discordBotConfig => DiscordBotConfig.fromJson(
+    _snapshot.carrierAccounts[TransportKind.discord.name],
+  );
+
+  /// The running Discord bot connection, for its state in settings.
+  DiscordCarrierChannel? get discordChannel => _discordChannel;
+  DiscordCarrierChannel? _discordChannel;
+
+  /// Reaches contacts through the bot with [token], in the private channel
+  /// [channelId] that the contacts' bots can also see. Returns the address.
+  Future<String> enableDiscordCarrier(String token, String channelId) async {
+    _requireIdentity();
+    if (!_carrierAllowed(TransportKind.discord)) {
+      throw StateError('Turn on Online and Discord in Connectivity first.');
+    }
+    final config = await checkDiscordBot(token, channelId, _discordNetwork);
+    await unregisterCarrierTransport(TransportKind.discord);
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        TransportKind.discord.name: config.toJson(),
+      },
+    );
+    await _persist('Discord bot carrier set up.');
+    await _startDiscordCarrier();
+    return config.address;
+  }
+
+  /// Stops the Discord bot carrier and forgets the bot token here.
+  Future<void> disableDiscordCarrier() async {
+    await unregisterCarrierTransport(TransportKind.discord);
+    _discordChannel = null;
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}
+        ..remove(TransportKind.discord.name),
+    );
+    await _persist('Discord bot carrier removed.');
+  }
+
+  Future<void> _startDiscordCarrier({bool advertise = true}) async {
+    final config = discordBotConfig;
+    if (config == null || _snapshot.identity == null || !conestActive) return;
+    final adapter =
+        _carrierTransports[TransportKind.discord] ??
+        createDiscordCarrierAdapter(sealer: carrierSealer, now: _now);
+    final channel = DiscordCarrierChannel(
+      config: config,
+      api: _discordNetwork.api(config.token, DiscordAuth.bot),
+      pollInterval: _discordNetwork.pollInterval,
+      slowdown: () =>
+          (_appInForeground ? 1 : 3) *
+          (_energyPolicy.modeFor(_networkCostClass) == EnergyMode.saver
+              ? 2
+              : 1),
+      onFrame: adapter.receiveFrame,
+      onStatusChanged: notifyListeners,
+      log: (line) => appendDebugLog(line),
+    );
+    await adapter.detach();
+    adapter.attach(channel);
+    _discordChannel = channel;
+    await registerCarrierTransport(adapter, advertise: advertise);
+  }
+
+  // Discord client (M31): opt-in, with the user's own account token, which
+  // is against Discord's terms (the user accepts that first). The token is
+  // kept in the vault and is never used by the carrier.
+
+  DiscordService get discord => _discordService ??= DiscordService(
+    network: _discordNetwork,
+    readAccount: () => _snapshot.carrierAccounts['discordClient'],
+    writeAccount: _writeDiscordAccount,
+    log: (line) => appendDebugLog(line),
+  )..addListener(notifyListeners);
+  DiscordService? _discordService;
+
+  Future<void> _writeDiscordAccount(Map<String, Object?>? account) async {
+    final accounts = {..._snapshot.carrierAccounts};
+    if (account == null) {
+      accounts.remove('discordClient');
+    } else {
+      accounts['discordClient'] = account;
+    }
+    _snapshot = _snapshot.copyWith(carrierAccounts: accounts);
+    await _persist('Discord client ${account == null ? 'removed' : 'on'}.');
+  }
+
+  /// Whether the Discord client may connect: alone in Discord-only mode, or
+  /// beside Conest while Online is on.
+  bool get _discordClientAllowed {
+    if (_disposed) return false;
+    if (!conestActive) return appMode == AppMode.discordOnly;
+    return _snapshot.identity?.connectivity.onlineEnabled ?? true;
+  }
+
+  /// Starts or stops the Discord client to match the mode and Online.
+  void _syncDiscordClient() {
+    if (!discord.enabled) return;
+    if (_discordClientAllowed) {
+      unawaited(discord.start());
+    } else if (discord.client != null) {
+      unawaited(discord.stop());
+    }
+  }
+
+  // Telegram client (M30): the user's own account through TDLib, beside
+  // Conest's chats or alone in Telegram-only mode. The session lives in
+  // TDLib's database on this device and is never copied elsewhere.
+
+  /// The Telegram client service; the client is hidden unless
+  /// [TelegramService.supported].
+  TelegramService get telegram => _telegramService ??= TelegramService(
+    keys: _telegramApiKeys,
+    engineFactory: _tdEngineFactory,
+    probe: _tdEngineIsDefault ? NativeTdEngine.isAvailable : null,
+    directory: _telegramDirectoryProvider,
+    readAccount: () => _snapshot.carrierAccounts['telegramClient'],
+    writeAccount: _writeTelegramAccount,
+    readMods: () => _snapshot.networkChats['telegramMods'],
+    writeMods: _writeTelegramMods,
+    readBridge: () => _snapshot.networkChats['telegramBridgeSettings'],
+    writeBridge: _writeTelegramBridgeSettings,
+    bridgeOut: _syncToOwnDevices,
+    languageCode: Platform.localeName.split(RegExp('[_-]')).first,
+    log: (line) => appendDebugLog(line),
+  )..addListener(notifyListeners);
+  TelegramService? _telegramService;
+
+  Future<void> _writeTelegramAccount(Map<String, Object?>? account) async {
+    final accounts = {..._snapshot.carrierAccounts};
+    if (account == null) {
+      accounts.remove('telegramClient');
+    } else {
+      accounts['telegramClient'] = account;
+    }
+    _snapshot = _snapshot.copyWith(carrierAccounts: accounts);
+    await _persist('Telegram client ${account == null ? 'removed' : 'on'}.');
+  }
+
+  void _writeTelegramBridgeSettings(Map<String, Object?> settings) {
+    _snapshot = _snapshot.copyWith(
+      networkChats: {
+        ..._snapshot.networkChats,
+        'telegramBridgeSettings': settings,
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
+  /// Messages relayed from this account's other devices that have Telegram.
+  TelegramBridgeInbox get telegramBridgeInbox {
+    final json = _snapshot.networkChats['telegramBridge'];
+    final cached = _telegramInboxCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final inbox = TelegramBridgeInbox.fromJson(json);
+    _telegramInboxCache = (json, inbox);
+    return inbox;
+  }
+
+  (Object?, TelegramBridgeInbox)? _telegramInboxCache;
+
+  /// A relayed Telegram message from one of this account's devices. A
+  /// device with its own signed-in Telegram already has the chats.
+  bool _acceptBridgedTelegram(Map<String, dynamic> event) {
+    if (telegram.client?.auth == TgAuth.ready) return false;
+    final inbox = telegramBridgeInbox;
+    final items = event['items'];
+    var any = false;
+    if (items is List) {
+      for (final item in items.take(TelegramBridgeBatcher.maxReceivedItems)) {
+        if (item is Map<String, dynamic> && inbox.accept(item)) any = true;
+      }
+    } else {
+      any = inbox.accept(event);
+    }
+    if (!any) return false;
+    final json = inbox.toJson();
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'telegramBridge': json},
+    );
+    _telegramInboxCache = (json, inbox);
+    return true;
+  }
+
+  /// Marks relayed chat [id] read here.
+  void markBridgedTelegramRead(String id) {
+    final inbox = telegramBridgeInbox;
+    final chat = inbox.chats[id];
+    if (chat == null || chat.unread == 0) return;
+    chat.unread = 0;
+    final json = inbox.toJson();
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'telegramBridge': json},
+    );
+    _telegramInboxCache = (json, inbox);
+    unawaited(_saveSnapshotSilently(notify: true, debounce: true));
+  }
+
+  void _writeTelegramMods(Map<String, Object?> mods) {
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'telegramMods': mods},
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
+  /// Whether the Telegram client may connect: alone in Telegram-only mode,
+  /// or beside Conest while Online is on.
+  bool get _telegramClientAllowed {
+    if (_disposed) return false;
+    if (!conestActive) return appMode == AppMode.telegramOnly;
+    return _snapshot.identity?.connectivity.onlineEnabled ?? true;
+  }
+
+  /// Starts or stops the Telegram client to match the mode and Online.
+  void _syncTelegramClient() {
+    if (!telegram.enabled) return;
+    if (_telegramClientAllowed) {
+      unawaited(telegram.start());
+    } else if (telegram.client != null) {
+      unawaited(telegram.stop());
+    }
+  }
+
+  // XMPP chats (M51 B1): the account's chats beside Conest's, or alone in
+  // XMPP-only mode. Its own connection and resource, so pausing the
+  // carrier never stops the chats (and the reverse).
+
+  /// The XMPP chats account, if set up.
+  XmppClientConfig? get xmppClientConfig =>
+      XmppClientConfig.fromJson(_snapshot.carrierAccounts['xmppChats']);
+
+  /// The running XMPP chats client.
+  XmppChatClient? get xmppChatClient => _xmppChatClient;
+  XmppChatClient? _xmppChatClient;
+  (Object?, XmppChats)? _xmppChatsCache;
+
+  XmppChats get xmppChats {
+    final json = _snapshot.networkChats['xmpp'];
+    final cached = _xmppChatsCache;
+    if (cached != null && identical(cached.$1, json)) return cached.$2;
+    final chats = XmppChats.fromJson(json);
+    _xmppChatsCache = (json, chats);
+    return chats;
+  }
+
+  /// Whether XMPP chats may connect: in XMPP-only mode, or beside Conest
+  /// while Online is on.
+  bool get _xmppChatsAllowed {
+    if (_disposed) return false;
+    if (!conestActive) return appMode == AppMode.xmppOnly;
+    return _snapshot.identity?.connectivity.onlineEnabled ?? true;
+  }
+
+  /// Turns XMPP chats on with [jid] and [password], or with the carrier's
+  /// account when [jid] is null.
+  Future<void> enableXmppChats({String? jid, String? password}) async {
+    final XmppClientConfig config;
+    if (jid == null) {
+      final carrier = xmppCarrierConfig;
+      if (carrier == null) throw StateError('Set up XMPP first.');
+      config = XmppClientConfig(
+        jid: carrier.jid,
+        password: carrier.password,
+        resource: newXmppResource(),
+        endpoints: carrier.endpoints,
+      );
+    } else {
+      final bare = jid.trim().toLowerCase();
+      if (!isValidBareJid(bare) || password == null || password.isEmpty) {
+        throw ArgumentError(
+          'Enter an XMPP address (name@server) and its password.',
+        );
+      }
+      final login = XmppCarrierConfig(
+        jid: bare,
+        password: password,
+        resource: newXmppResource(),
+      );
+      await checkXmppLogin(
+        login,
+        connector: _xmppNetwork.connector,
+        webSocketConnector: _xmppNetwork.webSocketConnector,
+      );
+      config = XmppClientConfig(
+        jid: bare,
+        password: password,
+        resource: login.resource,
+      );
+    }
+    await _stopXmppChats();
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {
+        ..._snapshot.carrierAccounts,
+        'xmppChats': config.toJson(),
+      },
+    );
+    await _persist('XMPP chats on as ${config.jid}.');
+    _startXmppChats();
+  }
+
+  /// Turns XMPP chats off; [forget] also drops the chats kept here.
+  Future<void> disableXmppChats({bool forget = false}) async {
+    await _stopXmppChats();
+    _snapshot = _snapshot.copyWith(
+      carrierAccounts: {..._snapshot.carrierAccounts}..remove('xmppChats'),
+      networkChats: forget
+          ? (({..._snapshot.networkChats}..remove('xmpp'))..remove('xmppOmemo'))
+          : _snapshot.networkChats,
+    );
+    await _persist('XMPP chats off.');
+  }
+
+  void _startXmppChats() {
+    final config = xmppClientConfig;
+    if (config == null || _xmppChatClient != null || !_xmppChatsAllowed) {
+      return;
+    }
+    final session = XmppSession(
+      jid: config.jid,
+      password: config.password,
+      resource: config.resource,
+      endpoints: [
+        ...config.endpoints,
+        ...xmppEndpointCandidates(
+          config.domain,
+        ).where((endpoint) => !config.endpoints.contains(endpoint)),
+      ],
+      connector: _xmppNetwork.connector,
+      webSocketConnector: _xmppNetwork.webSocketConnector,
+      onStateChanged: notifyListeners,
+      log: appendDebugLog,
+    );
+    final omemo = XmppOmemo(
+      session: session,
+      load: () => (_snapshot.networkChats['xmppOmemo']?['engine'] as Map?)
+          ?.cast<String, Object?>(),
+      save: _saveXmppOmemo,
+      legacyEnabled: xmppLegacyOmemo,
+      log: appendDebugLog,
+    );
+    _xmppChatClient = XmppChatClient(
+      session: session,
+      ownsSession: true,
+      chats: () => xmppChats,
+      save: _saveXmppChats,
+      sendReadMarkers: () => !(identity?.suppressReadReceipts ?? false),
+      omemo: omemo,
+      log: appendDebugLog,
+      now: _now,
+    )..start();
+    notifyListeners();
+  }
+
+  Future<void> _stopXmppChats() async {
+    final client = _xmppChatClient;
+    _xmppChatClient = null;
+    await client?.stop();
+  }
+
+  /// Starts or stops XMPP chats to match the mode and Online switch.
+  void _syncXmppChats() {
+    if (_xmppChatsAllowed) {
+      _startXmppChats();
+    } else if (_xmppChatClient != null) {
+      unawaited(_stopXmppChats());
+    }
+  }
+
+  /// Whether legacy OMEMO (Conversations' format) may be used in XMPP chats.
+  /// Off until that implementation has been checked against the reference
+  /// and reviewed.
+  bool get xmppLegacyOmemo =>
+      _snapshot.networkChats['xmppOmemo']?['legacy'] == true;
+
+  Future<void> setXmppLegacyOmemo(bool enabled) async {
+    final stored = _snapshot.networkChats['xmppOmemo'];
+    _snapshot = _snapshot.copyWith(
+      networkChats: {
+        ..._snapshot.networkChats,
+        'xmppOmemo': {...?stored, 'legacy': enabled},
+      },
+    );
+    final omemo = _xmppChatClient?.omemo;
+    if (omemo != null) {
+      omemo.legacyEnabled = enabled;
+      unawaited(
+        omemo.setUp().catchError((Object error) {
+          appendDebugLog('XMPP chats: OMEMO update failed: $error');
+        }),
+      );
+    }
+    await _persist(enabled ? 'Legacy OMEMO on.' : 'Legacy OMEMO off.');
+  }
+
+  void _saveXmppOmemo(Map<String, Object?> state) {
+    _snapshot = _snapshot.copyWith(
+      networkChats: {
+        ..._snapshot.networkChats,
+        'xmppOmemo': {'engine': state, 'legacy': xmppLegacyOmemo},
+      },
+    );
+    unawaited(_saveSnapshotSilently(notify: false, debounce: true));
+  }
+
+  void _saveXmppChats(XmppChats chats) {
+    final json = chats.toJson();
+    _snapshot = _snapshot.copyWith(
+      networkChats: {..._snapshot.networkChats, 'xmpp': json},
+    );
+    _xmppChatsCache = (json, chats);
+    unawaited(_saveSnapshotSilently(notify: true, debounce: true));
   }
 
   /// Whether this device can join the Bluetooth mesh.
@@ -8172,6 +8832,32 @@ class MessengerController extends ChangeNotifier {
             ?tor.progressDetail,
           ].join(': '),
         ),
+        // XMPP has its address from the start: ready while connected.
+        final XmppCarrierChannel xmpp
+            when xmpp.state != XmppCarrierState.connected =>
+          CarrierStatus(
+            kind: adapter.kind,
+            ready: false,
+            address: adapter.status.address,
+            lastError: xmpp.lastError ?? xmpp.state.name,
+          ),
+        final DiscordCarrierChannel discord
+            when discord.state != DiscordCarrierState.connected =>
+          CarrierStatus(
+            kind: adapter.kind,
+            ready: false,
+            address: adapter.status.address,
+            lastError: discord.lastError ?? discord.state.name,
+          ),
+        // The bot's name is the address from the start: ready while polling.
+        final TelegramCarrierChannel telegram
+            when telegram.state != TelegramCarrierState.connected =>
+          CarrierStatus(
+            kind: adapter.kind,
+            ready: false,
+            address: adapter.status.address,
+            lastError: telegram.lastError ?? telegram.state.name,
+          ),
         // Reticulum has its address from the start: ready only while its
         // link is up, or a node that drops every link looks fine.
         final ReticulumCarrierChannel reticulum
@@ -10890,6 +11576,9 @@ class MessengerController extends ChangeNotifier {
       await _stopTransportRegistry();
     }
     await _applyGlobalConnectivityState();
+    _syncXmppChats();
+    _syncTelegramClient();
+    _syncDiscordClient();
     if ((matrixPolicyChanged && _snapshot.matrixSession != null) ||
         carrierPolicyChanged) {
       // Contacts learn whether to address this device over each carrier.
@@ -11449,7 +12138,11 @@ class MessengerController extends ChangeNotifier {
       }
       return contact.routeHints.any((route) => route.routeKey == key);
     });
-    await _persist(removed == null ? 'Contact removed.' : 'Contact removed locally. Sending a removal notice in the background.');
+    await _persist(
+      removed == null
+          ? 'Contact removed.'
+          : 'Contact removed locally. Sending a removal notice in the background.',
+    );
     if (notifyPeer && removed != null) {
       final notified = removed;
       unawaited(
@@ -12014,9 +12707,7 @@ class MessengerController extends ChangeNotifier {
       pairingState: approvalGranted
           ? ContactPairingState.accepted
           : ContactPairingState.queued,
-      pairingRequestId: approvalGranted
-          ? pairingRequestId
-          : _randomId('pair'),
+      pairingRequestId: approvalGranted ? pairingRequestId : _randomId('pair'),
       carrierAddresses: _carrierHintsForContact(invite).carriers,
       bitchatInboxSecret: _carrierHintsForContact(invite).bitchatInboxSecret,
       matrixAddress: _carrierHintsForContact(invite).matrixAddress,
@@ -12079,7 +12770,9 @@ class MessengerController extends ChangeNotifier {
             pairingRequestId: pairingRequestId,
             pairingResponse: 'accepted',
           ).catchError((Object error) {
-            appendDebugLog('Contact approval response remains retryable: $error');
+            appendDebugLog(
+              'Contact approval response remains retryable: $error',
+            );
             return false;
           }),
         );
@@ -12494,7 +13187,8 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> cancelContactPairing(String deviceId) async {
     final contact = _contactByDeviceId(deviceId);
-    if (contact == null || contact.pairingState == ContactPairingState.accepted) {
+    if (contact == null ||
+        contact.pairingState == ContactPairingState.accepted) {
       return;
     }
     _replaceContactRecord(
@@ -12656,7 +13350,9 @@ class MessengerController extends ChangeNotifier {
 
   void _replaceContactRecord(ContactRecord contact) {
     final contacts = List<ContactRecord>.of(_snapshot.contacts);
-    final index = contacts.indexWhere((entry) => entry.deviceId == contact.deviceId);
+    final index = contacts.indexWhere(
+      (entry) => entry.deviceId == contact.deviceId,
+    );
     if (index < 0) return;
     contacts[index] = contact;
     _snapshot = _snapshot.copyWith(contacts: contacts);
@@ -13282,11 +13978,7 @@ class MessengerController extends ChangeNotifier {
         } catch (_) {}
       }
       _setTransferSessionState(attachmentId, TransferState.canceled);
-      _updateMessageState(
-        contact.deviceId,
-        message.id,
-        DeliveryState.canceled,
-      );
+      _updateMessageState(contact.deviceId, message.id, DeliveryState.canceled);
       await _saveSnapshotSilently(notify: true);
       return;
     }
@@ -14623,7 +15315,9 @@ class MessengerController extends ChangeNotifier {
       try {
         await cancelTransfer(id);
       } catch (error) {
-        appendDebugLog('Could not cancel transfer $id while clearing all: $error');
+        appendDebugLog(
+          'Could not cancel transfer $id while clearing all: $error',
+        );
       }
     }
     _dismissedTransferIds.addAll(snapshots.map((entry) => entry.id));
@@ -22937,7 +23631,9 @@ class MessengerController extends ChangeNotifier {
           final requestId = wrapper['pairingRequestId'];
           if (invitePayload is! String ||
               (requestId != null &&
-                  (requestId is! String || requestId.isEmpty || requestId.length > 128))) {
+                  (requestId is! String ||
+                      requestId.isEmpty ||
+                      requestId.length > 128))) {
             return;
           }
           payload =
@@ -23209,13 +23905,15 @@ class MessengerController extends ChangeNotifier {
           _syncCarrierPeers();
         }
       }
-      final matchesPendingRequest = pairingRequestId == null ||
+      final matchesPendingRequest =
+          pairingRequestId == null ||
           pairingRequestId == existing.pairingRequestId;
       if (updated != null &&
           pairingResponse == 'declined' &&
           (existing.pairingState == ContactPairingState.queued ||
               existing.pairingState == ContactPairingState.sending ||
-              existing.pairingState == ContactPairingState.awaitingAcceptance) &&
+              existing.pairingState ==
+                  ContactPairingState.awaitingAcceptance) &&
           matchesPendingRequest) {
         updated = updated.copyWith(
           pairingState: ContactPairingState.declined,
@@ -23231,7 +23929,8 @@ class MessengerController extends ChangeNotifier {
           pairingResponse == 'accepted' &&
           (existing.pairingState == ContactPairingState.queued ||
               existing.pairingState == ContactPairingState.sending ||
-              existing.pairingState == ContactPairingState.awaitingAcceptance) &&
+              existing.pairingState ==
+                  ContactPairingState.awaitingAcceptance) &&
           matchesPendingRequest) {
         updated = updated.copyWith(
           pairingState: ContactPairingState.accepted,
@@ -23280,23 +23979,25 @@ class MessengerController extends ChangeNotifier {
     final existingRequest = _snapshot.pendingContactRequests
         .where((entry) => entry.senderDeviceId == invite.deviceId)
         .firstOrNull;
-    final requestId = pairingRequestId ?? existingRequest?.id ?? envelope.messageId;
-    final pending = _snapshot.pendingContactRequests
-        .where(
-          (entry) =>
-              entry.receivedAt.isAfter(cutoff) &&
-              entry.senderDeviceId != invite.deviceId,
-        )
-        .toList(growable: true)
-      ..add(
-        PendingContactRequest(
-          id: requestId,
-          senderAccountId: invite.accountId,
-          senderDeviceId: invite.deviceId,
-          invitePayload: payload,
-          receivedAt: _now().toUtc(),
-        ),
-      );
+    final requestId =
+        pairingRequestId ?? existingRequest?.id ?? envelope.messageId;
+    final pending =
+        _snapshot.pendingContactRequests
+            .where(
+              (entry) =>
+                  entry.receivedAt.isAfter(cutoff) &&
+                  entry.senderDeviceId != invite.deviceId,
+            )
+            .toList(growable: true)
+          ..add(
+            PendingContactRequest(
+              id: requestId,
+              senderAccountId: invite.accountId,
+              senderDeviceId: invite.deviceId,
+              invitePayload: payload,
+              receivedAt: _now().toUtc(),
+            ),
+          );
     if (pending.length > _maxPendingContactRequests) {
       pending.removeRange(0, pending.length - _maxPendingContactRequests);
     }
@@ -23895,10 +24596,10 @@ class MessengerController extends ChangeNotifier {
       }
       if (!profileUpdate &&
           !_isAuthorizedGroupMembershipUpdate(
-        existing: existing,
-        incoming: incoming,
-        senderDeviceId: envelope.senderDeviceId,
-      )) {
+            existing: existing,
+            incoming: incoming,
+            senderDeviceId: envelope.senderDeviceId,
+          )) {
         return;
       }
     }
@@ -30816,6 +31517,9 @@ class MessengerController extends ChangeNotifier {
     TransportKind.deltaChat,
     TransportKind.matrix,
     TransportKind.tor,
+    TransportKind.xmpp,
+    TransportKind.telegram,
+    TransportKind.discord,
     // Through the target's inbox (bitchatInboxKey): its pair ids need keys
     // it does not have before the request.
     TransportKind.bitchat,
@@ -30855,6 +31559,8 @@ class MessengerController extends ChangeNotifier {
   static const Set<TransportKind> _identifyingCarriers = {
     TransportKind.deltaChat,
     TransportKind.matrix,
+    TransportKind.telegram,
+    TransportKind.discord,
   };
 
   /// The carrier addresses this device publishes to members of its groups.
@@ -30876,6 +31582,10 @@ class MessengerController extends ChangeNotifier {
     };
     if (!global.shareIdentifyingCarriersWithGroups) {
       addresses.removeWhere((kind, _) => _identifyingCarriers.contains(kind));
+      // The user's own XMPP account names them; one Conest made does not.
+      if (!(xmppCarrierConfig?.created ?? false)) {
+        addresses.remove(TransportKind.xmpp);
+      }
     }
     return addresses;
   }
@@ -30977,6 +31687,7 @@ class MessengerController extends ChangeNotifier {
   Future<List<InternetTransportCheck>> checkInternetTransports({
     List<String> nostrCandidates = nostrRelayCandidates,
     List<String> chatmailCandidates = defaultChatmailDomains,
+    List<String> xmppCandidates = defaultXmppServers,
     Duration timeout = const Duration(seconds: 10),
   }) async {
     final identity = _requireIdentity();
@@ -31079,6 +31790,22 @@ class MessengerController extends ChangeNotifier {
           headStart: timeout ~/ 5,
           enough: 1,
         ),
+      ),
+      oneTap(
+        TransportKind.xmpp,
+        () async => [
+          for (final server in await reachableXmppServers(
+            xmppCandidates,
+            connector: _xmppNetwork.connector,
+            webSocketConnector: _xmppNetwork.webSocketConnector,
+            webSocketLookup: null,
+            timeout: timeout * 2,
+            headStart: timeout ~/ 3,
+            enough: 1,
+            needRegistration: true,
+          ))
+            server.domain,
+        ],
       ),
       for (final kind in const [
         TransportKind.tor,
@@ -31749,9 +32476,10 @@ class MessengerController extends ChangeNotifier {
       (contact) => contact.canSendOutbound,
     )) {
       unawaited(
-        _sendReciprocalContactExchange(contact, recipientKnowsIdentity: true)
-            .then<void>((_) {})
-            .catchError((Object _) {}),
+        _sendReciprocalContactExchange(
+          contact,
+          recipientKnowsIdentity: true,
+        ).then<void>((_) {}).catchError((Object _) {}),
       );
     }
   }
@@ -32164,8 +32892,7 @@ class MessengerController extends ChangeNotifier {
   /// Controls (edits, deletes, reactions, cancels, call signals) leave the
   /// outbox once a transport accepts them. Keep the recent ones briefly so a
   /// peer reset can have them sent again on the new session.
-  final Map<String, List<(PendingAckDelivery, DateTime)>> _recentControls =
-      {};
+  final Map<String, List<(PendingAckDelivery, DateTime)>> _recentControls = {};
 
   void _rememberAcceptedControl(PendingAckDelivery entry) {
     if (entry.payload == null || _ratchet == null) return;
@@ -34106,6 +34833,7 @@ class MessengerController extends ChangeNotifier {
     final bulky = const {
       'group_message',
       'history_page',
+      'tgx',
     }.contains(event['type']);
     for (final device in devices) {
       final payload = QueuedEnvelopePayload(
@@ -35710,6 +36438,9 @@ class MessengerController extends ChangeNotifier {
           case 'gtx':
             await _postForOwnDevice(sender, event['chat'], event['message']);
             continue;
+          case 'tgx':
+            if (_acceptBridgedTelegram(event)) changed = true;
+            continue;
         }
       } catch (error) {
         appendDebugLog(
@@ -36550,6 +37281,9 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.groupFileRelayV1,
       ApplicationCapability.multiRouteBlocksV1,
       ApplicationCapability.ownDeviceFilesV1,
+      ApplicationCapability.xmppCarrierV1,
+      ApplicationCapability.telegramCarrierV1,
+      ApplicationCapability.discordCarrierV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -38185,6 +38919,9 @@ class MessengerController extends ChangeNotifier {
     _groupProfileRefreshTimers.clear();
     unawaited(_closeBitchatIdentity());
     unawaited(_stopNostrDirect());
+    unawaited(_stopXmppChats());
+    _telegramService?.dispose();
+    _discordService?.dispose();
     unawaited(_voiceCallChanges?.cancel());
     _voiceCallChanges = null;
     unawaited(_voiceCallSoundCues.dispose());

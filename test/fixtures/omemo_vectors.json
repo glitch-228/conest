@@ -1,0 +1,563 @@
+{
+ "generator": "tool/omemo_vectors/gen_vectors.py",
+ "oldmemo": {
+  "alice": {
+   "deviceId": 1111,
+   "identitySeed": "71a486493b6866c4076a1ec5b0c630001fed449ef9c3d61714c78f42ced87d1c",
+   "jid": "alice@example.org"
+  },
+  "bob": {
+   "deviceId": 2222,
+   "identitySeed": "5fa88c7775920eed87acb50ceca65486b7f8176d7ba20b15c1499b042b704897",
+   "jid": "bob@example.org",
+   "preKeyPrivs": {
+    "1": "fff2c883d95dfc01ff9f7a048055aa5212f27661584fd32781e0e48be40ddf10"
+   },
+   "signedPreKeyId": 1,
+   "signedPreKeyPriv": "ac900fd35021ddff5b709a2be1e1230006ac5fbc28cddb087aa84a0090bae1f0"
+  },
+  "bundle": {
+   "identityKey": "BVBN9WUrhle9bA/bvZvqwHm6N5u01XOUcFncdLeKx1c2",
+   "preKeys": {
+    "1": "BZS4Ssu4bMTTqVKTTrQUADTyHX56EwuIqwex6XPG4Lob"
+   },
+   "signedPreKey": "BY4I8Bj06pyotsxrLJ0sEhcJPYY18P/RUEHtGLduu4NA",
+   "signedPreKeyId": 1,
+   "signedPreKeySignature": "jVy5wAv+JsahZxTwwd0yQVzDlG+jmIextr104Xj1GZxCcNfo1gIrnUluQ0K+/XHuVBAxW59nsU8V27h4hsyXhg=="
+  },
+  "draws": {
+   "alice": [
+    {
+     "hex": "660a884264cf710a78ae713e1d74ea60",
+     "what": "token"
+    },
+    {
+     "hex": "7b251276343a192a1d7308e9",
+     "what": "token"
+    },
+    {
+     "hex": "b623d06c8b9697a1fb2cd5a7e351f75a2ab4f264b9c4b866367f03ff2841a605",
+     "what": "token"
+    },
+    {
+     "hex": "8dd148810b7f5f91dd2beb8e097f07e1e8337f317aa09f783cc64c85c42dfa43",
+     "what": "ratchet"
+    },
+    {
+     "hex": "8ba53d9bd29e131ef81ecb2f0e24eaf9",
+     "what": "token"
+    },
+    {
+     "hex": "12650a25eb8fd96bbe268c93",
+     "what": "token"
+    },
+    {
+     "hex": "6762786afc1a3db8019adca7d7f8a10e4346ebff0dee1354a86150c4d746a326",
+     "what": "ratchet"
+    },
+    {
+     "hex": "1c5f13a5a096ba378f17abf0850b067f",
+     "what": "token"
+    },
+    {
+     "hex": "8a8d19cb25d680f1d37bf637",
+     "what": "token"
+    },
+    {
+     "hex": "410b079a2c4146c85a2d0bc3e57a27cb",
+     "what": "token"
+    },
+    {
+     "hex": "1b27e987f69a1fcc8296e436",
+     "what": "token"
+    },
+    {
+     "hex": "70ba95862d0b84d99a51bda903448e5f",
+     "what": "token"
+    },
+    {
+     "hex": "41e9043c566fa4c814f78a73",
+     "what": "token"
+    },
+    {
+     "hex": "9bd8f7003775f9bb945235088c212b24",
+     "what": "token"
+    },
+    {
+     "hex": "35221ca2d4d848df54bceb04",
+     "what": "token"
+    },
+    {
+     "hex": "a64b61f61992e49fbfa1b50f2e5e96f6d004d1ac7780af558904535f9a49c48c",
+     "what": "ratchet"
+    }
+   ],
+   "bob": [
+    {
+     "hex": "28d2618564e603835547c1ff89929f81d618513f468cf6880104dea6d999e89c",
+     "what": "ratchet"
+    },
+    {
+     "hex": "2b647c9d9076fe486a371c71c919d734",
+     "what": "token"
+    },
+    {
+     "hex": "306b2caf4049b4c664f15cc8",
+     "what": "token"
+    },
+    {
+     "hex": "cfcc0895364a61582a02d554c3600cd29f9b897078a46273dc9c5f6800bba7e6",
+     "what": "ratchet"
+    },
+    {
+     "hex": "cc8eadb08eaf8c2183faa94fb55140df",
+     "what": "token"
+    },
+    {
+     "hex": "dea1dc504863be17f79241d1",
+     "what": "token"
+    },
+    {
+     "hex": "4788a0bdc30c707f99381d64308354e7",
+     "what": "token"
+    },
+    {
+     "hex": "45b97bc730b5e05d0d8b9a01",
+     "what": "token"
+    }
+   ],
+   "setup": [
+    {
+     "hex": "ac900fd35021ddff5b709a2be1e1230006ac5fbc28cddb087aa84a0090bae1f0",
+     "what": "token"
+    },
+    {
+     "hex": "8c9d3ed6c33a2889ac7dfea80e9e779c1b469855f698c92715f60fe42bc0cc5f4fdd62518f3624dbc51adca5e83e53f37a5a685e7d5a29632ec92537d9e7d6f7",
+     "what": "token"
+    },
+    {
+     "hex": "fff2c883d95dfc01ff9f7a048055aa5212f27661584fd32781e0e48be40ddf10",
+     "what": "token"
+    },
+    {
+     "hex": "95681c87cac59f1e20027857761554706761ff276f165b1629c91e052affb973",
+     "what": "token"
+    },
+    {
+     "hex": "9fb834c0d4bc92cbe114ba88be8dabea557735a9a6dcce64e25dbe5506b0d35112977ad9006485362c7d6aad335e99f66fa70a17bf0ba7a8e9de3ec218d24ce2",
+     "what": "token"
+    }
+   ]
+  },
+  "events": [
+   {
+    "msg": 0,
+    "op": "send"
+   },
+   {
+    "msg": 0,
+    "op": "recv"
+   },
+   {
+    "msg": 1,
+    "op": "send"
+   },
+   {
+    "msg": 1,
+    "op": "recv"
+   },
+   {
+    "msg": 2,
+    "op": "send"
+   },
+   {
+    "msg": 2,
+    "op": "recv"
+   },
+   {
+    "msg": 3,
+    "op": "send"
+   },
+   {
+    "msg": 3,
+    "op": "recv"
+   },
+   {
+    "msg": 4,
+    "op": "send"
+   },
+   {
+    "msg": 5,
+    "op": "send"
+   },
+   {
+    "msg": 6,
+    "op": "send"
+   },
+   {
+    "msg": 7,
+    "op": "send"
+   },
+   {
+    "msg": 8,
+    "op": "send"
+   },
+   {
+    "msg": 6,
+    "op": "recv"
+   },
+   {
+    "msg": 4,
+    "op": "recv"
+   },
+   {
+    "msg": 5,
+    "op": "recv"
+   },
+   {
+    "msg": 7,
+    "op": "recv"
+   },
+   {
+    "msg": 8,
+    "op": "recv"
+   }
+  ],
+  "messages": [
+   {
+    "from": "alice",
+    "iv": "eyUSdjQ6GSodcwjp",
+    "kex": true,
+    "key": "MwgBEiEFIcbcxmfoOSy0+kVR5zvc94fs8w0M2KGnLEAcBpRPfSAaIQUFvcp47bJcLrdDN+GG4UR4ZWe+5xV8BoNDGbtYLynjKSJiMwohBQc+zEtR61HQ8ZJF5Igq4cxR8ByXSr5C8K2RwLhXfYxoEAAYACIwmJ36tkk+86P1Wnyycf1Fuyj6QVJiXHCOdZgNV0+LBYmmsg1cyUc4JbtevVFvxRhnz1NvrpcqGSQwAQ==",
+    "payload": "/DIQaylj1ARP",
+    "plaintext": "hello bob"
+   },
+   {
+    "from": "alice",
+    "iv": "EmUKJeuP2Wu+JoyT",
+    "kex": true,
+    "key": "MwgBEiEFIcbcxmfoOSy0+kVR5zvc94fs8w0M2KGnLEAcBpRPfSAaIQUFvcp47bJcLrdDN+GG4UR4ZWe+5xV8BoNDGbtYLynjKSJiMwohBQc+zEtR61HQ8ZJF5Igq4cxR8ByXSr5C8K2RwLhXfYxoEAEYACIwnzMatrdeYTPFiiA3JnByvsRy/hq2pIb3pKZf7igVLeKprhHJjl/dSyv8DUsmCpPSnJBeaJZKR5AwAQ==",
+    "payload": "AS/v7Ixpn/ZKGWmtfQjwS43XUvyFPn7o",
+    "plaintext": "second, before any reply"
+   },
+   {
+    "from": "bob",
+    "iv": "MGssr0BJtMZk8VzI",
+    "kex": false,
+    "key": "MwohBZ6JVMSNU63iAkd5XmMbpkaD0OsFrkI1qdSagO+Sns4OEAAYACIwKfqUxWr8vjrHNx42vSfi/DommdcrKzOpJrk1AAGo/CwTea+8g7H1/fG4Jw7eMaI1LUOb2FOsr5E=",
+    "payload": "cD91+VBwhCA=",
+    "plaintext": "hi alice"
+   },
+   {
+    "from": "alice",
+    "iv": "io0ZyyXWgPHTe/Y3",
+    "kex": false,
+    "key": "MwohBQHm2bbIFel/ucy/MFylj4bl64EM+NzdO0yaxISWGaMjEAAYAiIw+TQA/DXppd6FKYjHFkOW4/vPHtg/ULlYGkzhBTxPoPHZZ5n7KsTGEQUbVvaquHFr4ep/uO24RIo=",
+    "payload": "fHT+E8pBPvPFgwqZueF9xnY6QxFDtS8=",
+    "plaintext": "third, after your reply"
+   },
+   {
+    "from": "alice",
+    "iv": "Gyfph/aaH8yCluQ2",
+    "kex": false,
+    "key": "MwohBQHm2bbIFel/ucy/MFylj4bl64EM+NzdO0yaxISWGaMjEAEYAiIwhw6uC9ObgZaxuiGV6Pbc211bi1E9s12UcY+h6fq2Ary+x297V/e6VBMd/g56x+FTsXn3OkCio3k=",
+    "payload": "Dqtk/cCaHgFMMA==",
+    "plaintext": "burst four"
+   },
+   {
+    "from": "alice",
+    "iv": "QekEPFZvpMgU94pz",
+    "kex": false,
+    "key": "MwohBQHm2bbIFel/ucy/MFylj4bl64EM+NzdO0yaxISWGaMjEAIYAiIws8jYwOUpXXwvO57HfyTkY8xhqydP4kFpSusgr3PXjYMblvm4EHGgkGPH4PBQqWCvN9e/r6oHpsA=",
+    "payload": "CBhykAeX0qBlcQ==",
+    "plaintext": "burst five"
+   },
+   {
+    "from": "alice",
+    "iv": "NSIcotTYSN9UvOsE",
+    "kex": false,
+    "key": "MwohBQHm2bbIFel/ucy/MFylj4bl64EM+NzdO0yaxISWGaMjEAMYAiIw6bp/XeukUPUPeTB9K1mbW83LkJrD+JT7gvNdKqOEA7TDUSiiwWxQkC6goNacfzIe0mLz7MAKrl8=",
+    "payload": "xzimTANdXWdc",
+    "plaintext": "burst six"
+   },
+   {
+    "from": "bob",
+    "iv": "3qHcUEhjvhf3kkHR",
+    "kex": false,
+    "key": "MwohBYtXToW7l0mO7//NMsYNVjAOGT3qiIKnG26qKmvcFz5gEAAYASIwSdz78v/uiutve1uHiWA05gTtn7oWA+o1cqe8cs2kDaY4Dqs/w7C+x4ypCiqiIZ0oxEOcTCdbzso=",
+    "payload": "Y7IY/KRuKQ==",
+    "plaintext": "bob one"
+   },
+   {
+    "from": "bob",
+    "iv": "Rbl7xzC14F0Ni5oB",
+    "kex": false,
+    "key": "MwohBYtXToW7l0mO7//NMsYNVjAOGT3qiIKnG26qKmvcFz5gEAEYASIwtygQQkKG5IL2AcTk5OLrP6aY6Ti4xuNiAlIO71+7Vi4bfGjt+Th4NVFrtbmMBKDIOnL8Sr3ltC4=",
+    "payload": "/p3TrcnMVw==",
+    "plaintext": "bob two"
+   }
+  ],
+  "namespace": "eu.siacs.conversations.axolotl"
+ },
+ "pins": {
+  "doubleratchet": "1.3.0",
+  "oldmemo": "2.1.0",
+  "omemo": "2.1.0",
+  "twomemo": "2.1.0",
+  "x3dh": "1.3.0"
+ },
+ "twomemo": {
+  "alice": {
+   "deviceId": 1111,
+   "identitySeed": "6ec01e59e898a092fb9e0805315cb20b50d14fa694f8c82e10890cf0d177442b",
+   "jid": "alice@example.org"
+  },
+  "bob": {
+   "deviceId": 2222,
+   "identitySeed": "4d4badab05c42d59037447a3338f510f201e902f6c1d8c1f94c48b8a5655b4f9",
+   "jid": "bob@example.org",
+   "preKeyPrivs": {
+    "1": "2c278e7bcf410f90b1c9bf2f3ee54962763105ec64dc442bc37a1dbaec453e56"
+   },
+   "signedPreKeyId": 1,
+   "signedPreKeyPriv": "e84972ee5e668bc6f1f767296402213c0e290e372866e130209f249c6239e8cc"
+  },
+  "bundle": {
+   "identityKey": "TrwlKiCXcW5O1vodRHStNZ6iviKYZ4Sh0nhvCuRNVW4=",
+   "preKeys": {
+    "1": "hOGiU4YHqj0IuhoMtStkUd9YS+7KdO2hQGFrVkkUo10="
+   },
+   "signedPreKey": "owQ5yuc7hCOo4TA8+kvPplsVBozrw5P+06X4AiKiW3I=",
+   "signedPreKeyId": 1,
+   "signedPreKeySignature": "p7fiJzp8OV9KK50zAwlIpHQycuL+RjotyOejkAgEbYKnHOYu6SdzmmRzGPH3gt2Hq8QoRaMZ/kqDzXpuDBRSDw=="
+  },
+  "draws": {
+   "alice": [
+    {
+     "hex": "0869ee1775b3eb27611ab62cb35acc4d92dd1dfe292fa38dad681c443039335f",
+     "what": "token"
+    },
+    {
+     "hex": "9d94ff896d823ab2d3254e042eac9c34da02483b0ddf8f0fb0cafa7c013e09aa",
+     "what": "token"
+    },
+    {
+     "hex": "b01968d141116d39b107e0ebf5865bbb1cecf999db9d6fde49b73b204fdb244c",
+     "what": "ratchet"
+    },
+    {
+     "hex": "619dd37947577e2131aa9f7d676dc2726910265f1a06f1566bf06ccf4e9add1b",
+     "what": "token"
+    },
+    {
+     "hex": "e3e6c5a27cbafda3599553d066644183b3bb12249ec96688c184b7949b4966bf",
+     "what": "ratchet"
+    },
+    {
+     "hex": "82c0b5605013ffac10a13f276d17140241b03e9a42e83df6b78cae07729f9bbc",
+     "what": "token"
+    },
+    {
+     "hex": "aa8c59a48b705643a24c9aa813a5b2335c06ed2ad41fb8d57a079cfd179d9382",
+     "what": "token"
+    },
+    {
+     "hex": "ceda0b53a811e7004d58cb98cb289dece41bc728829a5534392902b5711dfdbf",
+     "what": "token"
+    },
+    {
+     "hex": "f032767bc1bc37fac1c63eb384cc178dce274a171ecdfe162c9b3e42d336babd",
+     "what": "token"
+    },
+    {
+     "hex": "89743364aba9820525ca14d5d7b26abb61f1ee714781c1a56b6f3af50f388890",
+     "what": "ratchet"
+    }
+   ],
+   "bob": [
+    {
+     "hex": "ff4d70e831f8759cbb9139e04a80f92b866b5efc76f3e778e90139b8889f5c48",
+     "what": "ratchet"
+    },
+    {
+     "hex": "083a3ceb5427913f1301ac3b31c1bf36a081154609abdd5cf55914dc170a3cb7",
+     "what": "token"
+    },
+    {
+     "hex": "5334c86a53f6db1ba1a5d60fd04907555d8183ca03ffa20cdb7d2d5318f02061",
+     "what": "ratchet"
+    },
+    {
+     "hex": "ca9fd8559f03cd33dafc426995521159a1acc04ca7a4606e5aefd65eb80688fe",
+     "what": "token"
+    },
+    {
+     "hex": "1127201c6cc0f3c98fb3034aff3bb73792851c3aa820ab962e7802d0b940c84b",
+     "what": "token"
+    }
+   ],
+   "setup": [
+    {
+     "hex": "e84972ee5e668bc6f1f767296402213c0e290e372866e130209f249c6239e8cc",
+     "what": "token"
+    },
+    {
+     "hex": "67bb620021179cbf66fb5618473c802947248ccf23c559c6e5eec7817f9db5d8ef0b1389c3e3b61e1e9a9306e7a3faa93e376c78869c95af98e0c595c1118bc8",
+     "what": "token"
+    },
+    {
+     "hex": "2c278e7bcf410f90b1c9bf2f3ee54962763105ec64dc442bc37a1dbaec453e56",
+     "what": "token"
+    },
+    {
+     "hex": "d78cd9a740f4a640af47f8cb3608869c7db5006e2ddfd3b554310a5418d0b853",
+     "what": "token"
+    },
+    {
+     "hex": "25492d3819f297c54ac4eaf6064e7dc0bbab4fd2f9efd63ee92e47565d3794109ced2ef20b7c19553decf4f477460bcaa8814654171f9505029c099249442f83",
+     "what": "token"
+    }
+   ]
+  },
+  "events": [
+   {
+    "msg": 0,
+    "op": "send"
+   },
+   {
+    "msg": 0,
+    "op": "recv"
+   },
+   {
+    "msg": 1,
+    "op": "send"
+   },
+   {
+    "msg": 1,
+    "op": "recv"
+   },
+   {
+    "msg": 2,
+    "op": "send"
+   },
+   {
+    "msg": 2,
+    "op": "recv"
+   },
+   {
+    "msg": 3,
+    "op": "send"
+   },
+   {
+    "msg": 3,
+    "op": "recv"
+   },
+   {
+    "msg": 4,
+    "op": "send"
+   },
+   {
+    "msg": 5,
+    "op": "send"
+   },
+   {
+    "msg": 6,
+    "op": "send"
+   },
+   {
+    "msg": 7,
+    "op": "send"
+   },
+   {
+    "msg": 8,
+    "op": "send"
+   },
+   {
+    "msg": 6,
+    "op": "recv"
+   },
+   {
+    "msg": 4,
+    "op": "recv"
+   },
+   {
+    "msg": 5,
+    "op": "recv"
+   },
+   {
+    "msg": 7,
+    "op": "recv"
+   },
+   {
+    "msg": 8,
+    "op": "recv"
+   }
+  ],
+  "messages": [
+   {
+    "from": "alice",
+    "kex": true,
+    "key": "CAEQARogPKM1OaDsfhBKD9QKZ3QwVUCsBdca3LyisiSyRQiT5TsiINAJa1rAjFfHMZ7mpVWckKGC/EO2dUgCRogcF7ECuPxzKnwKEE31jxVX9sA91zhAfK2IJdISaAgAEAAaIMUAw7Lxvg2n0fQrN2/WN86UIuIcO675zGSpWJGeQJYDIkDvfa1YRQzHXjlyPjMTjWnsJHzKbx8liVI4zfPxhbs4l4JqGWZlRmH528QsodePftZavdlkmEP2GLgpnv41+cx6",
+    "payload": "9gu3CIZdOvEX7kQkqvWg7g==",
+    "plaintext": "hello bob"
+   },
+   {
+    "from": "alice",
+    "kex": true,
+    "key": "CAEQARogPKM1OaDsfhBKD9QKZ3QwVUCsBdca3LyisiSyRQiT5TsiINAJa1rAjFfHMZ7mpVWckKGC/EO2dUgCRogcF7ECuPxzKnwKEF+0NYm4oYoqbE4hFRhGa4USaAgBEAAaIMUAw7Lxvg2n0fQrN2/WN86UIuIcO675zGSpWJGeQJYDIkDu8PpF80RXupFt9BpAb3TuvekQp1CKIfLsmXi05/D0eRevB++oDhBBQgbjntOr4FHFyPruir8mVPhYhBs9+TlN",
+    "payload": "N1O6Gb2g1w09u2CImclUK5GRLoIf5Syw2vACF4RWXco=",
+    "plaintext": "second, before any reply"
+   },
+   {
+    "from": "bob",
+    "kex": false,
+    "key": "ChBXLdrk7NDppKA2G5V9YdFKEmgIABAAGiDO0bJ7frt66uigeXTD3NqmPdboaP0drTBcnIexjx0cbyJASsVFJEefLujkPM+V/RdXDoja13+nluQldSSD6KdOjapkxjO39QXSK4KFCzzHKv/B34F8IjjTUZMujhjJMyERCw==",
+    "payload": "nUhKJjFYGEexcyz2PGfDGg==",
+    "plaintext": "hi alice"
+   },
+   {
+    "from": "alice",
+    "kex": false,
+    "key": "ChAtvY5q7LnaDbEU0h0JEu12EmgIABACGiAZJEkMFoHVaKqMYCl+Pd66C0DKwIx0J+HVMTyVfeQePiJAWVNjmXGpbpfihOlBUTo1FCpPfCzouAq13PSqFcQMA1mKuFnBgZxTrARkAHMUv2aoT9ghuT2BZwKgMh3x2lUn5Q==",
+    "payload": "18BkSgAlqtNKz9ghudMfJ3TqXkwAi8SeKKGpx9kbckg=",
+    "plaintext": "third, after your reply"
+   },
+   {
+    "from": "alice",
+    "kex": false,
+    "key": "ChBondbgUHEceDjcwvTi4nxwEmgIARACGiAZJEkMFoHVaKqMYCl+Pd66C0DKwIx0J+HVMTyVfeQePiJAU7uzZbx7ezWLV7SLJyzvQP90D4KX2tKypuzhlLU8mRkBrcPRDh7qZHwEZOOtgjGGFy1KJg11nNDQabPMU/h7YQ==",
+    "payload": "JRgYrKY92F3EyEAXvUbuYA==",
+    "plaintext": "burst four"
+   },
+   {
+    "from": "alice",
+    "kex": false,
+    "key": "ChAD4ZzGSlW8H44CcWCZOhtFEmgIAhACGiAZJEkMFoHVaKqMYCl+Pd66C0DKwIx0J+HVMTyVfeQePiJAHXBeupEbjCEmimw2b3LesNAHNnEqziLeUfGEzCG3w+ogHdHdYKTZGNagn5r799Ee/QVeKNMSNlJKuaaO8dxKlw==",
+    "payload": "zde6GPPLNKHsijzZ63rk+Q==",
+    "plaintext": "burst five"
+   },
+   {
+    "from": "alice",
+    "kex": false,
+    "key": "ChBy1XPD93z01Bdzz82GDU8HEmgIAxACGiAZJEkMFoHVaKqMYCl+Pd66C0DKwIx0J+HVMTyVfeQePiJAcllQTFP7AQ5NHLl0juGooGqjLSS1XB7d28RyRekI17tIALRFwhmQ8yZSAGpFvrOlX/YZsnyvWr12NCsY3kVdAw==",
+    "payload": "7E6DubVs9SoOI6RfHnPIJA==",
+    "plaintext": "burst six"
+   },
+   {
+    "from": "bob",
+    "kex": false,
+    "key": "ChDMDnpRsglcMClkzEa2vmDKEmgIABABGiAS5U951Pggl2MpoPVEJqDBxsP8+JdysHQw5e7xv64KGiJAA1jzZR3O9l+4cczOmjWrnn3TEjWmc9HDpip48SX3o2eAWxf361Qvn1wGydsuvZL803AiVV6ZBz3LC9Zk5/5UrA==",
+    "payload": "E3Z+kK+zVtQ85Q7gxWlK/w==",
+    "plaintext": "bob one"
+   },
+   {
+    "from": "bob",
+    "kex": false,
+    "key": "ChDXFbvCPU+9C/THoDUdzuw5EmgIARABGiAS5U951Pggl2MpoPVEJqDBxsP8+JdysHQw5e7xv64KGiJAd7HH66rD9NcZ2x0GWnnPdQkoca7x7uKJxWVrxcjuMsThtT+T7lwKbxVEpuZQD31dEt6Gcfet5rTfNl1R5/SK2Q==",
+    "payload": "+MJThALHUVpE82erriTX+Q==",
+    "plaintext": "bob two"
+   }
+  ],
+  "namespace": "urn:xmpp:omemo:2"
+ }
+}

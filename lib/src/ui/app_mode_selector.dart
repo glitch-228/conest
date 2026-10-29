@@ -21,11 +21,38 @@ class AppModeSelector extends StatelessWidget {
     AppMode.matrixOnly =>
       'A Matrix client only. Conest chats are hidden and '
           'Conest networking stays off on this device.',
+    AppMode.discordOnly =>
+      'A Discord client only. Conest chats are hidden and '
+          'Conest networking stays off on this device.',
+    AppMode.telegramOnly =>
+      'A Telegram client only. Conest chats are hidden and '
+          'Conest networking stays off on this device.',
+    AppMode.xmppOnly =>
+      'An XMPP client only. Conest chats are hidden and '
+          'Conest networking stays off on this device.',
+  };
+
+  /// The modes this build offers.
+  static List<AppMode> available(MessengerController controller) => [
+    AppMode.conest,
+    if (controller.matrixAvailable) AppMode.both,
+    if (controller.matrixAvailable) AppMode.matrixOnly,
+    AppMode.xmppOnly,
+    if (controller.telegram.supported) AppMode.telegramOnly,
+    AppMode.discordOnly,
+  ];
+
+  static String label(BuildContext context, AppMode mode) => switch (mode) {
+    AppMode.conest => l10nOf(context).uiConest26885B,
+    AppMode.both => l10nOf(context).uiBoth1F4698,
+    AppMode.matrixOnly => l10nOf(context).uiMatrix58947E,
+    AppMode.xmppOnly => 'XMPP',
+    AppMode.telegramOnly => 'Telegram',
+    AppMode.discordOnly => 'Discord',
   };
 
   @override
   Widget build(BuildContext context) {
-    if (!controller.matrixAvailable) return const SizedBox.shrink();
     final mode = controller.appMode;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -37,24 +64,18 @@ class AppModeSelector extends StatelessWidget {
           ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
-        SegmentedButton<AppMode>(
-          segments: [
-            ButtonSegment(
-              value: AppMode.conest,
-              label: Text(l10nOf(context).uiConest26885B),
-            ),
-            ButtonSegment(
-              value: AppMode.both,
-              label: Text(l10nOf(context).uiBoth1F4698),
-            ),
-            ButtonSegment(
-              value: AppMode.matrixOnly,
-              label: Text(l10nOf(context).uiMatrix58947E),
-            ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            for (final option in available(controller))
+              ChoiceChip(
+                key: ValueKey('app-mode-${option.name}'),
+                label: Text(label(context, option)),
+                selected: option == mode,
+                onSelected: (_) => choose(context, controller, option),
+              ),
           ],
-          selected: {mode},
-          onSelectionChanged: (selection) =>
-              choose(context, controller, selection.single),
         ),
         const SizedBox(height: 6),
         Text(describe(mode), style: Theme.of(context).textTheme.bodySmall),
@@ -69,11 +90,15 @@ class AppModeSelector extends StatelessWidget {
     AppMode mode,
   ) async {
     if (mode == controller.appMode) return;
-    if (mode == AppMode.matrixOnly && controller.hasIdentity) {
+    if (mode.clientOnly && controller.hasIdentity) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text(l10nOf(context).uiUseConestAsAMatrix6A44C5),
+          title: Text(
+            mode == AppMode.matrixOnly
+                ? l10nOf(context).uiUseConestAsAMatrix6A44C5
+                : l10nOf(context).appModeClientOnlyTitle(label(context, mode)),
+          ),
           content: Text(l10nOf(context).uiYourConestChatsAreHiddenCFD853),
           actions: [
             TextButton(

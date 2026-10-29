@@ -111,6 +111,10 @@ jobs:
         run: |
           flutter test test/delta_mail_test.dart test/delta_protocol_test.dart test/delta_content_test.dart test/delta_content_widgets_test.dart test/delta_parser_limits_test.dart test/delta_avatar_store_test.dart test/pgp_test.dart test/email_carrier_test.dart
           flutter test test/messenger_controller_test.dart --plain-name "Delta"
+      - name: Verify the XMPP client and carrier
+        run: |
+          flutter test test/xmpp_test.dart test/xmpp_chats_test.dart
+          flutter test test/messenger_controller_test.dart --plain-name "XMPP"
 
   matrix:
     if: ${{ !inputs.quick_build }}
@@ -321,6 +325,68 @@ jobs:
         if: failure()
         run: docker logs greenmail | tail -200
 
+  xmpp:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: XMPP carrier against a real Prosody
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - name: Start Prosody with in-band registration
+        run: |
+          # Ubuntu's Prosody 0.12 (the Docker Hub image stopped at 0.11).
+          sudo apt-get update
+          sudo apt-get install -y prosody
+          sudo tee /etc/prosody/prosody.cfg.lua > /dev/null <<'EOF'
+          admins = { }
+          modules_enabled = {
+            "roster"; "saslauth"; "tls"; "disco"; "ping"; "register";
+            "smacks"; "carbons"; "csi_simple"; "offline"; "mam";
+            "websocket"; "blocklist"; "pep"; "private"; "vcard4";
+          }
+          allow_registration = true
+          min_seconds_between_registrations = 0
+          registration_throttle_max = 1000
+          registration_throttle_period = 60
+          c2s_require_encryption = false
+          allow_unencrypted_plain_auth = false
+          authentication = "internal_hashed"
+          storage = "internal"
+          http_ports = { 5280 }
+          http_interfaces = { "*" }
+          https_ports = { }
+          consider_websocket_secure = true
+          cross_domain_websocket = true
+          log = { info = "/var/log/prosody/prosody.log" }
+          pidfile = "/run/prosody/prosody.pid"
+          VirtualHost "localhost"
+          Component "conference.localhost" "muc"
+          EOF
+          sudo prosodyctl check config || true
+          sudo systemctl restart prosody
+          for attempt in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/localhost/5222) 2>/dev/null; then
+              prosodyctl about | head -5 || true
+              exit 0
+            fi
+            sleep 2
+          done
+          sudo tail -50 /var/log/prosody/prosody.log
+          exit 1
+      - name: Run the XMPP client and carrier against Prosody
+        env:
+          CONEST_XMPP_HOST: localhost
+          CONEST_XMPP_DOMAIN: localhost
+        run: flutter test test/xmpp_live_test.dart
+      - name: Prosody logs on failure
+        if: failure()
+        run: sudo tail -200 /var/log/prosody/prosody.log
+
   reticulum:
     if: ${{ !inputs.quick_build }}
     needs: cadence
@@ -453,6 +519,9 @@ jobs:
       - name: Build Tor's pluggable transports
         run: tool/build_lyrebird.sh android-arm64 build/app/lyrebirdJniLibs/arm64-v8a/liblyrebird.so
       - name: Build isolated debug APK
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter build apk --debug --target-platform android-arm64 \
             --dart-define=CONEST_BUILD_TAG=${DEBUG_TAG} \
@@ -461,6 +530,8 @@ jobs:
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
             --dart-define=CONEST_MATRIX=true \
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}" \
             --dart-define=CONEST_EXPERIMENTAL_ANDROID_BACKGROUND_RUNTIME=true
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-debug.apk \
@@ -484,7 +555,11 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake clang pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev libasound2-dev libdbus-1-dev
+          sudo apt-get install -y ninja-build cmake clang pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev libasound2-dev libdbus-1-dev gperf zlib1g-dev libssl-dev
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/conest-tdlib
+          key: tdlib-${{ runner.os }}-${{ hashFiles('tool/build_tdlib.sh') }}
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -537,6 +612,9 @@ jobs:
             --target-dir build/linux/x64/profile/conest_native_target \
             transfer::tests
       - name: Build Linux debug bundle
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter config --enable-linux-desktop
           # Profile, not debug: compiled ahead of time like what users run,
@@ -549,8 +627,11 @@ jobs:
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
-            --dart-define=CONEST_MATRIX=true
+            --dart-define=CONEST_MATRIX=true \
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}"
           tool/build_lyrebird.sh linux-x64 build/linux/x64/profile/bundle/lyrebird
+          tool/build_tdlib.sh linux-x64 build/linux/x64/profile/bundle/lib/libtdjson.so
           mkdir -p dist-stage/conest-debug-linux-x64 dist
           cp -a build/linux/x64/profile/bundle/. dist-stage/conest-debug-linux-x64/
           (cd dist-stage && zip -r ../dist/conest-debug-linux-x64-${GITHUB_RUN_NUMBER}.zip conest-debug-linux-x64)
@@ -611,6 +692,9 @@ jobs:
       # (aws-lc, ring, zstd...) and both rebuilt them every run.
       - name: Build Windows debug bundle
         shell: bash
+        env:
+          CONEST_TELEGRAM_API_ID: ${{ secrets.CONEST_TELEGRAM_API_ID }}
+          CONEST_TELEGRAM_API_HASH: ${{ secrets.CONEST_TELEGRAM_API_HASH }}
         run: |
           flutter config --enable-windows-desktop
           # Profile, as on Linux: lab numbers from what users run.
@@ -620,7 +704,9 @@ jobs:
             --dart-define=CONEST_BUILD_COMMIT=${GITHUB_SHA} \
             --dart-define=CONEST_EXPERIMENTAL_VOICE_CALLS=true \
             --dart-define=CONEST_FORWARD_SECRECY=true \
-            --dart-define=CONEST_MATRIX=true
+            --dart-define=CONEST_MATRIX=true \
+            "--dart-define=CONEST_TELEGRAM_API_ID=${CONEST_TELEGRAM_API_ID}" \
+            "--dart-define=CONEST_TELEGRAM_API_HASH=${CONEST_TELEGRAM_API_HASH}"
           tool/build_lyrebird.sh windows-x64 build/windows/x64/runner/Profile/lyrebird.exe
           mkdir -p dist-stage/conest-debug-windows-x64 dist
           cp -a build/windows/x64/runner/Profile/. dist-stage/conest-debug-windows-x64/

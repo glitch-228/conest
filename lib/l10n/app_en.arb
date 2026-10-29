@@ -8571,5 +8571,656 @@
   "notifyAllMessages": "Notify for all messages",
   "@notifyAllMessages": {
     "description": "Group menu: back to every message."
+  },
+  "xmppEncOmemo2Unverified": "encrypted, unverified (OMEMO)",
+  "@xmppEncOmemo2Unverified": {
+    "description": "XMPP chat header: end-to-end encrypted with OMEMO, but not every device of the contact was verified by comparing fingerprints."
+  },
+  "xmppTrustPending": "new device, not confirmed",
+  "@xmppTrustPending": {
+    "description": "Keys screen: a device that appeared after the user verified another device of the contact; nothing is sent to it until confirmed."
+  },
+  "xmppUnconfirmedMsg": "From a new device you have not confirmed.",
+  "@xmppUnconfirmedMsg": {
+    "description": "Note on a message sent by a new, unconfirmed device of a contact."
+  },
+  "xmppEncOmemo2": "encrypted, verified (OMEMO)",
+  "@xmppEncOmemo2": {
+    "description": "XMPP chat header: the chat is end-to-end encrypted with OMEMO."
+  },
+  "xmppEncLegacy": "legacy OMEMO (not reviewed yet)",
+  "@xmppEncLegacy": {
+    "description": "XMPP chat header: legacy OMEMO is in use, which has not been reviewed yet, so it is not called encrypted."
+  },
+  "xmppEncAuto": "encrypted if the contact supports it",
+  "@xmppEncAuto": {
+    "description": "XMPP chat header: messages are encrypted when the contact has OMEMO devices."
+  },
+  "xmppEncRequired": "always encrypted",
+  "@xmppEncRequired": {
+    "description": "XMPP chat header: encryption is required for this chat."
+  },
+  "xmppEncryptionMenu": "Encryption and keys",
+  "@xmppEncryptionMenu": {
+    "description": "XMPP chat menu entry opening encryption settings and keys."
+  },
+  "xmppEncryptionTitle": "Encryption",
+  "@xmppEncryptionTitle": {
+    "description": "Title of the dialog choosing whether an XMPP chat is encrypted."
+  },
+  "xmppEncryptionAuto": "When the contact supports it",
+  "@xmppEncryptionAuto": {
+    "description": "Encryption choice: encrypt when the contact supports it."
+  },
+  "xmppEncryptionOn": "Always (send nothing otherwise)",
+  "@xmppEncryptionOn": {
+    "description": "Encryption choice: always encrypt; send nothing when that is impossible."
+  },
+  "xmppEncryptionOff": "Never",
+  "@xmppEncryptionOff": {
+    "description": "Encryption choice: never encrypt."
+  },
+  "xmppKeysTitle": "Encryption keys",
+  "@xmppKeysTitle": {
+    "description": "Title of the screen with the OMEMO keys of a chat."
+  },
+  "xmppKeysYours": "Your key",
+  "@xmppKeysYours": {
+    "description": "Heading above the user's own OMEMO fingerprint."
+  },
+  "xmppKeysYoursHint": "Compare this fingerprint with your contact, in person or on a call you trust, or let them scan the code.",
+  "@xmppKeysYoursHint": {
+    "description": "Explains how to check the own fingerprint with a contact."
+  },
+  "xmppKeysTheirs": "Devices of {name}",
+  "@xmppKeysTheirs": {
+    "description": "Heading above the contact's devices.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "xmppKeysNone": "No OMEMO devices found for this contact.",
+  "@xmppKeysNone": {
+    "description": "Shown when a contact has no OMEMO devices."
+  },
+  "xmppTrustBlind": "not verified",
+  "@xmppTrustBlind": {
+    "description": "Trust state of a device: seen but not compared."
+  },
+  "xmppTrustVerified": "verified",
+  "@xmppTrustVerified": {
+    "description": "Trust state of a device: fingerprint compared."
+  },
+  "xmppTrustRefused": "refused",
+  "@xmppTrustRefused": {
+    "description": "Trust state of a device: the user refuses it."
+  },
+  "xmppTrustVerify": "Mark as verified",
+  "@xmppTrustVerify": {
+    "description": "Action: mark a device as verified."
+  },
+  "xmppTrustRefuse": "Refuse this device",
+  "@xmppTrustRefuse": {
+    "description": "Action: refuse a device."
+  },
+  "xmppTrustAllow": "Allow again",
+  "@xmppTrustAllow": {
+    "description": "Action: allow a refused device again."
+  },
+  "xmppKeysScan": "Scan their code",
+  "@xmppKeysScan": {
+    "description": "Button: scan the contact's code to verify their keys."
+  },
+  "xmppKeysRefresh": "Check for devices",
+  "@xmppKeysRefresh": {
+    "description": "Button: look for the contact's devices again."
+  },
+  "xmppKeysForget": "Forget this device's key",
+  "@xmppKeysForget": {
+    "description": "Action: forget the remembered key of a device."
+  },
+  "xmppKeysChanged": "Its key changed: it gets nothing until you forget the old key.",
+  "@xmppKeysChanged": {
+    "description": "Shown for a device whose key changed."
+  },
+  "xmppKeysScanMatch": "Verified {count} device(s).",
+  "@xmppKeysScanMatch": {
+    "description": "After scanning: how many devices were verified.",
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "xmppKeysScanMismatch": "The code does not match this contact's keys. Do not trust them.",
+  "@xmppKeysScanMismatch": {
+    "description": "After scanning: the code does not match."
+  },
+  "xmppUnreadable": "This message could not be decrypted.",
+  "@xmppUnreadable": {
+    "description": "Shown instead of a message that could not be decrypted."
+  },
+  "xmppUntrustedMsg": "From a device you refused.",
+  "@xmppUntrustedMsg": {
+    "description": "Warning under a message from a device the user refused."
+  },
+  "xmppLegacySwitch": "Legacy OMEMO (experimental)",
+  "@xmppLegacySwitch": {
+    "description": "Switch: use legacy OMEMO in XMPP chats."
+  },
+  "xmppLegacyHint": "Chat encrypted with older apps such as Conversations, Dino and Gajim. Not reviewed yet, so such messages are not marked as encrypted.",
+  "@xmppLegacyHint": {
+    "description": "Explains legacy OMEMO."
+  },
+  "routeXmppDescription": "Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.",
+  "@routeXmppDescription": {
+    "description": "Presentation text for message route information: the XMPP carrier."
+  },
+  "xmppCarrierSubtitle": "Carry messages through an XMPP (Jabber) account",
+  "@xmppCarrierSubtitle": {
+    "description": "Settings: subtitle of the XMPP carrier switch."
+  },
+  "xmppCreatedAccount": "Account made by Conest",
+  "@xmppCreatedAccount": {
+    "description": "Settings: the XMPP account was created by Conest."
+  },
+  "xmppOwnAccount": "Your own account",
+  "@xmppOwnAccount": {
+    "description": "Settings: the XMPP account is the user's own."
+  },
+  "xmppChangeAccount": "Change account",
+  "@xmppChangeAccount": {
+    "description": "Settings: button to change the XMPP carrier account."
+  },
+  "xmppServerField": "XMPP server (empty: the first one that answers here)",
+  "@xmppServerField": {
+    "description": "Settings: field for the XMPP server on which Conest creates an account."
+  },
+  "xmppUseOwnAccount": "Use my own XMPP account",
+  "@xmppUseOwnAccount": {
+    "description": "Settings: checkbox to use the user's own XMPP account."
+  },
+  "xmppOwnAccountNote": "Conest signs in as an extra device; your other XMPP apps do not see its messages.",
+  "@xmppOwnAccountNote": {
+    "description": "Settings: explanation of using one's own XMPP account."
+  },
+  "xmppAddressField": "XMPP address (name@server)",
+  "@xmppAddressField": {
+    "description": "Settings: field for an XMPP address."
+  },
+  "xmppPasswordField": "Password",
+  "@xmppPasswordField": {
+    "description": "Settings: field for the XMPP account password."
+  },
+  "xmppRetracted": "Message retracted",
+  "@xmppRetracted": {
+    "description": "XMPP chat: a message its sender took back."
+  },
+  "xmppFile": "File",
+  "@xmppFile": {
+    "description": "XMPP chat: a shared file."
+  },
+  "xmppNewChat": "New XMPP chat",
+  "@xmppNewChat": {
+    "description": "XMPP: start a new chat."
+  },
+  "xmppNewChatAddress": "Address or xmpp: link",
+  "@xmppNewChatAddress": {
+    "description": "XMPP: address field of a new chat."
+  },
+  "xmppGroupChat": "Group chat",
+  "@xmppGroupChat": {
+    "description": "XMPP: a group chat (MUC)."
+  },
+  "xmppNickname": "Your nickname",
+  "@xmppNickname": {
+    "description": "XMPP: nickname in a group chat."
+  },
+  "xmppOpenChat": "Open",
+  "@xmppOpenChat": {
+    "description": "XMPP: open the chat button."
+  },
+  "xmppMetadataTitle": "Some details stay in this file",
+  "@xmppMetadataTitle": {
+    "description": "XMPP: the file's metadata could not all be removed."
+  },
+  "xmppMetadataBody": "Conest could not remove all hidden details (such as location or device) from this file. Send it anyway?",
+  "@xmppMetadataBody": {
+    "description": "XMPP: explanation of remaining metadata."
+  },
+  "xmppSendAnyway": "Send anyway",
+  "@xmppSendAnyway": {
+    "description": "XMPP: send despite metadata."
+  },
+  "xmppReply": "Reply",
+  "@xmppReply": {
+    "description": "XMPP: reply to a message."
+  },
+  "xmppCopy": "Copy",
+  "@xmppCopy": {
+    "description": "XMPP: copy a message."
+  },
+  "xmppEdit": "Edit",
+  "@xmppEdit": {
+    "description": "XMPP: correct own message."
+  },
+  "xmppRetract": "Retract",
+  "@xmppRetract": {
+    "description": "XMPP: retract own message."
+  },
+  "xmppChatGone": "This chat is gone.",
+  "@xmppChatGone": {
+    "description": "XMPP: the chat no longer exists."
+  },
+  "xmppNotEncrypted": "not encrypted",
+  "@xmppNotEncrypted": {
+    "description": "XMPP: the chat is not end-to-end encrypted."
+  },
+  "xmppLeaveRoom": "Leave group chat",
+  "@xmppLeaveRoom": {
+    "description": "XMPP: leave a group chat."
+  },
+  "xmppDeleteChat": "Delete chat",
+  "@xmppDeleteChat": {
+    "description": "XMPP: delete a chat here."
+  },
+  "xmppBlock": "Block",
+  "@xmppBlock": {
+    "description": "XMPP: block someone."
+  },
+  "xmppAccept": "Accept",
+  "@xmppAccept": {
+    "description": "XMPP: accept a chat request."
+  },
+  "xmppRequest": "Someone not in your contacts wrote to you. Replies and read markers go out only once you accept.",
+  "@xmppRequest": {
+    "description": "XMPP: banner for a stranger's chat."
+  },
+  "xmppRoomInvitation": "You were invited to this group chat. Join it?",
+  "@xmppRoomInvitation": {
+    "description": "XMPP: banner for a group chat invitation."
+  },
+  "xmppAttach": "Attach a file",
+  "@xmppAttach": {
+    "description": "XMPP: attach a file."
+  },
+  "xmppMessageHint": "Message",
+  "@xmppMessageHint": {
+    "description": "XMPP: composer hint."
+  },
+  "xmppEdited": "edited",
+  "@xmppEdited": {
+    "description": "XMPP: message was corrected."
+  },
+  "xmppChats": "XMPP chats",
+  "@xmppChats": {
+    "description": "Settings: XMPP chats switch."
+  },
+  "xmppChatsSubtitle": "Chat with anyone on XMPP (Jabber), beside your Conest chats",
+  "@xmppChatsSubtitle": {
+    "description": "Settings: XMPP chats switch subtitle."
+  },
+  "xmppChatsOtherAccount": "Use another account than the one Conest carries messages through",
+  "@xmppChatsOtherAccount": {
+    "description": "Settings: use another XMPP account for chats."
+  },
+  "xmppConnected": "connected",
+  "@xmppConnected": {
+    "description": "XMPP: connected."
+  },
+  "xmppConnecting": "connecting",
+  "@xmppConnecting": {
+    "description": "XMPP: connecting."
+  },
+  "appModeClientOnlyTitle": "Use Conest as a {network} client?",
+  "@appModeClientOnlyTitle": {
+    "description": "App mode: confirm switching to a client-only mode for a network.",
+    "placeholders": {
+      "network": {
+        "type": "String"
+      }
+    }
+  },
+  "onbXmppInstead": "Use as an XMPP client instead",
+  "@onbXmppInstead": {
+    "description": "Onboarding: use the app as an XMPP client."
+  },
+  "xmppSignIn": "Sign in to your XMPP account",
+  "@xmppSignIn": {
+    "description": "XMPP-only mode: sign in heading."
+  },
+  "xmppNoChats": "No XMPP chats yet",
+  "@xmppNoChats": {
+    "description": "XMPP-only mode: no chats yet."
+  },
+  "xmppRequestShort": "Chat request",
+  "@xmppRequestShort": {
+    "description": "XMPP: chat list label for a request."
+  },
+  "routeTelegramDescription": "Carried by Telegram bots, still end-to-end encrypted by Conest; Telegram sees both bots and when.",
+  "@routeTelegramDescription": {
+    "description": "Presentation text for message route information: the Telegram bot carrier."
+  },
+  "telegramCarrierSubtitle": "Carry messages through a Telegram bot you made",
+  "@telegramCarrierSubtitle": {
+    "description": "Settings: subtitle of the Telegram bot carrier switch."
+  },
+  "telegramChangeBot": "Change bot",
+  "@telegramChangeBot": {
+    "description": "Settings: change the Telegram bot of the carrier."
+  },
+  "telegramBotHelp": "Make a bot with @BotFather, switch on bot-to-bot messaging for it, and paste its token here. Use a bot only Conest reads. Your contact does the same.",
+  "@telegramBotHelp": {
+    "description": "Settings: how to set up the Telegram bot carrier."
+  },
+  "telegramBotTokenField": "Bot token",
+  "@telegramBotTokenField": {
+    "description": "Settings: field label for the Telegram bot token."
+  },
+  "telegramClientTitle": "Telegram client",
+  "@telegramClientTitle": {
+    "description": "Settings: title of the Telegram client section."
+  },
+  "telegramClientSubtitle": "Use your own Telegram account in Conest (unofficial client)",
+  "@telegramClientSubtitle": {
+    "description": "Settings: subtitle of the Telegram client switch."
+  },
+  "telegramUnofficial": "Conest is an unofficial Telegram client. Telegram's rules apply to your account.",
+  "@telegramUnofficial": {
+    "description": "Settings: notice that Conest is not the official Telegram app."
+  },
+  "telegramPhoneField": "Phone number (+…)",
+  "@telegramPhoneField": {
+    "description": "Telegram sign-in: phone number field."
+  },
+  "telegramCodeField": "Login code",
+  "@telegramCodeField": {
+    "description": "Telegram sign-in: login code field."
+  },
+  "telegramPasswordField": "Two-step password",
+  "@telegramPasswordField": {
+    "description": "Telegram sign-in: two-step password field."
+  },
+  "telegramQrLogin": "Sign in with a QR code instead",
+  "@telegramQrLogin": {
+    "description": "Telegram sign-in: use a QR code."
+  },
+  "telegramQrHint": "On your phone open Telegram, Settings, Devices, Link Desktop Device, and scan this code.",
+  "@telegramQrHint": {
+    "description": "Telegram sign-in: how to use the QR code."
+  },
+  "telegramNoAccount": "This number has no Telegram account. Conest only signs in; make the account in the official Telegram app first.",
+  "@telegramNoAccount": {
+    "description": "Telegram sign-in: the number has no account."
+  },
+  "telegramLogOut": "Log out and remove",
+  "@telegramLogOut": {
+    "description": "Settings: log out of Telegram and remove its data here."
+  },
+  "telegramSignedInAs": "Signed in as {name}",
+  "@telegramSignedInAs": {
+    "description": "Settings: who is signed in to Telegram.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "telegramConnecting": "Connecting…",
+  "@telegramConnecting": {
+    "description": "Settings: Telegram is starting."
+  },
+  "telegramMods": "Mod settings",
+  "@telegramMods": {
+    "description": "Settings: open the Telegram mod settings."
+  },
+  "telegramNoChats": "No Telegram chats yet",
+  "@telegramNoChats": {
+    "description": "Telegram client: no chats yet."
+  },
+  "telegramSaved": "Saved Messages",
+  "@telegramSaved": {
+    "description": "Telegram client: Saved Messages chat."
+  },
+  "telegramSponsored": "Sponsored",
+  "@telegramSponsored": {
+    "description": "Telegram client: label on sponsored messages in channels."
+  },
+  "telegramDeletedBySender": "Deleted by sender",
+  "@telegramDeletedBySender": {
+    "description": "Telegram client: a message the sender deleted."
+  },
+  "telegramAllChats": "All chats",
+  "@telegramAllChats": {
+    "description": "Telegram client: the main chat list tab."
+  },
+  "telegramArchive": "Archive",
+  "@telegramArchive": {
+    "description": "Telegram client: the archive tab."
+  },
+  "telegramChannelReadOnly": "Only admins can post here",
+  "@telegramChannelReadOnly": {
+    "description": "Telegram client: channels cannot be written to."
+  },
+  "telegramSendSilently": "Send silently",
+  "@telegramSendSilently": {
+    "description": "Telegram client: send without a sound."
+  },
+  "telegramSchedule": "Send later…",
+  "@telegramSchedule": {
+    "description": "Telegram client: send later."
+  },
+  "telegramTranslate": "Translate",
+  "@telegramTranslate": {
+    "description": "Telegram client: translate a message."
+  },
+  "telegramExport": "Export loaded messages",
+  "@telegramExport": {
+    "description": "Telegram client: save the loaded chat to a file."
+  },
+  "telegramDeleteForAll": "Delete for everyone",
+  "@telegramDeleteForAll": {
+    "description": "Telegram client: delete a message for everyone."
+  },
+  "telegramDeleteForMe": "Delete for me",
+  "@telegramDeleteForMe": {
+    "description": "Telegram client: delete a message only here."
+  },
+  "telegramDownload": "Download",
+  "@telegramDownload": {
+    "description": "Telegram client: download a file."
+  },
+  "telegramOpenSponsored": "Open link",
+  "@telegramOpenSponsored": {
+    "description": "Telegram client: open a sponsored link."
+  },
+  "telegramHiddenWords": "Hide messages containing these words (one per line)",
+  "@telegramHiddenWords": {
+    "description": "Mod settings: words that hide messages."
+  },
+  "telegramDeletedNoticeSwitch": "Show a notice when someone deletes a message",
+  "@telegramDeletedNoticeSwitch": {
+    "description": "Mod settings: notice for deleted messages."
+  },
+  "telegramDeletedNoticeNote": "Only the notice stays. The deleted content is not kept.",
+  "@telegramDeletedNoticeNote": {
+    "description": "Mod settings: what the notice does and does not keep."
+  },
+  "telegramTranslateTo": "Translate into (language code, empty for the app language)",
+  "@telegramTranslateTo": {
+    "description": "Mod settings: translation language code."
+  },
+  "telegramPlugins": "Plugins",
+  "@telegramPlugins": {
+    "description": "Mod settings: plugins section."
+  },
+  "telegramPluginHelp": "Plugins are small rule files. They can only hide messages, change the text you send and add commands, and only what they declare.",
+  "@telegramPluginHelp": {
+    "description": "Mod settings: what plugins are."
+  },
+  "telegramPluginInstall": "Install a plugin (paste its text)",
+  "@telegramPluginInstall": {
+    "description": "Mod settings: install a plugin from pasted text."
+  },
+  "telegramPluginBad": "That is not a valid plugin, or too many are installed.",
+  "@telegramPluginBad": {
+    "description": "Mod settings: pasted plugin is not valid."
+  },
+  "telegramPluginPermissions": "May: {permissions}",
+  "@telegramPluginPermissions": {
+    "description": "Mod settings: what a plugin may do.",
+    "placeholders": {
+      "permissions": {
+        "type": "String"
+      }
+    }
+  },
+  "telegramPermReadMessages": "hide messages",
+  "@telegramPermReadMessages": {
+    "description": "Plugin permission name."
+  },
+  "telegramPermEditOutgoing": "change what you send",
+  "@telegramPermEditOutgoing": {
+    "description": "Plugin permission name."
+  },
+  "telegramPermCommands": "add commands",
+  "@telegramPermCommands": {
+    "description": "Plugin permission name."
+  },
+  "telegramDownloads": "Downloads",
+  "@telegramDownloads": {
+    "description": "Telegram client: active downloads."
+  },
+  "telegramLoadOlder": "Load older messages",
+  "@telegramLoadOlder": {
+    "description": "Telegram client: load older messages."
+  },
+  "onbTelegramInstead": "Use as a Telegram client instead",
+  "@onbTelegramInstead": {
+    "description": "Onboarding: use the app as a Telegram client instead."
+  },
+  "routeDiscordDescription": "Carried by Discord bots, still end-to-end encrypted by Conest; Discord sees both bots and when.",
+  "@routeDiscordDescription": {
+    "description": "Presentation text for message route information: the Discord carrier."
+  },
+  "discordCarrierSubtitle": "Carry messages through a Discord bot you made",
+  "@discordCarrierSubtitle": {
+    "description": "Settings: subtitle of the Discord bot carrier switch."
+  },
+  "discordBotHelp": "Make a bot in the Discord developer portal, add it to a private server you share with your contacts' bots, and paste its token and that channel's id. Use a bot only Conest reads.",
+  "@discordBotHelp": {
+    "description": "Settings: how to set up the Discord bot carrier."
+  },
+  "discordBotTokenField": "Bot token",
+  "@discordBotTokenField": {
+    "description": "Settings: Discord bot token field."
+  },
+  "discordChannelField": "Channel id",
+  "@discordChannelField": {
+    "description": "Settings: Discord channel id field."
+  },
+  "discordChangeBot": "Change bot",
+  "@discordChangeBot": {
+    "description": "Settings: change the Discord bot."
+  },
+  "discordClientTitle": "Discord client (against Discord's terms)",
+  "@discordClientTitle": {
+    "description": "Settings: Discord client section title."
+  },
+  "discordClientSubtitle": "Use your own Discord account in Conest, as Vencord and Vesktop do",
+  "@discordClientSubtitle": {
+    "description": "Settings: Discord client switch subtitle."
+  },
+  "discordWarningTitle": "This can get your account banned",
+  "@discordWarningTitle": {
+    "description": "Discord client warning dialog title."
+  },
+  "discordWarningBody": "Using your account token in another app is against Discord's terms, and Discord can ban the account. Conest only acts when you do: it reads what you open and sends only what you send. It does not use this token for anything else, and the Conest carrier never uses it.",
+  "@discordWarningBody": {
+    "description": "Discord client warning dialog text."
+  },
+  "discordWarningAccept": "I understand, continue",
+  "@discordWarningAccept": {
+    "description": "Discord client warning: accept button."
+  },
+  "discordAccountTokenField": "Account token",
+  "@discordAccountTokenField": {
+    "description": "Discord client: account token field."
+  },
+  "discordTokenHelp": "Find it in Discord's developer tools in a browser (Network tab, the Authorization header). Never share it.",
+  "@discordTokenHelp": {
+    "description": "Discord client: how to get the token."
+  },
+  "discordSignedInAs": "Signed in as {name}",
+  "@discordSignedInAs": {
+    "description": "Discord client: signed in.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "discordDirectMessages": "Direct messages",
+  "@discordDirectMessages": {
+    "description": "Discord client: the direct messages section."
+  },
+  "discordNoChats": "No Discord chats yet",
+  "@discordNoChats": {
+    "description": "Discord client: nothing to show."
+  },
+  "discordServers": "Servers",
+  "@discordServers": {
+    "description": "Discord client: the servers section."
+  },
+  "discordLoadOlder": "Load older messages",
+  "@discordLoadOlder": {
+    "description": "Discord client: load older messages."
+  },
+  "discordOnbInstead": "Use as a Discord client instead",
+  "@discordOnbInstead": {
+    "description": "Onboarding: use the app as a Discord client instead."
+  },
+  "telegramRelaySaved": "Relay Saved Messages to my other devices",
+  "@telegramRelaySaved": {
+    "description": "Telegram bridge: relay Saved Messages to own devices."
+  },
+  "telegramRelayChat": "Relay this chat to my other devices",
+  "@telegramRelayChat": {
+    "description": "Telegram bridge: relay a chat to own devices."
+  },
+  "telegramRelayNote": "Only message text goes, end-to-end encrypted between your devices. Your Telegram login never leaves this device.",
+  "@telegramRelayNote": {
+    "description": "Telegram bridge: what is and is not relayed."
+  },
+  "telegramViaDevice": "Telegram, via your other device",
+  "@telegramViaDevice": {
+    "description": "Telegram bridge: label for chats relayed from another device."
+  },
+  "telegramBridgeReadOnly": "Read only here. Answer in Telegram on the device that has it.",
+  "@telegramBridgeReadOnly": {
+    "description": "Telegram bridge: relayed chats cannot be answered here."
+  },
+  "telegramPluginConfirmTitle": "Install {name}?",
+  "@telegramPluginConfirmTitle": {
+    "description": "Telegram plugin: ask before installing.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "telegramPluginNoPermissions": "nothing (it can do nothing)",
+  "@telegramPluginNoPermissions": {
+    "description": "Telegram plugin: it asks for no permissions."
+  },
+  "telegramPluginInstallButton": "Install",
+  "@telegramPluginInstallButton": {
+    "description": "Telegram plugin: confirm install button."
+  },
+  "xmppEditNotApplied": "An edit of this message was not applied: it could not be checked.",
+  "@xmppEditNotApplied": {
+    "description": "XMPP: an edit of an encrypted message was ignored."
   }
 }

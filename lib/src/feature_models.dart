@@ -54,6 +54,16 @@ enum ApplicationCapability {
 
   /// Reserved: own devices share settings and transports.
   sharedSettingsV1,
+
+  /// Understands XMPP carrier addresses (`jid|resource`) and frames (M51).
+  xmppCarrierV1,
+
+  /// Understands Telegram bot carrier addresses (bot usernames) and frames
+  /// (M30).
+  telegramCarrierV1,
+
+  /// Understands Discord bot carrier addresses (`botId|channelId`) (M31).
+  discordCarrierV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

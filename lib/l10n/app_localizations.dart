@@ -9172,6 +9172,930 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Notify for all messages'**
   String get notifyAllMessages;
+
+  /// XMPP chat header: end-to-end encrypted with OMEMO, but not every device of the contact was verified by comparing fingerprints.
+  ///
+  /// In en, this message translates to:
+  /// **'encrypted, unverified (OMEMO)'**
+  String get xmppEncOmemo2Unverified;
+
+  /// Keys screen: a device that appeared after the user verified another device of the contact; nothing is sent to it until confirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'new device, not confirmed'**
+  String get xmppTrustPending;
+
+  /// Note on a message sent by a new, unconfirmed device of a contact.
+  ///
+  /// In en, this message translates to:
+  /// **'From a new device you have not confirmed.'**
+  String get xmppUnconfirmedMsg;
+
+  /// XMPP chat header: the chat is end-to-end encrypted with OMEMO.
+  ///
+  /// In en, this message translates to:
+  /// **'encrypted, verified (OMEMO)'**
+  String get xmppEncOmemo2;
+
+  /// XMPP chat header: legacy OMEMO is in use, which has not been reviewed yet, so it is not called encrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'legacy OMEMO (not reviewed yet)'**
+  String get xmppEncLegacy;
+
+  /// XMPP chat header: messages are encrypted when the contact has OMEMO devices.
+  ///
+  /// In en, this message translates to:
+  /// **'encrypted if the contact supports it'**
+  String get xmppEncAuto;
+
+  /// XMPP chat header: encryption is required for this chat.
+  ///
+  /// In en, this message translates to:
+  /// **'always encrypted'**
+  String get xmppEncRequired;
+
+  /// XMPP chat menu entry opening encryption settings and keys.
+  ///
+  /// In en, this message translates to:
+  /// **'Encryption and keys'**
+  String get xmppEncryptionMenu;
+
+  /// Title of the dialog choosing whether an XMPP chat is encrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'Encryption'**
+  String get xmppEncryptionTitle;
+
+  /// Encryption choice: encrypt when the contact supports it.
+  ///
+  /// In en, this message translates to:
+  /// **'When the contact supports it'**
+  String get xmppEncryptionAuto;
+
+  /// Encryption choice: always encrypt; send nothing when that is impossible.
+  ///
+  /// In en, this message translates to:
+  /// **'Always (send nothing otherwise)'**
+  String get xmppEncryptionOn;
+
+  /// Encryption choice: never encrypt.
+  ///
+  /// In en, this message translates to:
+  /// **'Never'**
+  String get xmppEncryptionOff;
+
+  /// Title of the screen with the OMEMO keys of a chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Encryption keys'**
+  String get xmppKeysTitle;
+
+  /// Heading above the user's own OMEMO fingerprint.
+  ///
+  /// In en, this message translates to:
+  /// **'Your key'**
+  String get xmppKeysYours;
+
+  /// Explains how to check the own fingerprint with a contact.
+  ///
+  /// In en, this message translates to:
+  /// **'Compare this fingerprint with your contact, in person or on a call you trust, or let them scan the code.'**
+  String get xmppKeysYoursHint;
+
+  /// Heading above the contact's devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Devices of {name}'**
+  String xmppKeysTheirs(String name);
+
+  /// Shown when a contact has no OMEMO devices.
+  ///
+  /// In en, this message translates to:
+  /// **'No OMEMO devices found for this contact.'**
+  String get xmppKeysNone;
+
+  /// Trust state of a device: seen but not compared.
+  ///
+  /// In en, this message translates to:
+  /// **'not verified'**
+  String get xmppTrustBlind;
+
+  /// Trust state of a device: fingerprint compared.
+  ///
+  /// In en, this message translates to:
+  /// **'verified'**
+  String get xmppTrustVerified;
+
+  /// Trust state of a device: the user refuses it.
+  ///
+  /// In en, this message translates to:
+  /// **'refused'**
+  String get xmppTrustRefused;
+
+  /// Action: mark a device as verified.
+  ///
+  /// In en, this message translates to:
+  /// **'Mark as verified'**
+  String get xmppTrustVerify;
+
+  /// Action: refuse a device.
+  ///
+  /// In en, this message translates to:
+  /// **'Refuse this device'**
+  String get xmppTrustRefuse;
+
+  /// Action: allow a refused device again.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow again'**
+  String get xmppTrustAllow;
+
+  /// Button: scan the contact's code to verify their keys.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan their code'**
+  String get xmppKeysScan;
+
+  /// Button: look for the contact's devices again.
+  ///
+  /// In en, this message translates to:
+  /// **'Check for devices'**
+  String get xmppKeysRefresh;
+
+  /// Action: forget the remembered key of a device.
+  ///
+  /// In en, this message translates to:
+  /// **'Forget this device\'s key'**
+  String get xmppKeysForget;
+
+  /// Shown for a device whose key changed.
+  ///
+  /// In en, this message translates to:
+  /// **'Its key changed: it gets nothing until you forget the old key.'**
+  String get xmppKeysChanged;
+
+  /// After scanning: how many devices were verified.
+  ///
+  /// In en, this message translates to:
+  /// **'Verified {count} device(s).'**
+  String xmppKeysScanMatch(String count);
+
+  /// After scanning: the code does not match.
+  ///
+  /// In en, this message translates to:
+  /// **'The code does not match this contact\'s keys. Do not trust them.'**
+  String get xmppKeysScanMismatch;
+
+  /// Shown instead of a message that could not be decrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'This message could not be decrypted.'**
+  String get xmppUnreadable;
+
+  /// Warning under a message from a device the user refused.
+  ///
+  /// In en, this message translates to:
+  /// **'From a device you refused.'**
+  String get xmppUntrustedMsg;
+
+  /// Switch: use legacy OMEMO in XMPP chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Legacy OMEMO (experimental)'**
+  String get xmppLegacySwitch;
+
+  /// Explains legacy OMEMO.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat encrypted with older apps such as Conversations, Dino and Gajim. Not reviewed yet, so such messages are not marked as encrypted.'**
+  String get xmppLegacyHint;
+
+  /// Presentation text for message route information: the XMPP carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by XMPP servers, still end-to-end encrypted by Conest; the servers see both accounts and when.'**
+  String get routeXmppDescription;
+
+  /// Settings: subtitle of the XMPP carrier switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Carry messages through an XMPP (Jabber) account'**
+  String get xmppCarrierSubtitle;
+
+  /// Settings: the XMPP account was created by Conest.
+  ///
+  /// In en, this message translates to:
+  /// **'Account made by Conest'**
+  String get xmppCreatedAccount;
+
+  /// Settings: the XMPP account is the user's own.
+  ///
+  /// In en, this message translates to:
+  /// **'Your own account'**
+  String get xmppOwnAccount;
+
+  /// Settings: button to change the XMPP carrier account.
+  ///
+  /// In en, this message translates to:
+  /// **'Change account'**
+  String get xmppChangeAccount;
+
+  /// Settings: field for the XMPP server on which Conest creates an account.
+  ///
+  /// In en, this message translates to:
+  /// **'XMPP server (empty: the first one that answers here)'**
+  String get xmppServerField;
+
+  /// Settings: checkbox to use the user's own XMPP account.
+  ///
+  /// In en, this message translates to:
+  /// **'Use my own XMPP account'**
+  String get xmppUseOwnAccount;
+
+  /// Settings: explanation of using one's own XMPP account.
+  ///
+  /// In en, this message translates to:
+  /// **'Conest signs in as an extra device; your other XMPP apps do not see its messages.'**
+  String get xmppOwnAccountNote;
+
+  /// Settings: field for an XMPP address.
+  ///
+  /// In en, this message translates to:
+  /// **'XMPP address (name@server)'**
+  String get xmppAddressField;
+
+  /// Settings: field for the XMPP account password.
+  ///
+  /// In en, this message translates to:
+  /// **'Password'**
+  String get xmppPasswordField;
+
+  /// XMPP chat: a message its sender took back.
+  ///
+  /// In en, this message translates to:
+  /// **'Message retracted'**
+  String get xmppRetracted;
+
+  /// XMPP chat: a shared file.
+  ///
+  /// In en, this message translates to:
+  /// **'File'**
+  String get xmppFile;
+
+  /// XMPP: start a new chat.
+  ///
+  /// In en, this message translates to:
+  /// **'New XMPP chat'**
+  String get xmppNewChat;
+
+  /// XMPP: address field of a new chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Address or xmpp: link'**
+  String get xmppNewChatAddress;
+
+  /// XMPP: a group chat (MUC).
+  ///
+  /// In en, this message translates to:
+  /// **'Group chat'**
+  String get xmppGroupChat;
+
+  /// XMPP: nickname in a group chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Your nickname'**
+  String get xmppNickname;
+
+  /// XMPP: open the chat button.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get xmppOpenChat;
+
+  /// XMPP: the file's metadata could not all be removed.
+  ///
+  /// In en, this message translates to:
+  /// **'Some details stay in this file'**
+  String get xmppMetadataTitle;
+
+  /// XMPP: explanation of remaining metadata.
+  ///
+  /// In en, this message translates to:
+  /// **'Conest could not remove all hidden details (such as location or device) from this file. Send it anyway?'**
+  String get xmppMetadataBody;
+
+  /// XMPP: send despite metadata.
+  ///
+  /// In en, this message translates to:
+  /// **'Send anyway'**
+  String get xmppSendAnyway;
+
+  /// XMPP: reply to a message.
+  ///
+  /// In en, this message translates to:
+  /// **'Reply'**
+  String get xmppReply;
+
+  /// XMPP: copy a message.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy'**
+  String get xmppCopy;
+
+  /// XMPP: correct own message.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get xmppEdit;
+
+  /// XMPP: retract own message.
+  ///
+  /// In en, this message translates to:
+  /// **'Retract'**
+  String get xmppRetract;
+
+  /// XMPP: the chat no longer exists.
+  ///
+  /// In en, this message translates to:
+  /// **'This chat is gone.'**
+  String get xmppChatGone;
+
+  /// XMPP: the chat is not end-to-end encrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'not encrypted'**
+  String get xmppNotEncrypted;
+
+  /// XMPP: leave a group chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave group chat'**
+  String get xmppLeaveRoom;
+
+  /// XMPP: delete a chat here.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete chat'**
+  String get xmppDeleteChat;
+
+  /// XMPP: block someone.
+  ///
+  /// In en, this message translates to:
+  /// **'Block'**
+  String get xmppBlock;
+
+  /// XMPP: accept a chat request.
+  ///
+  /// In en, this message translates to:
+  /// **'Accept'**
+  String get xmppAccept;
+
+  /// XMPP: banner for a stranger's chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Someone not in your contacts wrote to you. Replies and read markers go out only once you accept.'**
+  String get xmppRequest;
+
+  /// XMPP: banner for a group chat invitation.
+  ///
+  /// In en, this message translates to:
+  /// **'You were invited to this group chat. Join it?'**
+  String get xmppRoomInvitation;
+
+  /// XMPP: attach a file.
+  ///
+  /// In en, this message translates to:
+  /// **'Attach a file'**
+  String get xmppAttach;
+
+  /// XMPP: composer hint.
+  ///
+  /// In en, this message translates to:
+  /// **'Message'**
+  String get xmppMessageHint;
+
+  /// XMPP: message was corrected.
+  ///
+  /// In en, this message translates to:
+  /// **'edited'**
+  String get xmppEdited;
+
+  /// Settings: XMPP chats switch.
+  ///
+  /// In en, this message translates to:
+  /// **'XMPP chats'**
+  String get xmppChats;
+
+  /// Settings: XMPP chats switch subtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat with anyone on XMPP (Jabber), beside your Conest chats'**
+  String get xmppChatsSubtitle;
+
+  /// Settings: use another XMPP account for chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Use another account than the one Conest carries messages through'**
+  String get xmppChatsOtherAccount;
+
+  /// XMPP: connected.
+  ///
+  /// In en, this message translates to:
+  /// **'connected'**
+  String get xmppConnected;
+
+  /// XMPP: connecting.
+  ///
+  /// In en, this message translates to:
+  /// **'connecting'**
+  String get xmppConnecting;
+
+  /// App mode: confirm switching to a client-only mode for a network.
+  ///
+  /// In en, this message translates to:
+  /// **'Use Conest as a {network} client?'**
+  String appModeClientOnlyTitle(String network);
+
+  /// Onboarding: use the app as an XMPP client.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as an XMPP client instead'**
+  String get onbXmppInstead;
+
+  /// XMPP-only mode: sign in heading.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in to your XMPP account'**
+  String get xmppSignIn;
+
+  /// XMPP-only mode: no chats yet.
+  ///
+  /// In en, this message translates to:
+  /// **'No XMPP chats yet'**
+  String get xmppNoChats;
+
+  /// XMPP: chat list label for a request.
+  ///
+  /// In en, this message translates to:
+  /// **'Chat request'**
+  String get xmppRequestShort;
+
+  /// Presentation text for message route information: the Telegram bot carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by Telegram bots, still end-to-end encrypted by Conest; Telegram sees both bots and when.'**
+  String get routeTelegramDescription;
+
+  /// Settings: subtitle of the Telegram bot carrier switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Carry messages through a Telegram bot you made'**
+  String get telegramCarrierSubtitle;
+
+  /// Settings: change the Telegram bot of the carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Change bot'**
+  String get telegramChangeBot;
+
+  /// Settings: how to set up the Telegram bot carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Make a bot with @BotFather, switch on bot-to-bot messaging for it, and paste its token here. Use a bot only Conest reads. Your contact does the same.'**
+  String get telegramBotHelp;
+
+  /// Settings: field label for the Telegram bot token.
+  ///
+  /// In en, this message translates to:
+  /// **'Bot token'**
+  String get telegramBotTokenField;
+
+  /// Settings: title of the Telegram client section.
+  ///
+  /// In en, this message translates to:
+  /// **'Telegram client'**
+  String get telegramClientTitle;
+
+  /// Settings: subtitle of the Telegram client switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Use your own Telegram account in Conest (unofficial client)'**
+  String get telegramClientSubtitle;
+
+  /// Settings: notice that Conest is not the official Telegram app.
+  ///
+  /// In en, this message translates to:
+  /// **'Conest is an unofficial Telegram client. Telegram\'s rules apply to your account.'**
+  String get telegramUnofficial;
+
+  /// Telegram sign-in: phone number field.
+  ///
+  /// In en, this message translates to:
+  /// **'Phone number (+…)'**
+  String get telegramPhoneField;
+
+  /// Telegram sign-in: login code field.
+  ///
+  /// In en, this message translates to:
+  /// **'Login code'**
+  String get telegramCodeField;
+
+  /// Telegram sign-in: two-step password field.
+  ///
+  /// In en, this message translates to:
+  /// **'Two-step password'**
+  String get telegramPasswordField;
+
+  /// Telegram sign-in: use a QR code.
+  ///
+  /// In en, this message translates to:
+  /// **'Sign in with a QR code instead'**
+  String get telegramQrLogin;
+
+  /// Telegram sign-in: how to use the QR code.
+  ///
+  /// In en, this message translates to:
+  /// **'On your phone open Telegram, Settings, Devices, Link Desktop Device, and scan this code.'**
+  String get telegramQrHint;
+
+  /// Telegram sign-in: the number has no account.
+  ///
+  /// In en, this message translates to:
+  /// **'This number has no Telegram account. Conest only signs in; make the account in the official Telegram app first.'**
+  String get telegramNoAccount;
+
+  /// Settings: log out of Telegram and remove its data here.
+  ///
+  /// In en, this message translates to:
+  /// **'Log out and remove'**
+  String get telegramLogOut;
+
+  /// Settings: who is signed in to Telegram.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in as {name}'**
+  String telegramSignedInAs(String name);
+
+  /// Settings: Telegram is starting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting…'**
+  String get telegramConnecting;
+
+  /// Settings: open the Telegram mod settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod settings'**
+  String get telegramMods;
+
+  /// Telegram client: no chats yet.
+  ///
+  /// In en, this message translates to:
+  /// **'No Telegram chats yet'**
+  String get telegramNoChats;
+
+  /// Telegram client: Saved Messages chat.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved Messages'**
+  String get telegramSaved;
+
+  /// Telegram client: label on sponsored messages in channels.
+  ///
+  /// In en, this message translates to:
+  /// **'Sponsored'**
+  String get telegramSponsored;
+
+  /// Telegram client: a message the sender deleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Deleted by sender'**
+  String get telegramDeletedBySender;
+
+  /// Telegram client: the main chat list tab.
+  ///
+  /// In en, this message translates to:
+  /// **'All chats'**
+  String get telegramAllChats;
+
+  /// Telegram client: the archive tab.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive'**
+  String get telegramArchive;
+
+  /// Telegram client: channels cannot be written to.
+  ///
+  /// In en, this message translates to:
+  /// **'Only admins can post here'**
+  String get telegramChannelReadOnly;
+
+  /// Telegram client: send without a sound.
+  ///
+  /// In en, this message translates to:
+  /// **'Send silently'**
+  String get telegramSendSilently;
+
+  /// Telegram client: send later.
+  ///
+  /// In en, this message translates to:
+  /// **'Send later…'**
+  String get telegramSchedule;
+
+  /// Telegram client: translate a message.
+  ///
+  /// In en, this message translates to:
+  /// **'Translate'**
+  String get telegramTranslate;
+
+  /// Telegram client: save the loaded chat to a file.
+  ///
+  /// In en, this message translates to:
+  /// **'Export loaded messages'**
+  String get telegramExport;
+
+  /// Telegram client: delete a message for everyone.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete for everyone'**
+  String get telegramDeleteForAll;
+
+  /// Telegram client: delete a message only here.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete for me'**
+  String get telegramDeleteForMe;
+
+  /// Telegram client: download a file.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get telegramDownload;
+
+  /// Telegram client: open a sponsored link.
+  ///
+  /// In en, this message translates to:
+  /// **'Open link'**
+  String get telegramOpenSponsored;
+
+  /// Mod settings: words that hide messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide messages containing these words (one per line)'**
+  String get telegramHiddenWords;
+
+  /// Mod settings: notice for deleted messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Show a notice when someone deletes a message'**
+  String get telegramDeletedNoticeSwitch;
+
+  /// Mod settings: what the notice does and does not keep.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the notice stays. The deleted content is not kept.'**
+  String get telegramDeletedNoticeNote;
+
+  /// Mod settings: translation language code.
+  ///
+  /// In en, this message translates to:
+  /// **'Translate into (language code, empty for the app language)'**
+  String get telegramTranslateTo;
+
+  /// Mod settings: plugins section.
+  ///
+  /// In en, this message translates to:
+  /// **'Plugins'**
+  String get telegramPlugins;
+
+  /// Mod settings: what plugins are.
+  ///
+  /// In en, this message translates to:
+  /// **'Plugins are small rule files. They can only hide messages, change the text you send and add commands, and only what they declare.'**
+  String get telegramPluginHelp;
+
+  /// Mod settings: install a plugin from pasted text.
+  ///
+  /// In en, this message translates to:
+  /// **'Install a plugin (paste its text)'**
+  String get telegramPluginInstall;
+
+  /// Mod settings: pasted plugin is not valid.
+  ///
+  /// In en, this message translates to:
+  /// **'That is not a valid plugin, or too many are installed.'**
+  String get telegramPluginBad;
+
+  /// Mod settings: what a plugin may do.
+  ///
+  /// In en, this message translates to:
+  /// **'May: {permissions}'**
+  String telegramPluginPermissions(String permissions);
+
+  /// Plugin permission name.
+  ///
+  /// In en, this message translates to:
+  /// **'hide messages'**
+  String get telegramPermReadMessages;
+
+  /// Plugin permission name.
+  ///
+  /// In en, this message translates to:
+  /// **'change what you send'**
+  String get telegramPermEditOutgoing;
+
+  /// Plugin permission name.
+  ///
+  /// In en, this message translates to:
+  /// **'add commands'**
+  String get telegramPermCommands;
+
+  /// Telegram client: active downloads.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloads'**
+  String get telegramDownloads;
+
+  /// Telegram client: load older messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Load older messages'**
+  String get telegramLoadOlder;
+
+  /// Onboarding: use the app as a Telegram client instead.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as a Telegram client instead'**
+  String get onbTelegramInstead;
+
+  /// Presentation text for message route information: the Discord carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Carried by Discord bots, still end-to-end encrypted by Conest; Discord sees both bots and when.'**
+  String get routeDiscordDescription;
+
+  /// Settings: subtitle of the Discord bot carrier switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Carry messages through a Discord bot you made'**
+  String get discordCarrierSubtitle;
+
+  /// Settings: how to set up the Discord bot carrier.
+  ///
+  /// In en, this message translates to:
+  /// **'Make a bot in the Discord developer portal, add it to a private server you share with your contacts\' bots, and paste its token and that channel\'s id. Use a bot only Conest reads.'**
+  String get discordBotHelp;
+
+  /// Settings: Discord bot token field.
+  ///
+  /// In en, this message translates to:
+  /// **'Bot token'**
+  String get discordBotTokenField;
+
+  /// Settings: Discord channel id field.
+  ///
+  /// In en, this message translates to:
+  /// **'Channel id'**
+  String get discordChannelField;
+
+  /// Settings: change the Discord bot.
+  ///
+  /// In en, this message translates to:
+  /// **'Change bot'**
+  String get discordChangeBot;
+
+  /// Settings: Discord client section title.
+  ///
+  /// In en, this message translates to:
+  /// **'Discord client (against Discord\'s terms)'**
+  String get discordClientTitle;
+
+  /// Settings: Discord client switch subtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Use your own Discord account in Conest, as Vencord and Vesktop do'**
+  String get discordClientSubtitle;
+
+  /// Discord client warning dialog title.
+  ///
+  /// In en, this message translates to:
+  /// **'This can get your account banned'**
+  String get discordWarningTitle;
+
+  /// Discord client warning dialog text.
+  ///
+  /// In en, this message translates to:
+  /// **'Using your account token in another app is against Discord\'s terms, and Discord can ban the account. Conest only acts when you do: it reads what you open and sends only what you send. It does not use this token for anything else, and the Conest carrier never uses it.'**
+  String get discordWarningBody;
+
+  /// Discord client warning: accept button.
+  ///
+  /// In en, this message translates to:
+  /// **'I understand, continue'**
+  String get discordWarningAccept;
+
+  /// Discord client: account token field.
+  ///
+  /// In en, this message translates to:
+  /// **'Account token'**
+  String get discordAccountTokenField;
+
+  /// Discord client: how to get the token.
+  ///
+  /// In en, this message translates to:
+  /// **'Find it in Discord\'s developer tools in a browser (Network tab, the Authorization header). Never share it.'**
+  String get discordTokenHelp;
+
+  /// Discord client: signed in.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed in as {name}'**
+  String discordSignedInAs(String name);
+
+  /// Discord client: the direct messages section.
+  ///
+  /// In en, this message translates to:
+  /// **'Direct messages'**
+  String get discordDirectMessages;
+
+  /// Discord client: nothing to show.
+  ///
+  /// In en, this message translates to:
+  /// **'No Discord chats yet'**
+  String get discordNoChats;
+
+  /// Discord client: the servers section.
+  ///
+  /// In en, this message translates to:
+  /// **'Servers'**
+  String get discordServers;
+
+  /// Discord client: load older messages.
+  ///
+  /// In en, this message translates to:
+  /// **'Load older messages'**
+  String get discordLoadOlder;
+
+  /// Onboarding: use the app as a Discord client instead.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as a Discord client instead'**
+  String get discordOnbInstead;
+
+  /// Telegram bridge: relay Saved Messages to own devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay Saved Messages to my other devices'**
+  String get telegramRelaySaved;
+
+  /// Telegram bridge: relay a chat to own devices.
+  ///
+  /// In en, this message translates to:
+  /// **'Relay this chat to my other devices'**
+  String get telegramRelayChat;
+
+  /// Telegram bridge: what is and is not relayed.
+  ///
+  /// In en, this message translates to:
+  /// **'Only message text goes, end-to-end encrypted between your devices. Your Telegram login never leaves this device.'**
+  String get telegramRelayNote;
+
+  /// Telegram bridge: label for chats relayed from another device.
+  ///
+  /// In en, this message translates to:
+  /// **'Telegram, via your other device'**
+  String get telegramViaDevice;
+
+  /// Telegram bridge: relayed chats cannot be answered here.
+  ///
+  /// In en, this message translates to:
+  /// **'Read only here. Answer in Telegram on the device that has it.'**
+  String get telegramBridgeReadOnly;
+
+  /// Telegram plugin: ask before installing.
+  ///
+  /// In en, this message translates to:
+  /// **'Install {name}?'**
+  String telegramPluginConfirmTitle(String name);
+
+  /// Telegram plugin: it asks for no permissions.
+  ///
+  /// In en, this message translates to:
+  /// **'nothing (it can do nothing)'**
+  String get telegramPluginNoPermissions;
+
+  /// Telegram plugin: confirm install button.
+  ///
+  /// In en, this message translates to:
+  /// **'Install'**
+  String get telegramPluginInstallButton;
+
+  /// XMPP: an edit of an encrypted message was ignored.
+  ///
+  /// In en, this message translates to:
+  /// **'An edit of this message was not applied: it could not be checked.'**
+  String get xmppEditNotApplied;
 }
 
 class _AppLocalizationsDelegate

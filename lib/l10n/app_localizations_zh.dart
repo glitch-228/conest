@@ -5499,4 +5499,492 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get notifyAllMessages => '所有消息都通知';
+
+  @override
+  String get xmppEncOmemo2Unverified => '已加密，未验证 (OMEMO)';
+
+  @override
+  String get xmppTrustPending => '新设备，未确认';
+
+  @override
+  String get xmppUnconfirmedMsg => '来自你尚未确认的新设备。';
+
+  @override
+  String get xmppEncOmemo2 => '已加密（OMEMO）';
+
+  @override
+  String get xmppEncLegacy => '旧版 OMEMO（尚未审查）';
+
+  @override
+  String get xmppEncAuto => '联系人支持时加密';
+
+  @override
+  String get xmppEncRequired => '始终加密';
+
+  @override
+  String get xmppEncryptionMenu => '加密与密钥';
+
+  @override
+  String get xmppEncryptionTitle => '加密';
+
+  @override
+  String get xmppEncryptionAuto => '联系人支持时';
+
+  @override
+  String get xmppEncryptionOn => '始终（否则不发送）';
+
+  @override
+  String get xmppEncryptionOff => '从不';
+
+  @override
+  String get xmppKeysTitle => '加密密钥';
+
+  @override
+  String get xmppKeysYours => '你的密钥';
+
+  @override
+  String get xmppKeysYoursHint => '与联系人当面或通过可信通话核对此指纹，或让对方扫描二维码。';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return '$name 的设备';
+  }
+
+  @override
+  String get xmppKeysNone => '未找到该联系人的 OMEMO 设备。';
+
+  @override
+  String get xmppTrustBlind => '未验证';
+
+  @override
+  String get xmppTrustVerified => '已验证';
+
+  @override
+  String get xmppTrustRefused => '已拒绝';
+
+  @override
+  String get xmppTrustVerify => '标记为已验证';
+
+  @override
+  String get xmppTrustRefuse => '拒绝此设备';
+
+  @override
+  String get xmppTrustAllow => '重新允许';
+
+  @override
+  String get xmppKeysScan => '扫描对方二维码';
+
+  @override
+  String get xmppKeysRefresh => '检查设备';
+
+  @override
+  String get xmppKeysForget => '忘记此设备的密钥';
+
+  @override
+  String get xmppKeysChanged => '其密钥已更改：在你忘记旧密钥前不会向其发送任何内容。';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return '已验证 $count 台设备。';
+  }
+
+  @override
+  String get xmppKeysScanMismatch => '二维码与该联系人的密钥不符。请勿信任。';
+
+  @override
+  String get xmppUnreadable => '无法解密此消息。';
+
+  @override
+  String get xmppUntrustedMsg => '来自你拒绝的设备。';
+
+  @override
+  String get xmppLegacySwitch => '旧版 OMEMO（实验性）';
+
+  @override
+  String get xmppLegacyHint =>
+      '与 Conversations、Dino、Gajim 等旧版应用加密聊天。尚未审查，因此这类消息不会标记为已加密。';
+
+  @override
+  String get routeXmppDescription =>
+      '由 XMPP 服务器传送，仍由 Conest 端到端加密；服务器能看到双方账号和时间。';
+
+  @override
+  String get xmppCarrierSubtitle => '通过 XMPP（Jabber）账号传送消息';
+
+  @override
+  String get xmppCreatedAccount => '由 Conest 创建的账号';
+
+  @override
+  String get xmppOwnAccount => '你自己的账号';
+
+  @override
+  String get xmppChangeAccount => '更换账号';
+
+  @override
+  String get xmppServerField => 'XMPP 服务器（留空：此处第一个响应的服务器）';
+
+  @override
+  String get xmppUseOwnAccount => '使用我自己的 XMPP 账号';
+
+  @override
+  String get xmppOwnAccountNote => 'Conest 以额外设备身份登录；你的其他 XMPP 应用看不到它的消息。';
+
+  @override
+  String get xmppAddressField => 'XMPP 地址（名称@服务器）';
+
+  @override
+  String get xmppPasswordField => '密码';
+
+  @override
+  String get xmppRetracted => '消息已撤回';
+
+  @override
+  String get xmppFile => '文件';
+
+  @override
+  String get xmppNewChat => '新的 XMPP 聊天';
+
+  @override
+  String get xmppNewChatAddress => '地址或 xmpp: 链接';
+
+  @override
+  String get xmppGroupChat => '群聊';
+
+  @override
+  String get xmppNickname => '你的昵称';
+
+  @override
+  String get xmppOpenChat => '打开';
+
+  @override
+  String get xmppMetadataTitle => '此文件中仍保留部分信息';
+
+  @override
+  String get xmppMetadataBody => 'Conest 无法移除此文件中的全部隐藏信息（如位置或设备）。仍要发送吗？';
+
+  @override
+  String get xmppSendAnyway => '仍然发送';
+
+  @override
+  String get xmppReply => '回复';
+
+  @override
+  String get xmppCopy => '复制';
+
+  @override
+  String get xmppEdit => '编辑';
+
+  @override
+  String get xmppRetract => '撤回';
+
+  @override
+  String get xmppChatGone => '此聊天已不存在。';
+
+  @override
+  String get xmppNotEncrypted => '未加密';
+
+  @override
+  String get xmppLeaveRoom => '退出群聊';
+
+  @override
+  String get xmppDeleteChat => '删除聊天';
+
+  @override
+  String get xmppBlock => '屏蔽';
+
+  @override
+  String get xmppAccept => '接受';
+
+  @override
+  String get xmppRequest => '不在你联系人中的人给你发了消息。接受之后才会发送回复和已读标记。';
+
+  @override
+  String get xmppRoomInvitation => '你被邀请加入此群聊。要加入吗？';
+
+  @override
+  String get xmppAttach => '附加文件';
+
+  @override
+  String get xmppMessageHint => '消息';
+
+  @override
+  String get xmppEdited => '已编辑';
+
+  @override
+  String get xmppChats => 'XMPP 聊天';
+
+  @override
+  String get xmppChatsSubtitle => '在 Conest 聊天旁与任何 XMPP（Jabber）用户聊天';
+
+  @override
+  String get xmppChatsOtherAccount => '使用 Conest 传送消息所用账号之外的另一个账号';
+
+  @override
+  String get xmppConnected => '已连接';
+
+  @override
+  String get xmppConnecting => '正在连接';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return '将 Conest 用作 $network 客户端？';
+  }
+
+  @override
+  String get onbXmppInstead => '改为用作 XMPP 客户端';
+
+  @override
+  String get xmppSignIn => '登录你的 XMPP 账号';
+
+  @override
+  String get xmppNoChats => '还没有 XMPP 聊天';
+
+  @override
+  String get xmppRequestShort => '聊天请求';
+
+  @override
+  String get routeTelegramDescription =>
+      '通过 Telegram 机器人传送，仍由 Conest 端到端加密；Telegram 能看到两个机器人以及时间。';
+
+  @override
+  String get telegramCarrierSubtitle => '通过你创建的 Telegram 机器人传送消息';
+
+  @override
+  String get telegramChangeBot => '更换机器人';
+
+  @override
+  String get telegramBotHelp =>
+      '用 @BotFather 创建一个机器人，为它开启机器人之间的消息功能，然后在此粘贴令牌。该机器人只供 Conest 使用。你的联系人也这样做。';
+
+  @override
+  String get telegramBotTokenField => '机器人令牌';
+
+  @override
+  String get telegramClientTitle => 'Telegram 客户端';
+
+  @override
+  String get telegramClientSubtitle => '在 Conest 中使用你自己的 Telegram 账号（非官方客户端）';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest 是非官方的 Telegram 客户端。你的账号仍受 Telegram 规则约束。';
+
+  @override
+  String get telegramPhoneField => '手机号码 (+…)';
+
+  @override
+  String get telegramCodeField => '登录验证码';
+
+  @override
+  String get telegramPasswordField => '两步验证密码';
+
+  @override
+  String get telegramQrLogin => '改用二维码登录';
+
+  @override
+  String get telegramQrHint => '在手机上打开 Telegram，进入设置、设备、关联桌面设备，然后扫描此二维码。';
+
+  @override
+  String get telegramNoAccount =>
+      '该号码没有 Telegram 账号。Conest 只负责登录，请先在官方 Telegram 应用中注册。';
+
+  @override
+  String get telegramLogOut => '退出并移除';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return '已登录为 $name';
+  }
+
+  @override
+  String get telegramConnecting => '正在连接…';
+
+  @override
+  String get telegramMods => '模组设置';
+
+  @override
+  String get telegramNoChats => '还没有 Telegram 聊天';
+
+  @override
+  String get telegramSaved => '收藏的消息';
+
+  @override
+  String get telegramSponsored => '赞助内容';
+
+  @override
+  String get telegramDeletedBySender => '发送者已删除';
+
+  @override
+  String get telegramAllChats => '全部聊天';
+
+  @override
+  String get telegramArchive => '归档';
+
+  @override
+  String get telegramChannelReadOnly => '只有管理员可以在此发言';
+
+  @override
+  String get telegramSendSilently => '静默发送';
+
+  @override
+  String get telegramSchedule => '稍后发送…';
+
+  @override
+  String get telegramTranslate => '翻译';
+
+  @override
+  String get telegramExport => '导出已加载的消息';
+
+  @override
+  String get telegramDeleteForAll => '为所有人删除';
+
+  @override
+  String get telegramDeleteForMe => '仅为我删除';
+
+  @override
+  String get telegramDownload => '下载';
+
+  @override
+  String get telegramOpenSponsored => '打开链接';
+
+  @override
+  String get telegramHiddenWords => '隐藏包含这些词的消息（每行一个）';
+
+  @override
+  String get telegramDeletedNoticeSwitch => '有人删除消息时显示提示';
+
+  @override
+  String get telegramDeletedNoticeNote => '只保留提示，已删除的内容不会保留。';
+
+  @override
+  String get telegramTranslateTo => '翻译为（语言代码，留空则用应用语言）';
+
+  @override
+  String get telegramPlugins => '插件';
+
+  @override
+  String get telegramPluginHelp => '插件是小型规则文件，只能隐藏消息、修改你发送的文本和添加命令，且仅限其声明的权限。';
+
+  @override
+  String get telegramPluginInstall => '安装插件（粘贴其文本）';
+
+  @override
+  String get telegramPluginBad => '这不是有效的插件，或已安装过多。';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return '权限：$permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => '隐藏消息';
+
+  @override
+  String get telegramPermEditOutgoing => '修改你发送的内容';
+
+  @override
+  String get telegramPermCommands => '添加命令';
+
+  @override
+  String get telegramDownloads => '下载';
+
+  @override
+  String get telegramLoadOlder => '加载更早的消息';
+
+  @override
+  String get onbTelegramInstead => '改用作 Telegram 客户端';
+
+  @override
+  String get routeDiscordDescription =>
+      '通过 Discord 机器人传送，仍由 Conest 端到端加密；Discord 能看到两个机器人以及时间。';
+
+  @override
+  String get discordCarrierSubtitle => '通过你创建的 Discord 机器人传送消息';
+
+  @override
+  String get discordBotHelp =>
+      '在 Discord 开发者门户创建机器人，把它加入你与联系人的机器人共用的私人服务器，然后粘贴令牌和该频道的 ID。该机器人只供 Conest 使用。';
+
+  @override
+  String get discordBotTokenField => '机器人令牌';
+
+  @override
+  String get discordChannelField => '频道 ID';
+
+  @override
+  String get discordChangeBot => '更换机器人';
+
+  @override
+  String get discordClientTitle => 'Discord 客户端（违反 Discord 条款）';
+
+  @override
+  String get discordClientSubtitle =>
+      '在 Conest 中使用你自己的 Discord 账号，类似 Vencord 和 Vesktop';
+
+  @override
+  String get discordWarningTitle => '这可能导致你的账号被封禁';
+
+  @override
+  String get discordWarningBody =>
+      '在其他应用中使用账号令牌违反 Discord 条款，账号可能被封禁。Conest 只在你操作时才行动：只读取你打开的内容，只发送你发出的内容。此令牌不会用于其他用途，Conest 载体也绝不使用它。';
+
+  @override
+  String get discordWarningAccept => '我明白，继续';
+
+  @override
+  String get discordAccountTokenField => '账号令牌';
+
+  @override
+  String get discordTokenHelp =>
+      '可在浏览器的 Discord 开发者工具（Network 标签，Authorization 请求头）中找到。切勿分享。';
+
+  @override
+  String discordSignedInAs(String name) {
+    return '已登录为 $name';
+  }
+
+  @override
+  String get discordDirectMessages => '私信';
+
+  @override
+  String get discordNoChats => '还没有 Discord 聊天';
+
+  @override
+  String get discordServers => '服务器';
+
+  @override
+  String get discordLoadOlder => '加载更早的消息';
+
+  @override
+  String get discordOnbInstead => '改用作 Discord 客户端';
+
+  @override
+  String get telegramRelaySaved => '把收藏的消息转发到我的其他设备';
+
+  @override
+  String get telegramRelayChat => '把此聊天转发到我的其他设备';
+
+  @override
+  String get telegramRelayNote =>
+      '只转发消息文本，并在你的设备之间端到端加密。你的 Telegram 登录信息不会离开此设备。';
+
+  @override
+  String get telegramViaDevice => 'Telegram（经由你的其他设备）';
+
+  @override
+  String get telegramBridgeReadOnly => '此处只读。请在装有 Telegram 的设备上回复。';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return '安装 $name？';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => '无（它什么也做不了）';
+
+  @override
+  String get telegramPluginInstallButton => '安装';
+
+  @override
+  String get xmppEditNotApplied => '此消息的修改未应用：无法验证。';
 }

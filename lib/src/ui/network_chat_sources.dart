@@ -6,12 +6,18 @@ import 'package:flutter/material.dart';
 import '../bitchat_chats.dart';
 import '../messenger_controller.dart';
 import '../conest_theme.dart';
+import '../discord/discord_client.dart';
 import '../models.dart';
+import '../telegram/telegram_client.dart';
+import '../telegram/telegram_models.dart';
 import 'bitchat_chats_screen.dart';
 import 'delta_chats_screen.dart';
 import 'matrix_room_screen.dart';
 import 'nostr_chats_screen.dart';
 import 'radio_chats_screen.dart';
+import 'discord_chats_screen.dart';
+import 'telegram_chats_screen.dart';
+import 'xmpp_chats_screen.dart';
 import '../radio_chats.dart';
 
 /// A chat on another network, as the chat list shows it.
@@ -76,6 +82,10 @@ List<NetworkChatSource> networkChatSources(
   MatrixChatSource(controller, palette),
   NostrChatSource(controller),
   DeltaChatSource(controller),
+  XmppChatSource(controller),
+  TelegramChatSource(controller),
+  DiscordChatSource(controller),
+  TelegramBridgeChatSource(controller),
   BitchatChatSource(controller),
   RadioChatSource(
     'meshcore',
@@ -200,6 +210,153 @@ class DeltaChatSource extends NetworkChatSource {
           open: (context) => openDeltaChat(context, controller, chat.key),
         ),
   ];
+}
+
+/// XMPP chats: people, requests and group chats (M51).
+class XmppChatSource extends NetworkChatSource {
+  const XmppChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'xmpp';
+
+  @override
+  String get label => 'XMPP';
+
+  @override
+  bool get active => controller.xmppChatClient != null;
+
+  @override
+  List<NetworkChat> chats([BuildContext? context]) => [
+    if (active)
+      for (final chat in controller.xmppChats.chats.values)
+        NetworkChat(
+          network: id,
+          id: chat.jid,
+          title: xmppChatTitle(controller, chat),
+          preview: xmppPreview(context, chat.messages.lastOrNull),
+          at: chat.messages.lastOrNull?.at.toLocal(),
+          unread: chat.unread,
+          isGroup: chat.room,
+          searchText: () =>
+              chat.messages.map((message) => message.text).join('\n'),
+          open: (context) => openXmppChat(context, controller, chat.jid),
+        ),
+  ];
+}
+
+/// Telegram chats relayed from another of the account's devices (M30).
+class TelegramBridgeChatSource extends NetworkChatSource {
+  const TelegramBridgeChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'telegram-bridge';
+
+  @override
+  String get label => 'Telegram';
+
+  @override
+  bool get active => controller.telegramBridgeInbox.chats.isNotEmpty;
+
+  @override
+  List<NetworkChat> chats([BuildContext? context]) => [
+    for (final chat in controller.telegramBridgeInbox.chats.values)
+      NetworkChat(
+        network: id,
+        id: chat.id,
+        title: chat.saved ? l10nOf(context).telegramSaved : chat.title,
+        preview: chat.messages.lastOrNull?.text ?? '',
+        at: chat.messages.lastOrNull?.at.toLocal(),
+        unread: chat.unread,
+        searchText: () => chat.messages.map((m) => m.text).join('\n'),
+        open: (context) => unawaited(
+          Navigator.of(context).push<void>(
+            MaterialPageRoute(
+              builder: (_) => TelegramBridgedChatScreen(
+                controller: controller,
+                chatId: chat.id,
+              ),
+            ),
+          ),
+        ),
+      ),
+  ];
+}
+
+/// The user's Discord direct messages (M31), when the opt-in client is on.
+class DiscordChatSource extends NetworkChatSource {
+  const DiscordChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'discord';
+
+  @override
+  String get label => 'Discord';
+
+  @override
+  bool get active => controller.discord.client?.signedIn ?? false;
+
+  @override
+  List<NetworkChat> chats([BuildContext? context]) {
+    final client = controller.discord.client;
+    if (client == null || !active) return const [];
+    return [
+      for (final channel in client.dms)
+        NetworkChat(
+          network: id,
+          id: channel.id,
+          title: discordChannelTitle(channel),
+          preview: client.messagesOf(channel.id).lastOrNull?.text ?? '',
+          isGroup: channel.kind == DcChannelKind.groupDm,
+          open: (context) => openDiscordChannel(context, controller, channel),
+        ),
+    ];
+  }
+}
+
+/// The user's Telegram chats (M30), when the client is signed in.
+class TelegramChatSource extends NetworkChatSource {
+  const TelegramChatSource(this.controller);
+
+  final MessengerController controller;
+
+  @override
+  String get id => 'telegram';
+
+  @override
+  String get label => 'Telegram';
+
+  @override
+  bool get active => controller.telegram.client?.auth == TgAuth.ready;
+
+  @override
+  List<NetworkChat> chats([BuildContext? context]) {
+    final client = controller.telegram.client;
+    if (client == null || !active) return const [];
+    return [
+      for (final chat in client.chatList())
+        NetworkChat(
+          network: id,
+          id: '${chat.id}',
+          title: telegramChatTitle(context, chat),
+          preview: telegramPreview(context, chat.lastMessage),
+          at: chat.lastMessage?.date.toLocal(),
+          unread: chat.unread,
+          isGroup:
+              chat.kind == TgChatKind.group || chat.kind == TgChatKind.channel,
+          searchText: () => client
+              .messagesOf(chat.id)
+              .map((message) => message.content.text)
+              .join('\n'),
+          open: (context) => openTelegramChat(context, controller, chat.id),
+        ),
+    ];
+  }
 }
 
 /// Matrix rooms and DMs from the full Matrix client.

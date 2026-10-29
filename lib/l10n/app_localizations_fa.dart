@@ -5747,4 +5747,516 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get notifyAllMessages => 'برای همهٔ پیام‌ها اعلان بده';
+
+  @override
+  String get xmppEncOmemo2Unverified => 'رمزنگاری‌شده، تأییدنشده (OMEMO)';
+
+  @override
+  String get xmppTrustPending => 'دستگاه جدید، تأییدنشده';
+
+  @override
+  String get xmppUnconfirmedMsg => 'از دستگاه جدیدی که تأیید نکرده‌اید.';
+
+  @override
+  String get xmppEncOmemo2 => 'رمزگذاری‌شده (OMEMO)';
+
+  @override
+  String get xmppEncLegacy => 'OMEMO قدیمی (هنوز بررسی نشده)';
+
+  @override
+  String get xmppEncAuto => 'در صورت پشتیبانی مخاطب رمزگذاری می‌شود';
+
+  @override
+  String get xmppEncRequired => 'همیشه رمزگذاری‌شده';
+
+  @override
+  String get xmppEncryptionMenu => 'رمزگذاری و کلیدها';
+
+  @override
+  String get xmppEncryptionTitle => 'رمزگذاری';
+
+  @override
+  String get xmppEncryptionAuto => 'وقتی مخاطب پشتیبانی می‌کند';
+
+  @override
+  String get xmppEncryptionOn => 'همیشه (در غیر این صورت چیزی ارسال نشود)';
+
+  @override
+  String get xmppEncryptionOff => 'هرگز';
+
+  @override
+  String get xmppKeysTitle => 'کلیدهای رمزگذاری';
+
+  @override
+  String get xmppKeysYours => 'کلید شما';
+
+  @override
+  String get xmppKeysYoursHint =>
+      'این اثرانگشت را حضوری یا در تماسی مطمئن با مخاطب مقایسه کنید، یا بگذارید کد را اسکن کند.';
+
+  @override
+  String xmppKeysTheirs(String name) {
+    return 'دستگاه‌های $name';
+  }
+
+  @override
+  String get xmppKeysNone => 'هیچ دستگاه OMEMO برای این مخاطب پیدا نشد.';
+
+  @override
+  String get xmppTrustBlind => 'تأیید نشده';
+
+  @override
+  String get xmppTrustVerified => 'تأیید شده';
+
+  @override
+  String get xmppTrustRefused => 'رد شده';
+
+  @override
+  String get xmppTrustVerify => 'علامت‌گذاری به‌عنوان تأییدشده';
+
+  @override
+  String get xmppTrustRefuse => 'رد این دستگاه';
+
+  @override
+  String get xmppTrustAllow => 'دوباره مجاز کن';
+
+  @override
+  String get xmppKeysScan => 'اسکن کد آن‌ها';
+
+  @override
+  String get xmppKeysRefresh => 'بررسی دستگاه‌ها';
+
+  @override
+  String get xmppKeysForget => 'فراموش‌کردن کلید این دستگاه';
+
+  @override
+  String get xmppKeysChanged =>
+      'کلید آن تغییر کرده است: تا وقتی کلید قدیمی را فراموش نکنید چیزی به آن ارسال نمی‌شود.';
+
+  @override
+  String xmppKeysScanMatch(String count) {
+    return '$count دستگاه تأیید شد.';
+  }
+
+  @override
+  String get xmppKeysScanMismatch =>
+      'کد با کلیدهای این مخاطب مطابقت ندارد. به آن‌ها اعتماد نکنید.';
+
+  @override
+  String get xmppUnreadable => 'رمزگشایی این پیام ممکن نبود.';
+
+  @override
+  String get xmppUntrustedMsg => 'از دستگاهی که رد کرده‌اید.';
+
+  @override
+  String get xmppLegacySwitch => 'OMEMO قدیمی (آزمایشی)';
+
+  @override
+  String get xmppLegacyHint =>
+      'گفتگوی رمزگذاری‌شده با برنامه‌های قدیمی‌تر مانند Conversations، Dino و Gajim. هنوز بررسی نشده، پس این پیام‌ها رمزگذاری‌شده علامت نمی‌خورند.';
+
+  @override
+  String get routeXmppDescription =>
+      'خادم‌های XMPP آن را می‌برند و همچنان با Conest سرتاسری رمزگذاری شده است؛ خادم‌ها هر دو حساب و زمان را می‌بینند.';
+
+  @override
+  String get xmppCarrierSubtitle =>
+      'انتقال پیام‌ها از طریق یک حساب XMPP (Jabber)';
+
+  @override
+  String get xmppCreatedAccount => 'حسابی که Conest ساخته است';
+
+  @override
+  String get xmppOwnAccount => 'حساب خودتان';
+
+  @override
+  String get xmppChangeAccount => 'تغییر حساب';
+
+  @override
+  String get xmppServerField =>
+      'خادم XMPP (خالی: نخستین خادمی که اینجا پاسخ می‌دهد)';
+
+  @override
+  String get xmppUseOwnAccount => 'استفاده از حساب XMPP خودم';
+
+  @override
+  String get xmppOwnAccountNote =>
+      'Conest به‌عنوان یک دستگاه اضافه وارد می‌شود؛ برنامه‌های دیگر XMPP شما پیام‌های آن را نمی‌بینند.';
+
+  @override
+  String get xmppAddressField => 'نشانی XMPP (نام@خادم)';
+
+  @override
+  String get xmppPasswordField => 'گذرواژه';
+
+  @override
+  String get xmppRetracted => 'پیام پس گرفته شد';
+
+  @override
+  String get xmppFile => 'فایل';
+
+  @override
+  String get xmppNewChat => 'گفتگوی XMPP تازه';
+
+  @override
+  String get xmppNewChatAddress => 'نشانی یا پیوند xmpp:';
+
+  @override
+  String get xmppGroupChat => 'گفتگوی گروهی';
+
+  @override
+  String get xmppNickname => 'نام مستعار شما';
+
+  @override
+  String get xmppOpenChat => 'باز کردن';
+
+  @override
+  String get xmppMetadataTitle => 'برخی جزئیات در این فایل می‌ماند';
+
+  @override
+  String get xmppMetadataBody =>
+      'Conest نتوانست همه جزئیات پنهان (مانند مکان یا دستگاه) را از این فایل پاک کند. با این حال بفرستید؟';
+
+  @override
+  String get xmppSendAnyway => 'به هر حال بفرست';
+
+  @override
+  String get xmppReply => 'پاسخ';
+
+  @override
+  String get xmppCopy => 'رونوشت';
+
+  @override
+  String get xmppEdit => 'ویرایش';
+
+  @override
+  String get xmppRetract => 'پس گرفتن';
+
+  @override
+  String get xmppChatGone => 'این گفتگو دیگر وجود ندارد.';
+
+  @override
+  String get xmppNotEncrypted => 'رمزگذاری نشده';
+
+  @override
+  String get xmppLeaveRoom => 'ترک گفتگوی گروهی';
+
+  @override
+  String get xmppDeleteChat => 'حذف گفتگو';
+
+  @override
+  String get xmppBlock => 'مسدود کردن';
+
+  @override
+  String get xmppAccept => 'پذیرفتن';
+
+  @override
+  String get xmppRequest =>
+      'کسی که در مخاطبان شما نیست پیام داده است. پاسخ و نشانگر خوانده‌شدن فقط پس از پذیرش فرستاده می‌شود.';
+
+  @override
+  String get xmppRoomInvitation =>
+      'به این گفتگوی گروهی دعوت شده‌اید. می‌پیوندید؟';
+
+  @override
+  String get xmppAttach => 'پیوست فایل';
+
+  @override
+  String get xmppMessageHint => 'پیام';
+
+  @override
+  String get xmppEdited => 'ویرایش‌شده';
+
+  @override
+  String get xmppChats => 'گفتگوهای XMPP';
+
+  @override
+  String get xmppChatsSubtitle =>
+      'با هر کسی در XMPP (Jabber) گفتگو کنید، کنار گفتگوهای Conest';
+
+  @override
+  String get xmppChatsOtherAccount =>
+      'استفاده از حسابی جز حسابی که Conest پیام‌ها را با آن می‌برد';
+
+  @override
+  String get xmppConnected => 'متصل';
+
+  @override
+  String get xmppConnecting => 'در حال اتصال';
+
+  @override
+  String appModeClientOnlyTitle(String network) {
+    return 'از Conest به‌عنوان کارخواه $network استفاده شود؟';
+  }
+
+  @override
+  String get onbXmppInstead => 'به‌جای آن به‌عنوان کارخواه XMPP استفاده کن';
+
+  @override
+  String get xmppSignIn => 'به حساب XMPP خود وارد شوید';
+
+  @override
+  String get xmppNoChats => 'هنوز گفتگوی XMPP نیست';
+
+  @override
+  String get xmppRequestShort => 'درخواست گفتگو';
+
+  @override
+  String get routeTelegramDescription =>
+      'از طریق ربات‌های تلگرام منتقل می‌شود و همچنان با رمزنگاری سرتاسری Conest است؛ تلگرام هر دو ربات و زمان را می‌بیند.';
+
+  @override
+  String get telegramCarrierSubtitle =>
+      'انتقال پیام‌ها از طریق رباتی در تلگرام که ساخته‌اید';
+
+  @override
+  String get telegramChangeBot => 'تغییر ربات';
+
+  @override
+  String get telegramBotHelp =>
+      'با @BotFather یک ربات بسازید، پیام‌رسانی بین رباتی را برایش روشن کنید و توکن آن را اینجا بچسبانید. رباتی را به کار ببرید که فقط Conest می‌خواند. مخاطب شما هم همین کار را می‌کند.';
+
+  @override
+  String get telegramBotTokenField => 'توکن ربات';
+
+  @override
+  String get telegramClientTitle => 'کلاینت تلگرام';
+
+  @override
+  String get telegramClientSubtitle =>
+      'استفاده از حساب تلگرام خود در Conest (کلاینت غیررسمی)';
+
+  @override
+  String get telegramUnofficial =>
+      'Conest یک کلاینت غیررسمی تلگرام است. قوانین تلگرام برای حساب شما اعمال می‌شود.';
+
+  @override
+  String get telegramPhoneField => 'شماره تلفن (+…)';
+
+  @override
+  String get telegramCodeField => 'کد ورود';
+
+  @override
+  String get telegramPasswordField => 'گذرواژه تأیید دومرحله‌ای';
+
+  @override
+  String get telegramQrLogin => 'ورود با کد QR';
+
+  @override
+  String get telegramQrHint =>
+      'در تلفن خود تلگرام را باز کنید، تنظیمات، دستگاه‌ها، اتصال دستگاه دسکتاپ و این کد را اسکن کنید.';
+
+  @override
+  String get telegramNoAccount =>
+      'این شماره حساب تلگرام ندارد. Conest فقط وارد می‌شود؛ ابتدا حساب را در برنامه رسمی تلگرام بسازید.';
+
+  @override
+  String get telegramLogOut => 'خروج و حذف';
+
+  @override
+  String telegramSignedInAs(String name) {
+    return 'وارد شده با نام $name';
+  }
+
+  @override
+  String get telegramConnecting => 'در حال اتصال…';
+
+  @override
+  String get telegramMods => 'تنظیمات افزونه‌ها';
+
+  @override
+  String get telegramNoChats => 'هنوز گفتگوی تلگرامی نیست';
+
+  @override
+  String get telegramSaved => 'پیام‌های ذخیره‌شده';
+
+  @override
+  String get telegramSponsored => 'حمایت‌شده';
+
+  @override
+  String get telegramDeletedBySender => 'توسط فرستنده حذف شد';
+
+  @override
+  String get telegramAllChats => 'همه گفتگوها';
+
+  @override
+  String get telegramArchive => 'بایگانی';
+
+  @override
+  String get telegramChannelReadOnly =>
+      'فقط مدیران می‌توانند اینجا پست بگذارند';
+
+  @override
+  String get telegramSendSilently => 'ارسال بی‌صدا';
+
+  @override
+  String get telegramSchedule => 'ارسال در زمان بعد…';
+
+  @override
+  String get telegramTranslate => 'ترجمه';
+
+  @override
+  String get telegramExport => 'صادر کردن پیام‌های بارگذاری‌شده';
+
+  @override
+  String get telegramDeleteForAll => 'حذف برای همه';
+
+  @override
+  String get telegramDeleteForMe => 'حذف برای من';
+
+  @override
+  String get telegramDownload => 'دانلود';
+
+  @override
+  String get telegramOpenSponsored => 'باز کردن پیوند';
+
+  @override
+  String get telegramHiddenWords =>
+      'پنهان کردن پیام‌های دارای این واژه‌ها (هر خط یکی)';
+
+  @override
+  String get telegramDeletedNoticeSwitch =>
+      'نمایش اعلان وقتی کسی پیامی را حذف می‌کند';
+
+  @override
+  String get telegramDeletedNoticeNote =>
+      'فقط اعلان می‌ماند. محتوای حذف‌شده نگه داشته نمی‌شود.';
+
+  @override
+  String get telegramTranslateTo => 'ترجمه به (کد زبان، خالی برای زبان برنامه)';
+
+  @override
+  String get telegramPlugins => 'افزونه‌ها';
+
+  @override
+  String get telegramPluginHelp =>
+      'افزونه‌ها فایل‌های قانون کوچکی هستند. فقط می‌توانند پیام‌ها را پنهان کنند، متن ارسالی را تغییر دهند و دستور اضافه کنند، آن هم فقط در حد مجوزهایشان.';
+
+  @override
+  String get telegramPluginInstall => 'نصب افزونه (متن آن را بچسبانید)';
+
+  @override
+  String get telegramPluginBad =>
+      'این افزونه معتبر نیست یا تعداد افزونه‌ها زیاد است.';
+
+  @override
+  String telegramPluginPermissions(String permissions) {
+    return 'مجاز: $permissions';
+  }
+
+  @override
+  String get telegramPermReadMessages => 'پنهان کردن پیام‌ها';
+
+  @override
+  String get telegramPermEditOutgoing => 'تغییر آنچه می‌فرستید';
+
+  @override
+  String get telegramPermCommands => 'افزودن دستورها';
+
+  @override
+  String get telegramDownloads => 'دانلودها';
+
+  @override
+  String get telegramLoadOlder => 'بارگذاری پیام‌های قدیمی‌تر';
+
+  @override
+  String get onbTelegramInstead => 'استفاده به‌عنوان کلاینت تلگرام';
+
+  @override
+  String get routeDiscordDescription =>
+      'از طریق ربات‌های دیسکورد منتقل می‌شود و همچنان با رمزنگاری سرتاسری Conest است؛ دیسکورد هر دو ربات و زمان را می‌بیند.';
+
+  @override
+  String get discordCarrierSubtitle =>
+      'انتقال پیام‌ها از طریق رباتی در دیسکورد که ساخته‌اید';
+
+  @override
+  String get discordBotHelp =>
+      'در پورتال توسعه‌دهندگان دیسکورد یک ربات بسازید، آن را به سروری خصوصی که با ربات مخاطبانتان مشترک است اضافه کنید و توکن و شناسه کانال را بچسبانید. رباتی را به کار ببرید که فقط Conest می‌خواند.';
+
+  @override
+  String get discordBotTokenField => 'توکن ربات';
+
+  @override
+  String get discordChannelField => 'شناسه کانال';
+
+  @override
+  String get discordChangeBot => 'تغییر ربات';
+
+  @override
+  String get discordClientTitle => 'کلاینت دیسکورد (برخلاف قوانین دیسکورد)';
+
+  @override
+  String get discordClientSubtitle =>
+      'استفاده از حساب دیسکورد خود در Conest مانند Vencord و Vesktop';
+
+  @override
+  String get discordWarningTitle => 'ممکن است حساب شما مسدود شود';
+
+  @override
+  String get discordWarningBody =>
+      'استفاده از توکن حساب در برنامه‌ای دیگر برخلاف قوانین دیسکورد است و ممکن است حساب مسدود شود. Conest فقط وقتی شما کاری می‌کنید عمل می‌کند: آنچه را باز می‌کنید می‌خواند و فقط آنچه می‌فرستید ارسال می‌کند. این توکن برای کار دیگری استفاده نمی‌شود و حامل Conest هرگز از آن استفاده نمی‌کند.';
+
+  @override
+  String get discordWarningAccept => 'متوجه هستم، ادامه';
+
+  @override
+  String get discordAccountTokenField => 'توکن حساب';
+
+  @override
+  String get discordTokenHelp =>
+      'آن را در ابزار توسعه‌دهنده دیسکورد در مرورگر پیدا کنید (زبانه Network، سرآیند Authorization). هرگز به اشتراک نگذارید.';
+
+  @override
+  String discordSignedInAs(String name) {
+    return 'وارد شده با نام $name';
+  }
+
+  @override
+  String get discordDirectMessages => 'پیام‌های خصوصی';
+
+  @override
+  String get discordNoChats => 'هنوز گفتگوی دیسکوردی نیست';
+
+  @override
+  String get discordServers => 'سرورها';
+
+  @override
+  String get discordLoadOlder => 'بارگذاری پیام‌های قدیمی‌تر';
+
+  @override
+  String get discordOnbInstead => 'استفاده به‌عنوان کلاینت دیسکورد';
+
+  @override
+  String get telegramRelaySaved =>
+      'انتقال پیام‌های ذخیره‌شده به دستگاه‌های دیگرم';
+
+  @override
+  String get telegramRelayChat => 'انتقال این گفتگو به دستگاه‌های دیگرم';
+
+  @override
+  String get telegramRelayNote =>
+      'فقط متن پیام‌ها منتقل می‌شود، با رمزنگاری سرتاسری بین دستگاه‌هایتان. ورود تلگرام شما از این دستگاه خارج نمی‌شود.';
+
+  @override
+  String get telegramViaDevice => 'تلگرام، از طریق دستگاه دیگرتان';
+
+  @override
+  String get telegramBridgeReadOnly =>
+      'اینجا فقط‌خواندنی است. در تلگرام روی دستگاهی که دارد پاسخ دهید.';
+
+  @override
+  String telegramPluginConfirmTitle(String name) {
+    return '$name نصب شود؟';
+  }
+
+  @override
+  String get telegramPluginNoPermissions => 'هیچ (کاری نمی‌تواند بکند)';
+
+  @override
+  String get telegramPluginInstallButton => 'نصب';
+
+  @override
+  String get xmppEditNotApplied =>
+      'ویرایش این پیام اعمال نشد: قابل بررسی نبود.';
 }
