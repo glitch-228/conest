@@ -1,4 +1,6 @@
+import 'src/ui/bubble_selection_area.dart';
 import 'src/ui/circumvention_settings.dart';
+import 'src/ui/horizontal_chip_row.dart';
 import 'src/ui/relay_access_dialog.dart';
 import 'src/ui/localized_labels.dart';
 import 'src/ui/localized_ui_text.dart';
@@ -5338,9 +5340,8 @@ class _CourierHomeState extends State<_CourierHome> {
               widget.controller.userMode != UserMode.minimal)
             SizedBox(
               height: 42,
-              child: ListView(
+              child: HorizontalChipRow(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                scrollDirection: Axis.horizontal,
                 children: [
                   if (networks.isNotEmpty)
                     for (final (source, label) in [
@@ -9815,7 +9816,9 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                 ),
               ),
               const SizedBox(height: 6),
-              SelectionArea(
+              BubbleSelectionArea(
+                outbound: outbound,
+                palette: palette,
                 onSelectionChanged: (content) {
                   _selectedTextMessageId = message.id;
                   _selectedText = content?.plainText ?? '';
@@ -11882,7 +11885,9 @@ class _ChatPanelState extends State<_ChatPanel> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SelectionArea(
+              BubbleSelectionArea(
+                outbound: outbound,
+                palette: palette,
                 onSelectionChanged: (content) {
                   _selectedTextMessageId = message.id;
                   _selectedText = content?.plainText ?? '';
