@@ -6559,25 +6559,18 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get linkModeMergeHint =>
-      'Обе стороны становятся данными аккаунта. У общих контактов остаются имена, выбранные на этом устройстве.';
-
-  @override
-  String get linkModeBringMine => 'Перенести данные этого устройства в аккаунт';
-
-  @override
-  String get linkModeBringMineHint =>
-      'Как объединение, но имена и настройки этого устройства главные.';
+      'Обе стороны становятся данными аккаунта. У общих контактов остаются имена, которые вы дали здесь. Остальные контакты, чаты и группы этого устройства остаются.';
 
   @override
   String get linkModeReplace => 'Заменить данными аккаунта';
 
   @override
   String get linkModeReplaceHint =>
-      'Это устройство берёт данные аккаунта. Его чаты сначала сохраняются в файл.';
+      'Это устройство берёт чаты аккаунта и записи общих контактов. Его прежние чаты сохраняются в зашифрованном виде в Настройки > Устройства > Старые чаты.';
 
   @override
   String get linkModeReplaceConfirm =>
-      'Чаты и контакты этого устройства будут удалены после сохранения в файл. Продолжить?';
+      'Чаты этого устройства с контактами, которые есть и в аккаунте, будут заменены чатами аккаунта. Старые можно читать в разделе «Старые чаты» и выгрузить в файл. Продолжить?';
 
   @override
   String get linkModeSeparate => 'Отдельный профиль (пока нет)';
@@ -6587,4 +6580,50 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get linkSettingsTake => 'Взять настройки аккаунта';
+
+  @override
+  String get linkSettingsTakeList =>
+      'Настройки аккаунта меняют только: автозагрузку, резерв места и лимит передачи Iroh.';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name: здесь другие ключи, чем в аккаунте ($thisFingerprint здесь, $accountFingerprint в аккаунте). Это устройство оставляет свою запись; проверьте контакт.';
+  }
+
+  @override
+  String get devicesOldChats => 'Старые чаты этого устройства';
+
+  @override
+  String get devicesOldChatsHint =>
+      'Чаты, от которых устройство отказалось при входе в аккаунт. Только чтение.';
+
+  @override
+  String get linkArchiveEmpty => 'Здесь ничего нет.';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return 'Чатов: $chats, сообщений: $messages';
+  }
+
+  @override
+  String get linkArchiveExport => 'Выгрузить в файл';
+
+  @override
+  String get linkArchiveExportWarning =>
+      'Файл не зашифрован. Любой, кто его получит, сможет прочитать эти чаты. Сохраняйте только там, где доверяете.';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return 'Сохранено: $path.';
+  }
+
+  @override
+  String get linkArchiveDelete => 'Удалить этот архив';
+
+  @override
+  String get linkArchiveDeleteConfirm => 'Удалить эти старые чаты навсегда?';
 }

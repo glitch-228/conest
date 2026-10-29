@@ -6426,25 +6426,18 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkModeMergeHint =>
-      'Both sides become the account\'s. Shared contacts keep the names you chose on this device.';
-
-  @override
-  String get linkModeBringMine => 'Bring this device\'s data into the account';
-
-  @override
-  String get linkModeBringMineHint =>
-      'Like merge, but this device\'s names and settings win.';
+      'Both sides become the account\'s. Contacts you both know keep the names you gave them here. This device\'s other contacts, chats and groups stay.';
 
   @override
   String get linkModeReplace => 'Replace with the account\'s data';
 
   @override
   String get linkModeReplaceHint =>
-      'This device takes the account\'s data. Its own chats are saved to a file first.';
+      'This device takes the account\'s chats and the records of the contacts you both know. The chats it gives up are kept, encrypted, in Settings > Devices > Old chats.';
 
   @override
   String get linkModeReplaceConfirm =>
-      'This device\'s own chats and contacts will be removed after they are saved to a file. Continue?';
+      'This device\'s chats with contacts the account also has will be replaced by the account\'s. The old ones stay readable in Old chats, and you can export them to a file. Continue?';
 
   @override
   String get linkModeSeparate => 'Separate profile (not yet)';
@@ -6454,4 +6447,50 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkSettingsTake => 'Take the account\'s settings';
+
+  @override
+  String get linkSettingsTakeList =>
+      'Taking the account\'s settings changes only: automatic downloads, storage reserve and the Iroh transfer limit.';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name: other keys here than in the account ($thisFingerprint here, $accountFingerprint in the account). This device keeps its own record; verify the contact.';
+  }
+
+  @override
+  String get devicesOldChats => 'This device\'s old chats';
+
+  @override
+  String get devicesOldChatsHint =>
+      'Chats this device gave up when it joined the account. Read only.';
+
+  @override
+  String get linkArchiveEmpty => 'Nothing here.';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return '$chats chats, $messages messages';
+  }
+
+  @override
+  String get linkArchiveExport => 'Export to a file';
+
+  @override
+  String get linkArchiveExportWarning =>
+      'The file is not encrypted. Anyone who gets it can read these chats. Save it only where you trust.';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return 'Saved to $path.';
+  }
+
+  @override
+  String get linkArchiveDelete => 'Delete this archive';
+
+  @override
+  String get linkArchiveDeleteConfirm => 'Delete these old chats for good?';
 }

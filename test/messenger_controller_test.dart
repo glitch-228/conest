@@ -72,6 +72,8 @@ import 'package:conest/src/radio_chats.dart';
 import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/circumvention/lan_beacon_codec.dart';
+import 'package:conest/src/attachment_safety.dart';
+import 'package:conest/src/link/link_archive.dart';
 import 'package:conest/src/link/link_choice.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/delta_chats.dart';
@@ -20157,7 +20159,7 @@ void main() {
       MessengerController added,
       List<MessengerController> others, {
       bool leaveAccount = false,
-      void Function()? choose,
+      LinkChoice? choice,
     }) async {
       final qr = await added.startLinkAsNewDevice(
         leaveCurrentAccount: leaveAccount,
@@ -20167,15 +20169,46 @@ void main() {
         () => added.linkCode != null && existing.linkCode != null,
         reason: 'the codes did not show',
       );
-      choose?.call();
+      await added.confirmLinkCode();
+      await existing.confirmLinkCode();
+      var chose = false;
+      Object? failure;
+      await _waitForIroh(() {
+        for (final c in [existing, added, ...others]) {
+          unawaited(c.pollNow());
+        }
+        if (added.linkState == LinkState.chooseData && !chose) {
+          chose = true;
+          added
+              .completeLink(choice ?? const LinkChoice())
+              .catchError((Object e) => failure = e);
+        }
+        return failure != null || added.linkState == LinkState.linked;
+      }, reason: 'the device was not linked');
+      expect(failure, isNull);
+    }
+
+    /// Both codes shown and confirmed on both sides; the new device is at the
+    /// choice.
+    Future<void> toTheChoice(
+      MessengerController existing,
+      MessengerController added,
+      List<MessengerController> others,
+    ) async {
+      final qr = await added.startLinkAsNewDevice();
+      await existing.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => added.linkCode != null && existing.linkCode != null,
+        reason: 'the codes did not show',
+      );
       await added.confirmLinkCode();
       await existing.confirmLinkCode();
       await _waitForIroh(() {
         for (final c in [existing, added, ...others]) {
           unawaited(c.pollNow());
         }
-        return added.linkState == LinkState.linked;
-      }, reason: 'the device was not linked');
+        return added.linkState == LinkState.chooseData;
+      }, reason: 'the choice did not come');
     }
 
     test('a contact both devices know keeps one chat with every message '
@@ -20240,8 +20273,8 @@ void main() {
     });
 
     test(
-      'this device\'s alias and routing only carry over to the same '
-      'device: other keys under the same id keep the account\'s record',
+      'this device\'s alias and routing carry over for the same device; '
+      'other keys under the same id keep this device\'s record, flagged',
       () async {
         final (alice, bob, phone) = await make3(['Alice', 'Bob', 'Phone']);
         await _pairControllers(alice, bob);
@@ -20255,14 +20288,41 @@ void main() {
           [other],
           [known],
         );
-        expect(mismatched.first.alias, same.alias);
-        expect(mismatched.first.publicKeyBase64, 'AAAA');
+        expect(mismatched.first.alias, 'Bobby');
+        expect(mismatched.first.publicKeyBase64, known.publicKeyBase64);
+        expect(mismatched.first.accountKeysDiffer, isTrue);
       },
     );
 
-    Future<(MessengerController, MessengerController, MessengerController)>
-    withData() async {
-      final (alice, bob, phone) = await make3(['Alice', 'Bob', 'Phone']);
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        MessengerController,
+        MessengerController,
+      )
+    >
+    withData({VaultStore? phoneVault, Directory? phoneRoot}) async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final list = <MessengerController>[];
+      for (final name in ['Alice', 'Bob', 'Phone', 'Carol']) {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+          vaultStore: name == 'Phone' ? phoneVault : null,
+          attachmentRootProvider: name == 'Phone' && phoneRoot != null
+              ? () async => phoneRoot
+              : null,
+        );
+        // A phone with its own vault is disposed by the test (a restart).
+        if (name != 'Phone' || phoneVault == null) {
+          addTearDown(controller.dispose);
+        }
+        list.add(controller);
+      }
+      final (alice, bob, phone, carol) = (list[0], list[1], list[2], list[3]);
       await _pairControllers(alice, bob);
       await _pairControllers(phone, bob);
       await phone.updateContactProfile(
@@ -20279,108 +20339,176 @@ void main() {
       await phone.updateGlobalConnectivity(
         phone.identity!.connectivity.copyWith(
           autoDownloadPreset: AutoDownloadPreset.low,
+          lanEnabled: false,
         ),
       );
-      return (alice, bob, phone);
+      return (alice, bob, phone, carol);
     }
 
-    testWidgets('the link dialog shows the summary and the choices', (
+    testWidgets('the link dialog first shows counts, then the choices, and '
+        'hands the whole choice over', (tester) async {
+      final (alice, bob, phone) = (await tester.runAsync(() async {
+        final (a, b, p, _) = await withData();
+        return (a, b, p);
+      }))!;
+      await tester.runAsync(() async {
+        final qr = await phone.startLinkAsNewDevice();
+        await alice.startLinkFromQrCode(qr);
+        await _waitForIroh(() => phone.linkCode != null);
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: LinkNewDeviceDialog(controller: phone)),
+        ),
+      );
+      await tester.pump();
+      // Before the codes were compared: counts only, no choices.
+      expect(find.textContaining('This device: 1 contacts'), findsOneWidget);
+      expect(find.byKey(const ValueKey('link-mode-merge')), findsNothing);
+      expect(find.textContaining('Bobby'), findsNothing);
+      await tester.runAsync(() async {
+        await phone.confirmLinkCode();
+        await alice.confirmLinkCode();
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return phone.linkState == LinkState.chooseData;
+        });
+      });
+      await tester.pump();
+      expect(find.byKey(const ValueKey('link-mode-merge')), findsOneWidget);
+      expect(find.byKey(const ValueKey('link-mode-bringMine')), findsNothing);
+      expect(find.textContaining('Bobby'), findsOneWidget);
+      expect(
+        find.textContaining('automatic downloads'),
+        findsOneWidget,
+        reason: 'the settings it takes are named',
+      );
+      await tester.tap(find.byKey(const ValueKey('link-mode-replace')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('link-replace-confirm')));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.ensureVisible(find.byKey(const ValueKey('link-complete')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('link-complete')));
+      await tester.runAsync(() async {
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return phone.linkState == LinkState.linked;
+        });
+      });
+      await tester.pump();
+      // What was picked on the screen is what happened.
+      expect(phone.linkArchives, hasLength(1));
+      expect(
+        phone.contacts
+            .singleWhere((c) => c.deviceId == bob.identity!.deviceId)
+            .alias,
+        'Bob',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 10));
+    });
+
+    testWidgets('closing the link dialog in any way ends the link', (
       tester,
     ) async {
       final (alice, phone) = (await tester.runAsync(() async {
-        final network = _InProcessIrohNetwork();
-        final relay = _FakeRelayClient();
-        final alice = await _createController(
-          relayClient: relay,
-          displayName: 'Alice',
-          transportRegistryFactory: network.registry,
-        );
-        final phone = await _createController(
-          relayClient: relay,
-          displayName: 'Phone',
-          transportRegistryFactory: network.registry,
-        );
-        addTearDown(alice.dispose);
-        addTearDown(phone.dispose);
-        return (alice, phone);
-      }))!;
-      final qr = (await tester.runAsync(() async {
-        final text = await phone.startLinkAsNewDevice();
-        await alice.startLinkFromQrCode(text);
-        await _waitForIroh(() => phone.linkCode != null);
-        return text;
+        final (a, _, p, _) = await withData();
+        final qr = await p.startLinkAsNewDevice();
+        await a.startLinkFromQrCode(qr);
+        await _waitForIroh(() => p.linkCode != null);
+        return (a, p);
       }))!;
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(body: LinkNewDeviceDialog(controller: phone)),
         ),
       );
-      expect(qr, startsWith('cl1|'));
       await tester.pump();
-      expect(find.byKey(const ValueKey('link-mode-merge')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('link-mode-bringMine')));
-      await tester.pump();
-      expect(find.textContaining('This device: 0 contacts'), findsOneWidget);
-      phone.cancelLink();
-      alice.cancelLink();
+      expect(phone.linkState, LinkState.compareCode);
+      // Gone without a button (for example the route was removed).
       await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+      expect(phone.linkState, LinkState.none);
+      alice.cancelLink();
       await tester.pump(const Duration(seconds: 10));
     });
 
-    test('the summary lists both sides and the conflicts', () async {
-      final (alice, bob, phone) = await withData();
+    test('the offer holds counts only; names, ids and keys come after both '
+        'codes matched, and the account only after the choice', () async {
+      final (alice, bob, phone, carol) = await withData();
+      final bobId = bob.identity!.deviceId;
+      final carolId = carol.identity!.deviceId;
+      await _pairControllers(alice, carol);
+      alice.setContactPairingStateForTesting(
+        carolId,
+        ContactPairingState.declined,
+      );
+      final counts = alice.linkCountsForOfferForTesting();
+      expect(counts.values.every((v) => v is int), isTrue);
+      expect(counts['contacts'], 1, reason: 'declined contacts are not told');
+      final details = jsonEncode(alice.linkDetailsForTesting());
+      expect(details, contains(bobId));
+      expect(details, isNot(contains(carolId)));
+      final phoneAccount = phone.identity!.accountId;
       final qr = await phone.startLinkAsNewDevice();
       await alice.startLinkFromQrCode(qr);
       await _waitForIroh(() => phone.linkCode != null);
-      final summary = phone.linkSummary();
-      expect(summary.thisContacts, 1);
+      var summary = phone.linkSummary();
+      expect(summary.detailed, isFalse);
       expect(summary.accountContacts, 1);
+      expect(summary.conflicts, isEmpty, reason: 'no names before the codes');
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return phone.linkState == LinkState.chooseData;
+      });
+      summary = phone.linkSummary();
+      expect(summary.detailed, isTrue);
       expect(summary.conflicts.single.thisName, 'Bobby');
       expect(summary.conflicts.single.accountName, 'Bob');
+      // Nothing was given yet.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(phone.identity!.accountId, phoneAccount);
+      expect(alice.accountDevices?.devices.length ?? 1, 1);
       expect(
-        () => phone.chooseLinkMode(LinkMode.separateProfile),
+        () => phone.completeLink(
+          const LinkChoice(mode: LinkMode.separateProfile),
+        ),
         throwsStateError,
       );
-      phone.cancelLink();
-      alice.cancelLink();
-      expect(bob.contacts, hasLength(2));
+      expect(
+        () => phone.completeLink(const LinkChoice(mode: LinkMode.replace)),
+        throwsStateError,
+        reason: 'replacing needs the second confirmation',
+      );
+      await phone.completeLink(const LinkChoice());
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return phone.linkState == LinkState.linked;
+      });
+      expect(phone.identity!.accountId, isNot(phoneAccount));
+      expect(
+        () => phone.completeLink(const LinkChoice()),
+        throwsStateError,
+        reason: 'the choice is bound once',
+      );
     });
 
-    test('merge with the account\'s names and settings', () async {
-      final (alice, bob, phone) = await withData();
+    test('merge keeps this device\'s names and, when asked, takes exactly '
+        'the account\'s three settings', () async {
+      final (alice, bob, phone, _) = await withData();
       await link(
         alice,
         phone,
         [bob],
-        choose: () => phone.chooseLinkMode(
-          LinkMode.merge,
-          settings: LinkSettingsChoice.takeAccount,
-          keepAccountNames: true,
-        ),
-      );
-      final bobId = bob.identity!.deviceId;
-      expect(
-        phone.contacts.singleWhere((c) => c.deviceId == bobId).alias,
-        'Bob',
-      );
-      expect(
-        phone.identity!.connectivity.autoDownloadPreset,
-        AutoDownloadPreset.high,
-      );
-      expect(phone.messagesFor(bobId).map((m) => m.body), contains('old chat'));
-    });
-
-    test('bring this device\'s data: its names and settings win', () async {
-      final (alice, bob, phone) = await withData();
-      await link(
-        alice,
-        phone,
-        [bob],
-        choose: () => phone.chooseLinkMode(
-          LinkMode.bringMine,
-          settings: LinkSettingsChoice.takeAccount,
-          keepAccountNames: true,
-        ),
+        choice: const LinkChoice(settings: LinkSettingsChoice.takeAccount),
       );
       final bobId = bob.identity!.deviceId;
       expect(
@@ -20389,58 +20517,245 @@ void main() {
       );
       expect(
         phone.identity!.connectivity.autoDownloadPreset,
+        AutoDownloadPreset.high,
+      );
+      expect(
+        phone.identity!.connectivity.lanEnabled,
+        isFalse,
+        reason: 'only the listed settings are taken',
+      );
+      expect(phone.messagesFor(bobId).map((m) => m.body), contains('old chat'));
+    });
+
+    test('keeping this device\'s settings leaves them', () async {
+      final (alice, bob, phone, _) = await withData();
+      await link(alice, phone, [bob]);
+      expect(
+        phone.identity!.connectivity.autoDownloadPreset,
         AutoDownloadPreset.low,
       );
     });
 
-    test('replace needs the second confirmation, archives the old chats '
-        'and takes the account\'s data', () async {
-      final (alice, bob, phone) = await withData();
-      final qr = await phone.startLinkAsNewDevice();
-      await alice.startLinkFromQrCode(qr);
-      await _waitForIroh(() => phone.linkCode != null);
-      expect(() => phone.chooseLinkMode(LinkMode.replace), throwsStateError);
-      phone.cancelLink();
-      alice.cancelLink();
-      expect(phone.messagesFor(bob.identity!.deviceId), isNotEmpty);
+    test('replace archives the chats inside the vault with the full contact '
+        'records, keeps what the account lacks, and the archive and its files '
+        'survive a restart', () async {
+      final vault = _MemoryVaultStore();
+      final root = Directory.systemTemp.createTempSync('conest_link_root_');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
+      final (alice, bob, phone, carol) = await withData(
+        phoneVault: vault,
+        phoneRoot: root,
+      );
+      final bobId = bob.identity!.deviceId;
+      final carolId = carol.identity!.deviceId;
+      // A contact, a chat and a group only this device has.
+      await _pairControllers(phone, carol);
+      await phone.sendMessage(
+        contact: phone.contacts.singleWhere((c) => c.deviceId == carolId),
+        body: 'carol chat',
+      );
+      final group = await phone.createGroup(
+        title: 'Only mine',
+        members: [phone.contacts.singleWhere((c) => c.deviceId == carolId)],
+      );
       await link(
         alice,
         phone,
         [bob],
-        choose: () =>
-            phone.chooseLinkMode(LinkMode.replace, confirmReplace: true),
+        choice: const LinkChoice(mode: LinkMode.replace, confirmReplace: true),
       );
-      final bobId = bob.identity!.deviceId;
       expect(
         phone.contacts.singleWhere((c) => c.deviceId == bobId).alias,
         'Bob',
       );
-      final archive = phone.linkArchivePath;
-      expect(archive, isNotNull);
-      expect(await File(archive!).readAsString(), contains('old chat'));
-      File(archive).deleteSync();
+      expect(
+        phone.messagesFor(bobId).map((m) => m.body),
+        isNot(contains('old chat')),
+      );
+      // Not dropped: the contact, its chat and the group the account lacks.
+      expect(phone.contacts.map((c) => c.deviceId), contains(carolId));
+      expect(
+        phone.messagesFor(carolId).map((m) => m.body),
+        contains('carol chat'),
+      );
+      expect(phone.groups.map((g) => g.groupId), contains(group.groupId));
+      final archive = phone.linkArchives.single;
+      expect(
+        archive.conversations.expand((c) => c.messages).map((m) => m.body),
+        contains('old chat'),
+      );
+      final archivedBob = archive.contacts.singleWhere(
+        (c) => c.deviceId == bobId,
+      );
+      expect(archivedBob.alias, 'Bobby');
+      expect(archivedBob.publicKeyBase64, isNotEmpty);
+      expect(archive.contacts.map((c) => c.deviceId), isNot(contains(carolId)));
+
+      // A file of an archived chat, and one nothing names, both old.
+      final attachment = AttachmentDescriptor(
+        id: 'archived-file',
+        fileName: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        sizeBytes: 3,
+        chunkSize: 3,
+        chunkHashes: const [],
+        encryptionKeyBase64: '',
+        createdAt: DateTime.utc(2026, 1, 1),
+      );
+      await phone.addLinkArchiveForTesting(
+        LinkArchive(
+          id: 'with-file',
+          createdAt: DateTime.utc(2026, 1, 2),
+          contacts: const [],
+          groups: const [],
+          conversations: [
+            ConversationRecord(
+              id: bobId,
+              kind: ConversationKind.direct,
+              peerDeviceId: bobId,
+              messages: [
+                ChatMessage(
+                  id: 'm-file',
+                  conversationId: bobId,
+                  senderDeviceId: phone.identity!.deviceId,
+                  recipientDeviceId: bobId,
+                  body: 'a photo',
+                  outbound: true,
+                  state: DeliveryState.delivered,
+                  createdAt: DateTime.utc(2026, 1, 1),
+                  attachment: attachment,
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+      final cache = Directory('${root.path}/cache')
+        ..createSync(recursive: true);
+      final kept = File(
+        '${cache.path}/${attachmentStorageKey('archived-file')}',
+      )..writeAsBytesSync([1, 2, 3]);
+      final orphan = File('${cache.path}/${attachmentStorageKey('nobody')}')
+        ..writeAsBytesSync([1, 2, 3]);
+      final old = DateTime.now().subtract(const Duration(days: 30));
+      kept.setLastModifiedSync(old);
+      orphan.setLastModifiedSync(old);
+      phone.dispose();
+
+      // A restart: the vault goes through its JSON form, as on disk.
+      await vault.save(
+        VaultSnapshot.fromJson(
+          jsonDecode(jsonEncode(vault._snapshot.toJson()))
+              as Map<String, dynamic>,
+        ),
+      );
+      final again = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        vaultStore: vault,
+        createIdentity: false,
+        attachmentRootProvider: () async => root,
+      );
+      addTearDown(again.dispose);
+      await _waitForIroh(
+        () => !orphan.existsSync(),
+        reason: 'the cleanup did not run',
+      );
+      expect(kept.existsSync(), isTrue, reason: 'an archived chat\'s file');
+      expect(again.linkArchives, hasLength(2));
+      final restored = again.linkArchives.firstWhere(
+        (a) => a.contacts.isNotEmpty,
+      );
+      expect(
+        restored.conversations.expand((c) => c.messages).map((m) => m.body),
+        contains('old chat'),
+      );
+      // Only the explicit export is plain text.
+      final exported = utf8.decode(again.exportLinkArchive(restored.id));
+      expect(exported, contains('old chat'));
+      await again.deleteLinkArchive(restored.id);
+      expect(again.linkArchives.map((a) => a.id), ['with-file']);
     });
 
-    test(
-      'cancelling at the summary or the choice changes neither side',
-      () async {
-        final (alice, bob, phone) = await withData();
-        final phoneAccount = phone.identity!.accountId;
-        final contactsBefore = phone.contacts.map((c) => c.alias).toList();
-        final qr = await phone.startLinkAsNewDevice();
-        await alice.startLinkFromQrCode(qr);
-        await _waitForIroh(() => phone.linkCode != null);
-        phone.chooseLinkMode(LinkMode.replace, confirmReplace: true);
-        phone.cancelLink();
-        alice.cancelLink();
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-        expect(phone.identity!.accountId, phoneAccount);
-        expect(phone.contacts.map((c) => c.alias), contactsBefore);
-        expect(phone.messagesFor(bob.identity!.deviceId), isNotEmpty);
-        expect(alice.accountDevices?.devices.length ?? 1, 1);
-        expect(phone.linkArchivePath, isNull);
-      },
-    );
+    test('cancelling at the choice changes neither side', () async {
+      final (alice, bob, phone, _) = await withData();
+      final phoneAccount = phone.identity!.accountId;
+      final contactsBefore = phone.contacts.map((c) => c.alias).toList();
+      await toTheChoice(alice, phone, [bob]);
+      phone.cancelLink();
+      alice.cancelLink();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(phone.identity!.accountId, phoneAccount);
+      expect(phone.contacts.map((c) => c.alias), contactsBefore);
+      expect(phone.messagesFor(bob.identity!.deviceId), isNotEmpty);
+      expect(alice.accountDevices?.devices.length ?? 1, 1);
+      expect(phone.linkArchives, isEmpty);
+      expect(
+        () => phone.completeLink(const LinkChoice()),
+        throwsStateError,
+        reason: 'a cancelled link takes no choice',
+      );
+    });
+
+    test('a link cancelled while the account is being checked is not '
+        'applied', () async {
+      final (alice, bob, phone, _) = await withData();
+      final phoneAccount = phone.identity!.accountId;
+      await toTheChoice(alice, phone, [bob]);
+      phone.linkApplyPauseForTesting = () async => phone.cancelLink();
+      await phone.completeLink(
+        const LinkChoice(mode: LinkMode.replace, confirmReplace: true),
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return (alice.accountDevices?.devices.length ?? 1) == 2;
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(phone.identity!.accountId, phoneAccount);
+      expect(phone.linkArchives, isEmpty);
+      expect(phone.messagesFor(bob.identity!.deviceId), isNotEmpty);
+    });
+
+    test('a contact under other keys keeps this device\'s own record, '
+        'flagged, and is shown as a key conflict', () async {
+      final (alice, bob, phone, _) = await withData();
+      final bobId = bob.identity!.deviceId;
+      await phone.setContactSigningKeyForTesting(bobId, 'AAAA');
+      await toTheChoice(alice, phone, [bob]);
+      final conflict = phone.linkSummary().conflicts.single;
+      expect(conflict.keysDiffer, isTrue);
+      expect(conflict.thisFingerprint, isNot(conflict.accountFingerprint));
+      await phone.completeLink(
+        const LinkChoice(mode: LinkMode.replace, confirmReplace: true),
+      );
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return phone.linkState == LinkState.linked;
+      });
+      final mine = phone.contacts.singleWhere((c) => c.deviceId == bobId);
+      expect(mine.signingPublicKeyBase64, 'AAAA', reason: 'not adopted');
+      expect(mine.accountKeysDiffer, isTrue);
+      expect(mine.alias, 'Bobby');
+      // Not replaced: this chat is with other keys than the account's.
+      expect(phone.messagesFor(bobId).map((m) => m.body), contains('old chat'));
+      expect(phone.linkArchives, isEmpty);
+      expect(
+        ContactRecord.fromJson(mine.toJson()).accountKeysDiffer,
+        isTrue,
+        reason: 'kept in the vault',
+      );
+    });
+
+    test('names from another device are cut and cleaned', () {
+      expect(cleanLinkName('Bo\u202Eb\u0007'), 'Bob');
+      expect(cleanLinkName('a\u2066b\u2069c\nd'), 'abcd');
+      expect(cleanLinkName('x' * 300).length, 128);
+      expect(cleanLinkName('  hi  '), 'hi');
+    });
 
     test('a device that belongs to another account is refused until the '
         'user confirms leaving it', () async {

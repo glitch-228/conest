@@ -6145,22 +6145,19 @@ class AppLocalizationsZh extends AppLocalizations {
   String get linkModeMerge => '合并（推荐）';
 
   @override
-  String get linkModeMergeHint => '双方都归入账号。共有的联系人保留你在此设备上设置的名称。';
-
-  @override
-  String get linkModeBringMine => '将此设备的数据带入账号';
-
-  @override
-  String get linkModeBringMineHint => '与合并相似，但以此设备的名称和设置为准。';
+  String get linkModeMergeHint =>
+      '双方都成为账户的数据。共有联系人保留你在这里给他们起的名字。此设备的其他联系人、聊天和群组保留。';
 
   @override
   String get linkModeReplace => '用账号的数据替换';
 
   @override
-  String get linkModeReplaceHint => '此设备采用账号的数据。它自己的聊天会先保存到文件。';
+  String get linkModeReplaceHint =>
+      '此设备采用账户的聊天和共有联系人的记录。它放弃的聊天会加密保存在 设置 > 设备 > 旧聊天 中。';
 
   @override
-  String get linkModeReplaceConfirm => '此设备自己的聊天和联系人在保存到文件后将被移除。继续吗？';
+  String get linkModeReplaceConfirm =>
+      '此设备与账户中也有的联系人的聊天将被账户的聊天替换。旧聊天仍可在“旧聊天”中阅读，也可导出为文件。继续吗？';
 
   @override
   String get linkModeSeparate => '独立档案（暂不可用）';
@@ -6170,4 +6167,47 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get linkSettingsTake => '采用账号的设置';
+
+  @override
+  String get linkSettingsTakeList => '采用账户设置只会改变：自动下载、存储预留和 Iroh 传输限制。';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name：此处的密钥与账户中的不同（此处 $thisFingerprint，账户中 $accountFingerprint）。此设备保留自己的记录；请验证该联系人。';
+  }
+
+  @override
+  String get devicesOldChats => '此设备的旧聊天';
+
+  @override
+  String get devicesOldChatsHint => '此设备加入账户时放弃的聊天。只读。';
+
+  @override
+  String get linkArchiveEmpty => '这里没有内容。';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return '$chats 个聊天，$messages 条消息';
+  }
+
+  @override
+  String get linkArchiveExport => '导出为文件';
+
+  @override
+  String get linkArchiveExportWarning => '文件未加密。任何拿到它的人都能阅读这些聊天。请只保存在你信任的地方。';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return '已保存到 $path。';
+  }
+
+  @override
+  String get linkArchiveDelete => '删除此归档';
+
+  @override
+  String get linkArchiveDeleteConfirm => '永久删除这些旧聊天吗？';
 }

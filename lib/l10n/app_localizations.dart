@@ -10376,20 +10376,8 @@ abstract class AppLocalizations {
   /// Link choice: merge explained.
   ///
   /// In en, this message translates to:
-  /// **'Both sides become the account\'s. Shared contacts keep the names you chose on this device.'**
+  /// **'Both sides become the account\'s. Contacts you both know keep the names you gave them here. This device\'s other contacts, chats and groups stay.'**
   String get linkModeMergeHint;
-
-  /// Link choice: bring this device's data.
-  ///
-  /// In en, this message translates to:
-  /// **'Bring this device\'s data into the account'**
-  String get linkModeBringMine;
-
-  /// Link choice: bring explained.
-  ///
-  /// In en, this message translates to:
-  /// **'Like merge, but this device\'s names and settings win.'**
-  String get linkModeBringMineHint;
 
   /// Link choice: replace.
   ///
@@ -10400,13 +10388,13 @@ abstract class AppLocalizations {
   /// Link choice: replace explained.
   ///
   /// In en, this message translates to:
-  /// **'This device takes the account\'s data. Its own chats are saved to a file first.'**
+  /// **'This device takes the account\'s chats and the records of the contacts you both know. The chats it gives up are kept, encrypted, in Settings > Devices > Old chats.'**
   String get linkModeReplaceHint;
 
   /// Link choice: second confirmation for replace.
   ///
   /// In en, this message translates to:
-  /// **'This device\'s own chats and contacts will be removed after they are saved to a file. Continue?'**
+  /// **'This device\'s chats with contacts the account also has will be replaced by the account\'s. The old ones stay readable in Old chats, and you can export them to a file. Continue?'**
   String get linkModeReplaceConfirm;
 
   /// Link choice: separate profile, not yet.
@@ -10426,6 +10414,76 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Take the account\'s settings'**
   String get linkSettingsTake;
+
+  /// Link choice: lists the settings that taking the account's settings changes.
+  ///
+  /// In en, this message translates to:
+  /// **'Taking the account\'s settings changes only: automatic downloads, storage reserve and the Iroh transfer limit.'**
+  String get linkSettingsTakeList;
+
+  /// Link choice: a contact with different keys on the two sides.
+  ///
+  /// In en, this message translates to:
+  /// **'{name}: other keys here than in the account ({thisFingerprint} here, {accountFingerprint} in the account). This device keeps its own record; verify the contact.'**
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  );
+
+  /// Settings > Devices: entry for the chats this device gave up when it joined an account.
+  ///
+  /// In en, this message translates to:
+  /// **'This device\'s old chats'**
+  String get devicesOldChats;
+
+  /// Explains the old chats entry.
+  ///
+  /// In en, this message translates to:
+  /// **'Chats this device gave up when it joined the account. Read only.'**
+  String get devicesOldChatsHint;
+
+  /// Old chats screen: nothing archived.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing here.'**
+  String get linkArchiveEmpty;
+
+  /// Old chats screen: counts of one archive.
+  ///
+  /// In en, this message translates to:
+  /// **'{chats} chats, {messages} messages'**
+  String linkArchiveSummary(int chats, int messages);
+
+  /// Button: save the old chats to a plain file.
+  ///
+  /// In en, this message translates to:
+  /// **'Export to a file'**
+  String get linkArchiveExport;
+
+  /// Warning before saving the old chats unencrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'The file is not encrypted. Anyone who gets it can read these chats. Save it only where you trust.'**
+  String get linkArchiveExportWarning;
+
+  /// Status: the old chats were saved to a file.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved to {path}.'**
+  String linkArchiveSaved(String path);
+
+  /// Button: delete an archive of old chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete this archive'**
+  String get linkArchiveDelete;
+
+  /// Confirms deleting an archive.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete these old chats for good?'**
+  String get linkArchiveDeleteConfirm;
 }
 
 class _AppLocalizationsDelegate

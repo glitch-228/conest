@@ -6551,25 +6551,18 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get linkModeMergeHint =>
-      'يصبح الجانبان للحساب. تحتفظ جهات الاتصال المشتركة بالأسماء التي اخترتها على هذا الجهاز.';
-
-  @override
-  String get linkModeBringMine => 'إحضار بيانات هذا الجهاز إلى الحساب';
-
-  @override
-  String get linkModeBringMineHint =>
-      'مثل الدمج، لكن أسماء هذا الجهاز وإعداداته هي الأولى.';
+      'يصبح الطرفان بيانات الحساب. تحتفظ جهات الاتصال المشتركة بالأسماء التي منحتها لها هنا. وتبقى جهات الاتصال والمحادثات والمجموعات الأخرى في هذا الجهاز.';
 
   @override
   String get linkModeReplace => 'الاستبدال ببيانات الحساب';
 
   @override
   String get linkModeReplaceHint =>
-      'يأخذ هذا الجهاز بيانات الحساب. تُحفظ محادثاته في ملف أولاً.';
+      'يأخذ هذا الجهاز محادثات الحساب وسجلات جهات الاتصال المشتركة. تُحفظ المحادثات التي يتخلى عنها مشفرة في الإعدادات > الأجهزة > المحادثات القديمة.';
 
   @override
   String get linkModeReplaceConfirm =>
-      'ستُزال محادثات هذا الجهاز وجهات اتصاله بعد حفظها في ملف. المتابعة؟';
+      'ستُستبدل محادثات هذا الجهاز مع جهات الاتصال الموجودة في الحساب أيضًا بمحادثات الحساب. تبقى القديمة قابلة للقراءة في المحادثات القديمة ويمكنك تصديرها إلى ملف. متابعة؟';
 
   @override
   String get linkModeSeparate => 'ملف منفصل (غير متاح بعد)';
@@ -6579,4 +6572,50 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get linkSettingsTake => 'أخذ إعدادات الحساب';
+
+  @override
+  String get linkSettingsTakeList =>
+      'أخذ إعدادات الحساب يغيّر فقط: التنزيل التلقائي، واحتياطي التخزين، وحد النقل عبر Iroh.';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name: مفاتيح مختلفة هنا عن الحساب ($thisFingerprint هنا، $accountFingerprint في الحساب). يحتفظ هذا الجهاز بسجله؛ تحقق من جهة الاتصال.';
+  }
+
+  @override
+  String get devicesOldChats => 'المحادثات القديمة لهذا الجهاز';
+
+  @override
+  String get devicesOldChatsHint =>
+      'محادثات تخلى عنها هذا الجهاز عند انضمامه إلى الحساب. للقراءة فقط.';
+
+  @override
+  String get linkArchiveEmpty => 'لا شيء هنا.';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return '$chats محادثات، $messages رسائل';
+  }
+
+  @override
+  String get linkArchiveExport => 'تصدير إلى ملف';
+
+  @override
+  String get linkArchiveExportWarning =>
+      'الملف غير مشفر. يستطيع أي شخص يحصل عليه قراءة هذه المحادثات. احفظه فقط حيث تثق.';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return 'تم الحفظ في $path.';
+  }
+
+  @override
+  String get linkArchiveDelete => 'حذف هذا الأرشيف';
+
+  @override
+  String get linkArchiveDeleteConfirm => 'حذف هذه المحادثات القديمة نهائيًا؟';
 }

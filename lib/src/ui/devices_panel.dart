@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../app_locales.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -5,6 +7,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../link/link_choice.dart';
 import '../messenger_controller.dart';
 import '../transfer/own_device_sync_policy.dart' show SyncSpeed;
+import 'link_archive_screen.dart';
 
 /// Settings → Devices: this account's devices, linking a new one, and
 /// revoking a lost one.
@@ -235,6 +238,20 @@ class DevicesPanel extends StatelessWidget {
             onChanged: (on) => controller.setShareSettings(on),
           ),
         ],
+        if (controller.linkArchives.isNotEmpty)
+          ListTile(
+            key: const ValueKey('old-chats'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.inventory_2_outlined),
+            title: Text(l10nOf(context).devicesOldChats),
+            subtitle: Text(l10nOf(context).devicesOldChatsHint),
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute(
+                builder: (_) => LinkArchiveScreen(controller: controller),
+              ),
+            ),
+          ),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
@@ -244,6 +261,7 @@ class DevicesPanel extends StatelessWidget {
               key: const ValueKey('link-a-device'),
               onPressed: () => showDialog<void>(
                 context: context,
+                barrierDismissible: false,
                 builder: (_) =>
                     LinkExistingDialog(controller: controller, onScan: onScan),
               ),
@@ -256,6 +274,7 @@ class DevicesPanel extends StatelessWidget {
               key: const ValueKey('link-this-device'),
               onPressed: () => showDialog<void>(
                 context: context,
+                barrierDismissible: false,
                 builder: (_) => LinkNewDeviceDialog(controller: controller),
               ),
               icon: const Icon(Icons.qr_code),
@@ -439,6 +458,27 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
   bool _started = false;
   LinkMode _mode = LinkMode.merge;
   LinkSettingsChoice _settings = LinkSettingsChoice.keepMine;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    // However this dialog goes away, a link that is not done goes with it:
+    // no choice or confirmation outlives what the user sees.
+    final controller = widget.controller;
+    if (controller.linkState != LinkState.none &&
+        controller.linkState != LinkState.linked) {
+      scheduleMicrotask(controller.cancelLink);
+    }
+    super.dispose();
+  }
+
+  void _close() {
+    if (widget.controller.linkState != LinkState.linked) {
+      widget.controller.cancelLink();
+    }
+    Navigator.pop(context);
+  }
 
   Future<void> _pickMode(LinkMode mode) async {
     if (mode == LinkMode.replace) {
@@ -459,41 +499,46 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
           ],
         ),
       );
-      if (yes != true) return;
+      if (yes != true || !mounted) return;
     }
     setState(() => _mode = mode);
-    _applyChoice();
   }
 
-  void _applyChoice() {
+  /// Hands the whole choice over; nothing of it is kept anywhere else.
+  Future<void> _complete() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
-      widget.controller.chooseLinkMode(
-        _mode,
-        settings: _settings,
-        confirmReplace: _mode == LinkMode.replace,
+      await widget.controller.completeLink(
+        LinkChoice(
+          mode: _mode,
+          settings: _settings,
+          confirmReplace: _mode == LinkMode.replace,
+        ),
       );
-    } catch (_) {}
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+      widget.controller.setStatus('$error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
-  Widget _choices(BuildContext context) {
+  Future<void> _confirmCode() async {
+    try {
+      await widget.controller.confirmLinkCode();
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+      widget.controller.setStatus('$error');
+    }
+  }
+
+  Widget _counts(BuildContext context, LinkSummary summary) {
     final l10n = l10nOf(context);
-    final summary = widget.controller.linkSummary();
     String line(String side, int c, int ch, int g, int f) =>
         l10n.linkSummaryLine(side, c, ch, g, f);
-    Widget mode(LinkMode value, String title, String? hint) => ListTile(
-      key: ValueKey('link-mode-${value.name}'),
-      contentPadding: EdgeInsets.zero,
-      dense: true,
-      leading: Icon(
-        _mode == value
-            ? Icons.radio_button_checked
-            : Icons.radio_button_unchecked,
-      ),
-      title: Text(title),
-      subtitle: hint == null ? null : Text(hint),
-      enabled: value != LinkMode.separateProfile,
-      onTap: value == LinkMode.separateProfile ? null : () => _pickMode(value),
-    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -516,45 +561,93 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
             summary.accountFiles,
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _choices(BuildContext context) {
+    final l10n = l10nOf(context);
+    final summary = widget.controller.linkSummary();
+    Widget mode(LinkMode value, String title, String? hint) => ListTile(
+      key: ValueKey('link-mode-${value.name}'),
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      leading: Icon(
+        _mode == value
+            ? Icons.radio_button_checked
+            : Icons.radio_button_unchecked,
+      ),
+      title: Text(title),
+      subtitle: hint == null ? null : Text(hint),
+      enabled: value != LinkMode.separateProfile && !_busy,
+      onTap: value == LinkMode.separateProfile || _busy
+          ? null
+          : () => _pickMode(value),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _counts(context, summary),
         for (final c in summary.conflicts)
           Text(
-            c.isGroup
+            c.keysDiffer
+                ? l10n.linkConflictKeys(
+                    c.thisName,
+                    c.thisFingerprint,
+                    c.accountFingerprint,
+                  )
+                : c.isGroup
                 ? l10n.linkConflictGroup(c.thisName)
                 : l10n.linkConflictContact(c.thisName, c.accountName),
+            key: ValueKey('link-conflict-${c.id}'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         const SizedBox(height: 8),
         mode(LinkMode.merge, l10n.linkModeMerge, l10n.linkModeMergeHint),
-        mode(
-          LinkMode.bringMine,
-          l10n.linkModeBringMine,
-          l10n.linkModeBringMineHint,
-        ),
         mode(LinkMode.replace, l10n.linkModeReplace, l10n.linkModeReplaceHint),
         mode(LinkMode.separateProfile, l10n.linkModeSeparate, null),
-        if (_mode != LinkMode.bringMine) ...[
-          const SizedBox(height: 4),
-          SegmentedButton<LinkSettingsChoice>(
-            key: const ValueKey('link-settings-choice'),
-            showSelectedIcon: false,
-            segments: [
-              ButtonSegment(
-                value: LinkSettingsChoice.keepMine,
-                label: Text(l10n.linkSettingsKeep),
-              ),
-              ButtonSegment(
-                value: LinkSettingsChoice.takeAccount,
-                label: Text(l10n.linkSettingsTake),
-              ),
-            ],
-            selected: {_settings},
-            onSelectionChanged: (picked) {
-              setState(() => _settings = picked.single);
-              _applyChoice();
-            },
+        const SizedBox(height: 4),
+        SegmentedButton<LinkSettingsChoice>(
+          key: const ValueKey('link-settings-choice'),
+          showSelectedIcon: false,
+          segments: [
+            ButtonSegment(
+              value: LinkSettingsChoice.keepMine,
+              label: Text(l10n.linkSettingsKeep),
+            ),
+            ButtonSegment(
+              value: LinkSettingsChoice.takeAccount,
+              label: Text(l10n.linkSettingsTake),
+            ),
+          ],
+          selected: {_settings},
+          onSelectionChanged: _busy
+              ? null
+              : (picked) => setState(() => _settings = picked.single),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            l10n.linkSettingsTakeList,
+            style: Theme.of(context).textTheme.bodySmall,
           ),
-        ],
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              _error!,
+              key: const ValueKey('link-error'),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
         const SizedBox(height: 12),
+        FilledButton(
+          key: const ValueKey('link-complete'),
+          onPressed: _busy ? null : _complete,
+          child: Text(l10n.actionContinue),
+        ),
       ],
     );
   }
@@ -607,77 +700,90 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
         final code = widget.controller.linkCode;
         final qr = _qr;
         final preview = widget.controller.deviceLinkPreview();
-        return AlertDialog(
-          title: Text(l10nOf(context).uiLinkThisDeviceBF5E5C),
-          content: SingleChildScrollView(
-            child: switch (state) {
-              LinkState.none when !_started => _beforeLinking(context, preview),
-              LinkState.linked => Text(
-                l10nOf(context).uiThisDeviceIsNowLinked7EA826,
-              ),
-              LinkState.waitingForOtherDevice => Text(
-                l10nOf(context).uiWaitingForTheOtherDeviceB39C3F,
-              ),
-              LinkState.compareCode when code != null => Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _choices(context),
-                  _CompareCode(
-                    code: code,
-                    onConfirm: () => widget.controller.confirmLinkCode(),
-                  ),
-                ],
-              ),
-              _ => Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(l10nOf(context).uiOnTheDeviceYouAlready92C421),
-                  const SizedBox(height: 12),
-                  if (qr == null)
-                    const CircularProgressIndicator()
-                  else ...[
-                    SizedBox.square(
-                      dimension: 240,
-                      child: QrImageView(
-                        data: qr,
-                        backgroundColor: Colors.white,
-                      ),
-                    ),
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) _close();
+          },
+          child: AlertDialog(
+            title: Text(l10nOf(context).uiLinkThisDeviceBF5E5C),
+            content: SingleChildScrollView(
+              child: switch (state) {
+                LinkState.none when !_started => _beforeLinking(
+                  context,
+                  preview,
+                ),
+                LinkState.linked => Text(
+                  l10nOf(context).uiThisDeviceIsNowLinked7EA826,
+                ),
+                LinkState.waitingForOtherDevice => Text(
+                  l10nOf(context).uiWaitingForTheOtherDeviceB39C3F,
+                ),
+                LinkState.chooseData => _choices(context),
+                LinkState.compareCode when code != null => Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _counts(context, widget.controller.linkSummary()),
                     const SizedBox(height: 8),
-                    SelectableText(
-                      qr,
-                      key: const ValueKey('link-qr-text'),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+                    _CompareCode(code: code, onConfirm: _confirmCode),
+                    if (_error != null)
+                      Text(
+                        _error!,
+                        key: const ValueKey('link-error'),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
                   ],
-                ],
-              ),
-            },
-          ),
-          actions: [
-            if (!_started && state == LinkState.none)
-              FilledButton(
-                key: const ValueKey('link-continue'),
-                onPressed: () =>
-                    _start(leaveAccount: preview.joinsOtherAccount),
+                ),
+                _ => Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(l10nOf(context).uiOnTheDeviceYouAlready92C421),
+                    const SizedBox(height: 12),
+                    if (qr == null)
+                      const CircularProgressIndicator()
+                    else ...[
+                      SizedBox.square(
+                        dimension: 240,
+                        child: QrImageView(
+                          data: qr,
+                          backgroundColor: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SelectableText(
+                        qr,
+                        key: const ValueKey('link-qr-text'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
+                ),
+              },
+            ),
+            actions: [
+              if (!_started && state == LinkState.none)
+                FilledButton(
+                  key: const ValueKey('link-continue'),
+                  onPressed: () =>
+                      _start(leaveAccount: preview.joinsOtherAccount),
+                  child: Text(
+                    preview.joinsOtherAccount
+                        ? l10nOf(context).linkLeaveAndContinue
+                        : l10nOf(context).actionContinue,
+                  ),
+                ),
+              TextButton(
+                onPressed: _close,
                 child: Text(
-                  preview.joinsOtherAccount
-                      ? l10nOf(context).linkLeaveAndContinue
-                      : l10nOf(context).actionContinue,
+                  state == LinkState.linked
+                      ? l10nOf(context).uiDoneE9B450
+                      : l10nOf(context).actionCancel,
                 ),
               ),
-            TextButton(
-              onPressed: () {
-                if (state != LinkState.linked) widget.controller.cancelLink();
-                Navigator.pop(context);
-              },
-              child: Text(
-                state == LinkState.linked
-                    ? l10nOf(context).uiDoneE9B450
-                    : l10nOf(context).actionCancel,
-              ),
-            ),
-          ],
+            ],
+          ),
         );
       },
     );

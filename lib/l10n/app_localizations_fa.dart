@@ -6426,25 +6426,18 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get linkModeMergeHint =>
-      'هر دو طرف به حساب تعلق می‌گیرند. مخاطبان مشترک نام‌هایی را که در این دستگاه گذاشته‌اید نگه می‌دارند.';
-
-  @override
-  String get linkModeBringMine => 'آوردن داده‌های این دستگاه به حساب';
-
-  @override
-  String get linkModeBringMineHint =>
-      'مثل ادغام، اما نام‌ها و تنظیمات این دستگاه برتری دارند.';
+      'هر دو طرف به داده‌های حساب تبدیل می‌شوند. مخاطبان مشترک نام‌هایی را که اینجا داده‌اید نگه می‌دارند. مخاطبان، گفتگوها و گروه‌های دیگر این دستگاه می‌مانند.';
 
   @override
   String get linkModeReplace => 'جایگزینی با داده‌های حساب';
 
   @override
   String get linkModeReplaceHint =>
-      'این دستگاه داده‌های حساب را می‌گیرد. گفتگوهای خودش ابتدا در یک فایل ذخیره می‌شوند.';
+      'این دستگاه گفتگوهای حساب و اطلاعات مخاطبان مشترک را می‌گیرد. گفتگوهایی که کنار می‌گذارد رمزگذاری‌شده در تنظیمات > دستگاه‌ها > گفتگوهای قدیمی نگه داشته می‌شوند.';
 
   @override
   String get linkModeReplaceConfirm =>
-      'گفتگوها و مخاطبان این دستگاه پس از ذخیره در فایل حذف می‌شوند. ادامه؟';
+      'گفتگوهای این دستگاه با مخاطبانی که در حساب هم هستند با گفتگوهای حساب جایگزین می‌شود. قدیمی‌ها در «گفتگوهای قدیمی» خواندنی می‌مانند و می‌توانید آن‌ها را در فایل ذخیره کنید. ادامه؟';
 
   @override
   String get linkModeSeparate => 'نمایه جدا (هنوز نه)';
@@ -6454,4 +6447,51 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get linkSettingsTake => 'گرفتن تنظیمات حساب';
+
+  @override
+  String get linkSettingsTakeList =>
+      'گرفتن تنظیمات حساب فقط اینها را تغییر می‌دهد: دانلود خودکار، ذخیره فضا و محدودیت انتقال Iroh.';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name: کلیدها اینجا با حساب فرق دارند ($thisFingerprint اینجا، $accountFingerprint در حساب). این دستگاه رکورد خودش را نگه می‌دارد؛ مخاطب را تأیید کنید.';
+  }
+
+  @override
+  String get devicesOldChats => 'گفتگوهای قدیمی این دستگاه';
+
+  @override
+  String get devicesOldChatsHint =>
+      'گفتگوهایی که این دستگاه هنگام پیوستن به حساب کنار گذاشت. فقط خواندنی.';
+
+  @override
+  String get linkArchiveEmpty => 'اینجا چیزی نیست.';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return '$chats گفتگو، $messages پیام';
+  }
+
+  @override
+  String get linkArchiveExport => 'ذخیره در فایل';
+
+  @override
+  String get linkArchiveExportWarning =>
+      'فایل رمزگذاری نشده است. هر کس آن را بگیرد می‌تواند این گفتگوها را بخواند. فقط جایی ذخیره کنید که اعتماد دارید.';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return 'ذخیره شد در $path.';
+  }
+
+  @override
+  String get linkArchiveDelete => 'حذف این آرشیو';
+
+  @override
+  String get linkArchiveDeleteConfirm =>
+      'این گفتگوهای قدیمی برای همیشه حذف شوند؟';
 }
