@@ -109,6 +109,8 @@ import 'xmpp/xmpp_carrier.dart';
 import 'xmpp/xmpp_chat_client.dart';
 import 'xmpp/xmpp_chats.dart';
 import 'xmpp/xmpp_omemo.dart';
+import 'xmpp/xmpp_registration.dart' show XmppCaptchaSolver;
+import 'xmpp/xmpp_servers.dart' show XmppServerEntry;
 import 'xmpp/xmpp_session.dart' show XmppSession;
 import 'xmpp/xmpp_socket.dart' show XmppEndpoint;
 import 'xmpp/xmpp_xml.dart' show isValidBareJid;
@@ -5677,7 +5679,8 @@ class MessengerController extends ChangeNotifier {
   Future<String> enableXmppCarrier({
     String? jid,
     String? password,
-    List<String> servers = defaultXmppServers,
+    List<String>? servers,
+    XmppCaptchaSolver? captchaSolver,
   }) async {
     _requireIdentity();
     if (!_carrierAllowed(TransportKind.xmpp)) {
@@ -5704,20 +5707,22 @@ class MessengerController extends ChangeNotifier {
         webSocketConnector: _xmppNetwork.webSocketConnector,
       );
     } else {
-      final probed = await reachableXmppServers(
-        servers,
-        connector: _xmppNetwork.connector,
-        webSocketConnector: _xmppNetwork.webSocketConnector,
-        webSocketLookup: _xmppNetwork.webSocketLookup,
-        needRegistration: true,
-        log: (line) => appendDebugLog('XMPP setup: $line'),
-      );
-      config = await createXmppCarrierAccount(
-        probed,
+      // The server the user named, or the bundled list of public ones.
+      final entries = servers != null
+          ? [for (final domain in servers) XmppServerEntry(domain)]
+          : await _xmppNetwork.serverList() ??
+                [
+                  for (final domain in defaultXmppServers)
+                    XmppServerEntry(domain),
+                ];
+      config = await setUpXmppCarrierAccount(
+        entries,
         resource: resource,
         connector: _xmppNetwork.connector,
         webSocketConnector: _xmppNetwork.webSocketConnector,
-        log: appendDebugLog,
+        webSocketLookup: _xmppNetwork.webSocketLookup,
+        captchaSolver: captchaSolver,
+        log: (line) => appendDebugLog('XMPP setup: $line'),
       );
     }
     await unregisterCarrierTransport(TransportKind.xmpp);
@@ -38395,6 +38400,13 @@ class MessengerController extends ChangeNotifier {
     ChatMessage message,
   ) {
     if (message.outbound) {
+      return false;
+    }
+    // Only what the chat shows can be new: a message deleted by its sender
+    // (kept as a marker) is not there to read, and would leave a "new
+    // messages" mark with nothing under it.
+    if (conversation.kind != ConversationKind.lanLobby &&
+        !_isRenderableMessage(message)) {
       return false;
     }
     final lastReadAt = conversation.lastReadAt;

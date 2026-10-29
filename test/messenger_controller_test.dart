@@ -1914,6 +1914,89 @@ void main() {
     expect(notSent.conversationId, 'a-chat-since-removed');
   });
 
+  test('a message kept only as a deletion marker is not "new"', () async {
+    final relay = _FakeRelayClient();
+    final aliceVault = _MemoryVaultStore();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      vaultStore: aliceVault,
+    );
+    final bob = await _createController(relayClient: relay, displayName: 'Bob');
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    final bobId = bob.identity!.deviceId;
+    await bob.sendMessage(contact: bob.contacts.single, body: 'oops');
+    await alice.pollNow();
+    expect(alice.unreadCountFor(bobId), 1);
+    await alice.flushPendingChanges();
+    alice.dispose();
+    // The sender deleted it: what is kept is a marker, which the chat does
+    // not show (group history keeps deletions this way).
+    aliceVault._snapshot = aliceVault._snapshot.copyWith(
+      conversations: [
+        for (final conversation in aliceVault._snapshot.conversations)
+          conversation.copyWith(
+            messages: [
+              for (final message in conversation.messages)
+                message.copyWith(deleted: true, body: ''),
+            ],
+          ),
+      ],
+    );
+    final restarted = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      vaultStore: aliceVault,
+      createIdentity: false,
+    );
+    addTearDown(restarted.dispose);
+    // The chat shows nothing, so nothing in it is new.
+    expect(restarted.messagesFor(bobId), isEmpty);
+    expect(restarted.unreadCountFor(bobId), 0);
+  });
+
+  test(
+    'a file still arriving is a bubble in the chat, and is new there',
+    () async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      // Offered, not taken yet: it waits for the user.
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(
+          autoDownloadPreset: AutoDownloadPreset.custom,
+        ),
+      );
+      bob.setAppForegroundState(false);
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: Uint8List.fromList(List<int>.filled(64 * 1024, 7)),
+        fileName: 'arriving.bin',
+      );
+      await bob.pollNow();
+      final shown = bob.messagesFor(aliceId).where((m) => m.attachment != null);
+      expect(shown, hasLength(1));
+      expect(bob.unreadCountFor(aliceId), 1);
+      expect(bob.isUnreadMessage(aliceId, shown.single), isTrue);
+      // Every unread message is one the chat shows.
+      expect(
+        bob.messagesFor(aliceId).where((m) => bob.isUnreadMessage(aliceId, m)),
+        hasLength(bob.unreadCountFor(aliceId)),
+      );
+    },
+  );
+
   test('on a group notification, "Mark as read" reads it and a reply posts '
       'in it', () async {
     final relay = _FakeRelayClient();
