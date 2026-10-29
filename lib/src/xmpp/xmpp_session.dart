@@ -227,7 +227,11 @@ Future<XmppFeatures> _openSecureStream(
 
   var features = await open();
   if (!wire.secure) {
-    if (features.startTls && wire.canStartTls) {
+    // A local lab server (plain loopback) is used as it is, even when it
+    // offers STARTTLS with a certificate nobody could check.
+    if (features.startTls &&
+        wire.canStartTls &&
+        endpoint.mode != XmppEndpointMode.plainLoopback) {
       wire.send(XmppElement('starttls', xmlns: XmppNs.tls));
       final answer = await queue.element(_answerTimeout);
       if (answer.name != 'proceed') {

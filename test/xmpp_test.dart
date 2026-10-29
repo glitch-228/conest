@@ -274,6 +274,31 @@ void main() {
       expect(server.received.where((e) => e.name == 'auth'), isEmpty);
     });
 
+    test(
+      'a plain loopback lab server is used as it is, STARTTLS offered or not',
+      () async {
+        final server = FakeXmppServer(offerPlainSignInToo: true);
+        server.addAccount('alice', 'secret');
+        final session = XmppSession(
+          jid: 'alice@xmpp.test',
+          password: 'secret',
+          resource: 'conest-1',
+          endpoints: [
+            const XmppEndpoint(
+              host: 'localhost',
+              port: 5222,
+              mode: XmppEndpointMode.plainLoopback,
+            ),
+          ],
+          connector: server.connect,
+        );
+        addTearDown(session.stop);
+        session.start();
+        await _until(() => session.state == XmppSessionState.connected);
+        expect(server.received.where((e) => e.name == 'starttls'), isEmpty);
+      },
+    );
+
     test('a wrong password stops trying', () async {
       final server = FakeXmppServer();
       server.addAccount('alice', 'secret');

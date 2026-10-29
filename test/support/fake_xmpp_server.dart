@@ -21,6 +21,7 @@ class FakeXmppServer {
     this.allowRegistration = true,
     this.streamManagement = true,
     this.offerStartTls = true,
+    this.offerPlainSignInToo = false,
     this.mechanisms = const ['SCRAM-SHA-256', 'SCRAM-SHA-1', 'PLAIN'],
   });
 
@@ -28,6 +29,10 @@ class FakeXmppServer {
   bool allowRegistration;
   bool streamManagement;
   bool offerStartTls;
+
+  /// Offer sign-in mechanisms beside STARTTLS on a stream without TLS, as a
+  /// server with `c2s_require_encryption = false` does.
+  bool offerPlainSignInToo;
   List<String> mechanisms;
 
   /// Accounts: local part to password.
@@ -493,7 +498,11 @@ class _FakeConnection {
     final features = XmppElement('features', xmlns: XmppNs.stream);
     if (!_transport.secure && server.offerStartTls) {
       features.add(XmppElement('starttls', xmlns: XmppNs.tls));
-    } else if (!_authenticated) {
+    }
+    if (!_authenticated &&
+        (_transport.secure ||
+            !server.offerStartTls ||
+            server.offerPlainSignInToo)) {
       features.add(
         XmppElement(
           'mechanisms',
