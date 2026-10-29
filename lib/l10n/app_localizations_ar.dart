@@ -6492,4 +6492,30 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get linkLeaveAndContinue => 'مغادرة ذلك الحساب والمتابعة';
+
+  @override
+  String get devicesSyncSpeed => 'المزامنة مع أجهزتي';
+
+  @override
+  String get devicesSyncSteady => 'ثابتة';
+
+  @override
+  String get devicesSyncFast => 'سريعة';
+
+  @override
+  String get devicesSyncPaused => 'متوقفة';
+
+  @override
+  String get devicesSyncFastWarning =>
+      'المزامنة السريعة تستهلك الكثير من البيانات والبطارية. تعمل فقط على الشبكات غير المحدودة بحجم، ويُطلب تأكيدك في كل مرة تشغّلها.';
+
+  @override
+  String get devicesSyncFastTurnOn => 'تشغيل المزامنة السريعة';
+
+  @override
+  String get devicesShareSettings => 'مشاركة الإعدادات مع أجهزتي الأخرى';
+
+  @override
+  String get devicesShareSettingsHint =>
+      'تتبع قواعد التنزيل وحدود التخزين أحدث تغيير. يعمل فقط بين أجهزة فعّلت هذا الخيار جميعها.';
 }

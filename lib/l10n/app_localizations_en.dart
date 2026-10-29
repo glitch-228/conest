@@ -6367,4 +6367,30 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkLeaveAndContinue => 'Leave that account and continue';
+
+  @override
+  String get devicesSyncSpeed => 'Syncing with my devices';
+
+  @override
+  String get devicesSyncSteady => 'Steady';
+
+  @override
+  String get devicesSyncFast => 'Fast';
+
+  @override
+  String get devicesSyncPaused => 'Paused';
+
+  @override
+  String get devicesSyncFastWarning =>
+      'Fast sync uses a lot of data and battery. It only runs on networks that are not metered, and you are asked again each time you turn it on.';
+
+  @override
+  String get devicesSyncFastTurnOn => 'Turn on fast sync';
+
+  @override
+  String get devicesShareSettings => 'Share settings with my other devices';
+
+  @override
+  String get devicesShareSettingsHint =>
+      'Download rules and storage limits follow the newest change. It only works between devices that both have this on.';
 }

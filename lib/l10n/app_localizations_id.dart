@@ -6362,4 +6362,31 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get linkLeaveAndContinue => 'Keluar dari akun itu dan lanjutkan';
+
+  @override
+  String get devicesSyncSpeed => 'Sinkronisasi dengan perangkat saya';
+
+  @override
+  String get devicesSyncSteady => 'Stabil';
+
+  @override
+  String get devicesSyncFast => 'Cepat';
+
+  @override
+  String get devicesSyncPaused => 'Dijeda';
+
+  @override
+  String get devicesSyncFastWarning =>
+      'Sinkronisasi cepat memakai banyak data dan baterai. Hanya berjalan di jaringan tanpa batas kuota, dan Anda ditanya lagi setiap kali menyalakannya.';
+
+  @override
+  String get devicesSyncFastTurnOn => 'Nyalakan sinkronisasi cepat';
+
+  @override
+  String get devicesShareSettings =>
+      'Bagikan pengaturan ke perangkat saya yang lain';
+
+  @override
+  String get devicesShareSettingsHint =>
+      'Aturan unduhan dan batas penyimpanan mengikuti perubahan terbaru. Hanya berfungsi antar perangkat yang sama-sama mengaktifkannya.';
 }

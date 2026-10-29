@@ -9372,5 +9372,37 @@
   "linkLeaveAndContinue": "Leave that account and continue",
   "@linkLeaveAndContinue": {
     "description": "Link dialog button: leave the old account and link."
+  },
+  "devicesSyncSpeed": "Syncing with my devices",
+  "@devicesSyncSpeed": {
+    "description": "Settings, Devices: label of the sync speed choice between own devices."
+  },
+  "devicesSyncSteady": "Steady",
+  "@devicesSyncSteady": {
+    "description": "Sync speed choice: gentle default."
+  },
+  "devicesSyncFast": "Fast",
+  "@devicesSyncFast": {
+    "description": "Sync speed choice: fast."
+  },
+  "devicesSyncPaused": "Paused",
+  "@devicesSyncPaused": {
+    "description": "Sync speed choice: stopped."
+  },
+  "devicesSyncFastWarning": "Fast sync uses a lot of data and battery. It only runs on networks that are not metered, and you are asked again each time you turn it on.",
+  "@devicesSyncFastWarning": {
+    "description": "Confirmation text before fast sync."
+  },
+  "devicesSyncFastTurnOn": "Turn on fast sync",
+  "@devicesSyncFastTurnOn": {
+    "description": "Button confirming fast sync."
+  },
+  "devicesShareSettings": "Share settings with my other devices",
+  "@devicesShareSettings": {
+    "description": "Switch: share general settings with own devices."
+  },
+  "devicesShareSettingsHint": "Download rules and storage limits follow the newest change. It only works between devices that both have this on.",
+  "@devicesShareSettingsHint": {
+    "description": "Explains the share settings switch."
   }
 }

@@ -6088,4 +6088,29 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get linkLeaveAndContinue => '退出该账号并继续';
+
+  @override
+  String get devicesSyncSpeed => '与我的设备同步';
+
+  @override
+  String get devicesSyncSteady => '平稳';
+
+  @override
+  String get devicesSyncFast => '快速';
+
+  @override
+  String get devicesSyncPaused => '已暂停';
+
+  @override
+  String get devicesSyncFastWarning =>
+      '快速同步会消耗大量流量和电量。它只在不计流量的网络上运行，每次开启都会再次询问你。';
+
+  @override
+  String get devicesSyncFastTurnOn => '开启快速同步';
+
+  @override
+  String get devicesShareSettings => '与我的其他设备共享设置';
+
+  @override
+  String get devicesShareSettingsHint => '下载规则和存储限制以最新的更改为准。只有两台设备都开启时才有效。';
 }

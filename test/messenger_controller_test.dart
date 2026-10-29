@@ -20236,6 +20236,27 @@ void main() {
       );
     });
 
+    test(
+      'this device\'s alias and routing only carry over to the same '
+      'device: other keys under the same id keep the account\'s record',
+      () async {
+        final (alice, bob, phone) = await make3(['Alice', 'Bob', 'Phone']);
+        await _pairControllers(alice, bob);
+        await _pairControllers(phone, bob);
+        final known = phone.contacts.single.copyWith(alias: 'Bobby');
+        final same = alice.contacts.single;
+        final merged = phone.mergeLinkedContactsForTesting([same], [known]);
+        expect(merged.first.alias, 'Bobby');
+        final other = same.copyWith(publicKeyBase64: 'AAAA');
+        final mismatched = phone.mergeLinkedContactsForTesting(
+          [other],
+          [known],
+        );
+        expect(mismatched.first.alias, same.alias);
+        expect(mismatched.first.publicKeyBase64, 'AAAA');
+      },
+    );
+
     test('a device that belongs to another account is refused until the '
         'user confirms leaving it', () async {
       final (alice, other, phone) = await make3(['Alice', 'Other', 'Phone']);
@@ -22742,6 +22763,82 @@ void main() {
       expect(alice.linkState, LinkState.showingQrCode);
       alice.cancelLink();
       await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('Settings has the sync speed and the share-settings switch '
+        'with other devices', (tester) async {
+      final (alice, phone) = (await tester.runAsync(() async {
+        final network = _InProcessIrohNetwork();
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          transportRegistryFactory: network.registry,
+        );
+        final phone = await _createController(
+          relayClient: relay,
+          displayName: 'Phone',
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(phone.dispose);
+        final qr = await phone.startLinkAsNewDevice();
+        await alice.startLinkFromQrCode(qr);
+        await _waitForIroh(
+          () => phone.linkCode != null && alice.linkCode != null,
+        );
+        await phone.confirmLinkCode();
+        await alice.confirmLinkCode();
+        await _waitForIroh(() => phone.linkState == LinkState.linked);
+        return (alice, phone);
+      }))!;
+      expect(phone.identity, isNotNull);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: ListenableBuilder(
+                listenable: alice,
+                builder: (context, _) => DevicesPanel(controller: alice),
+              ),
+            ),
+          ),
+        ),
+      );
+      SyncSpeed speed() => alice.identity!.connectivity.syncSpeed;
+      expect(speed(), SyncSpeed.steady);
+      await tester.tap(find.text('Paused'));
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump();
+      expect(speed(), SyncSpeed.paused);
+      expect(alice.ownDeviceSyncPermission.allowed, isFalse);
+      // Fast asks first.
+      await tester.tap(find.text('Fast'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(speed(), SyncSpeed.paused, reason: 'not before the user agrees');
+      await tester.tap(find.byKey(const ValueKey('sync-fast-confirm')));
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump();
+      expect(speed(), SyncSpeed.fast);
+      expect(alice.ownDeviceSyncPolicy.fastConfirmed, isTrue);
+      // Sharing settings is opt in.
+      expect(alice.identity!.connectivity.shareSettings, isFalse);
+      await tester.tap(find.byKey(const ValueKey('share-settings')));
+      await tester.pump();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pump();
+      expect(alice.identity!.connectivity.shareSettings, isTrue);
+      await tester.pumpWidget(const SizedBox());
+      // Stops the timers the settings changes started.
+      await tester.runAsync(() async => alice.dispose());
     });
 
     test(

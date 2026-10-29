@@ -34293,6 +34293,10 @@ class MessengerController extends ChangeNotifier {
     final asNew = _linkAsNew;
     final offer = asNew?.offer;
     if (asNew != null && offer != null && asNew.code != null) {
+      if (!asNew.mayLeaveAccount && deviceLinkPreview().joinsOtherAccount) {
+        cancelLink();
+        throw const LinkLeavesAccountException();
+      }
       if (_linkExpired(asNew.startedAt)) {
         cancelLink();
         throw StateError('The link took too long. Start again.');
@@ -34725,6 +34729,12 @@ class MessengerController extends ChangeNotifier {
     _advertiseProfileToContacts();
   }
 
+  @visibleForTesting
+  List<ContactRecord> mergeLinkedContactsForTesting(
+    List<ContactRecord> granted,
+    List<ContactRecord> own,
+  ) => _mergeLinkedContacts(granted, own);
+
   /// The account's [granted] contacts, each with this device's own alias
   /// and routing choices where it knew the contact already, then the
   /// contacts only this device has.
@@ -34735,8 +34745,24 @@ class MessengerController extends ChangeNotifier {
     final mine = {for (final c in own) c.deviceId: c};
     return [
       for (final c in granted)
-        if (mine[c.deviceId] case final known? when !known.ownDevice)
-          c.copyWith(alias: known.alias, routing: known.routing)
+        // Only when it is the same device (same keys): a different key
+        // under the same id keeps the account's record and its name.
+        if (mine[c.deviceId] case final known?
+            when !known.ownDevice &&
+                known.publicKeyBase64 == c.publicKeyBase64 &&
+                known.signingPublicKeyBase64 == c.signingPublicKeyBase64)
+          c.copyWith(
+            alias: known.alias,
+            routing: known.routing,
+            accountDeviceListVersion: max(
+              known.accountDeviceListVersion,
+              c.accountDeviceListVersion,
+            ),
+            accountRevokedDeviceIds: {
+              ...known.accountRevokedDeviceIds,
+              ...c.accountRevokedDeviceIds,
+            }.toList(),
+          )
         else
           c,
       ...own,
@@ -35635,6 +35661,12 @@ class MessengerController extends ChangeNotifier {
           '${sender.deviceName ?? sender.alias}.';
       _setTransientStatus(_lastSharedSettingsNotice!);
     }
+  }
+
+  /// Turns sharing the general settings with own devices on or off.
+  Future<void> setShareSettings(bool on) async {
+    final me = _requireIdentity();
+    await updateGlobalConnectivity(me.connectivity.copyWith(shareSettings: on));
   }
 
   /// Chooses how fast to sync with own devices. Fast counts only when the
@@ -37365,8 +37397,16 @@ class MessengerController extends ChangeNotifier {
       if (index >= 0 &&
           contacts[index].accountAnchorDeviceId != current.deviceId) {
         final other = contacts[index];
+        // Only a live, accepted contact that is not known as part of any
+        // other account (a device's proof never expires, so an account it
+        // left must not be able to take it back).
         if (other.ownDevice ||
             other.isLinkedDevice ||
+            other.isArchived ||
+            other.pairingState != ContactPairingState.accepted ||
+            (other.accountKeyBase64 != null &&
+                other.accountKeyBase64 != update.accountKeyBase64) ||
+            linkedDevicesOf(other.deviceId).isNotEmpty ||
             other.publicKeyBase64 != cert.encryptionKeyBase64 ||
             other.signingPublicKeyBase64 != cert.signingKeyBase64) {
           continue;
@@ -37390,6 +37430,10 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(contacts: contacts);
     for (final device in joinedChats) {
       _joinChats(device, into: current.deviceId);
+      setStatus(
+        '${current.alias} now shows one chat for their devices; one of '
+        'them was a separate contact.',
+      );
     }
     await _saveSnapshotSilently(notify: true);
     for (final cert in added) {

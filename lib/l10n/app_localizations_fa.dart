@@ -6367,4 +6367,30 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get linkLeaveAndContinue => 'خروج از آن حساب و ادامه';
+
+  @override
+  String get devicesSyncSpeed => 'همگام‌سازی با دستگاه‌های من';
+
+  @override
+  String get devicesSyncSteady => 'پیوسته';
+
+  @override
+  String get devicesSyncFast => 'سریع';
+
+  @override
+  String get devicesSyncPaused => 'متوقف';
+
+  @override
+  String get devicesSyncFastWarning =>
+      'همگام‌سازی سریع داده و باتری زیادی مصرف می‌کند. فقط روی شبکه‌های بدون محدودیت حجم اجرا می‌شود و هر بار که روشنش کنید دوباره پرسیده می‌شود.';
+
+  @override
+  String get devicesSyncFastTurnOn => 'روشن کردن همگام‌سازی سریع';
+
+  @override
+  String get devicesShareSettings => 'اشتراک تنظیمات با دستگاه‌های دیگرم';
+
+  @override
+  String get devicesShareSettingsHint =>
+      'قوانین دانلود و محدودیت‌های فضا از جدیدترین تغییر پیروی می‌کنند. فقط بین دستگاه‌هایی کار می‌کند که هر دو این را روشن کرده‌اند.';
 }

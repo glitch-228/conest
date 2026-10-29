@@ -6499,4 +6499,31 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get linkLeaveAndContinue => 'Выйти из того аккаунта и продолжить';
+
+  @override
+  String get devicesSyncSpeed => 'Синхронизация с моими устройствами';
+
+  @override
+  String get devicesSyncSteady => 'Ровная';
+
+  @override
+  String get devicesSyncFast => 'Быстрая';
+
+  @override
+  String get devicesSyncPaused => 'Пауза';
+
+  @override
+  String get devicesSyncFastWarning =>
+      'Быстрая синхронизация расходует много трафика и заряда. Она работает только в сетях без ограничения трафика, и вас спросят снова при каждом включении.';
+
+  @override
+  String get devicesSyncFastTurnOn => 'Включить быструю синхронизацию';
+
+  @override
+  String get devicesShareSettings =>
+      'Делиться настройками с моими другими устройствами';
+
+  @override
+  String get devicesShareSettingsHint =>
+      'Правила загрузки и лимиты хранилища следуют за последним изменением. Работает только между устройствами, где это включено.';
 }
