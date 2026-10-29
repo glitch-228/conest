@@ -429,6 +429,9 @@ class PlatformBridge {
       await closeVoiceCallMedia();
     }
     await prepareVoiceCallMedia();
+    // A call took the audio from the test while it waited for the
+    // permission: the test gives up.
+    if (test && !_microphoneTestOpen) return false;
     final settings = _voiceSettings;
     await nativeAudio.open(
       input: settings.inputDevice,
@@ -442,6 +445,7 @@ class PlatformBridge {
               'handle': nativeAudio.handle,
               'peerDeviceId': peerDeviceId,
               'outgoing': outgoing,
+              'test': test,
             });
         if (started != true) {
           await nativeAudio.close();
@@ -569,18 +573,31 @@ class PlatformBridge {
     }
     if (_voiceAudio?.isOpen == true) return false;
     _micTestLoopback = loopback;
+    // Set before the first await: a call that opens meanwhile sees the test
+    // and takes the audio from it (which clears this).
+    _microphoneTestOpen = true;
     try {
       final opened = await openVoiceCallMedia(
         peerDeviceId: _microphoneTestPeer,
         outgoing: true,
       );
-      _microphoneTestOpen = opened;
-      if (!opened) _micTestLoopback = false;
-      return opened;
+      if (!opened) {
+        _microphoneTestOpen = false;
+        _micTestLoopback = false;
+      }
+      return opened && _microphoneTestOpen;
     } catch (_) {
+      _microphoneTestOpen = false;
       _micTestLoopback = false;
       rethrow;
     }
+  }
+
+  /// Closes the audio only if the microphone test still has it: a call
+  /// that took it over is left alone.
+  Future<void> closeMicrophoneTest() async {
+    if (!_microphoneTestOpen) return;
+    await closeVoiceCallMedia();
   }
 
   void setMicrophoneTestLoopback(bool loopback) {

@@ -79,6 +79,7 @@ import 'package:conest/src/email/carrier_mail.dart' show maxCarrierMailBytes;
 import 'package:conest/src/email/delta_content.dart';
 import 'package:conest/src/email/pgp.dart';
 import 'package:conest/src/content_routing.dart';
+import 'package:conest/src/transfer/own_device_sync_policy.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/network_history.dart';
 import 'package:conest/src/native_attachment_crypto.dart';
@@ -162,6 +163,9 @@ class _InProcessLanDirectChannel
   /// Number of envelopes this channel has accepted. Tests assert > 0 to
   /// confirm the fast-path actually carried traffic.
   int acceptedEnvelopes = 0;
+
+  /// File blocks this channel has taken (binary LAN).
+  int acceptedBlocks = 0;
 
   /// nightly.12: per-test knob. When `simulatedReachable == false`, the
   /// `probeReachable` method returns false so the controller's
@@ -283,6 +287,7 @@ class _InProcessLanDirectChannel
     final handler = target._blockHandler;
     if (handler == null) return false;
     target.acceptedEnvelopes++;
+    target.acceptedBlocks++;
     await handler(
       LanAttachmentBlock(
         attachmentId: block.attachmentId,
@@ -1327,6 +1332,9 @@ class _InProcessIrohNetwork {
   final envelopes = <RelayEnvelope>[];
   final groupFileHeaders = <GroupFileBinaryHeader>[];
 
+  /// 1:1 file blocks carried (binary Iroh ranges).
+  int attachmentRanges = 0;
+
   /// (sender, recipient) endpoint pairs that cannot reach each other.
   final blockedPairs = <(String, String)>{};
   final blockedEnvelopePairs = <(String, String)>{};
@@ -1443,6 +1451,8 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
     final range = decodeIrohAttachmentRangeFrame(bytes);
     if (range != null && isGroupFileBinary(range.bytes)) {
       network.groupFileHeaders.add(peekGroupFileBinary(range.bytes));
+    } else if (range != null) {
+      network.attachmentRanges++;
     }
     if (range == null) {
       final decoded = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
@@ -1581,12 +1591,14 @@ void main() {
     () async {
       final relay = _FakeRelayClient();
       final recorder = _RecordingPlatformBridge();
-      var clock = DateTime(2026, 10, 26, 23, 30);
+      // The real clock while pairing (it checks clock skew), then set
+      // hours of the same day and the next.
+      DateTime? clock;
       final alice = await _createController(
         relayClient: relay,
         displayName: 'Alice',
         platformBridge: recorder,
-        nowProvider: () => clock,
+        nowProvider: () => clock ?? DateTime.now(),
       );
       final bob = await _createController(
         relayClient: relay,
@@ -1606,12 +1618,14 @@ void main() {
       _ShowCall? shownFor(String text) =>
           recorder.shown.where((c) => c.body.endsWith(text)).firstOrNull;
 
+      final today = DateTime.now();
+      clock = DateTime(today.year, today.month, today.day, 23, 30);
       // Quiet hours (22:00 to 07:00): shown, without sound.
       await alice.updateQuietHours(const QuietHours(enabled: true));
       await bob.sendMessage(contact: bob.contacts.single, body: 'at night');
       await settle();
       expect(shownFor('at night')?.silent, isTrue);
-      clock = DateTime(2026, 10, 27, 12);
+      clock = DateTime(today.year, today.month, today.day + 1, 12);
       await bob.sendMessage(contact: bob.contacts.single, body: 'at noon');
       await settle();
       expect(shownFor('at noon')?.silent, isFalse);
@@ -3130,6 +3144,33 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('the push-to-talk key always lets go, in a call or not', (
+    tester,
+  ) async {
+    late MessengerController alice;
+    await tester.runAsync(() async {
+      alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      await alice.updateVoiceSettings(
+        alice.voiceSettings.copyWith(
+          inputMode: VoiceInputMode.pushToTalk,
+          pushToTalkKey: LogicalKeyboardKey.keyT.keyId,
+        ),
+      );
+      await alice.setPushToTalkHeld(true);
+    });
+    addTearDown(alice.dispose);
+    final keys = PushToTalkKeyHandler(alice)..attach();
+    addTearDown(keys.detach);
+    expect(alice.callUsesMicrophone, isFalse);
+    expect(alice.pushToTalkHeld, isTrue);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyT);
+    await tester.pump();
+    expect(alice.pushToTalkHeld, isFalse);
+  });
+
   group('contact recovery', () {
     late _FakeRelayClient relay;
     late MessengerController alice;
@@ -3699,6 +3740,560 @@ void main() {
         relay.storedEnvelopes.where((e) => e.kind != 'pairing_announcement'),
         isEmpty,
       );
+    },
+  );
+
+  test(
+    'a file to a peer on both LAN and Iroh goes over both at once',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final aliceLan = _InProcessLanDirectChannel(host: '192.168.61.10');
+      final bobLan = _InProcessLanDirectChannel(host: '192.168.61.11');
+      addTearDown(aliceLan.stop);
+      addTearDown(bobLan.stop);
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.61.10'],
+        lanDirectChannel: aliceLan,
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-striped',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.61.11'],
+        lanDirectChannel: bobLan,
+        transportRegistryFactory: network.registry,
+        debugBuildId: 'debug-striped',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final side in [alice, bob]) {
+        await side.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(
+            irohRelayEnabled: false,
+            lanEnabled: true,
+          ),
+        );
+      }
+      await _pairControllers(alice, bob);
+      // The ordinary send path (the debug battle test pins LAN only).
+      final bytes = Uint8List(24 * 1024 * 1024);
+      for (var i = 0; i < bytes.length; i += 4099) {
+        bytes[i] = i & 0xff;
+      }
+      final sourceRoot = await Directory.systemTemp.createTemp(
+        'conest-striped-',
+      );
+      addTearDown(() => sourceRoot.delete(recursive: true));
+      final sourceFile = File('${sourceRoot.path}/striped.bin');
+      await sourceFile.writeAsBytes(bytes);
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'striped-source',
+          fileName: 'striped.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: bytes.length,
+          filePath: sourceFile.path,
+        ),
+      );
+      ChatMessage? received;
+      for (var step = 0; step < 3000; step++) {
+        received = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment?.fileName == 'striped.bin')
+            .firstOrNull;
+        if (received != null) {
+          if (bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+            await bob.acceptIncomingAttachment(received.attachment!.id);
+          }
+          if (bob.attachmentAvailableLocally(received.attachment!.id)) break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(received, isNotNull);
+      final cache = await bob.attachmentCachePathFor(received!.attachment!.id);
+      expect(cache, isNotNull);
+      expect(await File(cache!).readAsBytes(), bytes);
+      expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried some');
+      expect(
+        network.attachmentRanges,
+        greaterThan(0),
+        reason: 'Iroh carried some',
+      );
+    },
+  );
+
+  test(
+    'group file pieces to a member on both LAN and Iroh go over both',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final aliceLan = _InProcessLanDirectChannel(host: '192.168.63.10');
+      final bobLan = _InProcessLanDirectChannel(host: '192.168.63.11');
+      addTearDown(aliceLan.stop);
+      addTearDown(bobLan.stop);
+      final aliceRoot = await Directory.systemTemp.createTemp('conest_gfs_a-');
+      final bobRoot = await Directory.systemTemp.createTemp('conest_gfs_b-');
+      addTearDown(() async {
+        if (await aliceRoot.exists()) await aliceRoot.delete(recursive: true);
+        if (await bobRoot.exists()) await bobRoot.delete(recursive: true);
+      });
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.63.10'],
+        lanDirectChannel: aliceLan,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.63.11'],
+        lanDirectChannel: bobLan,
+        transportRegistryFactory: network.registry,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final side in [alice, bob]) {
+        await side.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(
+            irohRelayEnabled: false,
+            lanEnabled: true,
+          ),
+        );
+      }
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Striped',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(() => bob.groups.isNotEmpty, reason: 'group');
+      final content = Uint8List(14 * 1024 * 1024);
+      for (var i = 0; i < content.length; i += 4099) {
+        content[i] = i & 0xff;
+      }
+      final source = await File(
+        '${aliceRoot.path}/big.bin',
+      ).writeAsBytes(content);
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'big.bin',
+        mimeType: 'application/octet-stream',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      await _waitForIroh(
+        () =>
+            bob.groupFileSession(eventId)?.download.state ==
+            GroupFileDownloadState.complete,
+        reason: 'group file download',
+        timeout: const Duration(seconds: 60),
+      );
+      expect(await File(bob.groupFilePathFor(eventId)!).readAsBytes(), content);
+      expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried some');
+      expect(
+        network.groupFileHeaders.where((h) => h.eventId == eventId),
+        isNotEmpty,
+        reason: 'Iroh carried some',
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test('while LAN works, a file does not use an Iroh relay path', () async {
+    final network = _InProcessIrohNetwork(relayed: true);
+    final relay = _FakeRelayClient();
+    final aliceLan = _InProcessLanDirectChannel(host: '192.168.64.10');
+    final bobLan = _InProcessLanDirectChannel(host: '192.168.64.11');
+    addTearDown(aliceLan.stop);
+    addTearDown(bobLan.stop);
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      lanAddresses: const ['192.168.64.10'],
+      lanDirectChannel: aliceLan,
+      transportRegistryFactory: network.registry,
+      debugBuildId: 'debug-norelay',
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      lanAddresses: const ['192.168.64.11'],
+      lanDirectChannel: bobLan,
+      transportRegistryFactory: network.registry,
+      debugBuildId: 'debug-norelay',
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    for (final side in [alice, bob]) {
+      await side.updateGlobalConnectivity(
+        _irohOnlyConnectivity.copyWith(lanEnabled: true),
+      );
+    }
+    await _pairControllers(alice, bob);
+    // The ordinary send path (the debug battle test pins LAN only).
+    final bytes = Uint8List(24 * 1024 * 1024);
+    for (var i = 0; i < bytes.length; i += 4099) {
+      bytes[i] = i & 0xff;
+    }
+    final sourceRoot = await Directory.systemTemp.createTemp('conest-striped-');
+    addTearDown(() => sourceRoot.delete(recursive: true));
+    final sourceFile = File('${sourceRoot.path}/striped.bin');
+    await sourceFile.writeAsBytes(bytes);
+    await alice.sendAttachmentSource(
+      contact: alice.contacts.single,
+      source: StagedAttachment(
+        id: 'striped-source',
+        fileName: 'striped.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: bytes.length,
+        filePath: sourceFile.path,
+      ),
+    );
+    ChatMessage? received;
+    for (var step = 0; step < 3000; step++) {
+      received = bob
+          .messagesFor(alice.identity!.deviceId)
+          .where((m) => m.attachment?.fileName == 'striped.bin')
+          .firstOrNull;
+      if (received != null) {
+        if (bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+          await bob.acceptIncomingAttachment(received.attachment!.id);
+        }
+        if (bob.attachmentAvailableLocally(received.attachment!.id)) break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(received, isNotNull);
+    final cache = await bob.attachmentCachePathFor(received!.attachment!.id);
+    expect(cache, isNotNull);
+    expect(await File(cache!).readAsBytes(), bytes);
+    expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried it');
+    // One block may probe Iroh before LAN is measured; once LAN has proved
+    // itself no more go over the relay path.
+    expect(
+      network.attachmentRanges,
+      lessThanOrEqualTo(1),
+      reason: 'blocks took an Iroh relay path while LAN worked',
+    );
+  });
+
+  test(
+    'a file whose only route is refused waits for another instead of failing',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final side in [alice, bob]) {
+        await side.updateGlobalConnectivity(_irohOnlyConnectivity);
+      }
+      await _pairControllers(alice, bob);
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(
+          contentRefusals: const ContentRefusals().withRefused(
+            TransportKind.iroh,
+            ContentClass.fileMedium,
+            true,
+          ),
+        ),
+      );
+      final sourceRoot = await Directory.systemTemp.createTemp('conest-wait-');
+      addTearDown(() => sourceRoot.delete(recursive: true));
+      final bytes = Uint8List(12 * 1024 * 1024);
+      final file = await File('${sourceRoot.path}/w.bin').writeAsBytes(bytes);
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'w',
+          fileName: 'w.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: bytes.length,
+          filePath: file.path,
+        ),
+      );
+      final bobId = bob.identity!.deviceId;
+      for (var i = 0; i < 150; i++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        final incoming = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment != null)
+            .firstOrNull;
+        if (incoming != null &&
+            bob.attachmentAwaitingAcceptance(incoming.attachment!.id)) {
+          await bob.acceptIncomingAttachment(incoming.attachment!.id);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final sent = alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.attachment?.fileName == 'w.bin');
+      expect(sent.state, isNot(DeliveryState.failed));
+      final session = alice.transferSnapshots.where(
+        (t) => t.id == sent.attachment!.id,
+      );
+      expect(session, isNotEmpty);
+      expect(session.single.phase, isNot(TransferPhase.failed));
+    },
+    timeout: const Timeout(Duration(minutes: 1)),
+  );
+
+  test('when LAN and Iroh both fail for a file, it keeps retrying instead of '
+      'failing as if the peer lacked binary blocks', () async {
+    final network = _InProcessIrohNetwork();
+    final relay = _FakeRelayClient();
+    final aliceLan = _InProcessLanDirectChannel(host: '192.168.65.10');
+    final bobLan = _InProcessLanDirectChannel(host: '192.168.65.11');
+    addTearDown(aliceLan.stop);
+    addTearDown(bobLan.stop);
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      lanAddresses: const ['192.168.65.10'],
+      lanDirectChannel: aliceLan,
+      transportRegistryFactory: network.registry,
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      lanAddresses: const ['192.168.65.11'],
+      lanDirectChannel: bobLan,
+      transportRegistryFactory: network.registry,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    for (final side in [alice, bob]) {
+      await side.updateGlobalConnectivity(
+        _irohOnlyConnectivity.copyWith(lanEnabled: true),
+      );
+    }
+    await _pairControllers(alice, bob);
+    final root = await Directory.systemTemp.createTemp('conest-bothfail-');
+    addTearDown(() => root.delete(recursive: true));
+    final bytes = Uint8List(10 * 1024 * 1024);
+    final file = await File('${root.path}/b.bin').writeAsBytes(bytes);
+    // Peer moved networks: nothing reaches it any more.
+    aliceLan.blockPutOverride = () async => false;
+    network.blockedPairs
+      ..add((alice.identity!.irohEndpointId!, bob.identity!.irohEndpointId!))
+      ..add((bob.identity!.irohEndpointId!, alice.identity!.irohEndpointId!));
+    await alice.sendAttachmentSource(
+      contact: alice.contacts.single,
+      source: StagedAttachment(
+        id: 'b',
+        fileName: 'b.bin',
+        mimeType: 'application/octet-stream',
+        sizeBytes: bytes.length,
+        filePath: file.path,
+      ),
+    );
+    for (var i = 0; i < 100; i++) {
+      await bob.pollNow();
+      await alice.pollNow();
+      final incoming = bob
+          .messagesFor(alice.identity!.deviceId)
+          .where((m) => m.attachment != null)
+          .firstOrNull;
+      if (incoming != null &&
+          bob.attachmentAwaitingAcceptance(incoming.attachment!.id)) {
+        await bob.acceptIncomingAttachment(incoming.attachment!.id);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+    final sent = alice
+        .messagesFor(bob.identity!.deviceId)
+        .singleWhere((m) => m.attachment?.fileName == 'b.bin');
+    final phase = alice.transferSnapshots
+        .where((t) => t.id == sent.attachment!.id)
+        .map((t) => t.phase)
+        .firstOrNull;
+    expect(phase, isNot(TransferPhase.failed));
+    expect(sent.state, isNot(DeliveryState.failed));
+  }, timeout: const Timeout(Duration(minutes: 1)));
+
+  test(
+    'a big group file (over the online limit) still reaches a member over LAN',
+    () async {
+      final relay = _FakeRelayClient();
+      final aliceLan = _InProcessLanDirectChannel(host: '192.168.63.10');
+      final bobLan = _InProcessLanDirectChannel(host: '192.168.63.11');
+      addTearDown(aliceLan.stop);
+      addTearDown(bobLan.stop);
+      final aliceRoot = await Directory.systemTemp.createTemp('conest_gfs_a-');
+      final bobRoot = await Directory.systemTemp.createTemp('conest_gfs_b-');
+      addTearDown(() async {
+        if (await aliceRoot.exists()) await aliceRoot.delete(recursive: true);
+        if (await bobRoot.exists()) await bobRoot.delete(recursive: true);
+      });
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.63.10'],
+        lanDirectChannel: aliceLan,
+        attachmentRootProvider: () async => aliceRoot,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.63.11'],
+        lanDirectChannel: bobLan,
+        attachmentRootProvider: () async => bobRoot,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Striped',
+        members: [alice.contacts.single],
+      );
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.groups.isNotEmpty;
+      }, reason: 'group');
+      final content = Uint8List(50 * 1024 * 1024);
+      for (var i = 0; i < content.length; i += 4099) {
+        content[i] = i & 0xff;
+      }
+      final source = await File(
+        '${aliceRoot.path}/big.bin',
+      ).writeAsBytes(content);
+      await alice.publishGroupFile(
+        groupId: group.groupId,
+        path: source.path,
+        fileName: 'big.bin',
+        mimeType: 'application/octet-stream',
+      );
+      final eventId = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((message) => message.groupFile != null)
+          .id;
+      await _waitForIroh(
+        () {
+          unawaited(bob.pollNow());
+          unawaited(alice.pollNow());
+          return bob.groupFileSession(eventId)?.download.state ==
+              GroupFileDownloadState.complete;
+        },
+        reason: 'group file download',
+        timeout: const Duration(seconds: 90),
+      );
+      expect(await File(bob.groupFilePathFor(eventId)!).readAsBytes(), content);
+      expect(bobLan.acceptedBlocks, greaterThan(0), reason: 'LAN carried some');
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
+    'file blocks follow the content refusals: a refused LAN carries none',
+    () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final aliceLan = _InProcessLanDirectChannel(host: '192.168.62.10');
+      final bobLan = _InProcessLanDirectChannel(host: '192.168.62.11');
+      addTearDown(aliceLan.stop);
+      addTearDown(bobLan.stop);
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        lanAddresses: const ['192.168.62.10'],
+        lanDirectChannel: aliceLan,
+        transportRegistryFactory: network.registry,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        lanAddresses: const ['192.168.62.11'],
+        lanDirectChannel: bobLan,
+        transportRegistryFactory: network.registry,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      for (final side in [alice, bob]) {
+        await side.updateGlobalConnectivity(
+          _irohOnlyConnectivity.copyWith(
+            irohRelayEnabled: false,
+            lanEnabled: true,
+          ),
+        );
+      }
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(
+          contentRefusals: const ContentRefusals().withRefused(
+            TransportKind.lan,
+            ContentClass.fileMedium,
+            true,
+          ),
+        ),
+      );
+      await _pairControllers(alice, bob);
+      expect(
+        alice.fileBlocksAllowedForTesting(
+          bob.identity!.deviceId,
+          TransportKind.lan,
+          8 * 1024 * 1024,
+        ),
+        isFalse,
+      );
+      final bytes = Uint8List(12 * 1024 * 1024);
+      for (var i = 0; i < bytes.length; i += 4099) {
+        bytes[i] = i & 0xff;
+      }
+      final sourceRoot = await Directory.systemTemp.createTemp(
+        'conest-refuse-',
+      );
+      addTearDown(() => sourceRoot.delete(recursive: true));
+      final sourceFile = File('${sourceRoot.path}/refused.bin');
+      await sourceFile.writeAsBytes(bytes);
+      await alice.sendAttachmentSource(
+        contact: alice.contacts.single,
+        source: StagedAttachment(
+          id: 'refused-source',
+          fileName: 'refused.bin',
+          mimeType: 'application/octet-stream',
+          sizeBytes: bytes.length,
+          filePath: sourceFile.path,
+        ),
+      );
+      ChatMessage? received;
+      for (var step = 0; step < 3000; step++) {
+        received = bob
+            .messagesFor(alice.identity!.deviceId)
+            .where((m) => m.attachment?.fileName == 'refused.bin')
+            .firstOrNull;
+        if (received != null) {
+          if (bob.attachmentAwaitingAcceptance(received.attachment!.id)) {
+            await bob.acceptIncomingAttachment(received.attachment!.id);
+          }
+          if (bob.attachmentAvailableLocally(received.attachment!.id)) break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(received, isNotNull);
+      final cache = await bob.attachmentCachePathFor(received!.attachment!.id);
+      expect(cache, isNotNull);
+      expect(await File(cache!).readAsBytes(), bytes);
+      expect(bobLan.acceptedBlocks, 0, reason: 'LAN is refused for files');
+      expect(network.attachmentRanges, greaterThan(0));
     },
   );
 
@@ -5854,6 +6449,100 @@ void main() {
       expect(alice.voiceCallService!.mediaBusy, true);
     },
   );
+
+  group('push to talk', () {
+    Future<(MessengerController, MessengerController, _VoiceRecordingBridge)>
+    pair() async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final bridge = _VoiceRecordingBridge();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        platformBridge: bridge,
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        platformBridge: _VoiceRecordingBridge(),
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await alice.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await bob.updateGlobalConnectivity(_irohOnlyConnectivity);
+      await _pairControllers(alice, bob);
+      await _waitForIroh(
+        () => alice.contacts.single.featureCapabilities.contains(
+          ApplicationCapability.voiceCallsV1,
+        ),
+      );
+      await alice.updateVoiceSettings(
+        alice.voiceSettings.copyWith(inputMode: VoiceInputMode.pushToTalk),
+      );
+      return (alice, bob, bridge);
+    }
+
+    Future<void> connect(
+      MessengerController alice,
+      MessengerController bob,
+    ) async {
+      final call = await alice.voiceCallService!.startOutgoing(
+        bob.identity!.deviceId,
+      );
+      await alice.voiceCallService!.onAccepted(callId: call.callId);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('a hold from the last call does not open the next one', () async {
+      final (alice, bob, bridge) = await pair();
+      await connect(alice, bob);
+      expect(bridge.mutes.last, isTrue);
+      await alice.setPushToTalkHeld(true);
+      expect(bridge.mutes.last, isFalse);
+      await alice.voiceCallService!.end();
+      await Future<void>.delayed(Duration.zero);
+      expect(alice.pushToTalkHeld, isFalse);
+      bridge.mutes.clear();
+      await connect(alice, bob);
+      expect(bridge.mutes, isNotEmpty);
+      expect(bridge.mutes.last, isTrue);
+    });
+
+    test('a group-call change during a 1:1 call keeps the hold', () async {
+      final (alice, bob, bridge) = await pair();
+      await connect(alice, bob);
+      await alice.setPushToTalkHeld(true);
+      // The group service really announces a change (the controller's
+      // listener runs on it) while no group call is joined.
+      var changes = 0;
+      final watch = alice.groupCallService!.changes.listen((_) => changes++);
+      addTearDown(watch.cancel);
+      await alice.groupCallService!.setNoiseSuppression(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(changes, 1);
+      expect(alice.pushToTalkHeld, isTrue);
+      expect(bridge.mutes.last, isFalse);
+    });
+
+    test('losing the window focus lets go of the key', () async {
+      final (alice, bob, bridge) = await pair();
+      await connect(alice, bob);
+      await alice.setPushToTalkHeld(true);
+      alice.setWindowFocused(false);
+      await Future<void>.delayed(Duration.zero);
+      expect(alice.pushToTalkHeld, isFalse);
+      expect(bridge.mutes.last, isTrue);
+      await alice.setPushToTalkHeld(true);
+      alice.setAppForegroundState(false);
+      await Future<void>.delayed(Duration.zero);
+      expect(alice.pushToTalkHeld, isFalse);
+    });
+  });
 
   group('a call whose audio device stops', () {
     Future<(MessengerController, _VoiceRecordingBridge)> connectedCall() async {
@@ -20605,6 +21294,450 @@ void main() {
           isNot(MessageRoute.viaOwnDevice),
         );
       });
+
+      Future<Uint8List> fileBytes() async {
+        final bytes = Uint8List(200 * 1024);
+        for (var i = 0; i < bytes.length; i += 7) {
+          bytes[i] = (i * 31) & 0xff;
+        }
+        return bytes;
+      }
+
+      Future<String> waitForFile(
+        MessengerController who,
+        String chatId,
+        String name,
+        MessengerController alice,
+        MessengerController phone,
+        MessengerController bob,
+      ) async {
+        String? id;
+        await _waitForIroh(
+          () {
+            unawaited(alice.pollNow());
+            unawaited(phone.pollNow());
+            unawaited(bob.pollNow());
+            final m = who
+                .messagesFor(chatId)
+                .where((m) => m.attachment?.fileName == name)
+                .firstOrNull;
+            id = m?.attachment?.id;
+            return id != null && who.attachmentAvailableLocally(id!);
+          },
+          reason: 'the file did not reach the device',
+          timeout: const Duration(seconds: 30),
+        );
+        return id!;
+      }
+
+      test('a file sent from the phone shows on the laptop, fetched from '
+          'the phone, and only own devices are served', () async {
+        final (alice, bob, phone, _, _, _) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final bytes = await fileBytes();
+        await phone.sendAttachment(
+          contact: phone.contacts.single,
+          bytes: bytes,
+          fileName: 'from_phone.bin',
+          albumId: 'album-1',
+        );
+        final id = await waitForFile(
+          alice,
+          bobId,
+          'from_phone.bin',
+          alice,
+          phone,
+          bob,
+        );
+        final copy = alice
+            .messagesFor(bobId)
+            .firstWhere((m) => m.attachment?.id == id);
+        expect(copy.outbound, isTrue);
+        expect(copy.albumId, 'album-1');
+        expect(copy.senderDeviceId, phone.identity!.deviceId);
+        expect(
+          await File((await alice.attachmentCachePathFor(id))!).readAsBytes(),
+          bytes,
+        );
+        // A contact is not served the phone's file by this path.
+        expect(await phone.ownDeviceServesForTesting(bobId, id), isFalse);
+        expect(
+          await phone.ownDeviceServesForTesting(alice.identity!.deviceId, id),
+          isTrue,
+        );
+        // Bob has it too, from the phone (not twice).
+        await _waitForIroh(() {
+          unawaited(bob.pollNow());
+          return bob.messageForAttachment(id) != null;
+        }, reason: 'Bob did not get the file');
+      });
+
+      test('serving a file to an own device follows the file and the '
+          'message: both must still be there', () async {
+        final (alice, bob, phone, _, _, advance) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        await phone.sendAttachment(
+          contact: phone.contacts.single,
+          bytes: await fileBytes(),
+          fileName: 'gone.bin',
+        );
+        final id = await waitForFile(
+          alice,
+          bobId,
+          'gone.bin',
+          alice,
+          phone,
+          bob,
+        );
+        expect(await phone.ownDeviceServesForTesting(aliceId, id), isTrue);
+        // Asked again: served from the same state.
+        expect(await phone.ownDeviceServesForTesting(aliceId, id), isTrue);
+        // The file leaves the disk: no longer served from a stale path.
+        // Blocks in flight see the entry stay while it is being checked.
+        advance(const Duration(seconds: 6));
+        final checking = phone.ownDeviceServesForTesting(aliceId, id);
+        expect(phone.ownServingHeldForTesting(aliceId, id), isTrue);
+        expect(await checking, isTrue);
+        final path = (await phone.attachmentCachePathFor(id))!;
+        await File(path).delete();
+        advance(const Duration(seconds: 6));
+        expect(await phone.ownDeviceServesForTesting(aliceId, id), isFalse);
+      });
+
+      test('a reach report is bounded, and digests leave out what history '
+          'does not carry and are not recomputed at once', () async {
+        final (alice, bob, phone, _, _, advance) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        final phoneId = phone.identity!.deviceId;
+        await phone.sendAccountSyncForTesting(aliceId, {
+          'type': 'reach',
+          'heard': {bobId: 1 << 62, 'other': 30},
+        });
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice.ownReachForTesting(phoneId) != null;
+        }, reason: 'the report did not come');
+        expect(alice.ownReachForTesting(phoneId), {'other': 30});
+        // A group file is not in the digest; a text is, and not at once.
+        final group = await alice.createGroup(
+          title: 'G',
+          members: [alice.contacts.single],
+        );
+        final root = await Directory.systemTemp.createTemp('conest-dg-');
+        addTearDown(() => root.delete(recursive: true));
+        final file = await File('${root.path}/f.bin').writeAsBytes([1, 2, 3]);
+        await alice.publishGroupFile(
+          groupId: group.groupId,
+          path: file.path,
+          fileName: 'f.bin',
+          mimeType: 'application/octet-stream',
+        );
+        final first = alice.chatDigestsForTesting();
+        expect(first.containsKey('group:${group.groupId}'), isFalse);
+        await alice.sendGroupMessage(groupId: group.groupId, body: 'hello');
+        // (A message arrived: the cached digests are dropped.)
+        expect(
+          alice.chatDigestsForTesting().containsKey('group:${group.groupId}'),
+          isTrue,
+          reason: 'a new message makes the digests current again',
+        );
+      });
+
+      test('a file that reached only the laptop shows on the phone, '
+          'fetched from the laptop', () async {
+        final (alice, bob, phone, network, relay, advance) = await linkedPair();
+        final bobId = bob.identity!.deviceId;
+        final phoneId = phone.identity!.deviceId;
+        relay.shouldFailStore = (_, _, _, _, envelope) =>
+            envelope.recipientDeviceId == phoneId;
+        network.blockedPairs
+          ..add((
+            bob.identity!.irohEndpointId!,
+            phone.identity!.irohEndpointId!,
+          ))
+          ..add((
+            phone.identity!.irohEndpointId!,
+            bob.identity!.irohEndpointId!,
+          ));
+        final bytes = await fileBytes();
+        await bob.sendAttachment(
+          contact: bob.contacts.single,
+          bytes: bytes,
+          fileName: 'to_laptop.bin',
+        );
+        await _waitForIroh(
+          () {
+            unawaited(alice.pollNow());
+            return alice
+                .messagesFor(bobId)
+                .any(
+                  (m) =>
+                      m.attachment?.fileName == 'to_laptop.bin' &&
+                      alice.attachmentAvailableLocally(m.attachment!.id),
+                );
+          },
+          reason: 'the laptop did not get the file',
+          timeout: const Duration(seconds: 30),
+        );
+        advance(const Duration(seconds: 20));
+        final id = await waitForFile(
+          phone,
+          bobId,
+          'to_laptop.bin',
+          alice,
+          phone,
+          bob,
+        );
+        final copy = phone
+            .messagesFor(bobId)
+            .firstWhere((m) => m.attachment?.id == id);
+        expect(copy.outbound, isFalse);
+        expect(copy.senderDeviceId, bobId);
+        expect(
+          await File((await phone.attachmentCachePathFor(id))!).readAsBytes(),
+          bytes,
+        );
+      });
+
+      /// A phone that was off while Bob wrote to the laptop, and was not
+      /// told afterwards (what waited to be passed on is dropped).
+      Future<
+        (
+          MessengerController,
+          MessengerController,
+          MessengerController,
+          void Function(Duration),
+        )
+      >
+      phoneThatMissedOne() async {
+        final (alice, bob, phone, network, relay, advance) = await linkedPair();
+        final phoneId = phone.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        final saved = MessengerController.maxQueuedReceived;
+        MessengerController.maxQueuedReceived = 0;
+        addTearDown(() => MessengerController.maxQueuedReceived = saved);
+        relay.shouldFailStore = (_, _, _, _, envelope) =>
+            envelope.recipientDeviceId == phoneId;
+        final phoneIroh = phone.identity!.irohEndpointId!;
+        final blocked = [
+          for (final other in [alice, bob]) ...[
+            (other.identity!.irohEndpointId!, phoneIroh),
+            (phoneIroh, other.identity!.irohEndpointId!),
+          ],
+        ];
+        network.blockedPairs.addAll(blocked);
+        await bob.sendMessage(contact: bob.contacts.single, body: 'missed');
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice
+              .messagesFor(bob.identity!.deviceId)
+              .any((m) => m.body == 'missed');
+        }, reason: 'the laptop did not get it');
+        advance(const Duration(seconds: 30));
+        await alice.pollNow();
+        relay.shouldFailStore = null;
+        network.blockedPairs.removeAll(blocked);
+        for (var i = 0; i < 20; i++) {
+          await alice.pollNow();
+          await phone.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(
+          phone
+              .messagesFor(bob.identity!.deviceId)
+              .where((m) => m.body == 'missed'),
+          isEmpty,
+        );
+        expect(aliceId, isNotEmpty);
+        return (alice, bob, phone, advance);
+      }
+
+      test(
+        'devices compare what they hold and fetch what is missing',
+        () async {
+          final (alice, bob, phone, _) = await phoneThatMissedOne();
+          final bobId = bob.identity!.deviceId;
+          alice.sendSyncStatusForTesting(phone.identity!.deviceId);
+          await _waitForIroh(() {
+            unawaited(alice.pollNow());
+            unawaited(phone.pollNow());
+            return phone.messagesFor(bobId).any((m) => m.body == 'missed');
+          }, reason: 'the phone did not catch up from the digest');
+        },
+      );
+
+      test('a paused device answers no history, a steady one does', () async {
+        final (alice, bob, phone, advance) = await phoneThatMissedOne();
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        await alice.setOwnDeviceSyncSpeed(SyncSpeed.paused);
+        expect(alice.ownDeviceSyncPermission.allowed, isFalse);
+        phone.askHistoryForTesting(aliceId);
+        for (var i = 0; i < 30; i++) {
+          await alice.pollNow();
+          await phone.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(
+          phone.messagesFor(bobId).where((m) => m.body == 'missed'),
+          isEmpty,
+        );
+        await alice.setOwnDeviceSyncSpeed(SyncSpeed.steady);
+        advance(const Duration(minutes: 10));
+        phone.forgetHistoryAsksForTesting();
+        phone.askHistoryForTesting(aliceId);
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return phone.messagesFor(bobId).any((m) => m.body == 'missed');
+        }, reason: 'the steady laptop did not answer');
+      });
+
+      for (final hears in [false, true]) {
+        test(
+          hears
+              ? 'a device that can hear the contact is left to say it has '
+                    'the message first'
+              : 'a device that cannot hear the contact is told at once',
+          () async {
+            final (alice, bob, phone, network, relay, advance) =
+                await linkedPair();
+            final bobId = bob.identity!.deviceId;
+            final aliceId = alice.identity!.deviceId;
+            final phoneId = phone.identity!.deviceId;
+            if (hears) {
+              await bob.sendMessage(contact: bob.contacts.single, body: 'warm');
+              await _waitForIroh(() {
+                unawaited(alice.pollNow());
+                unawaited(phone.pollNow());
+                return phone.messagesFor(bobId).any((m) => m.body == 'warm');
+              }, reason: 'the phone did not hear Bob');
+            }
+            // Not heard for a while: out of reach.
+            if (!hears) advance(const Duration(minutes: 16));
+            phone.sendSyncStatusForTesting(aliceId);
+            for (var i = 0; i < 10; i++) {
+              await alice.pollNow();
+              await phone.pollNow();
+              await Future<void>.delayed(const Duration(milliseconds: 20));
+            }
+            relay.shouldFailStore = (_, _, _, _, envelope) =>
+                envelope.recipientDeviceId == phoneId &&
+                envelope.senderDeviceId == bobId;
+            network.blockedPairs
+              ..add((
+                bob.identity!.irohEndpointId!,
+                phone.identity!.irohEndpointId!,
+              ))
+              ..add((
+                phone.identity!.irohEndpointId!,
+                bob.identity!.irohEndpointId!,
+              ));
+            await bob.sendMessage(contact: bob.contacts.single, body: 'now');
+            // Shorter than any wait to hear that it has it.
+            for (var i = 0; i < 10; i++) {
+              await alice.pollNow();
+              await phone.pollNow();
+              advance(const Duration(milliseconds: 100));
+              await Future<void>.delayed(const Duration(milliseconds: 30));
+            }
+            bool phoneHas() =>
+                phone.messagesFor(bobId).any((m) => m.body == 'now');
+            expect(phoneHas(), !hears);
+            if (hears) {
+              advance(const Duration(seconds: 20));
+              await _waitForIroh(() {
+                unawaited(alice.pollNow());
+                unawaited(phone.pollNow());
+                return phoneHas();
+              }, reason: 'it was never passed on');
+            }
+          },
+        );
+      }
+
+      test('settings are shared only between devices that opt in, the newest '
+          'change winning', () async {
+        final (alice, bob, phone, _, _, advance) = await linkedPair();
+        expect(bob, isNotNull);
+        AutoDownloadPreset presetOf(MessengerController c) =>
+            c.identity!.connectivity.autoDownloadPreset;
+        Future<void> settle(bool Function() done, String why) =>
+            _waitForIroh(() {
+              unawaited(alice.pollNow());
+              unawaited(phone.pollNow());
+              return done();
+            }, reason: why);
+        // Alice shares, the phone does not: nothing changes there.
+        await alice.updateGlobalConnectivity(
+          alice.identity!.connectivity.copyWith(
+            shareSettings: true,
+            autoDownloadPreset: AutoDownloadPreset.low,
+          ),
+        );
+        for (var i = 0; i < 10; i++) {
+          await alice.pollNow();
+          await phone.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(presetOf(phone), AutoDownloadPreset.medium);
+        // The phone opts in, then a later change on the laptop arrives.
+        await phone.updateGlobalConnectivity(
+          phone.identity!.connectivity.copyWith(shareSettings: true),
+        );
+        advance(const Duration(minutes: 1));
+        await alice.updateGlobalConnectivity(
+          alice.identity!.connectivity.copyWith(
+            autoDownloadPreset: AutoDownloadPreset.high,
+          ),
+        );
+        await settle(
+          () => presetOf(phone) == AutoDownloadPreset.high,
+          'the phone did not take the change',
+        );
+        // The dedicated toggles are shared too, and the user is told.
+        advance(const Duration(minutes: 1));
+        await alice.updateStorageReserveEnabled(false);
+        await settle(
+          () => !phone.identity!.connectivity.storageReserveEnabled,
+          'the phone did not take the storage reserve',
+        );
+        expect(
+          phone.lastSharedSettingsNoticeForTesting,
+          contains('Settings were changed'),
+        );
+        advance(const Duration(minutes: 1));
+        await alice.updateIrohTransferLimitEnabled(false);
+        await settle(
+          () => !phone.identity!.connectivity.irohTransferLimitEnabled,
+          'the phone did not take the Iroh limit',
+        );
+        // And back, from the phone.
+        advance(const Duration(minutes: 1));
+        await phone.updateGlobalConnectivity(
+          phone.identity!.connectivity.copyWith(
+            autoDownloadPreset: AutoDownloadPreset.low,
+          ),
+        );
+        await settle(
+          () => presetOf(alice) == AutoDownloadPreset.low,
+          'the laptop did not take the change',
+        );
+        // A change older than the last one is ignored.
+        final aliceId = alice.identity!.deviceId;
+        await phone.sendAccountSyncForTesting(aliceId, {
+          'type': 'settings',
+          'at': DateTime.utc(2020).toIso8601String(),
+          'values': {'autoDownloadPreset': 'high'},
+        });
+        for (var i = 0; i < 10; i++) {
+          await alice.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(presetOf(alice), AutoDownloadPreset.low);
+      });
     });
 
     test('groups show on the account\'s other devices through the one that '
@@ -20956,6 +22089,95 @@ void main() {
       expect(phone.unreadCountFor(bobId), 0);
       expect(phone.unreadGroupCountFor(group.groupId), 0);
       expect(aliceId, isNotEmpty);
+    });
+
+    test('a device linked later sees the files of old chats with their '
+        'details, and fetches one when the user accepts', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          transportRegistryFactory: network.registry,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final phone = await make('Phone');
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      final bytes = Uint8List.fromList(
+        List<int>.generate(150 * 1024, (i) => (i * 7) & 0xff),
+      );
+      await alice.sendAttachment(
+        contact: alice.contacts.single,
+        bytes: bytes,
+        fileName: 'old_photo.bin',
+      );
+      String? sentId;
+      await _waitForIroh(
+        () {
+          unawaited(bob.pollNow());
+          unawaited(alice.pollNow());
+          sentId = alice
+              .messagesFor(bobId)
+              .where((m) => m.attachment?.fileName == 'old_photo.bin')
+              .firstOrNull
+              ?.attachment
+              ?.id;
+          return sentId != null && alice.attachmentAvailableLocally(sentId!);
+        },
+        reason: 'the file was not sent',
+        timeout: const Duration(seconds: 30),
+      );
+      await alice.sendAttachment(
+        contact: alice.savedMessagesContact!,
+        bytes: bytes,
+        fileName: 'saved_note.bin',
+      );
+      final qr = await phone.startLinkAsNewDevice();
+      await alice.startLinkFromQrCode(qr);
+      await _waitForIroh(
+        () => phone.linkCode != null && alice.linkCode != null,
+      );
+      await phone.confirmLinkCode();
+      await alice.confirmLinkCode();
+      ChatMessage? old;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        unawaited(bob.pollNow());
+        old = phone
+            .messagesFor(bobId)
+            .where((m) => m.attachment?.fileName == 'old_photo.bin')
+            .firstOrNull;
+        return old != null &&
+            phone
+                .messagesFor(phone.identity!.deviceId)
+                .any((m) => m.attachment?.fileName == 'saved_note.bin');
+      }, reason: 'the files did not show in the history');
+      final id = old!.attachment!.id;
+      // Details only: nothing is fetched until the user says so.
+      expect(phone.attachmentAvailableLocally(id), isFalse);
+      expect(phone.attachmentAwaitingAcceptance(id), isTrue);
+      await phone.acceptIncomingAttachment(id);
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return phone.attachmentAvailableLocally(id);
+        },
+        reason: 'the accepted file did not come',
+        timeout: const Duration(seconds: 30),
+      );
+      expect(
+        await File((await phone.attachmentCachePathFor(id))!).readAsBytes(),
+        bytes,
+      );
     });
 
     test('history pages one device serves another are limited', () async {
@@ -29621,6 +30843,11 @@ class _VoiceRecordingBridge extends _RecordingPlatformBridge {
   }
   @override
   Future<void> closeVoiceCallMedia() async {}
+
+  /// Every mute the call audio was told, in order.
+  final mutes = <bool>[];
+  @override
+  Future<void> setVoiceCallMuted(bool muted) async => mutes.add(muted);
   @override
   Future<void> setVoiceCallNoiseSuppression(bool enabled) async {}
   @override

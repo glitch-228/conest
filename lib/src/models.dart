@@ -11,6 +11,7 @@ import 'group_file_manifest.dart';
 import 'feature_models.dart';
 import 'group_call/group_call_models.dart';
 import 'content_routing.dart';
+import 'transfer/own_device_sync_policy.dart' show SyncSpeed;
 import 'voice_settings.dart';
 import 'notification_rules.dart';
 
@@ -750,6 +751,9 @@ class GlobalConnectivityPreferences {
     this.shareIdentifyingCarriersWithGroups = false,
     this.contentRefusals = ContentRefusals.none,
     this.circumvention = const CircumventionPreferences(),
+    this.syncSpeed = SyncSpeed.steady,
+    this.shareSettings = false,
+    this.settingsChangedAt,
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -793,6 +797,17 @@ class GlobalConnectivityPreferences {
   /// What this device neither sends nor wants over each transport (told
   /// to contacts, who then send it another way).
   final ContentRefusals contentRefusals;
+
+  /// How fast this device syncs with the account's other devices.
+  final SyncSpeed syncSpeed;
+
+  /// This device shares its general settings with the account's other
+  /// devices that do too (the newest change wins).
+  final bool shareSettings;
+
+  /// When the shared settings last changed (here, or on a device that
+  /// shared them).
+  final DateTime? settingsChangedAt;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -818,12 +833,18 @@ class GlobalConnectivityPreferences {
     bool? irohTransferLimitEnabled,
     bool? shareIdentifyingCarriersWithGroups,
     ContentRefusals? contentRefusals,
+    SyncSpeed? syncSpeed,
+    bool? shareSettings,
+    DateTime? settingsChangedAt,
     Map<TransportKind, TransportPolicy>? transportPolicies,
     CircumventionPreferences? circumvention,
   }) {
     return GlobalConnectivityPreferences(
       circumvention: circumvention ?? this.circumvention,
+      shareSettings: shareSettings ?? this.shareSettings,
+      settingsChangedAt: settingsChangedAt ?? this.settingsChangedAt,
       contentRefusals: contentRefusals ?? this.contentRefusals,
+      syncSpeed: syncSpeed ?? this.syncSpeed,
       shareIdentifyingCarriersWithGroups:
           shareIdentifyingCarriersWithGroups ??
           this.shareIdentifyingCarriersWithGroups,
@@ -855,6 +876,10 @@ class GlobalConnectivityPreferences {
       'shareIdentifyingCarriersWithGroups': true,
     if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
     if (!circumvention.isDefault) 'circumvention': circumvention.toJson(),
+    if (syncSpeed != SyncSpeed.steady) 'syncSpeed': syncSpeed.name,
+    if (shareSettings) 'shareSettings': true,
+    if (settingsChangedAt != null)
+      'settingsChangedAt': settingsChangedAt!.toUtc().toIso8601String(),
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -876,6 +901,14 @@ class GlobalConnectivityPreferences {
           json['shareIdentifyingCarriersWithGroups'] == true,
       contentRefusals: ContentRefusals.fromJson(json['contentRefusals']),
       circumvention: CircumventionPreferences.fromJson(json['circumvention']),
+      shareSettings: json['shareSettings'] == true,
+      settingsChangedAt: DateTime.tryParse(
+        json['settingsChangedAt'] as String? ?? '',
+      )?.toUtc(),
+      syncSpeed: SyncSpeed.values.firstWhere(
+        (value) => value.name == json['syncSpeed'],
+        orElse: () => SyncSpeed.steady,
+      ),
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])
@@ -4422,11 +4455,17 @@ class TransferSession {
     this.pausedByPeer = false,
     this.lastError,
     this.storageReserveBlocked = false,
+    this.chatDeviceId,
   });
 
   final String id;
   final AttachmentDescriptor attachment;
   final List<String> peerDeviceIds;
+
+  /// The chat (a contact's device id, or this device's own for Saved) the
+  /// message is in, when that is not the device the blocks come from: a
+  /// file that an own device of this account passed on. Null otherwise.
+  final String? chatDeviceId;
   final TransferState state;
   final List<int> completedChunks;
   final DateTime createdAt;
@@ -4485,6 +4524,7 @@ class TransferSession {
       storageReserveBlocked: clearLastError
           ? false
           : (storageReserveBlocked ?? this.storageReserveBlocked),
+      chatDeviceId: chatDeviceId,
     );
   }
 
@@ -4492,6 +4532,7 @@ class TransferSession {
     return {
       'id': id,
       'attachment': attachment.toJson(),
+      if (chatDeviceId != null) 'chatDeviceId': chatDeviceId,
       'peerDeviceIds': peerDeviceIds,
       'state': state.name,
       'completedRanges': _encodeChunkRanges(completedChunks),
@@ -4554,6 +4595,7 @@ class TransferSession {
       pausedByPeer: json['pausedByPeer'] as bool? ?? false,
       lastError: json['lastError'] as String?,
       storageReserveBlocked: json['storageReserveBlocked'] as bool? ?? false,
+      chatDeviceId: json['chatDeviceId'] as String?,
     );
   }
 }

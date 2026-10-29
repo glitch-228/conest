@@ -26,6 +26,19 @@ class ConestBackgroundService : Service() {
     private var voiceAudioLibraryLoaded = false
     private var voiceCallAudioStarting = false
 
+    /// The microphone test of Settings → Voice has the audio: no call
+    /// state, so no "call connecting" notice, but the service stays up.
+    private var microphoneTest = false
+
+    /// Answer on the ringing notification works with this token only: the
+    /// activity is exported, so another app could send a bare answer.
+    @Volatile
+    private var ringToken: String? = null
+
+    /// The ringing notification already alerted (full screen, sound) for
+    /// this ring; later posts only update it.
+    private var ringAnnounced = false
+
     /// A reply or "Mark as read" from a notification being handled: Conest
     /// stays in the foreground until Dart is done, so Android does not end
     /// the process first.
@@ -33,7 +46,9 @@ class ConestBackgroundService : Service() {
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val endNotificationWork = Runnable {
         notificationWork = false
-        if (!backgroundEnabled && !callsEnabled && !hasCall() && !transferActive) {
+        if (!backgroundEnabled && !callsEnabled && !hasCall() && !transferActive &&
+            !microphoneTest
+        ) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         } else {
@@ -87,7 +102,9 @@ class ConestBackgroundService : Service() {
                 // Dart may close (and free) the native handle before this
                 // queued intent runs. Only start the handle still requested.
                 if (handle != 0L && handle == requestedCallAudioHandle) {
-                    if (callState == "idle" || callState == "ended") {
+                    if (intent.getBooleanExtra(EXTRA_CALL_AUDIO_TEST, false)) {
+                        if (!hasCall()) microphoneTest = true
+                    } else if (callState == "idle" || callState == "ended") {
                         callState = "connecting"
                     }
                     voiceCallAudioStarting = true
@@ -121,8 +138,9 @@ class ConestBackgroundService : Service() {
                 mainHandler.postDelayed(endNotificationWork, NOTIFICATION_WORK_LIMIT_MS)
             }
         }
+        updateRing()
         if (!backgroundEnabled && !callsEnabled && !hasCall() && !transferActive &&
-            !notificationWork
+            !notificationWork && !microphoneTest
         ) {
             // Started with startForegroundService, a service must call
             // startForeground before it stops, even with nothing to show;
@@ -164,6 +182,8 @@ class ConestBackgroundService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, buildNotification())
             }
+            // Only a post that went out counts as the ring's alert.
+            if (callState == "ringing") ringAnnounced = true
         } catch (error: Exception) {
             // Not allowed now (for example from the background on newer
             // Android): the service carries on without its notification.
@@ -181,7 +201,8 @@ class ConestBackgroundService : Service() {
     }
 
     private fun startVoiceCallAudio(handle: Long) {
-        stopVoiceCallAudio()
+        // The test flag of this very start stays.
+        stopVoiceCallAudio(keepMicrophoneTest = true)
         try {
             if (!voiceAudioLibraryLoaded) {
                 System.loadLibrary("conest_native")
@@ -219,7 +240,23 @@ class ConestBackgroundService : Service() {
         }
     }
 
-    private fun stopVoiceCallAudio() {
+    /// A new incoming ring gets a new token; no ring, no token.
+    private fun updateRing() {
+        val ringing = callState == "ringing"
+        if (!ringing) ringAnnounced = false
+        if (ringing && callIncoming) {
+            if (ringToken == null) {
+                val bytes = ByteArray(16)
+                java.security.SecureRandom().nextBytes(bytes)
+                ringToken = bytes.joinToString("") { "%02x".format(it) }
+            }
+        } else {
+            ringToken = null
+        }
+    }
+
+    private fun stopVoiceCallAudio(keepMicrophoneTest: Boolean = false) {
+        if (!keepMicrophoneTest) microphoneTest = false
         voiceCallAudioStarting = false
         voiceCallAudio?.stop()
         voiceCallAudio = null
@@ -273,7 +310,9 @@ class ConestBackgroundService : Service() {
         if (hasCall()) {
             builder
                 .setCategory(Notification.CATEGORY_CALL)
-                .setOnlyAlertOnce(callState != "ringing")
+                // Only the first post of a ring alerts; later ones (any
+                // service command re-posts) just update it.
+                .setOnlyAlertOnce(callState != "ringing" || ringAnnounced)
                 .setContentTitle(
                     when (callState) {
                         "ringing" -> if (callIncoming) "Incoming Conest call" else "Calling"
@@ -286,7 +325,7 @@ class ConestBackgroundService : Service() {
             if (callState == "ringing" && callIncoming) {
                 // Over the lock screen and with the screen off, as a phone
                 // call; Answer and Decline right in it.
-                builder.setFullScreenIntent(pendingIntent, true)
+                if (!ringAnnounced) builder.setFullScreenIntent(pendingIntent, true)
                 builder.addAction(callAction("Decline", NotificationActionReceiver.ACTION_CALL_DECLINE))
                 builder.addAction(answerAction())
             }
@@ -308,6 +347,10 @@ class ConestBackgroundService : Service() {
                     )
                 )
                 .addAction(action("Cancel all", CONTROL_CANCEL_ALL, 2))
+        } else if (microphoneTest) {
+            builder
+                .setContentTitle("Conest")
+                .setContentText("Testing the microphone")
         } else if (notificationWork && !backgroundEnabled && !callsEnabled) {
             builder
                 .setContentTitle("Conest")
@@ -328,6 +371,7 @@ class ConestBackgroundService : Service() {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_CALL_ANSWER, true)
+            putExtra(EXTRA_CALL_ANSWER_TOKEN, ringToken ?: "")
         }
         val pending = PendingIntent.getActivity(
             this,
@@ -495,6 +539,8 @@ class ConestBackgroundService : Service() {
         const val EXTRA_PAUSED = "paused"
         const val EXTRA_TRANSFER_CONTROL = "transferControl"
         const val EXTRA_CALL_ANSWER = "callAnswer"
+        const val EXTRA_CALL_ANSWER_TOKEN = "callAnswerToken"
+        const val EXTRA_CALL_AUDIO_TEST = "callAudioTest"
         const val CONTROL_PAUSE_ALL = "pause_all"
         const val CONTROL_RESUME_ALL = "resume_all"
         const val CONTROL_CANCEL_ALL = "cancel_all"
@@ -507,13 +553,26 @@ class ConestBackgroundService : Service() {
 
         fun isRunning(): Boolean = currentInstance != null
 
+        /// Whether [token] is the one of the call ringing now; it works
+        /// once.
+        fun consumeRingToken(token: String?): Boolean {
+            val service = currentInstance ?: return false
+            val current = service.ringToken
+            if (token.isNullOrEmpty() || current == null || token != current) {
+                return false
+            }
+            service.ringToken = null
+            return true
+        }
+
         /// Ends the transfer notice on the running service without a
         /// service intent (refused from the background on Android 8+).
         fun stopTransferDirectly() {
             val service = currentInstance ?: return
             service.transferActive = false
             if (!service.backgroundEnabled && !service.callsEnabled &&
-                !service.hasCall() && !service.notificationWork
+                !service.hasCall() && !service.notificationWork &&
+                !service.microphoneTest
             ) {
                 service.stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE)
                 service.stopSelf()
@@ -556,7 +615,19 @@ class ConestBackgroundService : Service() {
         fun stopVoiceCallMedia() {
             requestedCallAudioHandle = 0L
             requestedSpeakerphone = null
-            currentInstance?.stopVoiceCallAudio()
+            val service = currentInstance ?: return
+            service.stopVoiceCallAudio()
+            // The microphone test may have been all that kept the service
+            // up: go, or re-post without its notice.
+            if (!service.backgroundEnabled && !service.callsEnabled &&
+                !service.hasCall() && !service.transferActive &&
+                !service.notificationWork
+            ) {
+                service.stopForeground(android.app.Service.STOP_FOREGROUND_REMOVE)
+                service.stopSelf()
+            } else {
+                service.promoteToForeground()
+            }
         }
     }
 }
