@@ -1,27 +1,35 @@
 import 'models.dart';
+import 'path_stats.dart';
 
 const Duration kLanHealthCacheTtl = Duration(seconds: 15);
 const Duration kInternetHealthCacheTtl = Duration(seconds: 45);
 const Duration kLanRecentRouteSuccessTtl = Duration(seconds: 30);
 const Duration kInternetRecentRouteSuccessTtl = Duration(minutes: 2);
 
-/// Per-route runtime state: timestamps + failure streak + backoff. Exposed
-/// publicly because the controller's debug snapshot reads its fields when
-/// printing route diagnostics.
+/// Per-route runtime state: when the route last worked and its numbers
+/// ([stats]: round trip, failure streak, backoff). Exposed publicly because
+/// the controller's debug snapshot reads its fields when printing route
+/// diagnostics.
 class RouteRuntimeState {
+  RouteRuntimeState([PathStats? stats]) : stats = stats ?? PathStats();
+
   DateTime? lastFetchSuccessAt;
   DateTime? lastStoreSuccessAt;
-  DateTime? lastFailureAt;
-  int failureStreak = 0;
-  DateTime? backoffUntil;
+
+  /// The same figures ranking, escalation and file striping read.
+  final PathStats stats;
+
+  DateTime? get lastFailureAt => stats.lastFailureAt;
+  set lastFailureAt(DateTime? value) => stats.lastFailureAt = value;
+  int get failureStreak => stats.failureStreak;
+  set failureStreak(int value) => stats.failureStreak = value;
+  DateTime? get backoffUntil => stats.cooldownUntil;
+  set backoffUntil(DateTime? value) => stats.cooldownUntil = value;
 
   RouteRuntimeState clone() {
-    return RouteRuntimeState()
+    return RouteRuntimeState(stats.clone())
       ..lastFetchSuccessAt = lastFetchSuccessAt
-      ..lastStoreSuccessAt = lastStoreSuccessAt
-      ..lastFailureAt = lastFailureAt
-      ..failureStreak = failureStreak
-      ..backoffUntil = backoffUntil;
+      ..lastStoreSuccessAt = lastStoreSuccessAt;
   }
 }
 
@@ -70,8 +78,7 @@ class RouteHealthTracker {
   /// immediately on the new interface.
   void clearBackoffWindows() {
     for (final state in _runtime.values) {
-      state.failureStreak = 0;
-      state.backoffUntil = null;
+      state.stats.clearCooldown();
     }
   }
 
@@ -90,9 +97,31 @@ class RouteHealthTracker {
   /// Static comparator: routes that have established lower latency win.
   /// Routes that never reported a latency sort last.
   int compareHealth(PeerRouteHealth left, PeerRouteHealth right) {
-    final leftLatency = left.latency?.inMicroseconds ?? 1 << 62;
-    final rightLatency = right.latency?.inMicroseconds ?? 1 << 62;
-    return leftLatency.compareTo(rightLatency);
+    return _rankMicros(left).compareTo(_rankMicros(right));
+  }
+
+  /// [compareHealth]'s figure for [route] (last in line when unknown).
+  int rankMicrosFor(PeerEndpoint route) {
+    final health = _health[route.routeKey];
+    return health == null ? 1 << 62 : _rankMicros(health);
+  }
+
+  /// The round trip a route is ranked by: its smoothed figure from
+  /// [RouteRuntimeState.stats] while its last check answered, otherwise the
+  /// check's own time; a route that never answered goes last.
+  int _rankMicros(PeerRouteHealth health) {
+    final latency = health.latency;
+    if (latency == null) return 1 << 62;
+    final smoothed = _runtime[health.route.routeKey]?.stats.rttMs;
+    return smoothed == null
+        ? latency.inMicroseconds
+        : (smoothed * 1000).round();
+  }
+
+  /// The smoothed round trip of [route], if it has answered.
+  Duration? rttOf(PeerEndpoint route) {
+    final ms = _runtime[route.routeKey]?.stats.rttMs;
+    return ms == null ? null : Duration(microseconds: (ms * 1000).round());
   }
 
   int kindDeliveryPriority(PeerEndpoint route) {
@@ -205,9 +234,7 @@ class RouteHealthTracker {
         state.lastStoreSuccessAt = timestamp;
       }
     }
-    state.lastFailureAt = null;
-    state.failureStreak = 0;
-    state.backoffUntil = null;
+    state.stats.recordSuccess(timestamp, rtt: latency);
     _health[route.routeKey] = PeerRouteHealth(
       route: route,
       available: true,
@@ -223,17 +250,17 @@ class RouteHealthTracker {
     onOutcome?.call(route, false, error);
     final relayInstanceId = _health[route.routeKey]?.relayInstanceId;
     final state = ensureRuntime(route.routeKey);
-    state.lastFailureAt = timestamp;
     final pausedUntil = rateLimitedUntil?.call(route);
     if (pausedUntil != null && pausedUntil.isAfter(timestamp)) {
-      state.backoffUntil = pausedUntil;
+      state.stats.recordFailure(timestamp, until: pausedUntil, grow: false);
     } else {
-      state.failureStreak += 1;
-      final backoff = backoffDurationFor(
-        route,
-        failureStreak: state.failureStreak,
+      state.stats.recordFailure(
+        timestamp,
+        cooldown: backoffDurationFor(
+          route,
+          failureStreak: state.stats.failureStreak + 1,
+        ),
       );
-      state.backoffUntil = timestamp.add(backoff);
     }
     _health[route.routeKey] = PeerRouteHealth(
       route: route,

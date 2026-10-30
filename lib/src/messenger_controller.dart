@@ -4298,6 +4298,15 @@ class MessengerController extends ChangeNotifier {
 
   /// How this device's link to [deviceId] fares now.
   LinkStatus linkStatusFor(String deviceId) {
+    final status = _reachabilityLinkStatus(deviceId);
+    // Nothing heard either way, but every send lately failed.
+    return status == LinkStatus.unknown &&
+            (_transportRegistry?.failingToReach(deviceId) ?? false)
+        ? LinkStatus.failing
+        : status;
+  }
+
+  LinkStatus _reachabilityLinkStatus(String deviceId) {
     final record = _reachability.recordByDeviceId(deviceId);
     if (record == null) return LinkStatus.unknown;
     final now = _now().toUtc();
@@ -22346,6 +22355,11 @@ class MessengerController extends ChangeNotifier {
         !striper.isLate(_BlockRoute.lanBinary);
   }
 
+  double? _measuredBytesPerSecond(String peerDeviceId, TransportKind kind) {
+    final stats = _transportRegistry?.statsFor(peerDeviceId, kind);
+    return stats != null && stats.hasThroughput ? stats.bytesPerSecond : null;
+  }
+
   RouteStriper<_BlockRoute> _blockStriperFor(String peerDeviceId) {
     final striper = _blockStripers.remove(peerDeviceId);
     // The most recently used peers stay (at most 64).
@@ -22356,9 +22370,15 @@ class MessengerController extends ChangeNotifier {
         striper ??
         RouteStriper<_BlockRoute>(
           now: _now,
-          priorBytesPerSecond: const {
-            _BlockRoute.lanBinary: 8 * 1024 * 1024,
-            _BlockRoute.iroh: 1024 * 1024,
+          // What the peer's transports have been measured to move (the
+          // registry's path stats), else a guess for each.
+          priorBytesPerSecond: {
+            _BlockRoute.lanBinary:
+                _measuredBytesPerSecond(peerDeviceId, TransportKind.lan) ??
+                8 * 1024 * 1024,
+            _BlockRoute.iroh:
+                _measuredBytesPerSecond(peerDeviceId, TransportKind.iroh) ??
+                1024 * 1024,
           },
         );
   }
@@ -28449,7 +28469,7 @@ class MessengerController extends ChangeNotifier {
               fanout.interval,
               _transportRegistry
                   ?.statsFor(contact.deviceId, first.transportKind)
-                  ?.latencyMs,
+                  ?.rttMs,
             ),
           )
         : fanout;
@@ -32775,8 +32795,9 @@ class MessengerController extends ChangeNotifier {
       if (leftAvailable != rightAvailable) {
         return leftAvailable ? -1 : 1;
       }
-      final latencyCompare = (leftHealth?.latency?.inMicroseconds ?? 1 << 62)
-          .compareTo(rightHealth?.latency?.inMicroseconds ?? 1 << 62);
+      final latencyCompare = _routeHealthTracker
+          .rankMicrosFor(left)
+          .compareTo(_routeHealthTracker.rankMicrosFor(right));
       if (latencyCompare != 0) {
         return latencyCompare;
       }

@@ -395,6 +395,35 @@ void main() {
       expect(receipts.length, 1);
     });
 
+    test('a confirmation that beats the send call still counts', () async {
+      final radio = _AckingChannel(
+        'npub-me|wss://relay.one',
+        ackBeforeReturn: true,
+      );
+      final tracked = CarrierTransportAdapter(
+        kind: TransportKind.nostr,
+        sealer: sealer,
+        framing: CarrierFraming.nostr,
+      )..attach(radio);
+      await tracked.start();
+      final receipts = <CarrierDeliveryReceipt>[];
+      final subscription = tracked.deliveryReceipts.listen(receipts.add);
+      addTearDown(subscription.cancel);
+      final route = (await tracked.discoverRoutes(peer)).single;
+      await tracked.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'm1',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(50 * 1024),
+          createdAt: DateTime.utc(2026),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(receipts.single.envelopeId, 'm1');
+    });
+
     test('a cancelled send puts no more frames on air', () async {
       final slow = CarrierTransportAdapter(
         kind: TransportKind.nostr,
@@ -786,7 +815,14 @@ class _XorSealer implements CarrierSealer {
 }
 
 class _AckingChannel implements AcknowledgingCarrierChannel {
-  _AckingChannel(this.localAddress, {this.ackAtOnce = false});
+  _AckingChannel(
+    this.localAddress, {
+    this.ackAtOnce = false,
+    this.ackBeforeReturn = false,
+  });
+
+  /// The confirmation comes before the send call returns.
+  final bool ackBeforeReturn;
 
   /// The far radio confirms each frame as soon as it is sent.
   final bool ackAtOnce;
@@ -809,6 +845,7 @@ class _AckingChannel implements AcknowledgingCarrierChannel {
   Future<int> sendTrackedFrame(String address, Uint8List frame) async {
     final id = _next++;
     sentIds.add(id);
+    if (ackBeforeReturn) ack(id);
     if (ackAtOnce) scheduleMicrotask(() => ack(id));
     return id;
   }

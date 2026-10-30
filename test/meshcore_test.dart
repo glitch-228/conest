@@ -142,6 +142,44 @@ void main() {
     expect(aliceRadio.names[prefix], 'Bob (named by me)');
   });
 
+  test('a frame is confirmed when the far radio acknowledges it', () async {
+    final mesh = FakeMeshCoreMesh();
+    final aliceRadio = mesh.radio(1)..acksData = true;
+    final bobRadio = mesh.radio(2);
+    MeshCoreCarrierChannel channel(FakeMeshCoreRadio radio) =>
+        MeshCoreCarrierChannel(
+          config: const MeshCoreCarrierConfig(
+            link: MeshCoreLink.serial,
+            host: '/dev/ttyACM0',
+          ),
+          connector: (_) async => radio,
+          onFrame: (_, _) {},
+        );
+    final alice = channel(aliceRadio);
+    final bob = channel(bobRadio);
+    addTearDown(alice.stop);
+    addTearDown(bob.stop);
+    alice.start();
+    bob.start();
+    while (alice.state != MeshCoreCarrierState.connected ||
+        bob.state != MeshCoreCarrierState.connected) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    bob.updatePeers({alice.localAddress!});
+    alice.updatePeers({bob.localAddress!});
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final acks = <({int frameId, bool ok})>[];
+    final subscription = alice.frameAcks.listen(acks.add);
+    addTearDown(subscription.cancel);
+    final id = await alice.sendTrackedFrame(
+      bob.localAddress!,
+      Uint8List.fromList([1, 2, 3]),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(acks.single.frameId, id);
+    expect(acks.single.ok, isTrue);
+  });
+
   test('addresses are checked', () {
     final key = List.generate(32, (i) => i);
     final good = MeshCoreAddress(Uint8List.fromList(key)).encode();

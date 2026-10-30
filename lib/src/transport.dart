@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'path_stats.dart';
 import 'transport_models.dart';
 
 class TransportCapabilities {
@@ -195,22 +196,6 @@ class TransportSendCancelled implements Exception {
   String toString() => message;
 }
 
-class TransportRouteStats {
-  /// Moving average of accepted sends of small envelopes, in milliseconds.
-  double? latencyMs;
-  int failureStreak = 0;
-  DateTime? lastFailureAt;
-  DateTime? lastSuccessAt;
-
-  /// While a route that just failed cools down, working routes go first.
-  bool coolingAt(DateTime now) {
-    final failedAt = lastFailureAt;
-    if (failureStreak == 0 || failedAt == null) return false;
-    final seconds = min(15 * (1 << min(failureStreak - 1, 10)), 600);
-    return now.difference(failedAt) < Duration(seconds: seconds);
-  }
-}
-
 class TransportRegistry {
   TransportRegistry(
     Iterable<TransportAdapter> adapters, {
@@ -224,22 +209,43 @@ class TransportRegistry {
   void Function(TransportKind kind, bool ok, Object? error)? onOutcome;
   final DateTime Function() _now;
 
-  /// Route statistics by `deviceId|transport`, oldest first.
-  final Map<String, TransportRouteStats> _stats = {};
-  static const int _maxStats = 4096;
+  /// Statistics by `deviceId|transport`, least recently used first. The one
+  /// set of numbers per path ([PathStats]) that ranking and the wait before
+  /// another copy read.
+  final PathStatsBook<String> _stats = PathStatsBook<String>();
 
   /// Envelopes up to this size time the route rather than the payload.
   static const int _latencySampleBytes = 64 * 1024;
 
-  TransportRouteStats? statsFor(String deviceId, TransportKind kind) =>
-      _stats['$deviceId|${kind.name}'];
+  PathStats? statsFor(String deviceId, TransportKind kind) =>
+      _stats.peek('$deviceId|${kind.name}');
 
-  TransportRouteStats _statsEntry(String deviceId, TransportKind kind) {
-    final key = '$deviceId|${kind.name}';
-    final entry = _stats.remove(key) ?? TransportRouteStats();
-    _stats[key] = entry;
-    if (_stats.length > _maxStats) _stats.remove(_stats.keys.first);
-    return entry;
+  PathStats _statsEntry(String deviceId, TransportKind kind) =>
+      _stats.touch('$deviceId|${kind.name}');
+
+  /// Whether every transport that sent to [deviceId] within [within] failed
+  /// the last time (none worked since): the connection map shows such a
+  /// link as failing. False when nothing has been tried.
+  bool failingToReach(
+    String deviceId, {
+    Duration within = const Duration(minutes: 30),
+  }) {
+    final now = _now();
+    var tried = false;
+    for (final kind in _adapters.keys) {
+      final stats = statsFor(deviceId, kind);
+      if (stats == null) continue;
+      final failedAt = stats.lastFailureAt;
+      final workedAt = stats.lastSuccessAt;
+      final recent = [
+        failedAt,
+        workedAt,
+      ].whereType<DateTime>().any((at) => now.difference(at) <= within);
+      if (!recent) continue;
+      if (stats.failureStreak == 0) return false;
+      tried = true;
+    }
+    return tried;
   }
 
   Iterable<TransportAdapter> get adapters => _adapters.values;
@@ -291,7 +297,7 @@ class TransportRegistry {
     bool cooling(RouteCandidate route) =>
         statsFor(peer.deviceId, route.transport)?.coolingAt(now) ?? false;
     double speed(RouteCandidate route) =>
-        statsFor(peer.deviceId, route.transport)?.latencyMs ??
+        statsFor(peer.deviceId, route.transport)?.rttMs ??
         _expectedLatencyMs(route);
     routes.sort((left, right) {
       final leftPolicy = policies[left.transport] ?? TransportPolicy.automatic;
@@ -363,12 +369,14 @@ class TransportRegistry {
           ),
         );
         if (receipt.accepted) {
+          final took = completedAt.difference(startedAt);
+          final small = envelope.bytes.length <= _latencySampleBytes;
           _recordSuccess(
             peer.deviceId,
             route.transport,
-            envelope.bytes.length <= _latencySampleBytes
-                ? completedAt.difference(startedAt)
-                : null,
+            small ? took : null,
+            bytes: small ? null : envelope.bytes.length,
+            transferTook: small ? null : took,
           );
           return TransportDeliveryResult(
             receipt: receipt,
@@ -403,22 +411,23 @@ class TransportRegistry {
   void noteRoundTrip(String deviceId, TransportKind kind, Duration took) =>
       _recordSuccess(deviceId, kind, took);
 
-  void _recordSuccess(String deviceId, TransportKind kind, Duration? took) {
+  void _recordSuccess(
+    String deviceId,
+    TransportKind kind,
+    Duration? took, {
+    int? bytes,
+    Duration? transferTook,
+  }) {
     onOutcome?.call(kind, true, null);
-    final stats = _statsEntry(deviceId, kind)
-      ..failureStreak = 0
-      ..lastSuccessAt = _now();
-    if (took == null) return;
-    final sample = took.inMicroseconds / 1000;
-    final previous = stats.latencyMs;
-    stats.latencyMs = previous == null ? sample : previous * 0.7 + sample * 0.3;
+    _statsEntry(
+      deviceId,
+      kind,
+    ).recordSuccess(_now(), rtt: took, bytes: bytes, took: transferTook);
   }
 
   void _recordFailure(String deviceId, TransportKind kind, [Object? error]) {
     onOutcome?.call(kind, false, error);
-    _statsEntry(deviceId, kind)
-      ..failureStreak += 1
-      ..lastFailureAt = _now();
+    _statsEntry(deviceId, kind).recordFailure(_now());
   }
 
   /// Rough send time before anything is measured: the path kind, and how

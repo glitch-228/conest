@@ -1,3 +1,5 @@
+import '../path_stats.dart';
+
 /// Shares a file's blocks between the routes to one peer (LAN, Iroh…) in
 /// proportion to what each delivers: each block goes to the route whose
 /// measured speed, shared with the blocks already on it, is best. A route
@@ -34,8 +36,14 @@ class RouteStriper<R> {
 
   _RouteState _state(R route) => _routes.putIfAbsent(
     route,
-    () => _RouteState(_prior[route] ?? _defaultPrior),
+    () => _RouteState(
+      PathStats(priorBytesPerSecond: _prior[route] ?? _defaultPrior),
+    ),
   );
+
+  /// The numbers kept for [route]: the same [PathStats] the transport
+  /// registry and the route health tracker use for their paths.
+  PathStats statsOf(R route) => _state(route).stats;
 
   /// Measured speed of [route] (bytes a second, smoothed).
   double speedOf(R route) => _state(route).bytesPerSecond;
@@ -126,11 +134,11 @@ class RouteStriper<R> {
     final state = _state(lease.route);
     final seconds = _now().difference(lease.startedAt).inMicroseconds / 1e6;
     if (seconds > 0 && lease.bytes > 0) {
-      final sample = lease.bytes / seconds;
-      state.bytesPerSecond = state.samples == 0
-          ? sample
-          : state.bytesPerSecond * 0.7 + sample * 0.3;
-      state.samples++;
+      state.stats.recordSuccess(
+        _now(),
+        bytes: lease.bytes,
+        took: _now().difference(lease.startedAt),
+      );
       state.blockSeconds
         ..add(seconds)
         ..removeRange(
@@ -138,10 +146,10 @@ class RouteStriper<R> {
           state.blockSeconds.length > 32 ? state.blockSeconds.length - 32 : 0,
         );
     }
-    state.restingUntil = null;
+    if (!(seconds > 0 && lease.bytes > 0)) {
+      state.stats.recordSuccess(_now());
+    }
     state.lateUntil = null;
-    state.lastSuccessAt = _now();
-    state.failures = 0;
     _sentBytes += lease.bytes;
   }
 
@@ -152,12 +160,14 @@ class RouteStriper<R> {
     final state = _state(lease.route);
     // Blocks that were already in flight when it began resting do not
     // make it rest longer.
-    final already = state.restingUntil?.isAfter(_now()) == true;
-    if (!already) {
-      state.failures = state.failures < 16 ? state.failures + 1 : 16;
-    }
-    final rest = _restAfterFailure * (1 << (state.failures - 1).clamp(0, 6));
-    state.restingUntil = _now().add(rest > _maxRest ? _maxRest : rest);
+    final already = state.stats.coolingAt(_now());
+    final streak = state.stats.failureStreak + (already ? 0 : 1);
+    final rest = _restAfterFailure * (1 << (streak - 1).clamp(0, 6));
+    state.stats.recordFailure(
+      _now(),
+      cooldown: rest > _maxRest ? _maxRest : rest,
+      grow: !already,
+    );
   }
 
   bool _end(StripeLease<R> lease) {
@@ -198,13 +208,13 @@ class StripeLease<R> {
 }
 
 class _RouteState {
-  _RouteState(this.bytesPerSecond);
-  double bytesPerSecond;
-  int samples = 0;
+  _RouteState(this.stats);
+  final PathStats stats;
+  double get bytesPerSecond => stats.bytesPerSecond ?? 0;
+  int get samples => stats.throughputSamples;
+  DateTime? get lastSuccessAt => stats.lastSuccessAt;
+  DateTime? get restingUntil => stats.cooldownUntil;
   int inFlight = 0;
-  int failures = 0;
   DateTime? lateUntil;
-  DateTime? lastSuccessAt;
-  DateTime? restingUntil;
   final List<double> blockSeconds = [];
 }

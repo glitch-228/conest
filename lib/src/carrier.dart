@@ -640,6 +640,9 @@ class CarrierTransportAdapter implements TransportAdapter {
         while (_unconfirmedFrames.length > _maxUnconfirmedFrames) {
           _unconfirmedFrames.remove(_unconfirmedFrames.keys.first);
         }
+        // Its confirmation beat the send's own return.
+        final early = _earlyFrameAcks.remove(id);
+        if (early != null) _onFrameAck((frameId: id, ok: early));
       } else if (inboxSender != null) {
         await (channel as InboxCarrierChannel).sendInboxFrame(
           address,
@@ -683,9 +686,19 @@ class CarrierTransportAdapter implements TransportAdapter {
     }
   }
 
+  /// Confirmations that came before their frame was registered (bounded).
+  final Map<int, bool> _earlyFrameAcks = {};
+
   void _onFrameAck(({int frameId, bool ok}) ack) {
     final entry = _unconfirmedFrames.remove(ack.frameId);
-    if (entry == null) return;
+    if (entry == null) {
+      _earlyFrameAcks.remove(ack.frameId);
+      _earlyFrameAcks[ack.frameId] = ack.ok;
+      while (_earlyFrameAcks.length > 32) {
+        _earlyFrameAcks.remove(_earlyFrameAcks.keys.first);
+      }
+      return;
+    }
     if (!ack.ok) {
       entry.refused = true;
       return;
