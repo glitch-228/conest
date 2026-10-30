@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:conest/src/bitchat/direct.dart';
@@ -144,31 +145,37 @@ void main() {
   );
 
   for (final pruneThroughGetter in [false, true]) {
-    testWidgets(
+    test(
       'expiry notification survives ${pruneThroughGetter ? 'a getter' : 'an invalid announce'} before the mesh tick',
-      (tester) async {
-        late BitchatDirect listener;
-        late BitchatDirect phone;
-        late BitchatPacket announce;
-        await tester.runAsync(() async {
-          listener = await person(0, listeningOnly: true);
-          phone = await person(1);
-          announce = await phone.announce();
-          await listener.handleAnnounce(announce);
-        });
+      () async {
+        final listener = await person(0, listeningOnly: true);
+        final phone = await person(1);
+        final announce = await phone.announce();
+        await listener.handleAnnounce(announce);
         final area = FakeBleNeighbourhood();
         var notifications = 0;
-        final channel = BitchatCarrierChannel(
+        final running = Completer<void>();
+        Completer<void>? expiry;
+        late BitchatCarrierChannel channel;
+        channel = BitchatCarrierChannel(
           config: BitchatCarrierConfig.create(clock),
           connector: () async => area.node('listener'),
           keyFor: (_) async => [],
           onFrame: (_, _) {},
-          onStatusChanged: () => notifications++,
+          onStatusChanged: () {
+            notifications++;
+            if (channel.state == BitchatCarrierState.running &&
+                !running.isCompleted) {
+              running.complete();
+            }
+            final waiting = expiry;
+            if (waiting != null && !waiting.isCompleted) waiting.complete();
+          },
           now: () => clock,
         )..useDirect(listener, visible: false);
+        addTearDown(channel.stop);
         channel.start();
-        await tester.pump();
-        expect(channel.state, BitchatCarrierState.running);
+        await running.future;
         final before = notifications;
         clock = clock.add(const Duration(minutes: 5));
         if (pruneThroughGetter) {
@@ -185,15 +192,13 @@ void main() {
           );
         }
         expect(notifications, before);
-        await tester.pump(const Duration(seconds: 5));
+        final expired = Completer<void>();
+        expiry = expired;
+        await expired.future.timeout(const Duration(seconds: 15));
         expect(notifications, before + 1);
         expect(listener.peers, isEmpty);
-        await tester.pump(const Duration(seconds: 5));
-        expect(notifications, before + 1);
+        expect(listener.takePeerExpiry(), isFalse);
         expect(area.airtime, isEmpty);
-        final stopped = channel.stop();
-        await tester.pump();
-        await stopped;
       },
     );
   }
