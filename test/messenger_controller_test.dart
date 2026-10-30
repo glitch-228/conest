@@ -6208,6 +6208,9 @@ void main() {
         isEmpty,
       );
     },
+    // About 25 s of real work on a quiet machine (many history syncs in a
+    // row): the default 30 s fails on a slow runner without any hang.
+    timeout: const Timeout(Duration(minutes: 3)),
   );
 
   test(

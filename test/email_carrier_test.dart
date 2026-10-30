@@ -90,12 +90,12 @@ void main() {
       for (var i = 0; i < 4; i++) bob.sendFrame(alice.localAddress!, frame),
     ]);
     expect(connects, hasLength(4));
-    for (var i = 1; i < connects.length; i++) {
-      expect(
-        connects[i].difference(connects[i - 1]),
-        greaterThanOrEqualTo(const Duration(milliseconds: 250)),
-      );
-    }
+    // Turns are scheduled from one clock: the last mail leaves three gaps
+    // after the first, whatever the jitter between two of them.
+    expect(
+      connects.last.difference(connects.first),
+      greaterThanOrEqualTo(const Duration(milliseconds: 3 * 400 - 300)),
+    );
     refuse = true;
     await expectLater(
       bob.sendFrame(alice.localAddress!, frame),
