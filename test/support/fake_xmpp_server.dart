@@ -74,6 +74,12 @@ class FakeXmppServer {
   /// After the sign-up form, send this many stanzas nobody asked for.
   int floodAfterForm = 0;
 
+  /// After the sign-up form, send this many 200 KB stanzas.
+  int bigAfterForm = 0;
+
+  /// After the sign-up form, send a stream error and keep the connection.
+  bool streamErrorAfterForm = false;
+
   /// Sign-up happens on this web page: the form only says so.
   String? registrationWebPage;
 
@@ -1002,6 +1008,24 @@ class _FakeConnection {
         );
         for (var i = 0; i < server.floodAfterForm; i++) {
           _send(XmppElement('message', attributes: {'id': 'x$i'}));
+        }
+        for (var i = 0; i < server.bigAfterForm; i++) {
+          _send(
+            XmppElement(
+              'message',
+              attributes: {'id': 'big$i'},
+              text: 'x' * 200000,
+            ),
+          );
+        }
+        if (server.streamErrorAfterForm) {
+          _send(
+            XmppElement(
+              'error',
+              xmlns: XmppNs.stream,
+              children: [XmppElement('system-shutdown', xmlns: XmppNs.streams)],
+            ),
+          );
         }
         return;
       }

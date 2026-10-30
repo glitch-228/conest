@@ -78,13 +78,25 @@ class _EventQueue {
         if (_waiter case final waiter?) {
           _waiter = null;
           waiter.complete(event);
-        } else if (_buffer.length >= _maxBuffered) {
-          // Nobody is reading (the user is answering a question) and the
-          // server keeps talking: the attempt fails.
-          _error ??= const XmppProtocolException('The server sent too much.');
-          unawaited(_subscription.cancel());
         } else {
-          _buffer.add(event);
+          // Nobody is reading (the user is answering a question). Whatever
+          // the server sends is held up to a few events and bytes; beyond
+          // that the attempt fails.
+          final size = switch (event) {
+            XmppStreamElement(:final element) => element.toXml().length,
+            _ => 64,
+          };
+          _bufferedChars += size;
+          if (_buffer.length >= _maxBuffered ||
+              _bufferedChars > _maxBufferedChars) {
+            _error ??= const XmppProtocolException('The server sent too much.');
+            _buffer.clear();
+            _sizes.clear();
+            unawaited(_subscription.cancel());
+          } else {
+            _buffer.add(event);
+            _sizes.add(size);
+          }
         }
       },
       onError: (Object error) {
@@ -107,13 +119,21 @@ class _EventQueue {
   /// Most stream events held while nobody reads.
   static const int _maxBuffered = 64;
 
+  /// Most characters held (about a megabyte) while nobody reads.
+  static const int _maxBufferedChars = 1024 * 1024;
+  int _bufferedChars = 0;
+  final Queue<int> _sizes = Queue();
+
   late final StreamSubscription<XmppStreamEvent> _subscription;
   final Queue<XmppStreamEvent> _buffer = Queue();
   Completer<XmppStreamEvent>? _waiter;
   Object? _error;
 
   Future<XmppStreamEvent> next(Duration timeout) {
-    if (_buffer.isNotEmpty) return Future.value(_buffer.removeFirst());
+    if (_buffer.isNotEmpty) {
+      _bufferedChars -= _sizes.removeFirst();
+      return Future.value(_buffer.removeFirst());
+    }
     if (_error case final error?) return Future.error(error);
     final waiter = _waiter = Completer<XmppStreamEvent>();
     return waiter.future.timeout(
@@ -139,10 +159,22 @@ class _EventQueue {
     };
   }
 
-  /// Throws what already went wrong with the stream (too much was sent
-  /// while nobody was reading, or it closed).
+  /// Throws what already went wrong with the stream: too much was sent
+  /// while nobody was reading, it closed, or the server said so in what it
+  /// sent meanwhile (a stream error or the end of the stream, still waiting
+  /// unread).
   void ensureHealthy() {
     if (_error case final error?) throw error;
+    for (final event in _buffer) {
+      switch (event) {
+        case XmppStreamElement(:final element):
+          _checkStreamError(element);
+        case XmppStreamClosed():
+          throw const SocketException('The server closed the stream.');
+        case XmppStreamOpened():
+          break;
+      }
+    }
   }
 
   Future<void> cancel() => _subscription.cancel();
@@ -336,7 +368,10 @@ Future<void> _authenticate(
         }
         return;
       case 'failure':
-        final condition = answer.children.firstOrNull?.name ?? 'not-authorized';
+        final condition = serverText(
+          answer.children.firstOrNull?.name ?? 'not-authorized',
+          64,
+        );
         if (condition == 'not-authorized' ||
             condition == 'account-disabled' ||
             condition == 'credentials-expired') {
@@ -466,12 +501,16 @@ Future<XmppFeatures> probeXmppEndpoint({
   required String domain,
   XmppSocketConnector connector = connectXmppSocket,
   XmppWebSocketConnector webSocketConnector = connectXmppWebSocket,
+  void Function(Future<void> Function() close)? onOpen,
 }) async {
   final wire = await openXmppWire(
     endpoint,
     connector: connector,
     webSocketConnector: webSocketConnector,
   );
+  // Lets the caller close the connection from outside (a probe round that
+  // is over).
+  onOpen?.call(wire.close);
   final queue = _EventQueue(wire.events);
   try {
     return await _openSecureStream(wire, queue, domain, endpoint);

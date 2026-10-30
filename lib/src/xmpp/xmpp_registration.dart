@@ -19,19 +19,16 @@ const int maxCaptchaImageBytes = 256 * 1024;
 /// The most hidden fields sent back.
 const int _maxHiddenFields = 16;
 
-const Set<String> _imageTypes = {
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-};
+const Set<String> _imageTypes = {'image/png', 'image/jpeg', 'image/webp'};
+// GIF is not taken: decoders grow the canvas to the first frame's
+// rectangle, wherever it sits, whatever the header says.
 
 /// The largest CAPTCHA picture taken, by side and by area.
 const int maxCaptchaSide = 1024;
 const int maxCaptchaPixels = 4 * 1000 * 1000;
 
 /// The MIME type and size of an image, read from its header without
-/// decoding (PNG, JPEG, GIF, WebP only); null for anything else or a
+/// decoding (PNG, JPEG, WebP only); null for anything else or a
 /// damaged header.
 ({String mime, int width, int height})? readImageHeader(Uint8List b) {
   int le16(int i) => b[i] | b[i + 1] << 8;
@@ -53,15 +50,6 @@ const int maxCaptchaPixels = 4 * 1000 * 1000;
       width: b[16] << 24 | b[17] << 16 | b[18] << 8 | b[19],
       height: b[20] << 24 | b[21] << 16 | b[22] << 8 | b[23],
     );
-  }
-  if (b.length >= 10 &&
-      b[0] == 0x47 &&
-      b[1] == 0x49 &&
-      b[2] == 0x46 &&
-      b[3] == 0x38 &&
-      (b[4] == 0x37 || b[4] == 0x39) &&
-      b[5] == 0x61) {
-    return (mime: 'image/gif', width: le16(6), height: le16(8));
   }
   if (b.length >= 4 && b[0] == 0xff && b[1] == 0xd8) {
     var i = 2;
@@ -259,7 +247,15 @@ bool isPublicHttpsUrl(String url) {
       uri.host.isEmpty) {
     return false;
   }
-  final host = uri.host.toLowerCase();
+  var host = uri.host.toLowerCase();
+  if (host.endsWith('.')) host = host.substring(0, host.length - 1);
+  final labels = host.split('.');
+  final last = labels.last;
+  if (host.isEmpty ||
+      labels.any((label) => label.isEmpty) ||
+      RegExp(r'^(0x[0-9a-f]*|[0-9]+)$').hasMatch(last)) {
+    return false;
+  }
   if (InternetAddress.tryParse(host) != null ||
       host.contains(':') ||
       !host.contains('.') ||

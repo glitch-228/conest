@@ -277,7 +277,13 @@ enum XmppServerStatus {
 
 /// What one server answered.
 class XmppServerOutcome {
-  const XmppServerOutcome(this.domain, this.status, {this.url, this.detail});
+  const XmppServerOutcome(
+    this.domain,
+    this.status, {
+    this.url,
+    this.detail,
+    this.fromList = false,
+  });
 
   final String domain;
   final XmppServerStatus status;
@@ -285,6 +291,9 @@ class XmppServerOutcome {
   /// The web page for [XmppServerStatus.webSignup] (always `https`).
   final String? url;
   final String? detail;
+
+  /// Known from the bundled list only: the server was not asked.
+  final bool fromList;
 
   /// For the user, in a word or two.
   String get summary => switch (status) {
@@ -308,20 +317,34 @@ class XmppAccountCreationException extends StateError {
   final List<XmppServerOutcome> outcomes;
 
   /// The servers that sign people up on a web page, with their links.
+  /// Those that answered here come first, then the bundled list's.
   List<XmppServerOutcome> get webSignups => [
-    for (final outcome in outcomes)
-      if (outcome.status == XmppServerStatus.webSignup && outcome.url != null)
-        outcome,
+    for (final fromList in const [false, true])
+      for (final outcome in outcomes)
+        if (outcome.status == XmppServerStatus.webSignup &&
+            outcome.url != null &&
+            outcome.fromList == fromList)
+          outcome,
   ];
 
   static const int _listed = 8;
 
   static String _message(Iterable<XmppServerOutcome> outcomes) {
-    final all = outcomes.toList();
-    final shown = all.take(_listed).map((o) => '${o.domain}: ${o.summary}');
+    // What servers answered here comes first; the many that the list says
+    // sign up on a website are one line.
+    final asked = [
+      for (final o in outcomes)
+        if (!o.fromList) o,
+    ];
+    final listed = outcomes.length - asked.length;
+    final shown = asked.take(_listed).map((o) => '${o.domain}: ${o.summary}');
+    final parts = [
+      ...shown,
+      if (asked.length > _listed) 'and ${asked.length - _listed} more',
+      if (listed > 0) '$listed more sign up on their websites',
+    ];
     return 'No XMPP server here lets Conest create an account'
-        '${all.isEmpty ? '' : '. What each one answered: ${shown.join('; ')}'
-                  '${all.length > _listed ? '; and ${all.length - _listed} more' : ''}'}'
+        '${parts.isEmpty ? '' : '. What each one answered: ${parts.join('; ')}'}'
         '. Use your own account.';
   }
 }
@@ -365,6 +388,7 @@ Future<List<XmppServerProbe>> reachableXmppServers(
   final answered = <XmppServerProbe>[];
   final done = Completer<void>();
   var finished = false;
+  final openProbes = <Future<void> Function()>[];
   var pending = domains.length;
   void settle() {
     if (!done.isCompleted && (answered.length >= enough || pending == 0)) {
@@ -398,11 +422,21 @@ Future<List<XmppServerProbe>> reachableXmppServers(
         endpointFuture
             .then((endpoint) async {
               if (endpoint == null) throw StateError('no endpoint');
+              if (finished) throw StateError('round over');
               final features = await probeXmppEndpoint(
                 endpoint: endpoint,
                 domain: domain,
                 connector: connector,
                 webSocketConnector: webSocketConnector,
+                onOpen: (close) {
+                  // A connection that opens after the round ended is shut
+                  // at once.
+                  if (finished) {
+                    unawaited(close().catchError((Object _) {}));
+                  } else {
+                    openProbes.add(close);
+                  }
+                },
               );
               return (endpoint, features);
             })
@@ -479,6 +513,12 @@ Future<List<XmppServerProbe>> reachableXmppServers(
     },
   );
   finished = true;
+  // Probes still waiting for a slow server do not run on beside the
+  // sign-up that follows.
+  for (final close in openProbes) {
+    unawaited(close().catchError((Object _) {}));
+  }
+  openProbes.clear();
   for (final timer in timers) {
     timer.cancel();
   }
@@ -667,7 +707,12 @@ Future<XmppCarrierConfig> setUpXmppCarrierAccount(
   final webOnly = <XmppServerOutcome>[
     for (final server in servers)
       if (server.web case final url?)
-        XmppServerOutcome(server.domain, XmppServerStatus.webSignup, url: url),
+        XmppServerOutcome(
+          server.domain,
+          XmppServerStatus.webSignup,
+          url: url,
+          fromList: true,
+        ),
   ];
   // Those without a CAPTCHA first (the list comes in that order).
   final inApp = [
@@ -724,7 +769,7 @@ Future<XmppCarrierConfig> setUpXmppCarrierAccount(
     );
     if (config != null) return config;
   }
-  throw XmppAccountCreationException([...webOnly, ...outcomes.values]);
+  throw XmppAccountCreationException([...outcomes.values, ...webOnly]);
 }
 
 /// Checks that [config]'s account signs in, without keeping a connection.

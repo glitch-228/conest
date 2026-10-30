@@ -1,14 +1,18 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:conest/src/xmpp/xmpp_captcha_image.dart';
 import 'package:conest/src/xmpp/xmpp_carrier.dart';
 import 'package:conest/src/xmpp/xmpp_registration.dart';
+import 'package:conest/src/xmpp/xmpp_sasl.dart' show XmppSaslException;
 import 'package:conest/src/xmpp/xmpp_servers.dart';
 import 'package:conest/src/xmpp/xmpp_session.dart' show stanzaErrorOf;
 import 'package:conest/src/xmpp/xmpp_socket.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 
 import 'support/fake_xmpp_server.dart';
 
@@ -205,6 +209,39 @@ void main() {
     });
   });
 
+  group('a long list of web-only servers', () {
+    test('does not hide what the probed servers answered', () async {
+      final closed = FakeXmppServer(allowRegistration: false);
+      final web = FakeXmppServer()
+        ..registrationWebPage = 'https://web.test/signup';
+      Object? thrown;
+      try {
+        await _setUp(
+          [
+            for (var i = 0; i < 20; i++)
+              XmppServerEntry('site$i.test', web: 'https://site$i.test/join'),
+            const XmppServerEntry('down.test'),
+            const XmppServerEntry('closed.test'),
+            const XmppServerEntry('web.test'),
+          ],
+          {'closed.test': closed, 'web.test': web},
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      final error = thrown as XmppAccountCreationException;
+      expect(error.message, contains('down.test: no answer'));
+      expect(error.message, contains('closed.test: sign-up closed'));
+      expect(error.message, contains('web.test: sign-up on its website'));
+      expect(error.message, contains('20 more sign up on their websites'));
+      expect(error.message, isNot(contains('site3.test')));
+      // The link of a server that answered here comes first.
+      final urls = error.webSignups.map((o) => o.url).toList();
+      expect(urls.first, 'https://web.test/signup');
+      expect(urls.length, 21);
+    });
+  });
+
   group('sign-up forms from servers', () {
     XmppElement query(List<XmppElement> children) =>
         XmppElement('query', xmlns: XmppNs.register, children: children);
@@ -344,11 +381,13 @@ void main() {
         isFalse,
       );
       expect(taken(pngHeader(10, 10), 'image/gif'), isFalse);
-      // GIF and JPEG headers are read too.
-      final gif = [...utf8.encode('GIF89a'), 200, 0, 50, 0, 0, 0, 0, 0];
-      expect(taken(gif, 'image/gif'), isTrue);
-      final hugeGif = [...utf8.encode('GIF89a'), 255, 255, 255, 255, 0, 0];
-      expect(taken(hugeGif, 'image/gif'), isFalse);
+      // GIF is refused whatever its header says: a decoder grows the
+      // canvas to the first frame, wherever that sits (a 100 x 40 screen
+      // with a 30000 x 30000 first frame decodes to 30000 x 30000).
+      final gif = [...utf8.encode('GIF89a'), 100, 0, 40, 0, 0, 0, 0, 0];
+      expect(taken(gif, 'image/gif'), isFalse);
+      expect(taken(gif, 'image/png'), isFalse);
+      // JPEG headers are read.
       final jpeg = [
         0xff,
         0xd8,
@@ -374,6 +413,65 @@ void main() {
       ];
       expect(readImageHeader(Uint8List.fromList(jpeg))?.width, 120);
       expect(taken(jpeg, 'image/jpeg'), isTrue);
+    });
+  });
+
+  group('the decoder checks the picture too', () {
+    test('only pictures the engine measures as small are shown', () async {
+      Uint8List png(int w, int h) =>
+          Uint8List.fromList(img.encodePng(img.Image(width: w, height: h)));
+      expect(await captchaImageFitsToShow(png(200, 60)), isTrue);
+      expect(await captchaImageFitsToShow(png(2000, 10)), isFalse);
+      expect(await captchaImageFitsToShow(png(10, 1100)), isFalse);
+      expect(
+        await captchaImageFitsToShow(Uint8List.fromList([1, 2, 3])),
+        isFalse,
+      );
+    });
+  });
+
+  group('server text in sign-in errors', () {
+    test('is cleaned and cut', () {
+      final text = XmppSaslException('a\u202eb\u200b${'z' * 500}').toString();
+      expect(text, startsWith('Sign-in failed: ab'));
+      expect(text, isNot(contains('\u202e')));
+      expect(text.length, lessThan(100));
+    });
+  });
+
+  group('a finished probe round', () {
+    test('closes the connections of servers still being slow', () async {
+      final fast = FakeXmppServer(domain: 'fast.test');
+      final closed = <int>[];
+      var opened = 0;
+      Future<XmppByteSocket> silent() async {
+        final id = opened++;
+        return _SilentSocket(() => closed.add(id));
+      }
+
+      final probed = await reachableXmppServers(
+        ['slow.test', 'fast.test'],
+        connector: (host, port, {required tls, alpn}) async {
+          if (host == 'fast.test') {
+            return fast.connect(host, port, tls: tls, alpn: alpn);
+          }
+          if (port == 5222) return silent();
+          if (port == 5223) {
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            return silent();
+          }
+          throw const SocketException('unreachable');
+        },
+        webSocketLookup: null,
+        enough: 1,
+        parallel: 2,
+        headStart: const Duration(milliseconds: 10),
+        needRegistration: true,
+      );
+      expect(probed.map((p) => p.domain), ['fast.test']);
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      expect(opened, 2);
+      expect(closed.toSet(), {0, 1});
     });
   });
 
@@ -414,6 +512,13 @@ void main() {
         'https://192.168.1.1/x',
         'https://[::1]/',
         'https://localhost/',
+        'https://localhost./',
+        'https://example.org..',
+        'https://0x7f.0.0.1/',
+        'https://0xc0.0xa8.1.1/',
+        'https://127.1/',
+        'https://2130706433/',
+        'https://a.b.0x10/',
         'https://printer.local/',
         'https://intranet/',
         'https://user@example.org/',
@@ -442,6 +547,47 @@ void main() {
         ),
         throwsA(isA<XmppAccountCreationException>()),
       );
+      expect(server.passwords, isEmpty);
+    });
+
+    test(
+      'a few huge stanzas fail the attempt (bytes, not just count)',
+      () async {
+        final server = FakeXmppServer(domain: 'big.test')
+          ..captchaAnswer = 'x'
+          ..bigAfterForm = 8;
+        await expectLater(
+          _setUp(
+            const [XmppServerEntry('big.test', captcha: true)],
+            {'big.test': server},
+            solver: (_) async {
+              await Future<void>.delayed(const Duration(milliseconds: 300));
+              return 'x';
+            },
+          ),
+          throwsA(isA<XmppAccountCreationException>()),
+        );
+        expect(server.captchaAnswers, isEmpty);
+        expect(server.passwords, isEmpty);
+      },
+    );
+
+    test('a stream error sent meanwhile stops it before the answer', () async {
+      final server = FakeXmppServer(domain: 'bye.test')
+        ..captchaAnswer = 'x'
+        ..streamErrorAfterForm = true;
+      await expectLater(
+        _setUp(
+          const [XmppServerEntry('bye.test', captcha: true)],
+          {'bye.test': server},
+          solver: (_) async {
+            await Future<void>.delayed(const Duration(milliseconds: 200));
+            return 'x';
+          },
+        ),
+        throwsA(isA<XmppAccountCreationException>()),
+      );
+      expect(server.captchaAnswers, isEmpty);
       expect(server.passwords, isEmpty);
     });
 
@@ -529,4 +675,25 @@ void main() {
       expect(servers[2].web, 'https://ok.test/a');
     });
   });
+}
+
+/// A connection that opens and then says nothing.
+class _SilentSocket implements XmppByteSocket {
+  _SilentSocket(this.onClose);
+  final void Function() onClose;
+  final StreamController<Uint8List> _input = StreamController();
+
+  @override
+  Stream<Uint8List> get input => _input.stream;
+  @override
+  bool get secure => true;
+  @override
+  void write(List<int> bytes) {}
+  @override
+  Future<XmppByteSocket> startTls(String host) async => this;
+  @override
+  Future<void> close() async {
+    onClose();
+    await _input.close();
+  }
 }

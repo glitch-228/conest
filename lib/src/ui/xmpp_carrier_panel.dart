@@ -5,6 +5,7 @@ import '../messenger_controller.dart';
 import '../network_errors.dart';
 import '../transport_models.dart';
 import '../xmpp/xmpp_carrier.dart';
+import '../xmpp/xmpp_captcha_image.dart';
 import '../xmpp/xmpp_registration.dart';
 import 'carrier_switch.dart';
 
@@ -98,6 +99,11 @@ class _XmppCarrierPanelState extends State<XmppCarrierPanel> {
   /// Shows a server's CAPTCHA picture; what the user typed, or null.
   Future<String?> _askCaptcha(XmppCaptchaChallenge challenge) async {
     if (!mounted) return null;
+    // Second layer: what the engine itself says the picture measures.
+    if (!await captchaImageFitsToShow(challenge.image)) {
+      throw StateError('The CAPTCHA picture is not one Conest will show.');
+    }
+    if (!mounted) return null;
     final l10n = l10nOf(context);
     final answer = TextEditingController();
     try {
@@ -122,6 +128,7 @@ class _XmppCarrierPanelState extends State<XmppCarrierPanel> {
                   challenge.image,
                   key: const ValueKey('xmpp-captcha-image'),
                   fit: BoxFit.contain,
+                  cacheWidth: 400,
                   errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
                 ),
               ),
