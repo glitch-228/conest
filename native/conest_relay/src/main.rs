@@ -5,6 +5,7 @@
 //! HTTP form), `server` (the tokio server) and `legacy` (the old threaded
 //! server, kept behind `--legacy-threads`).
 
+mod blobs;
 mod borrowed;
 mod config;
 mod http;

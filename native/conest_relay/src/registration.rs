@@ -315,6 +315,7 @@ impl RelayState {
         json!({
             "tier1": self.config.ext.tier1.name(),
             "registration": self.config.ext.registration.name(),
+            "blobs": self.blob_info(),
         })
     }
 
@@ -354,7 +355,7 @@ impl RelayState {
     }
 
     /// An account's store budget: its quota, in bytes a minute.
-    fn allow_account_bytes(&self, token: &Token, bytes: u64) -> Result<(), String> {
+    pub(crate) fn allow_account_bytes(&self, token: &Token, bytes: u64) -> Result<(), String> {
         let minute = now_millis() / 60_000;
         let mut accounts = self
             .accounts

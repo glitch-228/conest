@@ -63,6 +63,9 @@ pub(crate) struct RelayState {
     pub(crate) token_secret: Arc<Vec<u8>>,
     /// How many times the queue was read (tests watch for busy loops).
     pub(crate) queue_reads: Arc<std::sync::atomic::AtomicU64>,
+    /// When blobs were last swept, and bytes fetched per address (blobs.rs).
+    pub(crate) blob_sweep: Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) blob_served: Arc<Mutex<HashMap<String, (u64, u64)>>>,
 }
 
 impl RelayState {
@@ -146,6 +149,7 @@ impl RelayState {
             )
             .map_err(|error| format!("initializing relay storage total: {error}"))?;
         let token_secret = crate::registration::init_tables(&database)?;
+        crate::blobs::init_tables(&database)?;
         let state = Self {
             config,
             database: Arc::new(Mutex::new(database)),
@@ -163,6 +167,8 @@ impl RelayState {
             accounts: Arc::new(Mutex::new(crate::registration::Accounts::default())),
             token_secret: Arc::new(token_secret),
             queue_reads: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            blob_sweep: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            blob_served: Arc::new(Mutex::new(HashMap::new())),
         };
         state.load_owners()?;
         state.load_accounts()?;

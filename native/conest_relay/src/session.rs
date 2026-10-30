@@ -521,6 +521,27 @@ impl Session {
                 .await
                 .unwrap_or_else(|error| error_json(error));
         }
+        if matches!(action.as_str(), "blob_put" | "blob_get" | "blob_has") {
+            // Blobs only inside an encrypted session; file and SQLite
+            // work, so off the async worker threads.
+            if !self.state.allow_request(&self.peer) {
+                return error_json("rate limit exceeded");
+            }
+            let Ok(request) = serde_json::from_slice::<Value>(&payload) else {
+                return error_json("invalid request");
+            };
+            let peer = self.peer.clone();
+            return self
+                .state
+                .blocking(move |state| match request["action"].as_str() {
+                    Some("blob_put") => state.blob_put(&request),
+                    Some("blob_get") => state.blob_get(&request, &peer),
+                    _ => state.blob_has(&request),
+                })
+                .await
+                .and_then(|result| result)
+                .unwrap_or_else(|error| error_json(error));
+        }
         if action == "register" {
             if !self.state.allow_request(&self.peer) {
                 return error_json("rate limit exceeded");
