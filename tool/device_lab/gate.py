@@ -3,10 +3,12 @@ that passed. A run is named by its label (transport and order, such as
 "nostr-normal"), so the same run is compared with itself.
 
   python3 gate.py record <out.json> <label>=<run folder> ...
-  python3 gate.py check <baseline.json> <label>=<run folder> ...
+  python3 gate.py check <baseline.json> [--budgets] <label>=<run folder> ...
 
 `check` prints each regression and exits 1 when there is one; with no
 baseline yet (the file missing) it only checks that every device reported.
+With --budgets (the full gate, before a stable) the app's own stutter and
+latency must also stay within fixed budgets, whatever the baseline.
 """
 import json
 import pathlib
@@ -22,6 +24,13 @@ TEXT_SLACK = 0.05
 # Frame trouble in calls is noisy: a regression only above twice the
 # baseline and this many more.
 TROUBLE_FLOOR = 50
+# Frames are judged only with enough of them drawn.
+MIN_FRAMES = 100
+# The full gate's budgets for the app itself (not the network).
+DESKTOP_SLOW_SHARE = 0.01
+DESKTOP_FRAME_P95_MS = 16.0
+PHONE_FRAME_P95_MS = 32.0
+HANDLING_P95_MS = 50.0
 
 
 def _reports(folder):
@@ -53,8 +62,20 @@ def metrics(folder):
             for task, group, _, _, _, _, _, ok in deadlines.evaluate(reports)
             if not ok}),
         "frame_trouble": 0,
+        # Per device: the app's own frames and message handling.
+        "performance": {},
     }
     for name, report in reports.items():
+        perf = report.get("performance") or {}
+        frames = perf.get("frames") or {}
+        handling = perf.get("handling") or {}
+        out["performance"][name] = {
+            "frames": frames.get("frames", 0),
+            "slow_share": frames.get("slowShare", 0.0),
+            "frame_p95_ms": max(frames.get("buildP95Ms", 0.0),
+                                frames.get("rasterP95Ms", 0.0)),
+            "handling_p95_ms": handling.get("p95Ms", 0.0),
+        }
         for chat in report.get("chats", []):
             for m in chat.get("messages", []):
                 if m.get("file"):
@@ -79,9 +100,47 @@ def metrics(folder):
     return out
 
 
-def regressions(current, baseline):
-    """Why [current] is worse than [baseline] (both from [metrics])."""
+def over_budget(current):
+    """Where the app itself stutters or is slow, whatever the baseline."""
     why = []
+    for device, perf in sorted(current.get("performance", {}).items()):
+        phone = device.startswith("android")
+        if perf["frames"] >= MIN_FRAMES:
+            if not phone and perf["slow_share"] > DESKTOP_SLOW_SHARE:
+                why.append(f"{device}: {perf['slow_share']:.1%} of frames slow")
+            limit = PHONE_FRAME_P95_MS if phone else DESKTOP_FRAME_P95_MS
+            if perf["frame_p95_ms"] > limit:
+                why.append(f"{device}: p95 frame {perf['frame_p95_ms']:.1f} ms")
+        if perf["handling_p95_ms"] > HANDLING_P95_MS:
+            why.append(f"{device}: messages handled in "
+                       f"{perf['handling_p95_ms']:.0f} ms (p95)")
+    return why
+
+
+def _perf_regressions(current, baseline):
+    why = []
+    before = baseline.get("performance", {})
+    for device, perf in sorted(current.get("performance", {}).items()):
+        old = before.get(device)
+        if not old:
+            continue
+        if (perf["frames"] >= MIN_FRAMES and old["frames"] >= MIN_FRAMES
+                and perf["slow_share"] > 2 * old["slow_share"]
+                and perf["slow_share"] > old["slow_share"] + 0.01):
+            why.append(f"{device}: slow frames {perf['slow_share']:.1%}"
+                       f" (was {old['slow_share']:.1%})")
+        if (perf["handling_p95_ms"] > 1.5 * old["handling_p95_ms"]
+                and perf["handling_p95_ms"] > old["handling_p95_ms"] + 20):
+            why.append(f"{device}: messages handled in "
+                       f"{perf['handling_p95_ms']:.0f} ms p95"
+                       f" (was {old['handling_p95_ms']:.0f})")
+    return why
+
+
+def regressions(current, baseline, budgets=False):
+    """Why [current] is worse than [baseline] (both from [metrics]); with
+    [budgets], also where it is over the app's own budgets."""
+    why = over_budget(current) if budgets else []
     missing = sorted(set(DEVICES) - set(current["devices"]))
     if missing:
         why.append("no report from " + ", ".join(missing))
@@ -113,6 +172,7 @@ def regressions(current, baseline):
             and current["frame_trouble"] > baseline["frame_trouble"] + TROUBLE_FLOOR):
         why.append(f"call frame trouble {current['frame_trouble']}"
                    f" (was {baseline['frame_trouble']})")
+    why.extend(_perf_regressions(current, baseline))
     return why
 
 
@@ -130,14 +190,16 @@ def main(argv):
     if len(argv) < 3 or argv[0] not in ("record", "check"):
         raise SystemExit(__doc__)
     path = pathlib.Path(argv[1])
-    runs = _runs(argv[2:])
+    rest = argv[2:]
+    budgets = "--budgets" in rest
+    runs = _runs([arg for arg in rest if arg != "--budgets"])
     if argv[0] == "record":
         path.write_text(json.dumps(runs, indent=1, sort_keys=True))
         return 0
     baseline = json.loads(path.read_text()) if path.exists() else {}
     failed = False
     for label, current in runs.items():
-        why = regressions(current, baseline.get(label))
+        why = regressions(current, baseline.get(label), budgets=budgets)
         status = "REGRESSION" if why else "ok"
         print(f"{label}: {status}" + ("" if not why else ": " + "; ".join(why)))
         failed |= bool(why)

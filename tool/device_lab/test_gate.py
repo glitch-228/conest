@@ -19,12 +19,21 @@ def file(available=True):
             "available": available, "state": "delivered", "traces": []}
 
 
-def report(messages=(), steps=(), trouble=None):
+def report(messages=(), steps=(), trouble=None, perf=None):
     calls = []
     if trouble is not None:
         calls.append({"groupCall": "g", "frames": {"trouble": trouble}})
-    return {"chats": [{"contact": "x", "messages": list(messages)}],
-            "steps": list(steps), "calls": calls}
+    out = {"chats": [{"contact": "x", "messages": list(messages)}],
+           "steps": list(steps), "calls": calls}
+    if perf is not None:
+        out["performance"] = perf
+    return out
+
+
+def perf(frames=1000, slow_share=0.0, p95=8.0, handling=10.0):
+    return {"frames": {"frames": frames, "slowShare": slow_share,
+                       "buildP95Ms": p95, "rasterP95Ms": p95 / 2},
+            "handling": {"count": 50, "p95Ms": handling}}
 
 
 class GateTest(unittest.TestCase):
@@ -81,6 +90,35 @@ class GateTest(unittest.TestCase):
             self.three(trouble={"a: sends backed up": 70}), base), [])
         self.assertTrue(gate.regressions(
             self.three(trouble={"a: sends backed up": 400}), base))
+
+    def test_budgets_judge_the_app_itself(self):
+        smooth = self.three(perf=perf())
+        self.assertEqual(gate.over_budget(smooth), [])
+        janky = self.run_folder(
+            android=report(perf=perf(slow_share=0.05, p95=20.0)),
+            linux=report(perf=perf(slow_share=0.02)),
+            windows=report(perf=perf(handling=80.0)))
+        why = gate.over_budget(janky)
+        # The phone may drop more frames, and 20 ms is within its 32 ms.
+        self.assertFalse(any(w.startswith("android") for w in why))
+        self.assertIn("linux: 2.0% of frames slow", why)
+        self.assertTrue(any(w.startswith("windows: messages handled") for w in why))
+        few = self.three(perf=perf(frames=50, slow_share=0.5, p95=90.0))
+        self.assertEqual(gate.over_budget(few), [], "too few frames to judge")
+
+    def test_slower_handling_than_last_time_is_a_regression(self):
+        base = self.three(perf=perf(handling=10.0))
+        self.assertEqual(gate.regressions(self.three(perf=perf(handling=14.0)), base), [])
+        why = gate.regressions(self.three(perf=perf(handling=45.0)), base)
+        self.assertTrue(any("messages handled in 45 ms" in w for w in why))
+
+    def test_budgets_apply_only_when_asked(self):
+        base = self.three(perf=perf())
+        slow = self.three(perf=perf(handling=60.0, p95=8.0))
+        self.assertEqual(
+            [w for w in gate.regressions(slow, None) if "handled" in w], [])
+        self.assertTrue(gate.regressions(slow, None, budgets=True))
+        self.assertTrue(gate.regressions(slow, base, budgets=True))
 
     def test_check_exits_1_on_a_regression(self):
         folder = pathlib.Path(tempfile.mkdtemp())

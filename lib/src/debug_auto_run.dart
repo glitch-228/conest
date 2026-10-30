@@ -56,10 +56,13 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/scheduler.dart';
+
 import 'group_call/group_call_service.dart';
 import 'group_file_download.dart';
 import 'messenger_controller.dart';
 import 'models.dart';
+import 'performance_samples.dart';
 
 class DebugRunRequest {
   const DebugRunRequest({
@@ -352,6 +355,14 @@ Future<String> runDebugRequest(
   final startedAt = DateTime.now().toUtc();
   final path = request.reportPath ?? await defaultReportPath();
   final steps = <Map<String, Object?>>[];
+  // Frame timings while the run lasts: the release gate's stutter check.
+  final frames = FrameStats();
+  TimingsCallback? onTimings = frames.addAll;
+  try {
+    SchedulerBinding.instance.addTimingsCallback(onTimings);
+  } catch (_) {
+    onTimings = null; // No Flutter binding (a plain Dart run).
+  }
   Future<void> step(String name, Future<Object?> Function() work) async {
     try {
       final result = await work();
@@ -867,6 +878,12 @@ Future<String> runDebugRequest(
     'watchedRelay': controller.watchedRelay?.label,
     'carriers': {'start': carriersAtStart, 'end': _carrierReport(controller)},
     'chats': _chatReport(controller, since: phase == null ? null : from.at),
+    // Frames drawn and how long the app took with incoming messages, for
+    // the release gate (the app's own stutter and latency, not the network).
+    'performance': {
+      'frames': frames.toJson(),
+      'handling': controller.envelopeHandling.toJson(),
+    },
     'errorHistory': controller.exportErrorHistory(),
   };
 
@@ -987,6 +1004,9 @@ Future<String> runDebugRequest(
     idleFrom: request.idle > Duration.zero ? idleFrom : null,
   );
   await _writeWhole(path, const JsonEncoder.withIndent('  ').convert(report));
+  if (onTimings != null) {
+    SchedulerBinding.instance.removeTimingsCallback(onTimings);
+  }
   controller.recordError(
     'test',
     'Automatic ${request.what} run written to $path',

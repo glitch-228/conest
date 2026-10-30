@@ -24780,6 +24780,10 @@ void main() {
       ];
       expect(received.map((m) => m['file']), contains('lab-65536.bin'));
       expect(received.map((m) => m['available']), everyElement(isTrue));
+      // How long the app took with the messages that came in, for the gate.
+      final handling = (phone['performance'] as Map)['handling'] as Map;
+      expect(handling['count'], greaterThan(0));
+      expect(handling['p95Ms'], isA<num>());
       expect(phone['events'], isNotEmpty);
     },
     timeout: const Timeout(Duration(minutes: 3)),

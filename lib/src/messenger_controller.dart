@@ -68,6 +68,7 @@ import 'email_carrier.dart';
 import 'meshtastic_carrier.dart';
 import 'meshcore_carrier.dart';
 import 'models.dart';
+import 'performance_samples.dart';
 import 'reticulum/identity.dart';
 import 'reticulum/rnode_interface.dart';
 import 'reticulum_carrier.dart';
@@ -20755,6 +20756,7 @@ class MessengerController extends ChangeNotifier {
   }) async {
     _notificationsDeferredDepth++;
     var outcome = const _EnvelopeProcessingOutcome();
+    final handling = Stopwatch()..start();
     try {
       // The route rides in the zone: batches overlap, and the messages it
       // marks are created deep inside processing.
@@ -20763,6 +20765,11 @@ class MessengerController extends ChangeNotifier {
         zoneValues: {_ingressRouteKey: route},
       );
     } finally {
+      // How long the app itself took with a batch that held messages (not
+      // file pieces): the release gate watches it.
+      if (_needsEnvelopeDurability(envelopes)) {
+        envelopeHandling.add(handling.elapsedMicroseconds);
+      }
       // Conversation upserts and state changes mark this batch dirty. Flush
       // them once here; transfer progress alone does not rebuild the shell.
       _notificationsDeferredDepth--;
@@ -20784,6 +20791,10 @@ class MessengerController extends ChangeNotifier {
     }
     return outcome.processed;
   }
+
+  /// How long the app took to handle each batch of incoming messages, in
+  /// microseconds (the latest [DurationSamples.capacity]).
+  final DurationSamples envelopeHandling = DurationSamples();
 
   static const Set<String> _highFrequencyTransferEnvelopeKinds = <String>{
     'attachment_chunk_request',
