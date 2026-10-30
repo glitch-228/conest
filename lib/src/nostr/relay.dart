@@ -102,6 +102,14 @@ class NostrRelay {
   static const Duration defaultPublishSpacing = Duration(milliseconds: 200);
   static const Duration _maxPublishSpacing = Duration(seconds: 8);
 
+  /// Left after an event's turn for the relay to answer it.
+  Duration get _answerAllowance {
+    final third = _publishTimeout ~/ 3;
+    return third < const Duration(seconds: 3)
+        ? third
+        : const Duration(seconds: 3);
+  }
+
   final Uri url;
   final Uint8List Function() _authKey;
   final NostrSocketConnector _connector;
@@ -171,19 +179,13 @@ class NostrRelay {
     if (!_running) throw StateError('Relay connection is stopped.');
     _lastUsed = DateTime.now();
     final deadline = DateTime.now().add(_publishTimeout);
-    var (accepted, message) = (false, '');
-    try {
-      // Connected first: a turn is not spent while the connection opens.
-      await _waitConnected(deadline);
-      await _waitForSlot(deadline);
+    // Connected first: a turn is not spent while the connection opens.
+    await _waitConnected(deadline);
+    await _waitForSlot(deadline);
+    var (accepted, message) = await _send(event, deadline);
+    if (!accepted && isAuthRequired(message)) {
+      await _waitForAuth(deadline);
       (accepted, message) = await _send(event, deadline);
-      if (!accepted && isAuthRequired(message)) {
-        await _waitForAuth(deadline);
-        (accepted, message) = await _send(event, deadline);
-      }
-    } on TimeoutException {
-      _slowDown();
-      rethrow;
     }
     if (accepted) {
       _easeSpacing();
@@ -199,7 +201,8 @@ class NostrRelay {
   Future<void> _waitForSlot(DateTime deadline) async {
     final now = DateTime.now();
     final slot = _nextSendAt.isAfter(now) ? _nextSendAt : now;
-    if (slot.isAfter(deadline)) {
+    // Time must remain after the turn for the relay's answer.
+    if (slot.add(_answerAllowance).isAfter(deadline)) {
       throw NostrRelayException(url.host, 'rate-limited: too many events');
     }
     _nextSendAt = slot.add(_spacing);
@@ -230,6 +233,10 @@ class NostrRelay {
     _socket!.send(jsonEncode(['EVENT', event.toJson()]));
     try {
       return await completer.future.timeout(_remaining(deadline));
+    } on TimeoutException {
+      // Sent, and no answer in time: the relay is slow or dropping events.
+      _slowDown();
+      rethrow;
     } finally {
       _pendingOk.remove(event.id);
     }

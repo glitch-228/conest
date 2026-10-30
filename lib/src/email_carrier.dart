@@ -439,13 +439,30 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     if (wait > Duration.zero) await Future<void>.delayed(wait);
   }
 
+  /// A refusal that says the account sends too fast, or a connection the
+  /// server cut; not a full mailbox or a bad address (one contact's), and
+  /// not a network that is away.
+  static bool _serverPushedBack(Object error) {
+    if (error is SmtpException) {
+      return error.temporary &&
+          RegExp(
+            r'too (much|many)|rate|limit|slow down|throttl|quota',
+            caseSensitive: false,
+          ).hasMatch(error.message);
+    }
+    return error is SocketException &&
+        RegExp(
+          r'closed|reset|broken pipe',
+          caseSensitive: false,
+        ).hasMatch(error.message);
+  }
+
   Future<void> _paced(Future<void> Function() send) async {
     await _waitForSendSlot();
     try {
       await send();
     } catch (error) {
-      if ((error is SmtpException && error.temporary) ||
-          error is SocketException) {
+      if (_serverPushedBack(error)) {
         final doubled = _spacing * 2;
         _spacing = doubled > _maxSendSpacing ? _maxSendSpacing : doubled;
       }

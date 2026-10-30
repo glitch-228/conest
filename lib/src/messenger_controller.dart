@@ -5104,6 +5104,8 @@ class MessengerController extends ChangeNotifier {
         registry.register(adapter);
       }
       _transportRegistry = registry..onOutcome = _noteTransportOutcome;
+      // Routes exist now: files that waited for one ask again.
+      _resumeInboundWithoutFileRoute();
       for (final adapter in registry.adapters.where(
         (adapter) => !adapter.kind.isCarrier,
       )) {
@@ -11891,6 +11893,7 @@ class MessengerController extends ChangeNotifier {
             ],
     );
     await _persist('Routing preferences updated for ${contacts[index].alias}.');
+    _resumeInboundWithoutFileRoute(deviceId);
     if (global != null &&
         contacts[index].canSendOutbound &&
         (prefs.carryForContact != carryBefore ||
@@ -12374,6 +12377,7 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _ratchetControlRetries.clear();
+    _ratchetControlGeneration.clear();
     for (final timer in _groupAnnounceTimers.values) {
       timer.cancel();
     }
@@ -24750,6 +24754,7 @@ class MessengerController extends ChangeNotifier {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
     }
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
+    _resumeInboundWithoutFileRoute(sender.deviceId);
     _noteOwnDeviceInTouch(sender);
     _applySiblingTouchReport(
       sender,
@@ -31640,6 +31645,7 @@ class MessengerController extends ChangeNotifier {
     if (lanRoutes.isEmpty) {
       return;
     }
+    _resumeInboundWithoutFileRoute(deviceId);
     final index = _snapshot.contacts.indexWhere(
       (contact) => contact.deviceId == deviceId,
     );
@@ -33426,7 +33432,14 @@ class MessengerController extends ChangeNotifier {
       // Offers start at 10 s and back off to the full interval: a delivered
       // offer can still be dropped by a receiver that does not know this
       // device yet (for example group membership still in flight).
-      final attempts = _ratchetBundleAttempts[limitKey] ?? 0;
+      // Quiet for a whole interval: the next one starts with short waits
+      // again. An answer does not reset them: anyone able to make this
+      // device send resets (a forged envelope) would get one every 30 s.
+      final lastSent = _ratchetBundleSentAt[limitKey];
+      final attempts =
+          lastSent == null || now.difference(lastSent) >= _ratchetBundleInterval
+          ? 0
+          : _ratchetBundleAttempts[limitKey] ?? 0;
       // A reset starts at 30 s: its first copy can be lost on a route that
       // works one way, and a peer left without the session's keys drops
       // everything it is sent until the next one (device lab, LAN only).
@@ -33483,6 +33496,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   final Map<String, Timer> _ratchetControlRetries = {};
+  final Map<String, int> _ratchetControlGeneration = {};
   static const int _ratchetControlRetryCap = 64;
 
   /// Delays before a session answer or hello that found no route is sent
@@ -33508,29 +33522,49 @@ class MessengerController extends ChangeNotifier {
     required String retryKey,
     required bool retry,
     int attempt = 0,
+    int? generation,
   }) async {
+    // A newer copy of the same control (a new answer or hello) replaces the
+    // pending one, also when it goes out at the first try.
+    if (attempt == 0) {
+      _ratchetControlRetries.remove(retryKey)?.cancel();
+      generation = _ratchetControlGeneration[retryKey] =
+          (_ratchetControlGeneration[retryKey] ?? 0) + 1;
+      if (_ratchetControlGeneration.length > 4 * _ratchetControlRetryCap) {
+        _ratchetControlGeneration.removeWhere(
+          (key, _) =>
+              !_ratchetControlRetries.containsKey(key) && key != retryKey,
+        );
+      }
+    }
     try {
       await _deliverToContact(
         contact: peer,
         recipientDeviceId: peer.deviceId,
         envelope: envelope,
-        ignoreRouteBackoff: true,
+        // The first try goes out as any message does (the inbound loop
+        // awaits it); the retries, in timers, also use resting routes.
+        ignoreRouteBackoff: attempt > 0,
       );
-      if (attempt > 0) _ratchetControlRetries.remove(retryKey);
+      if (attempt > 0 && _ratchetControlGeneration[retryKey] == generation) {
+        _ratchetControlRetries.remove(retryKey);
+      }
     } catch (error) {
       final delays = ratchetControlRetryDelays;
       if (retry &&
           !_disposed &&
+          _ratchetControlGeneration[retryKey] == generation &&
           attempt < delays.length &&
           (_ratchetControlRetries.containsKey(retryKey) ||
               _ratchetControlRetries.length < _ratchetControlRetryCap)) {
-        // A newer copy of the same control (a new answer) replaces the
-        // pending one; a retry of the pending one keeps its place.
-        if (attempt == 0) _ratchetControlRetries.remove(retryKey)?.cancel();
+        _ratchetControlRetries.remove(retryKey)?.cancel();
         _ratchetControlRetries[retryKey] = Timer(delays[attempt], () {
-          if (_disposed) return;
-          final current = _contactByDeviceId(peer.deviceId) ?? peer;
-          if (!current.canSendOutbound) {
+          if (_disposed || _ratchetControlGeneration[retryKey] != generation) {
+            return;
+          }
+          // The contact as it is now; gone, or no longer usable: no retry.
+          final current = _ratchetPeer(peer.deviceId);
+          if (current == null || !current.canSendOutbound) {
             _ratchetControlRetries.remove(retryKey);
             return;
           }
@@ -33541,10 +33575,12 @@ class MessengerController extends ChangeNotifier {
               retryKey: retryKey,
               retry: true,
               attempt: attempt + 1,
+              generation: generation,
             ).catchError((Object _) {}),
           );
         });
-      } else if (attempt > 0) {
+      } else if (attempt > 0 &&
+          _ratchetControlGeneration[retryKey] == generation) {
         _ratchetControlRetries.remove(retryKey);
       }
       rethrow;
@@ -33580,12 +33616,7 @@ class MessengerController extends ChangeNotifier {
     // Messages encrypted before this bundle must be encrypted again.
     _newPeerSession(peer.deviceId);
     await sessions.rememberPeerIdentity(id, bundle.identityKey);
-    if (reason == 'answer') {
-      // The peer's keys are known now: the next lost session starts again
-      // with short waits.
-      _ratchetBundleAttempts.removeWhere((key, _) => key.startsWith('$id|'));
-      return;
-    }
+    if (reason == 'answer') return;
     await sessions.startSession(id, bundle);
     _newPeerSession(peer.deviceId);
     await _sendRatchetBundle(peer, reason: 'answer');
@@ -39846,6 +39877,10 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final timer in _ratchetControlRetries.values) {
+      timer.cancel();
+    }
+    _ratchetControlRetries.clear();
     _matrixClient?.dispose();
     _linkPreviews?.dispose();
     for (final subscription in _carrierReceiptSubscriptions.values) {
