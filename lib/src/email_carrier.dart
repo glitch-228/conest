@@ -5,6 +5,8 @@ import 'dart:io' show SocketException;
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'carrier.dart';
 import 'email/carrier_mail.dart';
 import 'email/imap.dart';
@@ -375,10 +377,12 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.pollInterval = const Duration(minutes: 1),
     this.connectionLimitWait = const Duration(minutes: 10),
     this.readTimeout = const Duration(seconds: 60),
+    this.sendSpacing = defaultSendSpacing,
     DateTime Function()? now,
     void Function(String line)? log,
   }) : _config = config,
        _log = log,
+       _spacing = sendSpacing,
        // Chatmail servers also listen on 443, for networks that block the
        // mail ports.
        _connector =
@@ -404,6 +408,71 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// How long a command's answer may take before the connection counts as
   /// stalled.
   final Duration readTimeout;
+
+  /// Smallest gap between two mails sent from this account. Mail servers
+  /// limit what one account sends (chatmail relays answer "450 Too much
+  /// mail" and later cut the connection of an account that keeps pushing:
+  /// device lab, a phone whose every send then failed); the gap doubles
+  /// when a server pushes back and eases after each mail it takes.
+  static const Duration defaultSendSpacing = Duration(milliseconds: 1200);
+  static const Duration _maxSendSpacing = Duration(seconds: 30);
+
+  /// The longest a mail waits for its turn; a longer queue is refused at
+  /// once and the caller tries again later.
+  static const Duration maxSendWait = Duration(seconds: 30);
+  final Duration sendSpacing;
+  Duration _spacing;
+  DateTime _nextSendAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// The gap now in force between two mails.
+  @visibleForTesting
+  Duration get currentSendSpacing => _spacing;
+
+  Future<void> _waitForSendSlot() async {
+    final now = DateTime.now();
+    final slot = _nextSendAt.isAfter(now) ? _nextSendAt : now;
+    final wait = slot.difference(now);
+    if (wait > maxSendWait) {
+      throw StateError('Too many mails waiting to be sent from this account.');
+    }
+    _nextSendAt = slot.add(_spacing);
+    if (wait > Duration.zero) await Future<void>.delayed(wait);
+  }
+
+  /// A refusal that says the account sends too fast, or a connection the
+  /// server cut; not a full mailbox or a bad address (one contact's), and
+  /// not a network that is away.
+  static bool _serverPushedBack(Object error) {
+    if (error is SmtpException) {
+      return error.temporary &&
+          RegExp(
+            r'too (much|many)|rate|limit|slow down|throttl|quota',
+            caseSensitive: false,
+          ).hasMatch(error.message);
+    }
+    return error is SocketException &&
+        RegExp(
+          r'closed|reset|broken pipe',
+          caseSensitive: false,
+        ).hasMatch(error.message);
+  }
+
+  Future<void> _paced(Future<void> Function() send) async {
+    await _waitForSendSlot();
+    try {
+      await send();
+    } catch (error) {
+      if (_serverPushedBack(error)) {
+        final doubled = _spacing * 2;
+        _spacing = doubled > _maxSendSpacing ? _maxSendSpacing : doubled;
+      }
+      rethrow;
+    }
+    if (_spacing > sendSpacing) {
+      final eased = _spacing * 3 ~/ 4;
+      _spacing = eased < sendSpacing ? sendSpacing : eased;
+    }
+  }
 
   /// A frame from the mail address [sender].
   final void Function(String sender, Uint8List frame) onFrame;
@@ -543,21 +612,23 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     if (!_started) throw StateError('The email carrier is stopped.');
     final to = EmailAddress.tryParse(address);
     if (to == null) throw ArgumentError('Not an email carrier address.');
-    await SmtpSender.send(
-      host: _config.smtpHost,
-      port: _config.smtpPort,
-      user: _config.mail,
-      password: _config.password,
-      from: _config.mail,
-      to: to.mail,
-      tls: tls,
-      connector: _connector,
-      message: CarrierMail.build(
+    await _paced(
+      () => SmtpSender.send(
+        host: _config.smtpHost,
+        port: _config.smtpPort,
+        user: _config.mail,
+        password: _config.password,
         from: _config.mail,
         to: to.mail,
-        mailboxKey: to.mailboxKey,
-        frame: frame,
-        date: _now(),
+        tls: tls,
+        connector: _connector,
+        message: CarrierMail.build(
+          from: _config.mail,
+          to: to.mail,
+          mailboxKey: to.mailboxKey,
+          frame: frame,
+          date: _now(),
+        ),
       ),
     );
   }
@@ -566,17 +637,19 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   Future<void> sendMail(List<String> to, String message) async {
     if (!_started) throw StateError('The email carrier is stopped.');
     if (to.isEmpty) return;
-    await SmtpSender.send(
-      host: _config.smtpHost,
-      port: _config.smtpPort,
-      user: _config.mail,
-      password: _config.password,
-      from: _config.mail,
-      to: to.first,
-      moreRecipients: to.skip(1).toList(),
-      tls: tls,
-      connector: _connector,
-      message: message,
+    await _paced(
+      () => SmtpSender.send(
+        host: _config.smtpHost,
+        port: _config.smtpPort,
+        user: _config.mail,
+        password: _config.password,
+        from: _config.mail,
+        to: to.first,
+        moreRecipients: to.skip(1).toList(),
+        tls: tls,
+        connector: _connector,
+        message: message,
+      ),
     );
   }
 
