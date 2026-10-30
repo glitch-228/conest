@@ -34,6 +34,8 @@ pub(crate) const REGISTER_LABEL: &[u8] = b"conest-relay-register-v1";
 /// Scope bits a token carries.
 pub(crate) const SCOPE_MESSAGES: u8 = 1;
 pub(crate) const SCOPE_EXTENDED: u8 = 2 | 4 | 8;
+/// The scope bit that covers blobs.
+pub(crate) const SCOPE_BLOBS: u8 = 2;
 const DAY_MILLIS: u64 = 24 * 60 * 60 * 1000;
 /// Registrations one address may make a day.
 const REGISTRATIONS_PER_DAY: u32 = 16;

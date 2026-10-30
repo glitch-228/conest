@@ -28,7 +28,9 @@ use sha2::{Digest, Sha256};
 
 use crate::config::now_millis;
 use crate::limits::peer_group;
+#[cfg(test)]
 use crate::registration::SCOPE_EXTENDED;
+use crate::registration::SCOPE_BLOBS;
 use crate::storage::RelayState;
 
 /// The most one request carries (fits a session frame after base64).
@@ -185,7 +187,7 @@ impl RelayState {
             .and_then(Value::as_str)
             .and_then(|text| self.valid_token(text))
             .ok_or("blobs need a registered account")?;
-        if token.scope & SCOPE_EXTENDED == 0 {
+        if token.scope & SCOPE_BLOBS == 0 {
             return Err("this token does not cover blobs".to_owned());
         }
         let ext = &self.config.ext;

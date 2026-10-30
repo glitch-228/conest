@@ -23629,7 +23629,14 @@ class MessengerController extends ChangeNotifier {
       final plainHashes = <Uint8List>[];
       final working = relays.keys.toSet();
       for (var index = 0; index < descriptor.effectiveChunkCount; index++) {
-        if (!active() || working.isEmpty) return;
+        // Stops when the receiver started after all, or the network or
+        // energy state no longer allows it.
+        if (!active() ||
+            working.isEmpty ||
+            state.highestChunkSent >= 0 ||
+            !_blobUploadAllowed) {
+          return;
+        }
         final chunk = await _readOutboundAttachmentChunk(state, index);
         final block = await _encryptAttachmentBlock(descriptor, index, chunk);
         final name = blobHashOf(block.ciphertext);
