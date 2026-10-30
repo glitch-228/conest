@@ -88,14 +88,27 @@ class NostrRelay {
     this.onEvent,
     this.onStateChanged,
     Duration publishTimeout = const Duration(seconds: 15),
+    Duration publishSpacing = defaultPublishSpacing,
   }) : _authKey = authKey,
        _connector = connector ?? connectNostrSocket,
-       _publishTimeout = publishTimeout;
+       _publishTimeout = publishTimeout,
+       _baseSpacing = publishSpacing,
+       _spacing = publishSpacing;
+
+  /// Smallest gap between two events sent to one relay. Public relays drop
+  /// the connection of a client that sends a burst (device lab: a burst of
+  /// messages and receipts left every publish timed out or disconnected),
+  /// so events leave one by one; the gap doubles when a relay pushes back.
+  static const Duration defaultPublishSpacing = Duration(milliseconds: 200);
+  static const Duration _maxPublishSpacing = Duration(seconds: 8);
 
   final Uri url;
   final Uint8List Function() _authKey;
   final NostrSocketConnector _connector;
   final Duration _publishTimeout;
+  final Duration _baseSpacing;
+  Duration _spacing;
+  DateTime _nextSendAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// The subscription filter, read on every (re)connect so its `since`
   /// moves forward; null for a publish-only connection.
@@ -158,12 +171,57 @@ class NostrRelay {
     if (!_running) throw StateError('Relay connection is stopped.');
     _lastUsed = DateTime.now();
     final deadline = DateTime.now().add(_publishTimeout);
-    var (accepted, message) = await _send(event, deadline);
-    if (!accepted && isAuthRequired(message)) {
-      await _waitForAuth(deadline);
+    var (accepted, message) = (false, '');
+    try {
+      // Connected first: a turn is not spent while the connection opens.
+      await _waitConnected(deadline);
+      await _waitForSlot(deadline);
       (accepted, message) = await _send(event, deadline);
+      if (!accepted && isAuthRequired(message)) {
+        await _waitForAuth(deadline);
+        (accepted, message) = await _send(event, deadline);
+      }
+    } on TimeoutException {
+      _slowDown();
+      rethrow;
     }
-    if (!accepted) throw NostrRelayException(url.host, message);
+    if (accepted) {
+      _easeSpacing();
+    } else {
+      if (_pushesBack(message)) _slowDown();
+      throw NostrRelayException(url.host, message);
+    }
+  }
+
+  /// Reserves this event's turn; events leave [_spacing] apart. A turn
+  /// that would come after [deadline] is refused at once: the sender tries
+  /// again later instead of piling up.
+  Future<void> _waitForSlot(DateTime deadline) async {
+    final now = DateTime.now();
+    final slot = _nextSendAt.isAfter(now) ? _nextSendAt : now;
+    if (slot.isAfter(deadline)) {
+      throw NostrRelayException(url.host, 'rate-limited: too many events');
+    }
+    _nextSendAt = slot.add(_spacing);
+    final wait = slot.difference(now);
+    if (wait > Duration.zero) await Future<void>.delayed(wait);
+  }
+
+  bool _pushesBack(String message) =>
+      message.startsWith('rate-limited') ||
+      message.contains('slow down') ||
+      message.contains('too fast') ||
+      message.contains('disconnected');
+
+  void _slowDown() {
+    final doubled = _spacing * 2;
+    _spacing = doubled > _maxPublishSpacing ? _maxPublishSpacing : doubled;
+  }
+
+  void _easeSpacing() {
+    if (_spacing <= _baseSpacing) return;
+    final eased = _spacing * 3 ~/ 4;
+    _spacing = eased < _baseSpacing ? _baseSpacing : eased;
   }
 
   Future<(bool, String)> _send(NostrEvent event, DateTime deadline) async {

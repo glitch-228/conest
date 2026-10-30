@@ -415,6 +415,13 @@ class DefaultRelaysRefreshResult {
   final String? errorMessage;
 }
 
+/// No route the settings allow can carry this kind of content to a contact
+/// (only a carrier route for a file, say). Waiting does not help until the
+/// settings or the available routes change.
+class NoAllowedRouteException extends StateError {
+  NoAllowedRouteException(super.message);
+}
+
 class AttachmentSpoolException implements Exception {
   AttachmentSpoolException(
     this.message, {
@@ -4181,6 +4188,11 @@ class MessengerController extends ChangeNotifier {
   @visibleForTesting
   Future<Map<String, int>> groupHeadsForTesting(String groupId) => _groupHistory
       .authorHeads(groupId, _requireGroup(groupId).activeMemberDeviceIds);
+
+  /// Whether this device holds the owner's signed membership history.
+  @visibleForTesting
+  Future<bool> groupHasSignedMembershipForTesting(String groupId) =>
+      _groupHistory.hasSignedMembership(groupId);
 
   /// "Group history changed" notices this device sent (for tests).
   @visibleForTesting
@@ -11721,6 +11733,8 @@ class MessengerController extends ChangeNotifier {
       await _stopTransportRegistry();
     }
     await _applyGlobalConnectivityState();
+    // A route or a refusal changed: files that waited for a route ask again.
+    _resumeInboundWithoutFileRoute();
     _syncXmppChats();
     _syncTelegramClient();
     _syncDiscordClient();
@@ -13527,6 +13541,9 @@ class MessengerController extends ChangeNotifier {
     if (index < 0) return;
     contacts[index] = contact;
     _snapshot = _snapshot.copyWith(contacts: contacts);
+    if (_anyInboundWithoutFileRoute) {
+      _resumeInboundWithoutFileRoute(contact.deviceId);
+    }
   }
 
   /// Saved messages: a chat with this device itself, kept here only (not
@@ -18516,10 +18533,22 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       final profiledGroup = _refreshGroupMemberProfiles(group);
+      // The signed membership history goes with every copy: a member that
+      // only ever gets a retry (the first copy lost on a slow relay) would
+      // otherwise never hold it and could not send to the group.
+      String? historyProof;
+      try {
+        historyProof = (await _groupHistory.prepareMembership(
+          profiledGroup,
+        ))?.encode();
+      } catch (error) {
+        appendDebugLog('Group membership history pending: $error');
+      }
       final payload = jsonEncode({
         'version': 1,
         'reason': entry.reason,
         'group': _groupForWire(profiledGroup),
+        'historyProof': ?historyProof,
       });
       final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'group_membership',
@@ -22036,6 +22065,79 @@ class MessengerController extends ChangeNotifier {
     return (path: file.path, error: null, reserveBlocked: false);
   }
 
+  bool _anyInboundWithoutFileRoute = false;
+
+  /// Whether any route the settings allow can carry file blocks to
+  /// [contact] (a carrier route such as Nostr does not).
+  bool _hasAllowedFileRoute(ContactRecord contact, int sizeBytes) {
+    final effective = _effectiveTransports(contact);
+    final policies = _contentPolicies(
+      contact,
+      contentClassOfEnvelope(
+        'attachment_chunk_request',
+        fileSizeBytes: sizeBytes,
+      ),
+    );
+    final hasLegacy = dedupePeerEndpoints(
+      _candidateRoutesForContact(contact),
+    ).any((route) => _legacyRouteAllowed(route, effective, policies));
+    return hasLegacy ||
+        (_transportRegistry != null &&
+            policies.values.any(
+              (policy) =>
+                  policy == TransportPolicy.automatic ||
+                  policy == TransportPolicy.preferred,
+            ));
+  }
+
+  /// No allowed route carries file blocks: stop asking (every ask failed at
+  /// once, hundreds of times in the device lab), say so in the file's
+  /// bubble, and ask again when the routes or settings change.
+  void _markInboundWithoutFileRoute(
+    _InboundAttachmentState state,
+    ContactRecord peer,
+  ) {
+    state.requestedInFlight.clear();
+    state.retryTimer?.cancel();
+    state.nextRetryAt = null;
+    _anyInboundWithoutFileRoute = true;
+    if (state.noFileRoute) return;
+    state.noFileRoute = true;
+    appendDebugLog(
+      'No route carries file blocks from ${peer.alias}: not asking until '
+      'one is available (${state.descriptor.id}).',
+    );
+    _setTransferSessionState(
+      state.descriptor.id,
+      TransferState.pending,
+      error:
+          'This file cannot arrive over the routes you have. It continues '
+          'when a route that carries files is available.',
+    );
+  }
+
+  /// Asks again for files that waited for a route, if one exists now.
+  void _resumeInboundWithoutFileRoute([String? peerDeviceId]) {
+    if (!_anyInboundWithoutFileRoute) return;
+    var any = false;
+    for (final state in _inboundAttachments.values.toList(growable: false)) {
+      if (!state.noFileRoute) continue;
+      any = true;
+      if (peerDeviceId != null && state.peerDeviceId != peerDeviceId) continue;
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer == null ||
+          !_hasAllowedFileRoute(peer, state.descriptor.sizeBytes)) {
+        continue;
+      }
+      state.noFileRoute = false;
+      _setTransferSessionState(state.descriptor.id, TransferState.reconnecting);
+      _startInboundRequestWindow(state, peer);
+      _scheduleAttachmentRetry(state.descriptor.id);
+    }
+    _anyInboundWithoutFileRoute =
+        any && _inboundAttachments.values.any((state) => state.noFileRoute);
+  }
+
   Future<bool> _sendAttachmentChunkRequest(
     ContactRecord peer,
     String attachmentId,
@@ -22120,6 +22222,10 @@ class MessengerController extends ChangeNotifier {
     } catch (error) {
       // Retry on next poll cycle; the receiver still has the inbound
       // state, so the request will be re-issued.
+      if (error is NoAllowedRouteException) {
+        _markInboundWithoutFileRoute(inbound, peer);
+        return false;
+      }
       appendDebugLog(
         'chunk_req route failed → ${peer.alias} idx=$index '
         'attachmentId=$attachmentId: $error',
@@ -23272,6 +23378,11 @@ class MessengerController extends ChangeNotifier {
         state.partialPath == null) {
       return;
     }
+    if (state.noFileRoute) {
+      final peer = _contactByDeviceId(state.peerDeviceId) ?? sender;
+      if (!_hasAllowedFileRoute(peer, state.descriptor.sizeBytes)) return;
+      state.noFileRoute = false;
+    }
     final window = _inboundWindowFor(state.descriptor.chunkSize);
     final requests = <Future<void>>[];
     while (state.requestedInFlight.length < window) {
@@ -23289,7 +23400,9 @@ class MessengerController extends ChangeNotifier {
             state.descriptor.id,
             next,
           );
-          if (!sent) {
+          if (!sent && state.noFileRoute) {
+            state.requestedInFlight.remove(next);
+          } else if (!sent) {
             state.requestedInFlight.remove(next);
             unawaited(
               Future<void>.delayed(const Duration(seconds: 5), () {
@@ -23351,6 +23464,8 @@ class MessengerController extends ChangeNotifier {
       }
       final peer = _contactByDeviceId(s.peerDeviceId);
       if (peer == null) return;
+      // Nothing to ask over: a route change asks again, not this timer.
+      if (s.noFileRoute) return;
       s.nextRetryAt = null;
       s.retryAttempts = min(s.retryAttempts + 1, 1 << 20);
       s.requestedInFlight.clear();
@@ -28948,7 +29063,7 @@ class MessengerController extends ChangeNotifier {
               policy == TransportPolicy.preferred,
         );
     if (candidateRoutes.isEmpty && !canTryRegistry) {
-      throw StateError(
+      throw NoAllowedRouteException(
         'Connectivity is disabled for ${contact.alias} — no allowed routes.',
       );
     }
@@ -40295,6 +40410,10 @@ class _InboundAttachmentState {
   /// up to `MessengerController._inboundChunkWindow` requests outstanding
   /// so a slow path doesn't serialize on per-chunk RTT.
   final Set<int> requestedInFlight = <int>{};
+
+  /// No route the settings allow carries file blocks from this peer: the
+  /// receiver does not ask until the routes or the settings change.
+  bool noFileRoute = false;
 
   /// Debounce gate for `attachment_progress` envelopes the receiver sends
   /// back to the sender. We emit at most one per [_progressDebounce]

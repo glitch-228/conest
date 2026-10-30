@@ -1997,6 +1997,77 @@ void main() {
     },
   );
 
+  test('a file is not asked for while no allowed route carries it, and resumes '
+      'when one appears', () async {
+    // Nostr only in the lab: every file block request failed at once, was
+    // tried again every 5 s, and a bubble showed nothing (500 asks a run).
+    final relay = _FakeRelayClient();
+    final alice = await _createController(
+      relayClient: relay,
+      displayName: 'Alice',
+      keepErrorHistory: true,
+    );
+    final bob = await _createController(
+      relayClient: relay,
+      displayName: 'Bob',
+      keepErrorHistory: true,
+    );
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    await _pairControllers(alice, bob);
+    final aliceId = alice.identity!.deviceId;
+    // Bob's settings leave no route for files (as with Nostr alone).
+    const noFiles = ContentRefusals({
+      TransportKind.lan: {ContentClass.fileSmall},
+      TransportKind.iroh: {ContentClass.fileSmall},
+      TransportKind.conestRelay: {ContentClass.fileSmall},
+    });
+    await bob.updateGlobalConnectivity(
+      bob.identity!.connectivity.copyWith(contentRefusals: noFiles),
+    );
+    await alice.sendAttachment(
+      contact: alice.contacts.single,
+      bytes: Uint8List.fromList(List<int>.filled(64 * 1024, 7)),
+      fileName: 'waiting.bin',
+    );
+    await bob.pollNow();
+    final attachmentId = bob
+        .messagesFor(aliceId)
+        .firstWhere((m) => m.attachment != null)
+        .attachment!
+        .id;
+    String history() => bob.exportErrorHistory();
+    int asks() => 'chunk_req tx'.allMatches(history()).length;
+    final firstAsks = asks();
+    expect(firstAsks, lessThanOrEqualTo(8));
+    final snapshot = bob.transferSnapshotFor(attachmentId)!;
+    expect(snapshot.phase, TransferPhase.waitingForPeer);
+    expect(snapshot.error, contains('cannot arrive over the routes'));
+    // Waiting out the old 5 s retry asks nothing more.
+    await Future<void>.delayed(const Duration(seconds: 6));
+    expect(asks(), firstAsks);
+    // A route appears: the file continues and arrives.
+    await bob.updateGlobalConnectivity(
+      bob.identity!.connectivity.copyWith(
+        contentRefusals: ContentRefusals.none,
+      ),
+    );
+    // Alice learns what Bob takes again, then the next ask goes through.
+    for (var i = 0; i < 6; i++) {
+      await alice.pollNow();
+      await bob.pollNow();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    bob.onConnectivityChanged(interfaceLabel: 'wifi');
+    for (var i = 0; i < 100; i++) {
+      await alice.pollNow();
+      await bob.pollNow();
+      if (bob.attachmentAvailableLocally(attachmentId)) break;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    expect(bob.attachmentAvailableLocally(attachmentId), isTrue);
+  });
+
   test('on a group notification, "Mark as read" reads it and a reply posts '
       'in it', () async {
     final relay = _FakeRelayClient();
@@ -10200,6 +10271,48 @@ void main() {
           .toList(growable: false);
       expect(pendingForBob, hasLength(1));
       expect(pendingForBob.single.membershipVersion, greaterThan(firstVersion));
+    },
+  );
+
+  test(
+    'a membership copy sent again carries the signed membership history',
+    () async {
+      // Nostr only in the lab: the first copy timed out on public relays,
+      // the copy sent again had no history proof, and the member could never
+      // send to the group ("Waiting for the owner's signed membership history").
+      final relayClient = _FakeRelayClient();
+      var clock = DateTime.utc(2026, 10, 29, 17);
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+        nowProvider: () => clock,
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+        nowProvider: () => clock,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      var hold = true;
+      relayClient.shouldFailStore = (_, _, _, _, envelope) =>
+          hold && envelope.kind == 'group_membership';
+      final group = await alice.createGroup(
+        title: 'Slow relays',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      expect(bob.groups, isEmpty);
+      hold = false;
+      clock = clock.add(const Duration(minutes: 10));
+      await alice.retryUnacknowledgedMessagesNow();
+      await bob.pollNow();
+      expect(bob.groups.map((g) => g.groupId), contains(group.groupId));
+      expect(
+        await bob.groupHasSignedMembershipForTesting(group.groupId),
+        isTrue,
+      );
     },
   );
 
@@ -24119,6 +24232,47 @@ void main() {
         containsPair('irohDirect', 'twoWay'),
       );
       expect(report['errorHistory'], isA<String>());
+    },
+  );
+
+  test(
+    'a lab run that is not finished by its deadline still writes a report',
+    () async {
+      // Nostr only in the lab: the phone's run never ended and no report
+      // came ("Timed out waiting for the Android report").
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        debugBuildId: 'test@abc',
+      );
+      addTearDown(alice.dispose);
+      final root = Directory.systemTemp.createTempSync('conest_debug_dead_');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final path = '${root.path}/report.json';
+      final run = runDebugRequest(
+        alice,
+        const DebugRunRequest(
+          what: 'none',
+          serve: Duration(seconds: 4),
+          wait: Duration.zero,
+          deadline: Duration(milliseconds: 500),
+        ),
+        defaultReportPath: () async => path,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      final partial = jsonDecode(File(path).readAsStringSync()) as Map;
+      expect(partial['deadlineReached'], isTrue);
+      expect(partial['build'], 'test@abc');
+      await run;
+      final done = jsonDecode(File(path).readAsStringSync()) as Map;
+      expect(done.containsKey('deadlineReached'), isFalse);
+      expect(
+        DebugRunRequest.fromArgs([
+          '--debug-run=none',
+          '--debug-deadline=120',
+        ])!.deadline,
+        const Duration(seconds: 120),
+      );
     },
   );
 
