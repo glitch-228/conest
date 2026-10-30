@@ -35222,6 +35222,13 @@ class MessengerController extends ChangeNotifier {
     throw failure!;
   }
 
+  /// The choice already bound to this link when telling it failed: a retry
+  /// sends exactly this, so the screen shows it and cannot change it.
+  LinkChoice? get boundLinkChoice {
+    final link = _linkAsNew;
+    return link != null && link.choiceFailed ? link.choice : null;
+  }
+
   @visibleForTesting
   Duration linkChoiceRetryDelay = const Duration(milliseconds: 300);
 

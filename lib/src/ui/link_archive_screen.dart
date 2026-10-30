@@ -13,9 +13,17 @@ import '../models.dart';
 /// gave up when it joined an account with "Replace". Read only; the only way
 /// out of the vault is the explicit export, which warns first.
 class LinkArchiveScreen extends StatefulWidget {
-  const LinkArchiveScreen({super.key, required this.controller});
+  LinkArchiveScreen({
+    super.key,
+    required this.controller,
+    bool? warnBeforeOpening,
+  }) : warnBeforeOpening = warnBeforeOpening ?? Platform.isAndroid;
 
   final MessengerController controller;
+
+  /// Opening copies the file out of the vault (Android: into the shared
+  /// gallery or Downloads), so it asks first.
+  final bool warnBeforeOpening;
 
   @override
   State<LinkArchiveScreen> createState() => _LinkArchiveScreenState();
@@ -152,6 +160,7 @@ class _LinkArchiveScreenState extends State<LinkArchiveScreen> {
                                     messages: chat.messages,
                                     date: _date,
                                     controller: widget.controller,
+                                    warnBeforeOpening: widget.warnBeforeOpening,
                                   ),
                                 ),
                               ),
@@ -187,8 +196,10 @@ class _ArchiveChatPage extends StatelessWidget {
     required this.messages,
     required this.date,
     required this.controller,
+    required this.warnBeforeOpening,
   });
 
+  final bool warnBeforeOpening;
   final String title;
   final List<ChatMessage> messages;
   final String Function(DateTime) date;
@@ -197,6 +208,28 @@ class _ArchiveChatPage extends StatelessWidget {
   /// Opens the file of an archived message the way the chat bubbles do.
   Future<void> _open(BuildContext context, AttachmentDescriptor file) async {
     final l10n = l10nOf(context);
+    if (warnBeforeOpening) {
+      // Opening copies the file into the shared gallery or Downloads, where
+      // other apps can read it: ask first.
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          content: Text(l10n.linkArchiveExportWarning),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(l10n.actionCancel),
+            ),
+            FilledButton(
+              key: const ValueKey('archive-open-confirm'),
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(l10n.actionContinue),
+            ),
+          ],
+        ),
+      );
+      if (yes != true || !context.mounted) return;
+    }
     final path = await controller.attachmentCachePathFor(file.id);
     if (path == null) {
       controller.setStatus(l10n.linkArchiveFileMissing(file.fileName));

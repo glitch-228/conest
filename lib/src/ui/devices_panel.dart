@@ -512,11 +512,12 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
     });
     try {
       await widget.controller.completeLink(
-        LinkChoice(
-          mode: _mode,
-          settings: _settings,
-          confirmReplace: _mode == LinkMode.replace,
-        ),
+        widget.controller.boundLinkChoice ??
+            LinkChoice(
+              mode: _mode,
+              settings: _settings,
+              confirmReplace: _mode == LinkMode.replace,
+            ),
       );
     } catch (error) {
       if (mounted) setState(() => _error = '$error');
@@ -568,19 +569,24 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
   Widget _choices(BuildContext context) {
     final l10n = l10nOf(context);
     final summary = widget.controller.linkSummary();
+    // A choice whose telling failed is already bound; a retry sends that one.
+    final bound = widget.controller.boundLinkChoice;
+    final locked = _busy || bound != null;
+    final shownMode = bound?.mode ?? _mode;
+    final shownSettings = bound?.settings ?? _settings;
     Widget mode(LinkMode value, String title, String? hint) => ListTile(
       key: ValueKey('link-mode-${value.name}'),
       contentPadding: EdgeInsets.zero,
       dense: true,
       leading: Icon(
-        _mode == value
+        shownMode == value
             ? Icons.radio_button_checked
             : Icons.radio_button_unchecked,
       ),
       title: Text(title),
       subtitle: hint == null ? null : Text(hint),
-      enabled: value != LinkMode.separateProfile && !_busy,
-      onTap: value == LinkMode.separateProfile || _busy
+      enabled: value != LinkMode.separateProfile && !locked,
+      onTap: value == LinkMode.separateProfile || locked
           ? null
           : () => _pickMode(value),
     );
@@ -621,8 +627,8 @@ class _LinkNewDeviceDialogState extends State<LinkNewDeviceDialog> {
               label: Text(l10n.linkSettingsTake),
             ),
           ],
-          selected: {_settings},
-          onSelectionChanged: _busy
+          selected: {shownSettings},
+          onSelectionChanged: locked
               ? null
               : (picked) => setState(() => _settings = picked.single),
         ),

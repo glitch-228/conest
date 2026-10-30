@@ -74,6 +74,7 @@ import 'package:conest/src/matrix_service.dart';
 import 'package:conest/src/circumvention/lan_beacon_codec.dart';
 import 'package:conest/src/attachment_safety.dart';
 import 'package:conest/src/link/link_archive.dart';
+import 'package:conest/src/ui/link_archive_screen.dart';
 import 'package:conest/src/link/link_choice.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/delta_chats.dart';
@@ -20410,6 +20411,142 @@ void main() {
       );
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 10));
+    });
+
+    testWidgets('after a failed send the bound choice is shown and locked, '
+        'and the retry sends exactly it', (tester) async {
+      final (alice, bob, phone) = (await tester.runAsync(() async {
+        final (a, b, p, _) = await withData();
+        return (a, b, p);
+      }))!;
+      await tester.runAsync(() async {
+        await toTheChoice(alice, phone, [bob]);
+      });
+      phone.linkChoiceRetryDelay = const Duration(milliseconds: 1);
+      phone.linkAfterChoiceSendForTesting = () async =>
+          throw StateError('no acknowledgement');
+      // The grant that follows waits, so the failed state can be seen.
+      final release = Completer<void>();
+      phone.linkApplyPauseForTesting = () => release.future;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: LinkNewDeviceDialog(controller: phone)),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('link-mode-replace')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('link-replace-confirm')));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.ensureVisible(find.byKey(const ValueKey('link-complete')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('link-complete')));
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 100)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(phone.boundLinkChoice?.mode, LinkMode.replace);
+      // Merge cannot be picked now.
+      await tester.tap(find.byKey(const ValueKey('link-mode-merge')));
+      await tester.pump();
+      Finder checked(String mode) => find.descendant(
+        of: find.byKey(ValueKey('link-mode-$mode')),
+        matching: find.byIcon(Icons.radio_button_checked),
+      );
+      expect(checked('replace'), findsOneWidget);
+      expect(checked('merge'), findsNothing);
+      phone.linkAfterChoiceSendForTesting = null;
+      await tester.tap(find.byKey(const ValueKey('link-complete')));
+      release.complete();
+      await tester.runAsync(() async {
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          unawaited(phone.pollNow());
+          return phone.linkState == LinkState.linked;
+        });
+      });
+      await tester.pump();
+      expect(phone.linkArchives, hasLength(1), reason: 'replace was sent');
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 10));
+    });
+
+    testWidgets('opening an archived file asks first where it would be '
+        'copied out', (tester) async {
+      final phone = (await tester.runAsync(() async {
+        final c = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Phone',
+        );
+        await c.addLinkArchiveForTesting(
+          LinkArchive(
+            id: 'a1',
+            createdAt: DateTime.utc(2026, 1, 2),
+            contacts: const [],
+            groups: const [],
+            conversations: [
+              ConversationRecord(
+                id: 'bob',
+                kind: ConversationKind.direct,
+                peerDeviceId: 'bob',
+                messages: [
+                  ChatMessage(
+                    id: 'm1',
+                    conversationId: 'bob',
+                    senderDeviceId: 'bob',
+                    recipientDeviceId: c.identity!.deviceId,
+                    body: 'pic',
+                    outbound: false,
+                    state: DeliveryState.delivered,
+                    createdAt: DateTime.utc(2026, 1, 1),
+                    attachment: AttachmentDescriptor(
+                      id: 'f1',
+                      fileName: 'p.jpg',
+                      mimeType: 'image/jpeg',
+                      sizeBytes: 1,
+                      chunkSize: 1,
+                      chunkHashes: const [],
+                      encryptionKeyBase64: '',
+                      createdAt: DateTime.utc(2026, 1, 1),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        return c;
+      }))!;
+      addTearDown(phone.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: LinkArchiveScreen(controller: phone, warnBeforeOpening: true),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.textContaining('1 chats'));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.byKey(const ValueKey('archive-chat-bob')));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.byKey(const ValueKey('archive-message-m1')));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byKey(const ValueKey('archive-open-confirm')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('not encrypted'),
+        findsOneWidget,
+        reason: 'the same warning as the export',
+      );
+      await tester.pumpWidget(const SizedBox());
     });
 
     testWidgets('closing the link dialog in any way ends the link', (
