@@ -7799,7 +7799,7 @@ class MessengerController extends ChangeNotifier {
       now: _now,
     );
     // Who is nearby stays known across the switch.
-    direct.adoptPeers(_bitchatDirect?.peers ?? const <BitchatPeer>[]);
+    direct.adoptDiscovery(_bitchatDirect);
     await _closeBitchatIdentity();
     if (_disposed || !identical(_bitchatChannel, channel)) {
       await direct.close();

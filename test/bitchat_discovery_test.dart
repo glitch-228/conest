@@ -5,6 +5,7 @@ import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat/packet.dart';
 import 'package:conest/src/bitchat_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:cryptography/cryptography.dart';
 
 import 'support/fake_ble_mesh.dart';
 
@@ -100,6 +101,109 @@ void main() {
       clock = start;
       await listener.handleAnnounce(boundary);
       expect(listener.peers.single.peerId, phone.peerIdHex);
+    },
+  );
+
+  test(
+    'hidden expiry keeps signing pins through a reachability switch',
+    () async {
+      final listener = await person(0, listeningOnly: true);
+      final phone = await person(1);
+      await listener.handleAnnounce(await phone.announce());
+      clock = clock.add(const Duration(minutes: 6));
+      expect(listener.peers, isEmpty);
+      final impostor = await BitchatDirect.create(
+        nickname: 'impostor',
+        noiseSeed: List.generate(32, (i) => (1 >> (i % 4 * 8)) & 0xff),
+        signingSeed: List.filled(32, 88),
+        now: () => clock,
+      );
+      addTearDown(impostor.close);
+      await listener.handleAnnounce(await impostor.announce());
+      expect(listener.peers, isEmpty);
+      // Switching identities must retain the pin even while the peer is away.
+      final visible = await person(2);
+      visible.adoptDiscovery(listener);
+      await visible.handleAnnounce(await impostor.announce());
+      expect(visible.peers, isEmpty);
+      await visible.handleAnnounce(await phone.announce());
+      expect(visible.peers.single.nickname, 'person 1');
+      expect(visible.peers.single.signingKey, phone.signingPublicKey);
+    },
+  );
+
+  test('going hidden keeps the most recently heard 256 people', () async {
+    final visible = await person(0);
+    for (var i = 0; i < 300; i++) {
+      visible.adoptPeers([
+        BitchatPeer(
+          peerId: i.toRadixString(16).padLeft(16, '0'),
+          nickname: 'person $i',
+          noiseKey: Uint8List(32),
+          signingKey: Uint8List(32),
+          lastSeen: clock.subtract(Duration(seconds: 300 - i)),
+        ),
+      ]);
+    }
+    final hidden = await person(1, listeningOnly: true);
+    hidden.adoptDiscovery(visible);
+    expect(hidden.peers, hasLength(256));
+    expect(hidden.peer(299.toRadixString(16).padLeft(16, '0')), isNotNull);
+    expect(hidden.peer(44.toRadixString(16).padLeft(16, '0')), isNotNull);
+    expect(hidden.peer(43.toRadixString(16).padLeft(16, '0')), isNull);
+  });
+
+  test('hidden signing pins retain at most 512 identities', () async {
+    final listener = await person(0, listeningOnly: true);
+    final phone = await person(1);
+    await listener.handleAnnounce(await phone.announce());
+    clock = clock.add(const Duration(minutes: 6));
+    expect(listener.peers, isEmpty);
+    for (var seed = 2; seed <= 512; seed++) {
+      if (seed % 200 == 0) clock = clock.add(const Duration(minutes: 1));
+      await listener.handleAnnounce(await (await person(seed)).announce());
+    }
+    final impostor = await BitchatDirect.create(
+      nickname: 'new key after eviction',
+      noiseSeed: List.generate(32, (i) => (1 >> (i % 4 * 8)) & 0xff),
+      signingSeed: List.filled(32, 88),
+      now: () => clock,
+    );
+    addTearDown(impostor.close);
+    await listener.handleAnnounce(await impostor.announce());
+    expect(listener.peer(phone.peerIdHex), isNull);
+    // Once full, the oldest inactive pin gives way, matching visible mode.
+    await listener.handleAnnounce(await (await person(513)).announce());
+    await listener.handleAnnounce(await impostor.announce());
+    expect(listener.peer(phone.peerIdHex)?.nickname, 'new key after eviction');
+  });
+
+  test(
+    'hidden discovery rejects a signed wire timestamp that overflows age',
+    () async {
+      final listener = await person(0, listeningOnly: true);
+      final phone = await person(1);
+      final real = await phone.announce();
+      final unsigned = BitchatPacket(
+        type: BitchatType.announce,
+        senderId: phone.peerId,
+        timestamp: clock.millisecondsSinceEpoch + (-0x8000000000000000),
+        payload: real.payload,
+      );
+      final signing = await Ed25519().newKeyPairFromSeed(
+        List.generate(32, (i) => (1 + i + 100) & 0xff),
+      );
+      final signature = await Ed25519().sign(
+        unsigned.bytesToSign(),
+        keyPair: signing,
+      );
+      final received = BitchatPacket.decode(
+        unsigned
+            .copyWith(signature: Uint8List.fromList(signature.bytes))
+            .encode(),
+      )!;
+      await listener.handleAnnounce(received);
+      expect(listener.peers, isEmpty);
     },
   );
 

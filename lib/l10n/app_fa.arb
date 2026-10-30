@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "تحویل نشد (رادیوی او نتوانست بخواند)",
   "uiSenderNotVerified2BB0FA": "فرستنده تأیید نشده",
   "uiYouAreHidden56DCC1": "شما پنهان هستید",
-  "uiYouReadTheMeshChatAEACC5": "می‌توانید افراد نزدیک را ببینید و گفتگوی شبکه را بخوانید. برای پیام دادن، «دردسترس کاربران bitchat» را روشن کنید تا دستگاه شما برای افراد نزدیک نمایان شود.",
+  "uiYouReadTheMeshChatAEACC5": "در حالت پنهان می‌توانید افراد نزدیک را ببینید و گفتگوی شبکه را بخوانید. برای نمایان شدن و پیام دادن، «پیام» را بزنید.",
   "uiEveryoneNearbyOverBluetooth7B8D63": "همهٔ نزدیکان از Bluetooth",
   "uiNoBitchatUsersNearbyYetD30471": "هنوز کاربر bitchat نزدیکی نیست",
   "uiPhonesInBluetoothRangeThatDCCC0D": "دستگاه‌هایی که در برد Bluetooth اعلام حضور کنند اینجا دیده می‌شوند.",
@@ -1737,5 +1737,7 @@
         "type": "String"
       }
     }
-  }
+  },
+  "bitchatMessageReachabilityWarning": "این دستگاه برای کاربران نزدیک bitchat نمایان می‌شود و آن‌ها می‌توانند به شما پیام بدهند.",
+  "bitchatStartChatFailed": "شروع این گفتگو ممکن نشد. دوباره تلاش کنید."
 }

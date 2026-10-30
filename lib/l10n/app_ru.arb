@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "не доставлено (радиостанция не смогла прочитать)",
   "uiSenderNotVerified2BB0FA": "отправитель не проверен",
   "uiYouAreHidden56DCC1": "Вы скрыты",
-  "uiYouReadTheMeshChatAEACC5": "Вы видите людей поблизости и читаете общий чат. Чтобы написать кому-то, включите «Доступен пользователям bitchat» — ваше устройство станет видно людям поблизости.",
+  "uiYouReadTheMeshChatAEACC5": "Вы видите людей поблизости и читаете общий чат, оставаясь скрытым. Нажмите «Сообщение», чтобы стать видимым и написать кому-то.",
   "uiEveryoneNearbyOverBluetooth7B8D63": "Все рядом по Bluetooth",
   "uiNoBitchatUsersNearbyYetD30471": "Пока нет пользователей bitchat рядом",
   "uiPhonesInBluetoothRangeThatDCCC0D": "Здесь появятся устройства в зоне Bluetooth, объявляющие о себе.",
@@ -1737,5 +1737,7 @@
         "type": "String"
       }
     }
-  }
+  },
+  "bitchatMessageReachabilityWarning": "Это устройство станет видно пользователям bitchat поблизости, и они смогут вам написать.",
+  "bitchatStartChatFailed": "Не удалось начать чат. Попробуйте ещё раз."
 }

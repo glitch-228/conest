@@ -182,6 +182,11 @@ class BitchatDirect {
 
   final Map<String, BitchatPeer> _peers = {};
   bool _peerExpiryPending = false;
+
+  /// First signing keys survive nearby expiry, as in reachable mode.
+  /// Ordered by last verified announce and bounded independently of rows.
+  final Map<String, Uint8List> _signingPins = {};
+  static const int _maxSigningPins = 512;
   final Map<String, _Session> _sessions = {};
   final Map<String, List<Uint8List>> _waiting = {};
   final Map<String, Future<void>> _queues = {};
@@ -198,7 +203,9 @@ class BitchatDirect {
   static const int _maxHandshakesPerPeerPerMinute = 10;
   static const int _maxHandshakesPerMinute = 30;
   static const int _maxCounter = 0xffffffff;
-  Duration get _announceMaxAge => Duration(seconds: listeningOnly ? 120 : 900);
+  Duration get _announceMaxAge => listeningOnly
+      ? const Duration(seconds: 120)
+      : const Duration(seconds: 900);
 
   String get peerIdHex => _hex(peerId);
 
@@ -265,15 +272,23 @@ class BitchatDirect {
   /// kept unconfirmed: their signing keys are pinned only by a handshake
   /// with this identity.
   void adoptPeers(Iterable<BitchatPeer> peers) {
-    for (final peer in peers) {
+    final ordered = peers.toList()
+      ..sort((a, b) => a.lastSeen.compareTo(b.lastSeen));
+    for (final peer in ordered) {
+      if (peer.peerId != peerIdHex) {
+        _rememberSigningKey(peer.peerId, peer.signingKey, refresh: false);
+      }
+    }
+    // Retain the most recently heard people when going hidden in a crowd.
+    for (final peer in ordered.reversed) {
       if (listeningOnly &&
           _now().difference(peer.lastSeen) >= bitchatNearbyLifetime) {
         continue;
       }
       if (_peers.length >= _maxPeers) return;
-      if (peer.peerId == peerIdHex || _peers.containsKey(peer.peerId)) {
-        continue;
-      }
+      if (peer.peerId == peerIdHex || _peers.containsKey(peer.peerId)) continue;
+      final pin = _signingPins[peer.peerId];
+      if (pin != null && !_equal(pin, peer.signingKey)) continue;
       _peers[peer.peerId] = BitchatPeer(
         peerId: peer.peerId,
         nickname: peer.nickname,
@@ -282,6 +297,36 @@ class BitchatDirect {
         lastSeen: peer.lastSeen,
       );
     }
+  }
+
+  /// Carries discovery and its bounded signing-key pins across a switch,
+  /// including peers that have left the nearby list. No sessions are kept.
+  void adoptDiscovery(BitchatDirect? previous) {
+    if (previous == null) return;
+    for (final entry in previous._signingPins.entries) {
+      _rememberSigningKey(entry.key, entry.value, refresh: false);
+    }
+    adoptPeers(previous.peers);
+  }
+
+  void _rememberSigningKey(String id, Uint8List key, {bool refresh = true}) {
+    final pinned = _signingPins[id];
+    if (pinned != null) {
+      if (refresh) {
+        _signingPins.remove(id);
+        _signingPins[id] = pinned;
+      }
+      return;
+    }
+    if (_signingPins.length >= _maxSigningPins) {
+      // A working session's pin stays, as its peer does in the row cache.
+      final oldest = _signingPins.keys
+          .where((peer) => !hasSession(peer))
+          .firstOrNull;
+      if (oldest == null) return;
+      _signingPins.remove(oldest);
+    }
+    _signingPins[id] = Uint8List.fromList(key);
   }
 
   /// Whether a working session with [peerIdHex] exists.
@@ -338,14 +383,18 @@ class BitchatDirect {
     }
     final id = _hex(bitchatPeerId(announcement.noisePublicKey));
     if (id != _hex(packet.senderId) || id == peerIdHex) return true;
-    final age = _now().millisecondsSinceEpoch - packet.timestamp;
-    if (age.abs() > _announceMaxAge.inMilliseconds) return true;
+    final now = _now().millisecondsSinceEpoch;
+    final maxAge = _announceMaxAge.inMilliseconds;
+    // Compare bounds directly: subtraction/abs can wrap for a hostile uint64.
+    if (packet.timestamp < now - maxAge || packet.timestamp > now + maxAge) {
+      return true;
+    }
     var known = _peers[id];
+    final pinned = _signingPins[id] ?? known?.signingKey;
     // The first signing key checked for an id stays, as bitchat keeps it:
     // someone re-announcing a peer's Noise key with their own signing key
     // cannot write in the mesh chat as that peer (or silence them).
-    if (known != null &&
-        !_equal(known.signingKey, announcement.signingPublicKey)) {
+    if (pinned != null && !_equal(pinned, announcement.signingPublicKey)) {
       return true;
     }
     final sameKey = known != null;
@@ -373,10 +422,12 @@ class BitchatDirect {
     if (_events.isClosed) return true;
     prunePeers();
     known = _peers[id];
-    if (known != null &&
-        !_equal(known.signingKey, announcement.signingPublicKey)) {
+    final currentPin = _signingPins[id] ?? known?.signingKey;
+    if (currentPin != null &&
+        !_equal(currentPin, announcement.signingPublicKey)) {
       return true;
     }
+    _rememberSigningKey(id, announcement.signingPublicKey);
     if (known != null) {
       known
         ..nickname = announcement.nickname

@@ -4063,7 +4063,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get uiYouReadTheMeshChatAEACC5 =>
-      'يمكنك رؤية الأشخاص القريبين وقراءة دردشة الشبكة. لمراسلة شخص، فعّل «متاح لمستخدمي bitchat» ليصبح جهازك مرئيًا للأشخاص القريبين.';
+      'يمكنك رؤية الأشخاص القريبين وقراءة دردشة الشبكة وأنت مخفي. اختر «رسالة» لتصبح مرئيًا وتراسل شخصًا.';
 
   @override
   String get uiEveryoneNearbyOverBluetooth7B8D63 =>
@@ -6659,4 +6659,11 @@ class AppLocalizationsAr extends AppLocalizations {
   String bitchatLastHeard(String time) {
     return 'آخر إشارة في $time';
   }
+
+  @override
+  String get bitchatMessageReachabilityWarning =>
+      'سيصبح هذا الجهاز مرئيًا لمستخدمي bitchat القريبين، وسيتمكنون من مراسلتك.';
+
+  @override
+  String get bitchatStartChatFailed => 'تعذّر بدء هذه الدردشة. حاول مرة أخرى.';
 }

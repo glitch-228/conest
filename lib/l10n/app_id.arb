@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "tidak tersampaikan (radio mereka tidak dapat membacanya)",
   "uiSenderNotVerified2BB0FA": "pengirim belum diverifikasi",
   "uiYouAreHidden56DCC1": "Anda tersembunyi",
-  "uiYouReadTheMeshChatAEACC5": "Anda dapat melihat orang di sekitar dan membaca obrolan mesh. Untuk mengirim pesan, aktifkan “Dapat dijangkau pengguna bitchat” agar perangkat Anda terlihat oleh orang di sekitar.",
+  "uiYouReadTheMeshChatAEACC5": "Anda dapat melihat orang di sekitar dan membaca obrolan mesh saat tersembunyi. Pilih “Pesan” agar terlihat dan dapat mengirim pesan.",
   "uiEveryoneNearbyOverBluetooth7B8D63": "Semua orang sekitar lewat Bluetooth",
   "uiNoBitchatUsersNearbyYetD30471": "Belum ada pengguna bitchat sekitar",
   "uiPhonesInBluetoothRangeThatDCCC0D": "Perangkat dalam jangkauan Bluetooth yang mengumumkan diri muncul di sini.",
@@ -1737,5 +1737,7 @@
         "type": "String"
       }
     }
-  }
+  },
+  "bitchatMessageReachabilityWarning": "Perangkat ini akan terlihat oleh pengguna bitchat di sekitar, dan mereka dapat mengirim pesan kepada Anda.",
+  "bitchatStartChatFailed": "Tidak dapat memulai obrolan ini. Coba lagi."
 }

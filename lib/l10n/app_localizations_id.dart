@@ -3974,7 +3974,7 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get uiYouReadTheMeshChatAEACC5 =>
-      'Anda dapat melihat orang di sekitar dan membaca obrolan mesh. Untuk mengirim pesan, aktifkan “Dapat dijangkau pengguna bitchat” agar perangkat Anda terlihat oleh orang di sekitar.';
+      'Anda dapat melihat orang di sekitar dan membaca obrolan mesh saat tersembunyi. Pilih “Pesan” agar terlihat dan dapat mengirim pesan.';
 
   @override
   String get uiEveryoneNearbyOverBluetooth7B8D63 =>
@@ -6530,4 +6530,12 @@ class AppLocalizationsId extends AppLocalizations {
   String bitchatLastHeard(String time) {
     return 'Terakhir terdengar $time';
   }
+
+  @override
+  String get bitchatMessageReachabilityWarning =>
+      'Perangkat ini akan terlihat oleh pengguna bitchat di sekitar, dan mereka dapat mengirim pesan kepada Anda.';
+
+  @override
+  String get bitchatStartChatFailed =>
+      'Tidak dapat memulai obrolan ini. Coba lagi.';
 }

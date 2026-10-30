@@ -4072,7 +4072,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get uiYouReadTheMeshChatAEACC5 =>
-      'Вы видите людей поблизости и читаете общий чат. Чтобы написать кому-то, включите «Доступен пользователям bitchat» — ваше устройство станет видно людям поблизости.';
+      'Вы видите людей поблизости и читаете общий чат, оставаясь скрытым. Нажмите «Сообщение», чтобы стать видимым и написать кому-то.';
 
   @override
   String get uiEveryoneNearbyOverBluetooth7B8D63 => 'Все рядом по Bluetooth';
@@ -6667,4 +6667,12 @@ class AppLocalizationsRu extends AppLocalizations {
   String bitchatLastHeard(String time) {
     return 'Последний сигнал: $time';
   }
+
+  @override
+  String get bitchatMessageReachabilityWarning =>
+      'Это устройство станет видно пользователям bitchat поблизости, и они смогут вам написать.';
+
+  @override
+  String get bitchatStartChatFailed =>
+      'Не удалось начать чат. Попробуйте ещё раз.';
 }

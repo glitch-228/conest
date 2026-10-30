@@ -1,4 +1,7 @@
+import 'dart:typed_data';
+
 import 'package:conest/l10n/app_localizations.dart';
+import 'package:conest/l10n/app_localizations_en.dart';
 import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat_carrier.dart';
 import 'package:conest/src/messenger_controller.dart';
@@ -100,6 +103,88 @@ void registerBitchatHiddenControllerTests({
     },
   );
 
+  testWidgets('Message fails closed if the mesh stops during consent', (
+    tester,
+  ) async {
+    late MessengerController controller;
+    late BitchatCarrierChannel phone;
+    late FakeBleNeighbourhood area;
+    late VoidCallback disposeController;
+    await tester.runAsync(() async {
+      final pair = await setup(DateTime.now);
+      controller = pair.$1;
+      phone = pair.$2;
+      area = pair.$4;
+      disposeController = pair.$5;
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: BitchatChatsScreen(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(ValueKey('bitchat-message-${phone.direct!.peerIdHex}')),
+    );
+    await tester.pumpAndSettle();
+    await tester.runAsync(controller.disableBitchatCarrier);
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not start this chat. Try again.'), findsOneWidget);
+    expect(controller.bitchatReachable, isFalse);
+    expect(controller.bitchatPeerId, isNull);
+    expect(find.byKey(const ValueKey('bitchat-composer')), findsNothing);
+    expect(area.airtime, hasLength(1));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async => disposeController());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('nearby list formats only the visible part of a crowded mesh', (
+    tester,
+  ) async {
+    late MessengerController controller;
+    late VoidCallback disposeController;
+    await tester.runAsync(() async {
+      final pair = await setup(DateTime.now);
+      controller = pair.$1;
+      disposeController = pair.$5;
+      final now = DateTime.now();
+      controller.bitchatChannel!.direct!.adoptPeers([
+        for (var i = 0; i < 256; i++)
+          BitchatPeer(
+            peerId: i.toRadixString(16).padLeft(16, '0'),
+            nickname: 'person $i',
+            noiseKey: Uint8List(32),
+            signingKey: Uint8List(32),
+            lastSeen: now,
+          ),
+      ]);
+    });
+    final strings = _CountingNearbyStrings();
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('en'),
+        localizationsDelegates: [
+          _CountingNearbyDelegate(strings),
+          ...AppLocalizations.localizationsDelegates,
+        ],
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: BitchatChatsScreen(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(controller.bitchatNearbyPeers, hasLength(256));
+    // Formatting work on the first frame is limited to the viewport/cache.
+    expect(strings.lastHeardCalls, lessThan(40));
+    expect(strings.lastHeardCalls, greaterThan(0));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async => disposeController());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
   testWidgets(
     'hidden Message asks before becoming reachable and opens the chat',
     (tester) async {
@@ -148,7 +233,7 @@ void registerBitchatHiddenControllerTests({
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(
-        find.textContaining('bitchat users nearby see you'),
+        find.textContaining('become visible to bitchat users nearby'),
         findsOneWidget,
       );
       expect(controller.bitchatReachable, isFalse);
@@ -221,4 +306,28 @@ void registerBitchatHiddenControllerTests({
       await tester.pump(const Duration(seconds: 1));
     },
   );
+}
+
+class _CountingNearbyStrings extends AppLocalizationsEn {
+  int lastHeardCalls = 0;
+
+  @override
+  String bitchatLastHeard(String time) {
+    lastHeardCalls++;
+    return super.bitchatLastHeard(time);
+  }
+}
+
+class _CountingNearbyDelegate extends LocalizationsDelegate<AppLocalizations> {
+  const _CountingNearbyDelegate(this.strings);
+  final _CountingNearbyStrings strings;
+
+  @override
+  bool isSupported(Locale locale) => locale.languageCode == 'en';
+
+  @override
+  Future<AppLocalizations> load(Locale locale) async => strings;
+
+  @override
+  bool shouldReload(_CountingNearbyDelegate old) => false;
 }

@@ -36,10 +36,7 @@ class BitchatChatsScreen extends StatelessWidget {
             nearbyById[peer]?.nickname ??
             chats.nicknameOf(peer) ??
             peer.substring(0, 8);
-        return Scaffold(
-          appBar: AppBar(title: Text(l10nOf(context).uiBitchatNearbyD0C416)),
-          body: ListView(
-            children: [
+        final header = <Widget>[
               if (!controller.bitchatReachable)
                 ListTile(
                   leading: Icon(Icons.visibility_off_outlined),
@@ -68,44 +65,51 @@ class BitchatChatsScreen extends StatelessWidget {
                     l10nOf(context).uiPhonesInBluetoothRangeThatDCCC0D,
                   ),
                 ),
-              for (final peer in peers)
-                ListTile(
-                  leading: Icon(
-                    nearbyById.containsKey(peer)
-                        ? Icons.bluetooth_connected
-                        : Icons.bluetooth_disabled,
-                  ),
-                  title: Text(name(peer)),
-                  subtitle: Text(
-                    [
-                      ?chats.direct[peer]?.last.text,
-                      if (nearbyById[peer] case final nearbyPeer?)
-                        l10nOf(context).bitchatLastHeard(
-                          TimeOfDay.fromDateTime(
-                            nearbyPeer.lastSeen.toLocal(),
-                          ).format(context),
-                        ),
-                    ].join('\n'),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _Unread(chats.unread[peer] ?? 0),
-                      if (nearbyById.containsKey(peer))
-                        TextButton(
-                          key: ValueKey('bitchat-message-$peer'),
-                          onPressed: () => _message(context, peer, name(peer)),
-                          child: Text(l10nOf(context).uiMessage68F414),
-                        ),
-                    ],
-                  ),
-                  onTap: () => chats.direct.containsKey(peer)
-                      ? _open(context, peer, name(peer))
-                      : _message(context, peer, name(peer)),
+        ];
+        return Scaffold(
+          appBar: AppBar(title: Text(l10nOf(context).uiBitchatNearbyD0C416)),
+          body: ListView.builder(
+            itemCount: header.length + peers.length,
+            itemBuilder: (context, index) {
+              if (index < header.length) return header[index];
+              final peer = peers[index - header.length];
+              return ListTile(
+                leading: Icon(
+                  nearbyById.containsKey(peer)
+                      ? Icons.bluetooth_connected
+                      : Icons.bluetooth_disabled,
                 ),
-            ],
+                title: Text(name(peer)),
+                subtitle: Text(
+                  [
+                    ?chats.direct[peer]?.last.text,
+                    if (nearbyById[peer] case final nearbyPeer?)
+                      l10nOf(context).bitchatLastHeard(
+                        TimeOfDay.fromDateTime(
+                          nearbyPeer.lastSeen.toLocal(),
+                        ).format(context),
+                      ),
+                  ].join('\n'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _Unread(chats.unread[peer] ?? 0),
+                    if (nearbyById.containsKey(peer))
+                      TextButton(
+                        key: ValueKey('bitchat-message-$peer'),
+                        onPressed: () => _message(context, peer, name(peer)),
+                        child: Text(l10nOf(context).uiMessage68F414),
+                      ),
+                  ],
+                ),
+                onTap: () => chats.direct.containsKey(peer)
+                    ? _open(context, peer, name(peer))
+                    : _message(context, peer, name(peer)),
+              );
+            },
           ),
         );
       },
@@ -131,11 +135,7 @@ Future<void> messageBitchatPeer(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(l10nOf(context).uiReachableByBitchatUsers568021),
-        content: Text(
-          l10nOf(
-            context,
-          ).uiBitchatUsersNearbySeeYou1B54FC(controller.bitchatNickname),
-        ),
+        content: Text(l10nOf(context).bitchatMessageReachabilityWarning),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -151,11 +151,11 @@ Future<void> messageBitchatPeer(
     if (accepted != true || !context.mounted) return;
     try {
       await controller.setBitchatReachable(true);
-    } catch (error) {
+    } catch (_) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(l10nOf(context).bitchatStartChatFailed)),
+        );
       }
       return;
     }

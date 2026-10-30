@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "لم تُسلّم (تعذّرت قراءتها على راديو الطرف الآخر)",
   "uiSenderNotVerified2BB0FA": "المرسِل غير متحقق منه",
   "uiYouAreHidden56DCC1": "أنت مخفي",
-  "uiYouReadTheMeshChatAEACC5": "يمكنك رؤية الأشخاص القريبين وقراءة دردشة الشبكة. لمراسلة شخص، فعّل «متاح لمستخدمي bitchat» ليصبح جهازك مرئيًا للأشخاص القريبين.",
+  "uiYouReadTheMeshChatAEACC5": "يمكنك رؤية الأشخاص القريبين وقراءة دردشة الشبكة وأنت مخفي. اختر «رسالة» لتصبح مرئيًا وتراسل شخصًا.",
   "uiEveryoneNearbyOverBluetooth7B8D63": "كل من بالقرب عبر Bluetooth",
   "uiNoBitchatUsersNearbyYetD30471": "لا يوجد مستخدمو bitchat قريبون بعد",
   "uiPhonesInBluetoothRangeThatDCCC0D": "تظهر هنا الأجهزة التي تعلن عن نفسها ضمن نطاق Bluetooth.",
@@ -1737,5 +1737,7 @@
         "type": "String"
       }
     }
-  }
+  },
+  "bitchatMessageReachabilityWarning": "سيصبح هذا الجهاز مرئيًا لمستخدمي bitchat القريبين، وسيتمكنون من مراسلتك.",
+  "bitchatStartChatFailed": "تعذّر بدء هذه الدردشة. حاول مرة أخرى."
 }
