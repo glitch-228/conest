@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "не доставлено (радиостанция не смогла прочитать)",
   "uiSenderNotVerified2BB0FA": "отправитель не проверен",
   "uiYouAreHidden56DCC1": "Вы скрыты",
-  "uiYouReadTheMeshChatAEACC5": "Вы читаете общий чат сети, но пользователи bitchat не видят вас и не могут вам писать. Включите «Доступен пользователям bitchat» в Настройки → Связь для отправки.",
+  "uiYouReadTheMeshChatAEACC5": "Вы видите людей поблизости и читаете общий чат, оставаясь скрытым. Нажмите «Сообщение», чтобы стать видимым и написать кому-то.",
   "uiEveryoneNearbyOverBluetooth7B8D63": "Все рядом по Bluetooth",
   "uiNoBitchatUsersNearbyYetD30471": "Пока нет пользователей bitchat рядом",
   "uiPhonesInBluetoothRangeThatDCCC0D": "Здесь появятся устройства в зоне Bluetooth, объявляющие о себе.",
@@ -1728,5 +1728,16 @@
   "linkArchiveSavedWithFiles": "Сохранено в {path}, файлов: {count}.",
   "contactKeysDifferTitle": "Ключи различаются: проверьте",
   "contactKeysDifferBody": "Это устройство знало этот контакт с другими ключами, чем ваш аккаунт. Сверьте код безопасности с контактом по другому каналу.",
-  "contactKeysDifferConfirm": "Я сверил(а)"
+  "contactKeysDifferConfirm": "Я сверил(а)",
+  "bitchatLastHeard": "Последний сигнал: {time}",
+  "@bitchatLastHeard": {
+    "description": "When a verified bitchat announce was last received from a nearby person.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "bitchatMessageReachabilityWarning": "Это устройство станет видно пользователям bitchat поблизости, и они смогут вам написать.",
+  "bitchatStartChatFailed": "Не удалось начать чат. Попробуйте ещё раз."
 }

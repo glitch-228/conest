@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'file_privacy_controller_cases.dart';
+import 'bitchat_hidden_controller_cases.dart';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart'
@@ -27485,6 +27486,14 @@ void main() {
   });
 
   group('Bluetooth mesh carrier', () {
+    registerBitchatHiddenControllerTests(
+      create: (area, now) => _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        bitchatConnector: () async => area.node('alice'),
+        nowProvider: now,
+      ),
+    );
     test(
       'desktop native connector drives the controller and adapter state',
       () async {
