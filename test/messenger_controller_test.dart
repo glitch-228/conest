@@ -28403,6 +28403,87 @@ void main() {
       expect(failures, isNot(contains('No ratchet session can decrypt')));
     });
 
+    test(
+      'a lost session answer and hello are sent again, not waited for',
+      () async {
+        // LAN only in the lab: the answering side's sends timed out for a
+        // while, its answer and hello were never retried, and the offering
+        // side dropped everything the answerer sent (no keys, no session).
+        final relay = _FakeRelayClient();
+        final clock = DateTime.utc(2026, 10, 29, 16);
+        Future<MessengerController> device(String name) => _createController(
+          relayClient: relay,
+          displayName: name,
+          ratchetEngine: FakeRatchetEngine(),
+          nowProvider: () => clock,
+          keepErrorHistory: true,
+        );
+        final alice = await device('Alice');
+        final bob = await device('Bob');
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        final offerer =
+            alice.identity!.deviceId.compareTo(bob.identity!.deviceId) < 0
+            ? alice
+            : bob;
+        final starter = identical(offerer, alice) ? bob : alice;
+        for (final controller in [alice, bob]) {
+          controller.ratchetControlRetryDelays = List.filled(
+            30,
+            const Duration(milliseconds: 20),
+          );
+        }
+        final failed = <String, int>{};
+        // Every route fails for a while, then they work again.
+        var blocked = true;
+        DateTime? firstBlockedAt;
+        relay.shouldFailStore = (_, _, _, recipient, envelope) {
+          if (recipient != offerer.identity!.deviceId ||
+              envelope.senderDeviceId != starter.identity!.deviceId ||
+              (envelope.kind != 'ratchet_bundle' &&
+                  envelope.kind != 'ratchet_hello')) {
+            return false;
+          }
+          if (!blocked) return false;
+          firstBlockedAt ??= DateTime.now();
+          if (DateTime.now().difference(firstBlockedAt!) >
+              const Duration(milliseconds: 300)) {
+            blocked = false;
+            return false;
+          }
+          failed[envelope.kind] = (failed[envelope.kind] ?? 0) + 1;
+          return true;
+        };
+        await _pairControllers(alice, bob);
+        // The clock stays put: no new offer is due, only the retries help.
+        final offererId = offerer.identity!.deviceId;
+        final starterId = starter.identity!.deviceId;
+        final deadline = DateTime.now().add(const Duration(seconds: 15));
+        for (
+          var round = 0;
+          DateTime.now().isBefore(deadline) &&
+              !(await offerer.hasRatchetSessionForTesting(starterId) &&
+                  await starter.hasRatchetSessionForTesting(offererId));
+          round++
+        ) {
+          await settle([alice, bob], rounds: 1);
+        }
+        expect(failed['ratchet_bundle'], isNotNull);
+        expect(await starter.hasRatchetSessionForTesting(offererId), isTrue);
+        expect(await offerer.hasRatchetSessionForTesting(starterId), isTrue);
+        await starter.sendMessage(
+          contact: starter.contacts.single,
+          body: 'from starter',
+        );
+        await settle([alice, bob], rounds: 12);
+        expect(
+          offerer.messagesFor(starterId).map((m) => m.body),
+          contains('from starter'),
+          reason: offerer.exportErrorHistory(),
+        );
+      },
+    );
+
     test('ratchet peers switch to forward-secret envelopes', () async {
       final relay = _FakeRelayClient();
       final alice = await ratchetController(relay, 'Alice');

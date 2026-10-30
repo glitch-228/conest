@@ -12356,6 +12356,10 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _groupHistoryTimers.clear();
+    for (final timer in _ratchetControlRetries.values) {
+      timer.cancel();
+    }
+    _ratchetControlRetries.clear();
     for (final timer in _groupAnnounceTimers.values) {
       timer.cancel();
     }
@@ -28895,6 +28899,10 @@ class MessengerController extends ChangeNotifier {
     Set<PeerRouteKind> skipLegacyKinds = const {},
     // For file blocks: the file's size, which picks its content class.
     int? fileSizeBytes,
+    // Session setup (bundles, hellos) tries every allowed route, also the
+    // ones resting after failures: a route that works one way must not
+    // keep the other side from learning this device's session keys.
+    bool ignoreRouteBackoff = false,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -29161,6 +29169,7 @@ class MessengerController extends ChangeNotifier {
         await tryLegacy(rankedRoutes);
       }
     }
+    if (ignoreRouteBackoff) await tryLegacy(candidateRoutes);
     // Last, the routes no receipt confirmed lately: better than nothing.
     await tryLegacy(skippedSuspects, suspectsToo: true);
     if (suspects.isNotEmpty) await tryUnifiedTransports(suspectsToo: true);
@@ -33303,11 +33312,14 @@ class MessengerController extends ChangeNotifier {
       // offer can still be dropped by a receiver that does not know this
       // device yet (for example group membership still in flight).
       final attempts = _ratchetBundleAttempts[limitKey] ?? 0;
-      final wait = reason == 'offer'
+      // A reset starts at 30 s: its first copy can be lost on a route that
+      // works one way, and a peer left without the session's keys drops
+      // everything it is sent until the next one (device lab, LAN only).
+      final wait = reason == 'offer' || reason == 'reset'
           ? Duration(
               seconds: min(
                 _ratchetBundleInterval.inSeconds,
-                10 << min(attempts, 6),
+                (reason == 'offer' ? 10 : 30) << min(attempts, 6),
               ),
             )
           : _ratchetBundleInterval;
@@ -33342,15 +33354,85 @@ class MessengerController extends ChangeNotifier {
       if (_debugBuildId != null) {
         appendDebugLog('Ratchet: sending $reason bundle to ${peer.alias}');
       }
-      await _deliverToContact(
-        contact: peer,
-        recipientDeviceId: peer.deviceId,
-        envelope: envelope,
+      await _deliverRatchetControl(
+        peer,
+        envelope,
+        retryKey: '${ratchetPeerId(peer)}|bundle|$reason',
+        retry: reason == 'answer',
       );
     } catch (error) {
       // A later retry pass offers again after the interval.
       if (reason != 'answer') _ratchetBundleSentAt.remove(limitKey);
       appendDebugLog('Ratchet bundle to ${peer.alias} not sent: $error');
+    }
+  }
+
+  final Map<String, Timer> _ratchetControlRetries = {};
+  static const int _ratchetControlRetryCap = 64;
+
+  /// Delays before a session answer or hello that found no route is sent
+  /// again (the last one repeats nothing: five tries, then the peer's next
+  /// reset or offer starts over).
+  @visibleForTesting
+  List<Duration> ratchetControlRetryDelays = const [
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+    Duration(seconds: 45),
+    Duration(minutes: 2),
+    Duration(minutes: 5),
+  ];
+
+  /// Delivers a session-setup envelope over every allowed route, resting
+  /// ones included. With [retry], a delivery that failed on all of them is
+  /// tried again a few times: an answer or hello nobody retries leaves the
+  /// other side with traffic it cannot decrypt (device lab, LAN only).
+  /// Throws the first failure so the caller still logs it.
+  Future<void> _deliverRatchetControl(
+    ContactRecord peer,
+    RelayEnvelope envelope, {
+    required String retryKey,
+    required bool retry,
+    int attempt = 0,
+  }) async {
+    try {
+      await _deliverToContact(
+        contact: peer,
+        recipientDeviceId: peer.deviceId,
+        envelope: envelope,
+        ignoreRouteBackoff: true,
+      );
+      if (attempt > 0) _ratchetControlRetries.remove(retryKey);
+    } catch (error) {
+      final delays = ratchetControlRetryDelays;
+      if (retry &&
+          !_disposed &&
+          attempt < delays.length &&
+          (_ratchetControlRetries.containsKey(retryKey) ||
+              _ratchetControlRetries.length < _ratchetControlRetryCap)) {
+        // A newer copy of the same control (a new answer) replaces the
+        // pending one; a retry of the pending one keeps its place.
+        if (attempt == 0) _ratchetControlRetries.remove(retryKey)?.cancel();
+        _ratchetControlRetries[retryKey] = Timer(delays[attempt], () {
+          if (_disposed) return;
+          final current = _contactByDeviceId(peer.deviceId) ?? peer;
+          if (!current.canSendOutbound) {
+            _ratchetControlRetries.remove(retryKey);
+            return;
+          }
+          unawaited(
+            _deliverRatchetControl(
+              current,
+              envelope,
+              retryKey: retryKey,
+              retry: true,
+              attempt: attempt + 1,
+            ).catchError((Object _) {}),
+          );
+        });
+      } else if (attempt > 0) {
+        _ratchetControlRetries.remove(retryKey);
+      }
+      rethrow;
     }
   }
 
@@ -33383,7 +33465,12 @@ class MessengerController extends ChangeNotifier {
     // Messages encrypted before this bundle must be encrypted again.
     _newPeerSession(peer.deviceId);
     await sessions.rememberPeerIdentity(id, bundle.identityKey);
-    if (reason == 'answer') return;
+    if (reason == 'answer') {
+      // The peer's keys are known now: the next lost session starts again
+      // with short waits.
+      _ratchetBundleAttempts.removeWhere((key, _) => key.startsWith('$id|'));
+      return;
+    }
     await sessions.startSession(id, bundle);
     _newPeerSession(peer.deviceId);
     await _sendRatchetBundle(peer, reason: 'answer');
@@ -33400,10 +33487,11 @@ class MessengerController extends ChangeNotifier {
         plaintext: '{}',
         createdAt: _now().toUtc(),
       );
-      await _deliverToContact(
-        contact: peer,
-        recipientDeviceId: peer.deviceId,
-        envelope: hello,
+      await _deliverRatchetControl(
+        peer,
+        hello,
+        retryKey: '${ratchetPeerId(peer)}|hello',
+        retry: true,
       );
     } catch (error) {
       // Real traffic on the new session also opens it at the peer.
