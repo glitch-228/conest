@@ -59,7 +59,10 @@ class BlockSourceSet {
          priorBytesPerSecond: priorBytesPerSecond,
        ) {
     _sources.add(primary);
+    _primary = primary;
   }
+
+  late final BlockSource _primary;
 
   final DateTime Function() _now;
 
@@ -79,6 +82,8 @@ class BlockSourceSet {
   final Set<BlockSource> _dropped = {};
   final Map<int, List<_Request>> _requests = {};
   final Map<BlockSource, int> _delivered = {};
+
+  static const Duration _minHedgeTick = Duration(seconds: 1);
 
   /// Most sources remembered as dropped (a hostile feed of devices cannot
   /// grow this).
@@ -183,7 +188,11 @@ class BlockSourceSet {
     ];
     if (withRoom.isEmpty) return null;
     final resting = withRoom.where(striper.isResting).toList();
-    final working = withRoom.where((s) => !striper.isResting(s)).toList();
+    var working = withRoom.where((s) => !striper.isResting(s)).toList();
+    // A source whose blocks were late is left alone while another works
+    // (until a block lands on it again).
+    final timely = working.where((s) => !striper.isLate(s)).toList();
+    if (timely.isNotEmpty) working = timely;
     if (working.isNotEmpty) return striper.order(working).first;
     // Only sources that failed lately: one block at a time, to find out
     // whether they are back.
@@ -256,7 +265,9 @@ class BlockSourceSet {
   /// one included) when dropped; empty when kept.
   List<int> corrupt(int index, BlockSource source) {
     if (!_sources.contains(source)) return const [];
-    if (_sources.length <= 1) {
+    // The sender is never dropped (it rests instead): a wrong block may
+    // come from a route that truncates, and the file has no one else.
+    if (_sources.length <= 1 || source == _primary) {
       failed(index, source);
       return const [];
     }
@@ -275,7 +286,9 @@ class BlockSourceSet {
       final request = requests.single;
       final due = request.at.add(striper.hedgeDelay(request.source));
       final wait = due.difference(now);
-      final clamped = wait.isNegative ? Duration.zero : wait;
+      // Never a busy timer: requests that cannot be hedged now (budget)
+      // are looked at again after a pause.
+      final clamped = wait < _minHedgeTick ? _minHedgeTick : wait;
       if (soonest == null || clamped < soonest) soonest = clamped;
     }
     return soonest;

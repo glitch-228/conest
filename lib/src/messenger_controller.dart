@@ -22997,6 +22997,20 @@ class MessengerController extends ChangeNotifier {
     if (state == null || !state.sources.contains(source)) {
       return;
     }
+    // Another device is a source only while it is still one of this
+    // account's devices.
+    if (source.id != state.peerDeviceId &&
+        !(sender.ownDevice &&
+            accountDevices?.deviceFor(sender.deviceId) != null)) {
+      state.requestedInFlight.removeAll(state.sources.drop(source));
+      return;
+    }
+    // The file's counterpart for completion, progress and cancel is the
+    // device it came from, whichever source served the last block.
+    final primary = _contactByDeviceId(state.peerDeviceId) ?? sender;
+    // A LAN block carries no proof of who sent it (any host on the network
+    // may put one): it is verified and used, but never blamed on a source.
+    final attributable = route != MessageRoute.lanDirect;
     // Janitor: if the parent ChatMessage is gone (locally deleted), drop
     // the inbound state silently. The next chunk-request retry that the
     // sender's `_handleAttachmentChunkRequest` sees will trigger the
@@ -23027,6 +23041,7 @@ class MessengerController extends ChangeNotifier {
         source,
         index,
         askAgain: false,
+        blame: attributable,
       );
       return;
     }
@@ -23052,7 +23067,14 @@ class MessengerController extends ChangeNotifier {
           state.finalizing) {
         return;
       }
-      await _sourceServedBadBlock(state, sender, source, index, askAgain: true);
+      await _sourceServedBadBlock(
+        state,
+        sender,
+        source,
+        index,
+        askAgain: true,
+        blame: attributable,
+      );
       return;
     }
     if (!identical(_inboundAttachments[attachmentId], state) ||
@@ -23092,9 +23114,9 @@ class MessengerController extends ChangeNotifier {
     // debounce inside the helper caps to one envelope per 250 ms; the
     // completion path below forces a final emit so the sender flips to
     // 100% in lockstep with us.
-    _maybeSendAttachmentProgress(state, sender, force: state.isComplete);
+    _maybeSendAttachmentProgress(state, primary, force: state.isComplete);
     if (state.isComplete) {
-      await _finalizeInboundAttachment(sender, attachmentId, state);
+      await _finalizeInboundAttachment(primary, attachmentId, state);
     } else if (state.paused) {
       // Paused mid-transfer — sit on the chunks we have. The owner-only
       // resume re-arms the retry timer and re-issues the next request.
@@ -23102,7 +23124,7 @@ class MessengerController extends ChangeNotifier {
       _scheduleAttachmentRetry(attachmentId);
       // Pipelined refill: keep up to _inboundChunkWindow requests in
       // flight so a slow path doesn't serialize on per-chunk RTT.
-      _startInboundRequestWindow(state, sender);
+      _startInboundRequestWindow(state, primary);
     }
   }
 
@@ -23483,8 +23505,9 @@ class MessengerController extends ChangeNotifier {
     BlockSource source,
     int index, {
     required bool askAgain,
+    required bool blame,
   }) async {
-    final again = state.sources.corrupt(index, source);
+    final again = blame ? state.sources.corrupt(index, source) : const <int>[];
     appendDebugLog(
       'A block of ${state.descriptor.id} from ${sender.alias} failed '
       'verification (idx=$index)'

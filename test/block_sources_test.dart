@@ -166,6 +166,51 @@ void main() {
       expect(set.inFlightOn(_laptop), 0);
     });
 
+    test('the sender is never dropped for a bad block, it rests', () {
+      final set = BlockSourceSet(primary: _sender, blockBytes: _block)
+        ..add(_laptop)
+        ..begin(0, _sender);
+      expect(set.corrupt(0, _sender), isEmpty);
+      expect(set.contains(_sender), isTrue);
+      expect(set.wasDropped(_sender), isFalse);
+      expect(set.striper.isResting(_sender), isTrue);
+    });
+
+    test('a source whose block was late gets no new blocks while another '
+        'works', () {
+      var now = DateTime.utc(2026);
+      final set = BlockSourceSet(
+        primary: _sender,
+        blockBytes: _block,
+        now: () => now,
+      )..add(_laptop);
+      set.begin(0, _sender);
+      now = now.add(const Duration(seconds: 10));
+      expect(set.takeHedges(), [(0, _laptop)]);
+      expect(set.choose(1), _laptop);
+      set.delivered(0, _sender);
+      expect(set.striper.isLate(_sender), isFalse);
+    });
+
+    test('the hedge timer never asks to fire at once', () {
+      var now = DateTime.utc(2026);
+      final set = BlockSourceSet(
+        primary: _sender,
+        blockBytes: _block,
+        now: () => now,
+        windowPerSource: 16,
+      )..add(_laptop);
+      for (var i = 0; i < 6; i++) {
+        set.begin(i, _sender);
+      }
+      now = now.add(const Duration(minutes: 10));
+      set.takeHedges();
+      expect(
+        set.nextHedgeIn(),
+        greaterThanOrEqualTo(const Duration(seconds: 1)),
+      );
+    });
+
     test('the only source is kept after a bad block (asked again as '
         'before)', () {
       final set = BlockSourceSet(primary: _sender, blockBytes: _block)
