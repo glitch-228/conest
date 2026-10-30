@@ -11,6 +11,7 @@ import '../messenger_controller.dart';
 import '../network_errors.dart';
 import '../telegram/telegram_client.dart';
 import '../telegram/telegram_models.dart';
+import 'horizontal_chip_row.dart';
 
 /// What to call a chat: Saved Messages by its own name.
 String telegramChatTitle(BuildContext? context, TgChat chat) =>
@@ -94,23 +95,20 @@ class _TelegramChatListState extends State<TelegramChatList> {
     return Column(
       children: [
         if (tabs.length > 1)
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
+          HorizontalChipRow(
             padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                for (final (key, title) in tabs)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ChoiceChip(
-                      key: ValueKey('telegram-tab-$key'),
-                      label: Text(title),
-                      selected: key == _list,
-                      onSelected: (_) => setState(() => _list = key),
-                    ),
+            children: [
+              for (final (key, title) in tabs)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    key: ValueKey('telegram-tab-$key'),
+                    label: Text(title),
+                    selected: key == _list,
+                    onSelected: (_) => setState(() => _list = key),
                   ),
-              ],
-            ),
+                ),
+            ],
           ),
         Expanded(
           child: chats.isEmpty

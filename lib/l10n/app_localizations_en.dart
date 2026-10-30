@@ -6393,4 +6393,17 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'Download rules and storage limits follow the newest change. It only works between devices that both have this on.';
+
+  @override
+  String get xmppCaptchaTitle => 'The server asks for a CAPTCHA';
+
+  @override
+  String get xmppCaptchaAnswerField => 'What the picture says';
+
+  @override
+  String get xmppSignUpOnWebsite =>
+      'These servers sign you up on a website. Sign up there, then choose \"Use my own XMPP account\".';
+
+  @override
+  String get xmppOpenWebsite => 'Open website';
 }

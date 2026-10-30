@@ -9404,5 +9404,21 @@
   "devicesShareSettingsHint": "Download rules and storage limits follow the newest change. It only works between devices that both have this on.",
   "@devicesShareSettingsHint": {
     "description": "Explains the share settings switch."
+  },
+  "xmppCaptchaTitle": "The server asks for a CAPTCHA",
+  "@xmppCaptchaTitle": {
+    "description": "Settings, XMPP setup: title of the dialog showing a CAPTCHA picture."
+  },
+  "xmppCaptchaAnswerField": "What the picture says",
+  "@xmppCaptchaAnswerField": {
+    "description": "Settings, XMPP setup: label of the field for the CAPTCHA answer."
+  },
+  "xmppSignUpOnWebsite": "These servers sign you up on a website. Sign up there, then choose \"Use my own XMPP account\".",
+  "@xmppSignUpOnWebsite": {
+    "description": "Settings, XMPP setup: shown above links to servers that sign people up on a website."
+  },
+  "xmppOpenWebsite": "Open website",
+  "@xmppOpenWebsite": {
+    "description": "Settings, XMPP setup: button opening a server's sign-up website."
   }
 }

@@ -6389,4 +6389,17 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'Aturan unduhan dan batas penyimpanan mengikuti perubahan terbaru. Hanya berfungsi antar perangkat yang sama-sama mengaktifkannya.';
+
+  @override
+  String get xmppCaptchaTitle => 'Server meminta CAPTCHA';
+
+  @override
+  String get xmppCaptchaAnswerField => 'Isi gambar';
+
+  @override
+  String get xmppSignUpOnWebsite =>
+      'Server ini mendaftarkan akun di situs webnya. Daftar di sana, lalu pilih \"Gunakan akun XMPP saya sendiri\".';
+
+  @override
+  String get xmppOpenWebsite => 'Buka situs';
 }

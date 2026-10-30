@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
+import 'xmpp_registration.dart' show serverText;
+
 /// SASL mechanisms Conest offers, best first. PLAIN only ever goes over
 /// TLS (the session refuses it otherwise).
 const List<String> xmppSaslPreference = [
@@ -29,7 +31,7 @@ class XmppSaslException implements Exception {
   const XmppSaslException(this.message);
   final String message;
   @override
-  String toString() => 'Sign-in failed: $message';
+  String toString() => 'Sign-in failed: ${serverText(message, 64)}';
 }
 
 /// The initial response for PLAIN: `\0user\0password`.
@@ -133,7 +135,9 @@ class ScramClient {
       throw const XmppSaslException('no challenge was answered');
     }
     final fields = _fields(utf8.decode(serverFinalBytes, allowMalformed: true));
-    if (fields['e'] case final error?) throw XmppSaslException(error);
+    if (fields['e'] case final error?) {
+      throw XmppSaslException(serverText(error, 64));
+    }
     final Uint8List signature;
     try {
       signature = base64.decode(fields['v'] ?? '');

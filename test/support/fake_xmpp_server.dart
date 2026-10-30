@@ -9,6 +9,39 @@ import 'package:conest/src/xmpp/xmpp_socket.dart';
 import 'package:conest/src/xmpp/xmpp_xml.dart';
 import 'package:crypto/crypto.dart';
 
+/// The first bytes of a PNG that says it is [width] x [height].
+List<int> pngHeader(int width, int height) => [
+  137,
+  80,
+  78,
+  71,
+  13,
+  10,
+  26,
+  10,
+  0,
+  0,
+  0,
+  13,
+  73,
+  72,
+  68,
+  82,
+  width >> 24 & 255,
+  width >> 16 & 255,
+  width >> 8 & 255,
+  width & 255,
+  height >> 24 & 255,
+  height >> 16 & 255,
+  height >> 8 & 255,
+  height & 255,
+  8,
+  6,
+  0,
+  0,
+  0,
+];
+
 const _pubsubNs = 'http://jabber.org/protocol/pubsub';
 
 /// An in-memory XMPP server for tests: stream negotiation with STARTTLS,
@@ -27,6 +60,31 @@ class FakeXmppServer {
 
   final String domain;
   bool allowRegistration;
+
+  /// Sign-up refused with "forbidden (Access denied by service policy)",
+  /// after the form was handed out.
+  bool forbidRegistration = false;
+
+  /// Sign-up needs this CAPTCHA answer (the picture is [captchaImage]).
+  String? captchaAnswer;
+
+  /// A PNG header declaring 100 x 40 (what a CAPTCHA picture needs to be).
+  List<int> captchaImage = pngHeader(100, 40);
+
+  /// After the sign-up form, send this many stanzas nobody asked for.
+  int floodAfterForm = 0;
+
+  /// After the sign-up form, send this many 200 KB stanzas.
+  int bigAfterForm = 0;
+
+  /// After the sign-up form, send a stream error and keep the connection.
+  bool streamErrorAfterForm = false;
+
+  /// Sign-up happens on this web page: the form only says so.
+  String? registrationWebPage;
+
+  /// The CAPTCHA answers received.
+  final List<String> captchaAnswers = [];
   bool streamManagement;
   bool offerStartTls;
 
@@ -850,6 +908,26 @@ class _FakeConnection {
         return;
       }
       if (type == 'get') {
+        if (server.registrationWebPage case final page?) {
+          _send(
+            result([
+              XmppElement(
+                'query',
+                xmlns: XmppNs.register,
+                children: [
+                  XmppElement('instructions', text: 'Sign up on the web'),
+                  XmppElement(
+                    'x',
+                    xmlns: XmppNs.oob,
+                    children: [XmppElement('url', text: page)],
+                  ),
+                ],
+              ),
+            ]),
+          );
+          return;
+        }
+        final captcha = server.captchaAnswer != null;
         _send(
           result([
             XmppElement(
@@ -859,11 +937,136 @@ class _FakeConnection {
                 XmppElement('instructions', text: 'Choose a name'),
                 XmppElement('username'),
                 XmppElement('password'),
+                if (captcha) ...[
+                  XmppElement(
+                    'x',
+                    xmlns: XmppNs.dataForms,
+                    attributes: {'type': 'form'},
+                    children: [
+                      XmppElement(
+                        'field',
+                        xmlns: XmppNs.dataForms,
+                        attributes: {'var': 'FORM_TYPE', 'type': 'hidden'},
+                        children: [
+                          XmppElement(
+                            'value',
+                            xmlns: XmppNs.dataForms,
+                            text: 'urn:xmpp:captcha',
+                          ),
+                        ],
+                      ),
+                      XmppElement(
+                        'field',
+                        xmlns: XmppNs.dataForms,
+                        attributes: {'var': 'challenge', 'type': 'hidden'},
+                        children: [
+                          XmppElement(
+                            'value',
+                            xmlns: XmppNs.dataForms,
+                            text: 'ch-1',
+                          ),
+                        ],
+                      ),
+                      XmppElement(
+                        'field',
+                        xmlns: XmppNs.dataForms,
+                        attributes: {
+                          'var': 'ocr',
+                          'label': 'Enter the text you see',
+                        },
+                        children: [
+                          XmppElement(
+                            'media',
+                            xmlns: 'urn:xmpp:media-element',
+                            children: [
+                              XmppElement(
+                                'uri',
+                                xmlns: 'urn:xmpp:media-element',
+                                attributes: {'type': 'image/png'},
+                                text: 'cid:sha1+abc@bob.xmpp.org',
+                              ),
+                            ],
+                          ),
+                          XmppElement('required', xmlns: XmppNs.dataForms),
+                        ],
+                      ),
+                    ],
+                  ),
+                  XmppElement(
+                    'data',
+                    xmlns: 'urn:xmpp:bob',
+                    attributes: {
+                      'cid': 'sha1+abc@bob.xmpp.org',
+                      'type': 'image/png',
+                    },
+                    text: base64.encode(server.captchaImage),
+                  ),
+                ],
               ],
             ),
           ]),
         );
+        for (var i = 0; i < server.floodAfterForm; i++) {
+          _send(XmppElement('message', attributes: {'id': 'x$i'}));
+        }
+        for (var i = 0; i < server.bigAfterForm; i++) {
+          _send(
+            XmppElement(
+              'message',
+              attributes: {'id': 'big$i'},
+              text: 'x' * 200000,
+            ),
+          );
+        }
+        if (server.streamErrorAfterForm) {
+          _send(
+            XmppElement(
+              'error',
+              xmlns: XmppNs.stream,
+              children: [XmppElement('system-shutdown', xmlns: XmppNs.streams)],
+            ),
+          );
+        }
         return;
+      }
+      if (server.forbidRegistration) {
+        _send(
+          XmppElement(
+            'iq',
+            attributes: {'type': 'error', 'id': ?id},
+            children: [
+              XmppElement(
+                'error',
+                attributes: {'type': 'auth'},
+                children: [
+                  XmppElement('forbidden', xmlns: XmppNs.stanzas),
+                  XmppElement(
+                    'text',
+                    xmlns: XmppNs.stanzas,
+                    text: 'Access denied by service policy',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+      if (server.captchaAnswer case final expected?) {
+        final form = query.child('x', XmppNs.dataForms);
+        String? given;
+        String? challenge;
+        for (final field in form?.all('field') ?? const <XmppElement>[]) {
+          if (field.attr('var') == 'ocr') given = field.childText('value');
+          if (field.attr('var') == 'challenge') {
+            challenge = field.childText('value');
+          }
+        }
+        server.captchaAnswers.add(given ?? '');
+        if (given != expected || challenge != 'ch-1') {
+          _send(error('not-acceptable'));
+          return;
+        }
       }
       final user = query.childText('username');
       final password = query.childText('password');

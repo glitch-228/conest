@@ -1694,5 +1694,9 @@
   "devicesSyncFastWarning": "Sinkronisasi cepat memakai banyak data dan baterai. Hanya berjalan di jaringan tanpa batas kuota, dan Anda ditanya lagi setiap kali menyalakannya.",
   "devicesSyncFastTurnOn": "Nyalakan sinkronisasi cepat",
   "devicesShareSettings": "Bagikan pengaturan ke perangkat saya yang lain",
-  "devicesShareSettingsHint": "Aturan unduhan dan batas penyimpanan mengikuti perubahan terbaru. Hanya berfungsi antar perangkat yang sama-sama mengaktifkannya."
+  "devicesShareSettingsHint": "Aturan unduhan dan batas penyimpanan mengikuti perubahan terbaru. Hanya berfungsi antar perangkat yang sama-sama mengaktifkannya.",
+  "xmppCaptchaTitle": "Server meminta CAPTCHA",
+  "xmppCaptchaAnswerField": "Isi gambar",
+  "xmppSignUpOnWebsite": "Server ini mendaftarkan akun di situs webnya. Daftar di sana, lalu pilih \"Gunakan akun XMPP saya sendiri\".",
+  "xmppOpenWebsite": "Buka situs"
 }

@@ -105,6 +105,62 @@ fn call_inputs(host: &cpal::Host) -> Result<Vec<Device>> {
         .collect())
 }
 
+/// On Linux with a sound server running: the ALSA "pulse" device and the
+/// server's own name for the output or microphone called [name] (one of the
+/// real devices Settings → Voice lists, see [crate::audio_pulse]). None for
+/// anything else, which is opened as before.
+#[cfg(target_os = "linux")]
+fn server_device(host: &cpal::Host, source: bool, name: &str) -> Option<(Device, String)> {
+    use crate::audio_pulse::{Kind, list, resolve};
+    let kind = if source { Kind::Source } else { Kind::Sink };
+    let target = resolve(&list(kind), name)?.to_owned();
+    let mut devices: Vec<Device> = if source {
+        host.input_devices().ok()?.collect()
+    } else {
+        host.output_devices().ok()?.collect()
+    };
+    let at = devices
+        .iter()
+        .position(|device| device.id().is_ok_and(|id| id.id() == "pulse"))?;
+    Some((devices.swap_remove(at), target))
+}
+
+/// Runs [open] (which opens a stream) with the sound server told to use
+/// [target], when there is one.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn on_server_device<T>(source: bool, target: Option<&str>, open: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "linux")]
+    if let Some(target) = target {
+        use crate::audio_pulse::{Kind, with_device};
+        return with_device(if source { Kind::Source } else { Kind::Sink }, target, open);
+    }
+    let _ = (source, target);
+    open()
+}
+
+/// The microphone or output called [name] and, for the sound server's own
+/// devices, the name to give the server.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn find_device(host: &cpal::Host, source: bool, name: &str) -> Option<(Device, Option<String>)> {
+    #[cfg(target_os = "linux")]
+    if let Some((device, target)) = server_device(host, source, name) {
+        return Some((device, Some(target)));
+    }
+    let devices = (if source { call_inputs(host) } else { call_outputs(host) }).ok()?;
+    devices
+        .into_iter()
+        .find(|device| output_device_name(device).as_deref() == Some(name))
+        .map(|device| (device, None))
+}
+
+/// The sound server's real outputs or microphones by description; None
+/// without a sound server (then the ALSA devices are listed).
+#[cfg(target_os = "linux")]
+fn server_device_names(kind: crate::audio_pulse::Kind) -> Option<Vec<String>> {
+    let devices = crate::audio_pulse::list(kind);
+    (!devices.is_empty()).then(|| devices.into_iter().map(|d| d.description).collect())
+}
+
 /// What the user set in Settings → Voice, changed live during a call.
 /// Gains are linear factors (0 to 2) kept as f32 bits.
 pub struct VoiceTuning {
@@ -521,41 +577,42 @@ impl VoiceAudioSession {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn open_with_devices(input_name: Option<&str>, output_name: Option<&str>) -> Result<Self> {
         let host = cpal::default_host();
-        let named_input = input_name.and_then(|name| {
-            call_inputs(&host)
-                .ok()?
-                .into_iter()
-                .find(|device| output_device_name(device).as_deref() == Some(name))
-        });
-        let input = match named_input {
-            Some(device) => device,
-            None => host
-                .default_input_device()
-                .context("No default microphone device is available")?,
+        let (input, input_server) = match input_name.and_then(|name| find_device(&host, true, name))
+        {
+            Some(found) => found,
+            None => (
+                host.default_input_device()
+                    .context("No default microphone device is available")?,
+                None,
+            ),
         };
-        let output = match output_name {
-            Some(name) => call_outputs(&host)?
-                .into_iter()
-                .find(|device| output_device_name(device).as_deref() == Some(name))
+        let (output, output_server) = match output_name {
+            Some(name) => find_device(&host, false, name)
                 .with_context(|| format!("Audio output device '{name}' is unavailable"))?,
-            None => host
-                .default_output_device()
-                .context("No default speaker or headphone device is available")?,
+            None => (
+                host.default_output_device()
+                    .context("No default speaker or headphone device is available")?,
+                None,
+            ),
         };
 
         let mut session = Self::create_codec()?;
-        let input_stream = open_input_stream(
-            &input,
-            session.capture.clone(),
-            session.muted.clone(),
-            session.failed.clone(),
-        )?;
-        let output_stream = open_output_stream(
-            &output,
-            session.playback.clone(),
-            session.render_reference.clone(),
-            session.failed.clone(),
-        )?;
+        let input_stream = on_server_device(true, input_server.as_deref(), || {
+            open_input_stream(
+                &input,
+                session.capture.clone(),
+                session.muted.clone(),
+                session.failed.clone(),
+            )
+        })?;
+        let output_stream = on_server_device(false, output_server.as_deref(), || {
+            open_output_stream(
+                &output,
+                session.playback.clone(),
+                session.render_reference.clone(),
+                session.failed.clone(),
+            )
+        })?;
         input_stream
             .play()
             .context("Could not start microphone capture")?;
@@ -569,6 +626,10 @@ impl VoiceAudioSession {
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn output_device_names() -> Vec<String> {
+        #[cfg(target_os = "linux")]
+        if let Some(names) = server_device_names(crate::audio_pulse::Kind::Sink) {
+            return names;
+        }
         call_outputs(&cpal::default_host())
             .ok()
             .into_iter()
@@ -584,6 +645,10 @@ impl VoiceAudioSession {
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn input_device_names() -> Vec<String> {
+        #[cfg(target_os = "linux")]
+        if let Some(names) = server_device_names(crate::audio_pulse::Kind::Source) {
+            return names;
+        }
         call_inputs(&cpal::default_host())
             .ok()
             .into_iter()
@@ -600,16 +665,16 @@ impl VoiceAudioSession {
     /// Switches a live call (or the microphone test) to a named microphone.
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn set_input_device(&mut self, name: &str) -> Result<()> {
-        let input = call_inputs(&cpal::default_host())?
-            .into_iter()
-            .find(|device| output_device_name(device).as_deref() == Some(name))
+        let (input, server) = find_device(&cpal::default_host(), true, name)
             .with_context(|| format!("Microphone '{name}' is unavailable"))?;
-        let input_stream = open_input_stream(
-            &input,
-            self.capture.clone(),
-            self.muted.clone(),
-            self.failed.clone(),
-        )?;
+        let input_stream = on_server_device(true, server.as_deref(), || {
+            open_input_stream(
+                &input,
+                self.capture.clone(),
+                self.muted.clone(),
+                self.failed.clone(),
+            )
+        })?;
         input_stream
             .play()
             .context("Could not start the selected microphone")?;
@@ -619,16 +684,16 @@ impl VoiceAudioSession {
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn set_output_device(&mut self, name: &str) -> Result<()> {
-        let output = call_outputs(&cpal::default_host())?
-            .into_iter()
-            .find(|device| output_device_name(device).as_deref() == Some(name))
+        let (output, server) = find_device(&cpal::default_host(), false, name)
             .with_context(|| format!("Audio output device '{name}' is unavailable"))?;
-        let output_stream = open_output_stream(
-            &output,
-            self.playback.clone(),
-            self.render_reference.clone(),
-            self.failed.clone(),
-        )?;
+        let output_stream = on_server_device(false, server.as_deref(), || {
+            open_output_stream(
+                &output,
+                self.playback.clone(),
+                self.render_reference.clone(),
+                self.failed.clone(),
+            )
+        })?;
         output_stream
             .play()
             .context("Could not start the selected audio output")?;

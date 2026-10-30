@@ -6393,4 +6393,17 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'قوانین دانلود و محدودیت‌های فضا از جدیدترین تغییر پیروی می‌کنند. فقط بین دستگاه‌هایی کار می‌کند که هر دو این را روشن کرده‌اند.';
+
+  @override
+  String get xmppCaptchaTitle => 'کارساز کپچا می‌خواهد';
+
+  @override
+  String get xmppCaptchaAnswerField => 'آنچه در تصویر نوشته شده';
+
+  @override
+  String get xmppSignUpOnWebsite =>
+      'این کارسازها ثبت‌نام را در وب‌سایت خود انجام می‌دهند. آنجا ثبت‌نام کنید، سپس «استفاده از حساب XMPP خودم» را انتخاب کنید.';
+
+  @override
+  String get xmppOpenWebsite => 'باز کردن وب‌سایت';
 }

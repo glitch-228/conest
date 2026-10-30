@@ -1694,5 +1694,9 @@
   "devicesSyncFastWarning": "快速同步会消耗大量流量和电量。它只在不计流量的网络上运行，每次开启都会再次询问你。",
   "devicesSyncFastTurnOn": "开启快速同步",
   "devicesShareSettings": "与我的其他设备共享设置",
-  "devicesShareSettingsHint": "下载规则和存储限制以最新的更改为准。只有两台设备都开启时才有效。"
+  "devicesShareSettingsHint": "下载规则和存储限制以最新的更改为准。只有两台设备都开启时才有效。",
+  "xmppCaptchaTitle": "服务器要求输入验证码",
+  "xmppCaptchaAnswerField": "图片中的字符",
+  "xmppSignUpOnWebsite": "这些服务器在其网站上注册。请先在那里注册，然后选择“使用我自己的 XMPP 账号”。",
+  "xmppOpenWebsite": "打开网站"
 }

@@ -5,6 +5,7 @@ import 'dart:io' show SocketException;
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'xmpp_registration.dart';
 import 'xmpp_sasl.dart';
 import 'xmpp_socket.dart';
 import 'xmpp_xml.dart';
@@ -78,7 +79,24 @@ class _EventQueue {
           _waiter = null;
           waiter.complete(event);
         } else {
-          _buffer.add(event);
+          // Nobody is reading (the user is answering a question). Whatever
+          // the server sends is held up to a few events and bytes; beyond
+          // that the attempt fails.
+          final size = switch (event) {
+            XmppStreamElement(:final element) => element.toXml().length,
+            _ => 64,
+          };
+          _bufferedChars += size;
+          if (_buffer.length >= _maxBuffered ||
+              _bufferedChars > _maxBufferedChars) {
+            _error ??= const XmppProtocolException('The server sent too much.');
+            _buffer.clear();
+            _sizes.clear();
+            unawaited(_subscription.cancel());
+          } else {
+            _buffer.add(event);
+            _sizes.add(size);
+          }
         }
       },
       onError: (Object error) {
@@ -98,13 +116,24 @@ class _EventQueue {
     );
   }
 
+  /// Most stream events held while nobody reads.
+  static const int _maxBuffered = 64;
+
+  /// Most characters held (about a megabyte) while nobody reads.
+  static const int _maxBufferedChars = 1024 * 1024;
+  int _bufferedChars = 0;
+  final Queue<int> _sizes = Queue();
+
   late final StreamSubscription<XmppStreamEvent> _subscription;
   final Queue<XmppStreamEvent> _buffer = Queue();
   Completer<XmppStreamEvent>? _waiter;
   Object? _error;
 
   Future<XmppStreamEvent> next(Duration timeout) {
-    if (_buffer.isNotEmpty) return Future.value(_buffer.removeFirst());
+    if (_buffer.isNotEmpty) {
+      _bufferedChars -= _sizes.removeFirst();
+      return Future.value(_buffer.removeFirst());
+    }
     if (_error case final error?) return Future.error(error);
     final waiter = _waiter = Completer<XmppStreamEvent>();
     return waiter.future.timeout(
@@ -130,6 +159,24 @@ class _EventQueue {
     };
   }
 
+  /// Throws what already went wrong with the stream: too much was sent
+  /// while nobody was reading, it closed, or the server said so in what it
+  /// sent meanwhile (a stream error or the end of the stream, still waiting
+  /// unread).
+  void ensureHealthy() {
+    if (_error case final error?) throw error;
+    for (final event in _buffer) {
+      switch (event) {
+        case XmppStreamElement(:final element):
+          _checkStreamError(element);
+        case XmppStreamClosed():
+          throw const SocketException('The server closed the stream.');
+        case XmppStreamOpened():
+          break;
+      }
+    }
+  }
+
   Future<void> cancel() => _subscription.cancel();
 }
 
@@ -140,18 +187,14 @@ XmppElement _checkStreamError(XmppElement element) {
         .firstOrNull
         ?.name;
     throw XmppStreamError(
-      condition ?? 'undefined-condition',
+      condition == null ? 'undefined-condition' : serverText(condition, 64),
       _bounded(element.childText('text', XmppNs.streams)),
     );
   }
   return element;
 }
 
-String? _bounded(String? text) => text == null
-    ? null
-    : text.length > 200
-    ? text.substring(0, 200)
-    : text;
+String? _bounded(String? text) => text == null ? null : serverText(text);
 
 /// The condition of an error stanza.
 XmppStanzaError stanzaErrorOf(XmppElement stanza) {
@@ -161,7 +204,7 @@ XmppStanzaError stanzaErrorOf(XmppElement stanza) {
       .firstOrNull
       ?.name;
   return XmppStanzaError(
-    condition ?? 'undefined-condition',
+    condition == null ? 'undefined-condition' : serverText(condition, 64),
     _bounded(error?.childText('text', XmppNs.stanzas)),
   );
 }
@@ -201,6 +244,8 @@ Future<XmppWire> openXmppWire(
 }
 
 const Duration _answerTimeout = Duration(seconds: 30);
+const Duration _registrationDeadline = Duration(seconds: 60);
+const int _maxUnrelated = 32;
 
 /// Opens the stream and upgrades it with STARTTLS when it is not secure;
 /// returns the features of the (secure) stream. Without TLS, only a
@@ -323,7 +368,10 @@ Future<void> _authenticate(
         }
         return;
       case 'failure':
-        final condition = answer.children.firstOrNull?.name ?? 'not-authorized';
+        final condition = serverText(
+          answer.children.firstOrNull?.name ?? 'not-authorized',
+          64,
+        );
         if (condition == 'not-authorized' ||
             condition == 'account-disabled' ||
             condition == 'credentials-expired') {
@@ -340,9 +388,10 @@ Future<void> _authenticate(
 
 /// In-band registration (XEP-0077) of [username] with [password] on the
 /// server behind [endpoint]. Throws [XmppStanzaError] (`conflict` when the
-/// name is taken, `not-allowed` when the server only registers on its web
-/// page) or [XmppProtocolException] when the server needs more than a name
-/// and password (a CAPTCHA).
+/// name is taken, `not-allowed` or `forbidden` when sign-up is closed),
+/// [XmppRegistrationRedirect] when the server registers on its web page,
+/// [XmppCaptchaRequired] when it asks for a CAPTCHA and [captchaSolver] gave
+/// no answer, or [XmppRegistrationNeedsMore] when it needs more than that.
 Future<void> registerXmppAccount({
   required XmppEndpoint endpoint,
   required String domain,
@@ -350,6 +399,7 @@ Future<void> registerXmppAccount({
   required String password,
   XmppSocketConnector connector = connectXmppSocket,
   XmppWebSocketConnector webSocketConnector = connectXmppWebSocket,
+  XmppCaptchaSolver? captchaSolver,
 }) async {
   final wire = await openXmppWire(
     endpoint,
@@ -373,52 +423,67 @@ Future<void> registerXmppAccount({
           children: [query],
         ),
       );
+      // One answer in 30 s at most 60 s in all (the user's time at a
+      // CAPTCHA is not part of it), and a few unrelated stanzas.
+      final deadline = DateTime.now().add(_registrationDeadline);
+      var others = 0;
       while (true) {
-        final answer = await queue.element(_answerTimeout);
+        final left = deadline.difference(DateTime.now());
+        if (left <= Duration.zero || ++others > _maxUnrelated) {
+          throw TimeoutException('The XMPP server did not answer.');
+        }
+        final answer = await queue.element(
+          left < _answerTimeout ? left : _answerTimeout,
+        );
         if (answer.name != 'iq' || answer.attr('id') != id) continue;
         if (answer.attr('type') == 'error') throw stanzaErrorOf(answer);
         return answer;
       }
     }
 
-    final form = await iq(
+    final answer = await iq(
       'get',
       XmppElement('query', xmlns: XmppNs.register),
       'reg1',
     );
-    final query = form.child('query', XmppNs.register);
-    if (query == null ||
-        query.child('username') == null ||
-        query.child('password') == null) {
+    final query = answer.child('query', XmppNs.register);
+    if (query == null) {
       throw const XmppProtocolException(
         'The server needs more than a name and password to register.',
       );
     }
-    // A data form with more required fields (a CAPTCHA, an email) cannot
-    // be filled in automatically.
-    final dataForm = query.child('x', XmppNs.dataForms);
-    if (dataForm != null) {
-      for (final field in dataForm.all('field')) {
-        final name = field.attr('var');
-        if (field.child('required') != null &&
-            name != 'username' &&
-            name != 'password' &&
-            name != 'FORM_TYPE') {
-          throw const XmppProtocolException(
-            'The server needs more than a name and password to register.',
-          );
-        }
-      }
+    final form = parseRegistrationForm(query);
+    if (!form.hasNameAndPassword) {
+      // Signing up happens on a web page.
+      if (form.redirect case final url?) throw XmppRegistrationRedirect(url);
+      throw const XmppProtocolException(
+        'The server needs more than a name and password to register.',
+      );
+    }
+    // More required fields (an email address, an invite) cannot be filled
+    // in automatically.
+    if (form.unsupported.isNotEmpty) {
+      throw XmppRegistrationNeedsMore(form.unsupported);
+    }
+    String? captchaAnswer;
+    if (form.captcha case final challenge?) {
+      if (captchaSolver == null) throw const XmppCaptchaRequired();
+      captchaAnswer = (await captchaSolver(
+        challenge.forDomain(domain),
+      ))?.trim();
+      // No answer is the user giving up: setup stops.
+      if (captchaAnswer == null) throw const XmppRegistrationCancelled();
+      if (captchaAnswer.isEmpty) throw const XmppCaptchaRequired();
+      // Nothing is sent to a server that misbehaved meanwhile.
+      queue.ensureHealthy();
     }
     await iq(
       'set',
-      XmppElement(
-        'query',
-        xmlns: XmppNs.register,
-        children: [
-          XmppElement('username', text: username),
-          XmppElement('password', text: password),
-        ],
+      registrationSubmission(
+        form,
+        username: username,
+        password: password,
+        answer: captchaAnswer,
       ),
       'reg2',
     );
@@ -436,12 +501,16 @@ Future<XmppFeatures> probeXmppEndpoint({
   required String domain,
   XmppSocketConnector connector = connectXmppSocket,
   XmppWebSocketConnector webSocketConnector = connectXmppWebSocket,
+  void Function(Future<void> Function() close)? onOpen,
 }) async {
   final wire = await openXmppWire(
     endpoint,
     connector: connector,
     webSocketConnector: webSocketConnector,
   );
+  // Lets the caller close the connection from outside (a probe round that
+  // is over).
+  onOpen?.call(wire.close);
   final queue = _EventQueue(wire.events);
   try {
     return await _openSecureStream(wire, queue, domain, endpoint);

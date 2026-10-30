@@ -545,9 +545,14 @@ class MainActivity : FlutterActivity() {
         } else {
             // The engine runs on without a screen: its channel answers what
             // needs none.
-            systemChannel?.setMethodCallHandler(
-                ConestEngine.headlessHandler(applicationContext)
-            )
+            // Only if no newer activity took the channel name over meanwhile:
+            // its handler must stay.
+            if (activeSystemChannel === systemChannel) {
+                activeSystemChannel = null
+                systemChannel?.setMethodCallHandler(
+                    ConestEngine.headlessHandler(applicationContext)
+                )
+            }
         }
         super.onDestroy()
     }

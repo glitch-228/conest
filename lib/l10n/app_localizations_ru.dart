@@ -6526,4 +6526,17 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get devicesShareSettingsHint =>
       'Правила загрузки и лимиты хранилища следуют за последним изменением. Работает только между устройствами, где это включено.';
+
+  @override
+  String get xmppCaptchaTitle => 'Сервер просит ввести CAPTCHA';
+
+  @override
+  String get xmppCaptchaAnswerField => 'Что написано на картинке';
+
+  @override
+  String get xmppSignUpOnWebsite =>
+      'Эти серверы регистрируют на своём сайте. Зарегистрируйтесь там, затем выберите «Использовать свою учётную запись XMPP».';
+
+  @override
+  String get xmppOpenWebsite => 'Открыть сайт';
 }
