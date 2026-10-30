@@ -10,7 +10,10 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
+import 'energy_budget_setting.dart';
 import 'models.dart';
+
+export 'energy_budget_setting.dart';
 
 enum EnergyMode {
   /// Mains power (or no battery) and an unmetered network.
@@ -46,6 +49,61 @@ class PowerState {
 /// Where [PowerState] comes from on this platform.
 abstract interface class PowerStateSource {
   Future<PowerState> read();
+}
+
+/// What the device may do right now, from the setting and the power state.
+class EnergyBudget {
+  const EnergyBudget({
+    required this.maxActiveTransports,
+    required this.pollFactor,
+    required this.maxExtraCopies,
+    required this.hedgedBlocks,
+  });
+
+  /// How many transports stay up at once; null for no limit.
+  final int? maxActiveTransports;
+
+  /// Poll and keep-alive intervals are this many times the normal ones.
+  final int pollFactor;
+
+  /// Extra carriers that copy a message after the first route took it.
+  final int maxExtraCopies;
+
+  /// Whether a late file block may also go on a second route.
+  final bool hedgedBlocks;
+
+  /// Mains power and the setting does not restrain it.
+  static const EnergyBudget full = EnergyBudget(
+    maxActiveTransports: null,
+    pollFactor: 1,
+    maxExtraCopies: 4,
+    hedgedBlocks: true,
+  );
+
+  /// On battery or a metered network, balanced.
+  static const EnergyBudget reduced = EnergyBudget(
+    maxActiveTransports: null,
+    pollFactor: 2,
+    maxExtraCopies: 4,
+    hedgedBlocks: true,
+  );
+
+  /// Eco while discharging: LAN, Iroh and one relay subscription; carriers
+  /// only as fallback (no copies); long intervals; no hedging.
+  static const EnergyBudget eco = EnergyBudget(
+    maxActiveTransports: 3,
+    pollFactor: 6,
+    maxExtraCopies: 0,
+    hedgedBlocks: false,
+  );
+
+  /// Battery saver: the strictest.
+  static const EnergyBudget saver = EnergyBudget(
+    maxActiveTransports: 2,
+    pollFactor: 8,
+    maxExtraCopies: 0,
+    hedgedBlocks: false,
+  );
 }
 
 /// How a message goes out on several routes.
@@ -97,6 +155,9 @@ class EnergyPolicy {
   final PowerStateSource _source;
   final Duration escalateInterval;
 
+  /// The user's choice; the controller keeps it current.
+  EnergyBudgetSetting setting = EnergyBudgetSetting.balanced;
+
   /// Larger groups escalate even when the device can afford more: every
   /// copy goes to every member.
   final int maxGroupAllAtOnce;
@@ -130,9 +191,26 @@ class EnergyPolicy {
 
   EnergyMode modeFor(NetworkCostClass network) {
     final fixed = _fixedMode;
-    if (fixed != null) return fixed;
-    return modeOf(_power, network);
+    final mode = fixed ?? modeOf(_power, network);
+    // Fast treats battery like mains; battery saver still wins.
+    if (setting == EnergyBudgetSetting.fast && mode == EnergyMode.limited) {
+      return EnergyMode.unconstrained;
+    }
+    return mode;
   }
+
+  /// What may be spent now. Eco restrains every state but mains power
+  /// (charging, or a desktop without a battery, on an unmetered network):
+  /// more only while charging.
+  EnergyBudget budgetFor(NetworkCostClass network) =>
+      switch (modeFor(network)) {
+        EnergyMode.saver => EnergyBudget.saver,
+        EnergyMode.limited =>
+          setting == EnergyBudgetSetting.eco
+              ? EnergyBudget.eco
+              : EnergyBudget.reduced,
+        EnergyMode.unconstrained => EnergyBudget.full,
+      };
 
   /// The mode for a power reading and a network.
   static EnergyMode modeOf(PowerState power, NetworkCostClass network) {
@@ -160,7 +238,9 @@ class EnergyPolicy {
     required bool copiesAllowed,
     int? groupSize,
   }) {
-    if (!copiesAllowed) return const SingleRouteFanout();
+    if (!copiesAllowed || budgetFor(network).maxExtraCopies == 0) {
+      return const SingleRouteFanout();
+    }
     return switch (modeFor(network)) {
       EnergyMode.saver => const SingleRouteFanout(),
       EnergyMode.limited => EscalatingFanout(escalateInterval),

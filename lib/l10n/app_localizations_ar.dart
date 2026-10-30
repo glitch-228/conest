@@ -6654,4 +6654,20 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => 'قارنتها';
+
+  @override
+  String get energyBudgetTitle => 'استهلاك الطاقة';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'مقدار البطارية التي قد تستهلكها الاتصالات. وضع التوفير يبقي الحد الأدنى عند فصل الشاحن.';
+
+  @override
+  String get energyBudgetBalanced => 'متوازن';
+
+  @override
+  String get energyBudgetEco => 'توفير: المزيد أثناء الشحن فقط';
+
+  @override
+  String get energyBudgetFast => 'سريع';
 }

@@ -1728,5 +1728,10 @@
   "linkArchiveSavedWithFiles": "Сохранено в {path}, файлов: {count}.",
   "contactKeysDifferTitle": "Ключи различаются: проверьте",
   "contactKeysDifferBody": "Это устройство знало этот контакт с другими ключами, чем ваш аккаунт. Сверьте код безопасности с контактом по другому каналу.",
-  "contactKeysDifferConfirm": "Я сверил(а)"
+  "contactKeysDifferConfirm": "Я сверил(а)",
+  "energyBudgetTitle": "Расход энергии",
+  "energyBudgetSubtitle": "Сколько заряда могут тратить соединения. Эко держит минимум без зарядки.",
+  "energyBudgetBalanced": "Сбалансированный",
+  "energyBudgetEco": "Эко: больше только при зарядке",
+  "energyBudgetFast": "Быстрый"
 }

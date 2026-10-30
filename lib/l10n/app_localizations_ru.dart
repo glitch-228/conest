@@ -6662,4 +6662,20 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => 'Я сверил(а)';
+
+  @override
+  String get energyBudgetTitle => 'Расход энергии';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'Сколько заряда могут тратить соединения. Эко держит минимум без зарядки.';
+
+  @override
+  String get energyBudgetBalanced => 'Сбалансированный';
+
+  @override
+  String get energyBudgetEco => 'Эко: больше только при зарядке';
+
+  @override
+  String get energyBudgetFast => 'Быстрый';
 }

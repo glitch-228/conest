@@ -1728,5 +1728,10 @@
   "linkArchiveSavedWithFiles": "تم الحفظ في {path} مع {count} ملفات.",
   "contactKeysDifferTitle": "المفاتيح مختلفة: تحقق",
   "contactKeysDifferBody": "عرف هذا الجهاز جهة الاتصال هذه بمفاتيح غير التي في حسابك. قارن رقم الأمان معها عبر قناة أخرى.",
-  "contactKeysDifferConfirm": "قارنتها"
+  "contactKeysDifferConfirm": "قارنتها",
+  "energyBudgetTitle": "استهلاك الطاقة",
+  "energyBudgetSubtitle": "مقدار البطارية التي قد تستهلكها الاتصالات. وضع التوفير يبقي الحد الأدنى عند فصل الشاحن.",
+  "energyBudgetBalanced": "متوازن",
+  "energyBudgetEco": "توفير: المزيد أثناء الشحن فقط",
+  "energyBudgetFast": "سريع"
 }

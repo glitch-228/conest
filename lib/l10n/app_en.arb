@@ -9607,5 +9607,25 @@
   "contactKeysDifferConfirm": "I compared them",
   "@contactKeysDifferConfirm": {
     "description": "Button: the user compared the safety numbers."
+  },
+  "energyBudgetTitle": "Power use",
+  "@energyBudgetTitle": {
+    "description": "Settings, Connectivity: title of the power use choice."
+  },
+  "energyBudgetSubtitle": "How much battery connections may use. Eco keeps the minimum while unplugged.",
+  "@energyBudgetSubtitle": {
+    "description": "Settings, Connectivity: explains the power use choice."
+  },
+  "energyBudgetBalanced": "Balanced",
+  "@energyBudgetBalanced": {
+    "description": "Power use choice: default."
+  },
+  "energyBudgetEco": "Eco: more only while charging",
+  "@energyBudgetEco": {
+    "description": "Power use choice: minimum on battery, more while charging."
+  },
+  "energyBudgetFast": "Fast",
+  "@energyBudgetFast": {
+    "description": "Power use choice: treat battery like mains power."
   }
 }

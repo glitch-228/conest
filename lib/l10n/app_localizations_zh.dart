@@ -6246,4 +6246,19 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => '我已核对';
+
+  @override
+  String get energyBudgetTitle => '耗电';
+
+  @override
+  String get energyBudgetSubtitle => '连接可使用多少电量。节能模式在未充电时保持最低用量。';
+
+  @override
+  String get energyBudgetBalanced => '均衡';
+
+  @override
+  String get energyBudgetEco => '节能：仅在充电时增加';
+
+  @override
+  String get energyBudgetFast => '快速';
 }

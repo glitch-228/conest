@@ -1728,5 +1728,10 @@
   "linkArchiveSavedWithFiles": "已保存到 {path}，含 {count} 个文件。",
   "contactKeysDifferTitle": "密钥不同：请验证",
   "contactKeysDifferBody": "此设备所知的该联系人密钥与你的账户不同。请通过其他渠道与对方核对安全码。",
-  "contactKeysDifferConfirm": "我已核对"
+  "contactKeysDifferConfirm": "我已核对",
+  "energyBudgetTitle": "耗电",
+  "energyBudgetSubtitle": "连接可使用多少电量。节能模式在未充电时保持最低用量。",
+  "energyBudgetBalanced": "均衡",
+  "energyBudgetEco": "节能：仅在充电时增加",
+  "energyBudgetFast": "快速"
 }

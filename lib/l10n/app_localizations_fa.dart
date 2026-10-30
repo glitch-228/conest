@@ -6530,4 +6530,20 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => 'مقایسه کردم';
+
+  @override
+  String get energyBudgetTitle => 'مصرف انرژی';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'اتصال‌ها چقدر از باتری مصرف کنند. حالت صرفه‌جویی هنگام بی‌شارژری حداقل را نگه می‌دارد.';
+
+  @override
+  String get energyBudgetBalanced => 'متعادل';
+
+  @override
+  String get energyBudgetEco => 'صرفه‌جویی: بیشتر فقط هنگام شارژ';
+
+  @override
+  String get energyBudgetFast => 'سریع';
 }

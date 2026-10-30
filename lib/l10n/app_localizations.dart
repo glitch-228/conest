@@ -10544,6 +10544,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'I compared them'**
   String get contactKeysDifferConfirm;
+
+  /// Settings, Connectivity: title of the power use choice.
+  ///
+  /// In en, this message translates to:
+  /// **'Power use'**
+  String get energyBudgetTitle;
+
+  /// Settings, Connectivity: explains the power use choice.
+  ///
+  /// In en, this message translates to:
+  /// **'How much battery connections may use. Eco keeps the minimum while unplugged.'**
+  String get energyBudgetSubtitle;
+
+  /// Power use choice: default.
+  ///
+  /// In en, this message translates to:
+  /// **'Balanced'**
+  String get energyBudgetBalanced;
+
+  /// Power use choice: minimum on battery, more while charging.
+  ///
+  /// In en, this message translates to:
+  /// **'Eco: more only while charging'**
+  String get energyBudgetEco;
+
+  /// Power use choice: treat battery like mains power.
+  ///
+  /// In en, this message translates to:
+  /// **'Fast'**
+  String get energyBudgetFast;
 }
 
 class _AppLocalizationsDelegate

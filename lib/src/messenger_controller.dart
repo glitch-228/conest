@@ -2276,12 +2276,27 @@ class MessengerController extends ChangeNotifier {
   /// power: as is on mains or an unmetered network, half as often on
   /// battery, a quarter as often in battery saver. Nothing the user waits
   /// for (an open chat, a transfer) slows down.
-  int get _backgroundEnergyFactor =>
-      switch (_energyPolicy.modeFor(_networkCostClass)) {
-        EnergyMode.unconstrained => 1,
-        EnergyMode.limited => 2,
-        EnergyMode.saver => 4,
-      };
+  int get _backgroundEnergyFactor => _currentEnergyBudget.pollFactor;
+
+  /// What the device may spend now: the user's Connectivity choice (balanced,
+  /// eco, fast) with the power state (M25).
+  EnergyBudget get _currentEnergyBudget {
+    _energyPolicy.setting =
+        _snapshot.identity?.connectivity.energyBudget ??
+        EnergyBudgetSetting.balanced;
+    return _energyPolicy.budgetFor(_networkCostClass);
+  }
+
+  @visibleForTesting
+  EnergyBudget get energyBudgetForTesting => _currentEnergyBudget;
+
+  /// Chooses how much power connections may use.
+  Future<void> setEnergyBudget(EnergyBudgetSetting setting) async {
+    final me = _requireIdentity();
+    await updateGlobalConnectivity(
+      me.connectivity.copyWith(energyBudget: setting),
+    );
+  }
 
   /// When a transfer last moved through a relay that has to be polled, per
   /// contact; the fast transfer poll runs only for a while after that.
@@ -22466,7 +22481,9 @@ class MessengerController extends ChangeNotifier {
       striper.noteLate(route);
       // One rule for the budget, whichever of the two is unmeasured.
       final probe = probing || striper.unmeasured(backup);
-      if (!stillActive() || !striper.mayHedge(bytes, probing: probe)) {
+      if (!stillActive() ||
+          !_currentEnergyBudget.hedgedBlocks ||
+          !striper.mayHedge(bytes, probing: probe)) {
         if (await primary) return true;
         continue;
       }
@@ -28490,6 +28507,7 @@ class MessengerController extends ChangeNotifier {
   }) {
     if (first.forwarded || _disposed) return;
     unawaited(_energyPolicy.refresh());
+    _currentEnergyBudget; // Brings the user's setting up to date.
     final fanout = _energyPolicy.fanoutFor(
       _networkCostClass,
       copiesAllowed: contact.featureCapabilities.contains(

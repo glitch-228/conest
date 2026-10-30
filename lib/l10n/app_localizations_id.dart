@@ -6525,4 +6525,20 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => 'Sudah saya bandingkan';
+
+  @override
+  String get energyBudgetTitle => 'Penggunaan daya';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'Seberapa banyak baterai boleh dipakai koneksi. Hemat menjaga minimum saat tidak diisi daya.';
+
+  @override
+  String get energyBudgetBalanced => 'Seimbang';
+
+  @override
+  String get energyBudgetEco => 'Hemat: lebih banyak hanya saat mengisi daya';
+
+  @override
+  String get energyBudgetFast => 'Cepat';
 }

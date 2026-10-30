@@ -1728,5 +1728,10 @@
   "linkArchiveSavedWithFiles": "Disimpan di {path} dengan {count} file.",
   "contactKeysDifferTitle": "Kunci berbeda: verifikasi",
   "contactKeysDifferBody": "Perangkat ini mengenal kontak ini dengan kunci yang berbeda dari akun Anda. Bandingkan nomor keamanan dengan kontak lewat saluran lain.",
-  "contactKeysDifferConfirm": "Sudah saya bandingkan"
+  "contactKeysDifferConfirm": "Sudah saya bandingkan",
+  "energyBudgetTitle": "Penggunaan daya",
+  "energyBudgetSubtitle": "Seberapa banyak baterai boleh dipakai koneksi. Hemat menjaga minimum saat tidak diisi daya.",
+  "energyBudgetBalanced": "Seimbang",
+  "energyBudgetEco": "Hemat: lebih banyak hanya saat mengisi daya",
+  "energyBudgetFast": "Cepat"
 }

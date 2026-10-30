@@ -1728,5 +1728,10 @@
   "linkArchiveSavedWithFiles": "در {path} ذخیره شد، با {count} فایل.",
   "contactKeysDifferTitle": "کلیدها فرق دارند: بررسی کنید",
   "contactKeysDifferBody": "این دستگاه این مخاطب را با کلیدهایی غیر از کلیدهای حساب شما می‌شناخت. شماره امنیتی را از راه دیگری با او مقایسه کنید.",
-  "contactKeysDifferConfirm": "مقایسه کردم"
+  "contactKeysDifferConfirm": "مقایسه کردم",
+  "energyBudgetTitle": "مصرف انرژی",
+  "energyBudgetSubtitle": "اتصال‌ها چقدر از باتری مصرف کنند. حالت صرفه‌جویی هنگام بی‌شارژری حداقل را نگه می‌دارد.",
+  "energyBudgetBalanced": "متعادل",
+  "energyBudgetEco": "صرفه‌جویی: بیشتر فقط هنگام شارژ",
+  "energyBudgetFast": "سریع"
 }

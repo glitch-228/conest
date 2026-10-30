@@ -26336,6 +26336,29 @@ void main() {
   });
 
   group('Energy policy', () {
+    test(
+      'the Connectivity setting sets the budget the controller uses',
+      () async {
+        final controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Eco',
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.limited),
+        );
+        addTearDown(controller.dispose);
+        expect(controller.energyBudgetForTesting.pollFactor, 2);
+        await controller.setEnergyBudget(EnergyBudgetSetting.eco);
+        expect(controller.energyBudgetForTesting.maxExtraCopies, 0);
+        expect(controller.energyBudgetForTesting.hedgedBlocks, isFalse);
+        expect(controller.energyBudgetForTesting.pollFactor, greaterThan(2));
+        await controller.setEnergyBudget(EnergyBudgetSetting.fast);
+        expect(controller.energyBudgetForTesting.pollFactor, 1);
+        expect(
+          controller.identity!.connectivity.energyBudget,
+          EnergyBudgetSetting.fast,
+        );
+      },
+    );
+
     test('mains power and unmetered networks send on every route', () {
       const plugged = PowerState(hasBattery: true, charging: true);
       const desktop = PowerState(hasBattery: false);

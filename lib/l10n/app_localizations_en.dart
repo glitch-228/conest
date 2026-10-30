@@ -6529,4 +6529,20 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => 'I compared them';
+
+  @override
+  String get energyBudgetTitle => 'Power use';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'How much battery connections may use. Eco keeps the minimum while unplugged.';
+
+  @override
+  String get energyBudgetBalanced => 'Balanced';
+
+  @override
+  String get energyBudgetEco => 'Eco: more only while charging';
+
+  @override
+  String get energyBudgetFast => 'Fast';
 }
