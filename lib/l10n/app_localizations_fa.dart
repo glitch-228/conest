@@ -6481,7 +6481,7 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get linkArchiveExportWarning =>
-      'فایل رمزگذاری نشده است. هر کس آن را بگیرد می‌تواند این گفتگوها را بخواند. فقط جایی ذخیره کنید که اعتماد دارید.';
+      'فایل رمزگذاری نشده است. گفتگوهای قدیمی شما و نام و نشانی مخاطبان در آن است. هر کس آن را بگیرد می‌تواند آن‌ها را بخواند. فقط جایی ذخیره کنید که اعتماد دارید.';
 
   @override
   String linkArchiveSaved(String path) {
@@ -6494,4 +6494,27 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get linkArchiveDeleteConfirm =>
       'این گفتگوهای قدیمی برای همیشه حذف شوند؟';
+
+  @override
+  String get linkArchiveExportWithFiles => 'برون‌بری با فایل‌ها';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return 'فایل $name دیگر روی این دستگاه نیست.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'در $path ذخیره شد، با $count فایل.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'کلیدها فرق دارند: بررسی کنید';
+
+  @override
+  String get contactKeysDifferBody =>
+      'این دستگاه این مخاطب را با کلیدهایی غیر از کلیدهای حساب شما می‌شناخت. شماره امنیتی را از راه دیگری با او مقایسه کنید.';
+
+  @override
+  String get contactKeysDifferConfirm => 'مقایسه کردم';
 }

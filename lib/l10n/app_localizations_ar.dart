@@ -6606,7 +6606,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get linkArchiveExportWarning =>
-      'الملف غير مشفر. يستطيع أي شخص يحصل عليه قراءة هذه المحادثات. احفظه فقط حيث تثق.';
+      'الملف غير مشفر. يحتوي على محادثاتك القديمة وأسماء جهات الاتصال وعناوينهم. يستطيع أي شخص يحصل عليه قراءتها. احفظه فقط حيث تثق.';
 
   @override
   String linkArchiveSaved(String path) {
@@ -6618,4 +6618,27 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get linkArchiveDeleteConfirm => 'حذف هذه المحادثات القديمة نهائيًا؟';
+
+  @override
+  String get linkArchiveExportWithFiles => 'تصدير مع الملفات';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return 'الملف $name لم يعد على هذا الجهاز.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'تم الحفظ في $path مع $count ملفات.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'المفاتيح مختلفة: تحقق';
+
+  @override
+  String get contactKeysDifferBody =>
+      'عرف هذا الجهاز جهة الاتصال هذه بمفاتيح غير التي في حسابك. قارن رقم الأمان معها عبر قناة أخرى.';
+
+  @override
+  String get contactKeysDifferConfirm => 'قارنتها';
 }

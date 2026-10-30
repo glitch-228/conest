@@ -6477,7 +6477,7 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get linkArchiveExportWarning =>
-      'File ini tidak terenkripsi. Siapa pun yang memilikinya bisa membaca chat ini. Simpan hanya di tempat yang Anda percaya.';
+      'File ini tidak terenkripsi. Isinya chat lama Anda serta nama dan alamat kontak. Siapa pun yang memilikinya bisa membacanya. Simpan hanya di tempat yang Anda percaya.';
 
   @override
   String linkArchiveSaved(String path) {
@@ -6489,4 +6489,27 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get linkArchiveDeleteConfirm => 'Hapus chat lama ini selamanya?';
+
+  @override
+  String get linkArchiveExportWithFiles => 'Ekspor dengan file';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return '$name sudah tidak ada di perangkat ini.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'Disimpan di $path dengan $count file.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'Kunci berbeda: verifikasi';
+
+  @override
+  String get contactKeysDifferBody =>
+      'Perangkat ini mengenal kontak ini dengan kunci yang berbeda dari akun Anda. Bandingkan nomor keamanan dengan kontak lewat saluran lain.';
+
+  @override
+  String get contactKeysDifferConfirm => 'Sudah saya bandingkan';
 }

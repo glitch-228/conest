@@ -20679,6 +20679,269 @@ void main() {
       expect(again.linkArchives.map((a) => a.id), ['with-file']);
     });
 
+    test('archived files are never evicted (age or space pressure), keep '
+        'their references through a restart, open, and export with the '
+        'archive without secrets', () async {
+      final vault = _MemoryVaultStore();
+      final root = Directory.systemTemp.createTempSync('conest_arc_files_');
+      final out = Directory.systemTemp.createTempSync('conest_arc_out_');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+        if (out.existsSync()) out.deleteSync(recursive: true);
+      });
+      final first = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        vaultStore: vault,
+        attachmentRootProvider: () async => root,
+      );
+      final bobId = 'bob-device';
+      final hash = base64Encode(List<int>.filled(32, 7));
+      final attachment = AttachmentDescriptor(
+        id: 'archived-photo',
+        fileName: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        sizeBytes: 3,
+        chunkSize: 3,
+        chunkHashes: const [],
+        fileHashBase64: hash,
+        encryptionKeyBase64: 'FILE-KEY-MATERIAL',
+        createdAt: DateTime.utc(2026, 1, 1),
+      );
+      final bob = ContactRecord.fromJson({
+        'accountId': 'acc-bob',
+        'deviceId': bobId,
+        'alias': 'Bobby',
+        'displayName': 'Bob',
+        'bio': '',
+        'relayCapable': false,
+        'publicKeyBase64': base64Encode(List<int>.filled(32, 3)),
+        'routeHints': const <Object>[],
+        'safetyNumber': '1234',
+        'trustedAt': DateTime.utc(2026, 1, 1).toIso8601String(),
+        'bitchatInboxSecret': 'INBOX-SECRET-VALUE',
+        'matrixAddress': '@bob:example.org',
+      });
+      await first.addLinkArchiveForTesting(
+        LinkArchive(
+          id: 'with-file',
+          createdAt: DateTime.utc(2026, 1, 2),
+          contacts: [bob],
+          groups: const [],
+          conversations: [
+            ConversationRecord(
+              id: bobId,
+              kind: ConversationKind.direct,
+              peerDeviceId: bobId,
+              messages: [
+                ChatMessage(
+                  id: 'm-file',
+                  conversationId: bobId,
+                  senderDeviceId: bobId,
+                  recipientDeviceId: first.identity!.deviceId,
+                  body: 'a photo',
+                  outbound: false,
+                  state: DeliveryState.delivered,
+                  createdAt: DateTime.utc(2026, 1, 1),
+                  attachment: attachment,
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+      final cache = Directory('${root.path}/cache')
+        ..createSync(recursive: true);
+      final file = File('${cache.path}/${attachmentStorageKey('sha256:$hash')}')
+        ..writeAsBytesSync([1, 2, 3]);
+      // Four months old: past the age limit on every platform.
+      file.setLastModifiedSync(
+        DateTime.now().subtract(const Duration(days: 120)),
+      );
+      await first.markAttachmentExplicitlySaved('archived-photo');
+      await first.flushPendingChanges();
+      first.dispose();
+
+      final again = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        vaultStore: vault,
+        createIdentity: false,
+        attachmentRootProvider: () async => root,
+        // Nearly full, so space pressure would evict anything evictable.
+        storageCapacityProvider: (_) async =>
+            const StorageCapacity(freeBytes: 0, totalBytes: 1 << 30),
+      );
+      addTearDown(again.dispose);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(file.existsSync(), isTrue, reason: 'kept: it is archived');
+      expect(
+        again.cacheReferenceFor('archived-photo'),
+        isNotNull,
+        reason: 'the reference survives the start-up pruning',
+      );
+      expect(
+        again.cacheReferenceFor('archived-photo')!.explicitlySaved,
+        isTrue,
+        reason: 'and what the user chose for the file',
+      );
+      expect(again.attachmentAvailableLocally('archived-photo'), isTrue);
+      expect(
+        await again.attachmentCachePathFor('archived-photo'),
+        file.path,
+        reason: 'it can be found and opened',
+      );
+      await expectLater(
+        again.evictAttachment('archived-photo'),
+        throwsStateError,
+      );
+
+      // The export: secrets and keys stay out, addresses are in.
+      final text = utf8.decode(again.exportLinkArchive('with-file'));
+      expect(text, contains('@bob:example.org'));
+      expect(text, contains('a photo'));
+      for (final secret in ['INBOX-SECRET-VALUE', 'FILE-KEY-MATERIAL']) {
+        expect(text, isNot(contains(secret)), reason: secret);
+      }
+      expect(text.toLowerCase(), isNot(contains('secret')));
+      final copied = await again.exportLinkArchiveWithFiles('with-file', out);
+      expect(copied, 1);
+      final exportedFiles = Directory('${out.path}/files').listSync();
+      expect(exportedFiles, hasLength(1));
+      expect(File(exportedFiles.single.path).readAsBytesSync(), [1, 2, 3]);
+      expect(
+        File('${out.path}/conest-old-chats.json').readAsStringSync(),
+        isNot(contains('INBOX-SECRET-VALUE')),
+      );
+      expect(
+        lookupAppLocalizations(const Locale('en')).linkArchiveExportWarning,
+        contains('addresses'),
+      );
+    });
+
+    test('a new Replace is refused when the archives are full, and nothing '
+        'is dropped silently', () async {
+      final (alice, bob, phone, _) = await withData();
+      for (var i = 0; i < 16; i++) {
+        await phone.addLinkArchiveForTesting(
+          LinkArchive(
+            id: 'old-$i',
+            createdAt: DateTime.utc(2026, 1, 1 + i),
+            contacts: const [],
+            groups: const [],
+            conversations: const [],
+          ),
+        );
+      }
+      await toTheChoice(alice, phone, [bob]);
+      await expectLater(
+        phone.completeLink(
+          const LinkChoice(mode: LinkMode.replace, confirmReplace: true),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Export or delete'),
+          ),
+        ),
+      );
+      expect(phone.linkArchives, hasLength(16));
+      expect(phone.linkArchives.first.id, 'old-0');
+      expect(phone.linkState, LinkState.chooseData, reason: 'may choose again');
+      // Merging does not need an archive.
+      await phone.completeLink(const LinkChoice());
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return phone.linkState == LinkState.linked;
+      }, reason: 'the device was not linked');
+    });
+
+    test('a choice that was delivered but whose send threw is kept, and the '
+        'grant that follows is applied', () async {
+      final (alice, bob, phone, _) = await withData();
+      await toTheChoice(alice, phone, [bob]);
+      phone.linkChoiceRetryDelay = const Duration(milliseconds: 10);
+      phone.linkAfterChoiceSendForTesting = () async =>
+          throw StateError('lost the acknowledgement');
+      // The send throws (maybe after the other device got the choice): the
+      // grant that follows must still be applied.
+      try {
+        await phone.completeLink(const LinkChoice());
+      } on StateError {
+        // Either the grant came first or both tries failed.
+      }
+      phone.linkAfterChoiceSendForTesting = null;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(phone.pollNow());
+        return phone.linkState == LinkState.linked;
+      }, reason: 'the grant that followed was dropped');
+      expect(phone.identity!.accountId, alice.identity!.accountId);
+    });
+
+    testWidgets('a contact whose keys differ from the account shows the mark '
+        'in its details, with the safety number, until it is compared', (
+      tester,
+    ) async {
+      late MessengerController alice;
+      late MessengerController bob;
+      await tester.runAsync(() async {
+        final network = _InProcessIrohNetwork();
+        final relay = _FakeRelayClient();
+        alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          transportRegistryFactory: network.registry,
+        );
+        bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          transportRegistryFactory: network.registry,
+        );
+        await _pairControllers(alice, bob);
+        alice.markContactKeysDifferForTesting(bob.identity!.deviceId);
+      });
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      tester.view.physicalSize = const Size(1200, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: alice,
+              builder: (context, _) => app.ContactProfileDialog(
+                fullscreenOnMobile: true,
+                controller: alice,
+                contact: alice.contacts.single,
+                palette: app.ConestPalette(),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('contact-keys-differ')), findsOneWidget);
+      expect(
+        find.text(alice.contacts.single.safetyNumber),
+        findsWidgets,
+        reason: 'the number to compare',
+      );
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const ValueKey('contact-keys-differ-ack')));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pump();
+      expect(find.byKey(const ValueKey('contact-keys-differ')), findsNothing);
+      expect(alice.contacts.single.accountKeysDiffer, isFalse);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
     test('cancelling at the choice changes neither side', () async {
       final (alice, bob, phone, _) = await withData();
       final phoneAccount = phone.identity!.accountId;

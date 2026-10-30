@@ -9534,7 +9534,7 @@
   "@linkArchiveExport": {
     "description": "Button: save the old chats to a plain file."
   },
-  "linkArchiveExportWarning": "The file is not encrypted. Anyone who gets it can read these chats. Save it only where you trust.",
+  "linkArchiveExportWarning": "The file is not encrypted. It holds your old chats and your contacts' names and addresses. Anyone who gets it can read them. Save it only where you trust.",
   "@linkArchiveExportWarning": {
     "description": "Warning before saving the old chats unencrypted."
   },
@@ -9554,5 +9554,42 @@
   "linkArchiveDeleteConfirm": "Delete these old chats for good?",
   "@linkArchiveDeleteConfirm": {
     "description": "Confirms deleting an archive."
+  },
+  "linkArchiveExportWithFiles": "Export with files",
+  "@linkArchiveExportWithFiles": {
+    "description": "Button: save the old chats and their files to a folder."
+  },
+  "linkArchiveFileMissing": "{name} is no longer on this device.",
+  "@linkArchiveFileMissing": {
+    "description": "Status: an archived file is gone.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "linkArchiveSavedWithFiles": "Saved to {path} with {count} files.",
+  "@linkArchiveSavedWithFiles": {
+    "description": "Status: the old chats and files were saved.",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "contactKeysDifferTitle": "Keys differ: verify",
+  "@contactKeysDifferTitle": {
+    "description": "Contact details: keys differ from the account."
+  },
+  "contactKeysDifferBody": "This device knew this contact under other keys than your account does. Compare the safety number with them through another channel.",
+  "@contactKeysDifferBody": {
+    "description": "Contact details: what to do."
+  },
+  "contactKeysDifferConfirm": "I compared them",
+  "@contactKeysDifferConfirm": {
+    "description": "Button: the user compared the safety numbers."
   }
 }

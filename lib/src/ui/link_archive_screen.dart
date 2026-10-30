@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../app_locales.dart';
+import '../attachment_safety.dart';
 import '../link/link_archive.dart';
 import '../messenger_controller.dart';
 import '../models.dart';
@@ -30,24 +31,48 @@ class _LinkArchiveScreenState extends State<LinkArchiveScreen> {
 
   Future<void> _export(LinkArchive archive) async {
     final l10n = l10nOf(context);
-    final yes = await showDialog<bool>(
+    // null: cancel, false: the chats only, true: with the files.
+    final withFiles = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         content: Text(l10n.linkArchiveExportWarning),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(context),
             child: Text(l10n.actionCancel),
+          ),
+          TextButton(
+            key: const ValueKey('archive-export-files-confirm'),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(l10n.linkArchiveExportWithFiles),
           ),
           FilledButton(
             key: const ValueKey('archive-export-confirm'),
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(context, false),
             child: Text(l10n.linkArchiveExport),
           ),
         ],
       ),
     );
-    if (yes != true || !mounted) return;
+    if (withFiles == null || !mounted) return;
+    if (withFiles) {
+      try {
+        final folder = await FilePicker.getDirectoryPath(
+          dialogTitle: l10n.linkArchiveExportWithFiles,
+        );
+        if (folder == null) return;
+        final copied = await widget.controller.exportLinkArchiveWithFiles(
+          archive.id,
+          Directory(folder),
+        );
+        widget.controller.setStatus(
+          l10n.linkArchiveSavedWithFiles(folder, copied),
+        );
+      } catch (error) {
+        widget.controller.setStatus('$error');
+      }
+      return;
+    }
     try {
       final bytes = widget.controller.exportLinkArchive(archive.id);
       final path = await FilePicker.saveFile(
@@ -126,6 +151,7 @@ class _LinkArchiveScreenState extends State<LinkArchiveScreen> {
                                     title: archive.nameOf(chat.peerDeviceId),
                                     messages: chat.messages,
                                     date: _date,
+                                    controller: widget.controller,
                                   ),
                                 ),
                               ),
@@ -160,11 +186,46 @@ class _ArchiveChatPage extends StatelessWidget {
     required this.title,
     required this.messages,
     required this.date,
+    required this.controller,
   });
 
   final String title;
   final List<ChatMessage> messages;
   final String Function(DateTime) date;
+  final MessengerController controller;
+
+  /// Opens the file of an archived message the way the chat bubbles do.
+  Future<void> _open(BuildContext context, AttachmentDescriptor file) async {
+    final l10n = l10nOf(context);
+    final path = await controller.attachmentCachePathFor(file.id);
+    if (path == null) {
+      controller.setStatus(l10n.linkArchiveFileMissing(file.fileName));
+      return;
+    }
+    try {
+      if (Platform.isAndroid) {
+        final kind = file.mimeType.startsWith('image/')
+            ? 'image'
+            : file.mimeType.startsWith('video/')
+            ? 'video'
+            : 'other';
+        await controller.platformBridge.saveMediaFileToGallery(
+          sourcePath: path,
+          fileName: sanitizeAttachmentFileName(file.fileName),
+          mimeType: file.mimeType,
+          kind: kind,
+        );
+      } else if (Platform.isLinux) {
+        await Process.start('xdg-open', [path]);
+      } else if (Platform.isMacOS) {
+        await Process.start('open', [path]);
+      } else if (Platform.isWindows) {
+        await Process.start('cmd', ['/c', 'start', '', path]);
+      }
+    } catch (error) {
+      controller.setStatus('$error');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -176,9 +237,12 @@ class _ArchiveChatPage extends StatelessWidget {
         itemCount: sorted.length,
         itemBuilder: (context, index) {
           final message = sorted[index];
-          final file = message.attachment?.fileName;
+          final attachment = message.attachment;
+          final file = attachment?.fileName;
           return ListTile(
+            key: ValueKey('archive-message-${message.id}'),
             dense: true,
+            onTap: attachment == null ? null : () => _open(context, attachment),
             title: Text(
               [if (message.body.isNotEmpty) message.body, ?file].join('\n'),
             ),

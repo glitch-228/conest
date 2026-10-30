@@ -1715,8 +1715,14 @@
   "linkArchiveEmpty": "Здесь ничего нет.",
   "linkArchiveSummary": "Чатов: {chats}, сообщений: {messages}",
   "linkArchiveExport": "Выгрузить в файл",
-  "linkArchiveExportWarning": "Файл не зашифрован. Любой, кто его получит, сможет прочитать эти чаты. Сохраняйте только там, где доверяете.",
+  "linkArchiveExportWarning": "Файл не зашифрован. В нём ваши старые чаты, а также имена и адреса контактов. Любой, кто его получит, сможет это прочитать. Сохраняйте только там, где доверяете.",
   "linkArchiveSaved": "Сохранено: {path}.",
   "linkArchiveDelete": "Удалить этот архив",
-  "linkArchiveDeleteConfirm": "Удалить эти старые чаты навсегда?"
+  "linkArchiveDeleteConfirm": "Удалить эти старые чаты навсегда?",
+  "linkArchiveExportWithFiles": "Экспорт с файлами",
+  "linkArchiveFileMissing": "Файла {name} больше нет на этом устройстве.",
+  "linkArchiveSavedWithFiles": "Сохранено в {path}, файлов: {count}.",
+  "contactKeysDifferTitle": "Ключи различаются: проверьте",
+  "contactKeysDifferBody": "Это устройство знало этот контакт с другими ключами, чем ваш аккаунт. Сверьте код безопасности с контактом по другому каналу.",
+  "contactKeysDifferConfirm": "Я сверил(а)"
 }

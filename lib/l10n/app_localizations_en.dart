@@ -6481,7 +6481,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkArchiveExportWarning =>
-      'The file is not encrypted. Anyone who gets it can read these chats. Save it only where you trust.';
+      'The file is not encrypted. It holds your old chats and your contacts\' names and addresses. Anyone who gets it can read them. Save it only where you trust.';
 
   @override
   String linkArchiveSaved(String path) {
@@ -6493,4 +6493,27 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get linkArchiveDeleteConfirm => 'Delete these old chats for good?';
+
+  @override
+  String get linkArchiveExportWithFiles => 'Export with files';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return '$name is no longer on this device.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'Saved to $path with $count files.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'Keys differ: verify';
+
+  @override
+  String get contactKeysDifferBody =>
+      'This device knew this contact under other keys than your account does. Compare the safety number with them through another channel.';
+
+  @override
+  String get contactKeysDifferConfirm => 'I compared them';
 }

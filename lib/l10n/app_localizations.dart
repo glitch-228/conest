@@ -10464,7 +10464,7 @@ abstract class AppLocalizations {
   /// Warning before saving the old chats unencrypted.
   ///
   /// In en, this message translates to:
-  /// **'The file is not encrypted. Anyone who gets it can read these chats. Save it only where you trust.'**
+  /// **'The file is not encrypted. It holds your old chats and your contacts\' names and addresses. Anyone who gets it can read them. Save it only where you trust.'**
   String get linkArchiveExportWarning;
 
   /// Status: the old chats were saved to a file.
@@ -10484,6 +10484,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Delete these old chats for good?'**
   String get linkArchiveDeleteConfirm;
+
+  /// Button: save the old chats and their files to a folder.
+  ///
+  /// In en, this message translates to:
+  /// **'Export with files'**
+  String get linkArchiveExportWithFiles;
+
+  /// Status: an archived file is gone.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} is no longer on this device.'**
+  String linkArchiveFileMissing(String name);
+
+  /// Status: the old chats and files were saved.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved to {path} with {count} files.'**
+  String linkArchiveSavedWithFiles(String path, int count);
+
+  /// Contact details: keys differ from the account.
+  ///
+  /// In en, this message translates to:
+  /// **'Keys differ: verify'**
+  String get contactKeysDifferTitle;
+
+  /// Contact details: what to do.
+  ///
+  /// In en, this message translates to:
+  /// **'This device knew this contact under other keys than your account does. Compare the safety number with them through another channel.'**
+  String get contactKeysDifferBody;
+
+  /// Button: the user compared the safety numbers.
+  ///
+  /// In en, this message translates to:
+  /// **'I compared them'**
+  String get contactKeysDifferConfirm;
 }
 
 class _AppLocalizationsDelegate

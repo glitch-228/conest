@@ -42,6 +42,56 @@ class LinkArchive {
     'groups': [for (final g in groups) g.toJson()],
   };
 
+  /// The archive for the export file: contacts with their names, public keys
+  /// and addresses only, and no secret or key material (not the inbox
+  /// secrets, route secrets, or the keys that open files). Anything named
+  /// like a secret is dropped wherever it is.
+  Map<String, dynamic> toExportJson() => _scrub({
+    'id': id,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    'contacts': [for (final c in contacts) _exportContact(c.toJson())],
+    'conversations': [for (final c in conversations) c.toJson()],
+    'groups': [for (final g in groups) g.toJson()],
+  });
+
+  static const _contactExportKeys = {
+    'accountId',
+    'deviceId',
+    'alias',
+    'displayName',
+    'bio',
+    'publicKeyBase64',
+    'signingPublicKeyBase64',
+    'accountKey',
+    'safetyNumber',
+    'irohEndpointId',
+    'matrixAddress',
+    'carrierAddresses',
+    'trustedAt',
+  };
+
+  static Map<String, dynamic> _exportContact(Map<String, dynamic> json) => {
+    for (final entry in json.entries)
+      if (_contactExportKeys.contains(entry.key)) entry.key: entry.value,
+  };
+
+  static final _secretName = RegExp(
+    r'secret|private|encryptionkey|token|password|seed',
+    caseSensitive: false,
+  );
+
+  static dynamic _scrub(dynamic value) {
+    if (value is Map) {
+      return {
+        for (final entry in value.entries)
+          if (!_secretName.hasMatch('${entry.key}'))
+            '${entry.key}': _scrub(entry.value),
+      };
+    }
+    if (value is List) return [for (final item in value) _scrub(item)];
+    return value;
+  }
+
   /// Null when [json] is not an archive this version can read.
   static LinkArchive? tryParse(Map<String, dynamic> json) {
     try {

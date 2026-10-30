@@ -1715,8 +1715,14 @@
   "linkArchiveEmpty": "لا شيء هنا.",
   "linkArchiveSummary": "{chats} محادثات، {messages} رسائل",
   "linkArchiveExport": "تصدير إلى ملف",
-  "linkArchiveExportWarning": "الملف غير مشفر. يستطيع أي شخص يحصل عليه قراءة هذه المحادثات. احفظه فقط حيث تثق.",
+  "linkArchiveExportWarning": "الملف غير مشفر. يحتوي على محادثاتك القديمة وأسماء جهات الاتصال وعناوينهم. يستطيع أي شخص يحصل عليه قراءتها. احفظه فقط حيث تثق.",
   "linkArchiveSaved": "تم الحفظ في {path}.",
   "linkArchiveDelete": "حذف هذا الأرشيف",
-  "linkArchiveDeleteConfirm": "حذف هذه المحادثات القديمة نهائيًا؟"
+  "linkArchiveDeleteConfirm": "حذف هذه المحادثات القديمة نهائيًا؟",
+  "linkArchiveExportWithFiles": "تصدير مع الملفات",
+  "linkArchiveFileMissing": "الملف {name} لم يعد على هذا الجهاز.",
+  "linkArchiveSavedWithFiles": "تم الحفظ في {path} مع {count} ملفات.",
+  "contactKeysDifferTitle": "المفاتيح مختلفة: تحقق",
+  "contactKeysDifferBody": "عرف هذا الجهاز جهة الاتصال هذه بمفاتيح غير التي في حسابك. قارن رقم الأمان معها عبر قناة أخرى.",
+  "contactKeysDifferConfirm": "قارنتها"
 }

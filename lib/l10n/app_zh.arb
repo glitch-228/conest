@@ -1715,8 +1715,14 @@
   "linkArchiveEmpty": "这里没有内容。",
   "linkArchiveSummary": "{chats} 个聊天，{messages} 条消息",
   "linkArchiveExport": "导出为文件",
-  "linkArchiveExportWarning": "文件未加密。任何拿到它的人都能阅读这些聊天。请只保存在你信任的地方。",
+  "linkArchiveExportWarning": "文件未加密。其中有你的旧聊天以及联系人的名字和地址。任何拿到它的人都能阅读。请只保存在你信任的地方。",
   "linkArchiveSaved": "已保存到 {path}。",
   "linkArchiveDelete": "删除此归档",
-  "linkArchiveDeleteConfirm": "永久删除这些旧聊天吗？"
+  "linkArchiveDeleteConfirm": "永久删除这些旧聊天吗？",
+  "linkArchiveExportWithFiles": "连同文件导出",
+  "linkArchiveFileMissing": "{name} 已不在此设备上。",
+  "linkArchiveSavedWithFiles": "已保存到 {path}，含 {count} 个文件。",
+  "contactKeysDifferTitle": "密钥不同：请验证",
+  "contactKeysDifferBody": "此设备所知的该联系人密钥与你的账户不同。请通过其他渠道与对方核对安全码。",
+  "contactKeysDifferConfirm": "我已核对"
 }

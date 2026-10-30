@@ -1715,8 +1715,14 @@
   "linkArchiveEmpty": "Tidak ada apa-apa di sini.",
   "linkArchiveSummary": "{chats} chat, {messages} pesan",
   "linkArchiveExport": "Ekspor ke file",
-  "linkArchiveExportWarning": "File ini tidak terenkripsi. Siapa pun yang memilikinya bisa membaca chat ini. Simpan hanya di tempat yang Anda percaya.",
+  "linkArchiveExportWarning": "File ini tidak terenkripsi. Isinya chat lama Anda serta nama dan alamat kontak. Siapa pun yang memilikinya bisa membacanya. Simpan hanya di tempat yang Anda percaya.",
   "linkArchiveSaved": "Disimpan ke {path}.",
   "linkArchiveDelete": "Hapus arsip ini",
-  "linkArchiveDeleteConfirm": "Hapus chat lama ini selamanya?"
+  "linkArchiveDeleteConfirm": "Hapus chat lama ini selamanya?",
+  "linkArchiveExportWithFiles": "Ekspor dengan file",
+  "linkArchiveFileMissing": "{name} sudah tidak ada di perangkat ini.",
+  "linkArchiveSavedWithFiles": "Disimpan di {path} dengan {count} file.",
+  "contactKeysDifferTitle": "Kunci berbeda: verifikasi",
+  "contactKeysDifferBody": "Perangkat ini mengenal kontak ini dengan kunci yang berbeda dari akun Anda. Bandingkan nomor keamanan dengan kontak lewat saluran lain.",
+  "contactKeysDifferConfirm": "Sudah saya bandingkan"
 }

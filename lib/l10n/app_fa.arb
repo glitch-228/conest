@@ -1715,8 +1715,14 @@
   "linkArchiveEmpty": "اینجا چیزی نیست.",
   "linkArchiveSummary": "{chats} گفتگو، {messages} پیام",
   "linkArchiveExport": "ذخیره در فایل",
-  "linkArchiveExportWarning": "فایل رمزگذاری نشده است. هر کس آن را بگیرد می‌تواند این گفتگوها را بخواند. فقط جایی ذخیره کنید که اعتماد دارید.",
+  "linkArchiveExportWarning": "فایل رمزگذاری نشده است. گفتگوهای قدیمی شما و نام و نشانی مخاطبان در آن است. هر کس آن را بگیرد می‌تواند آن‌ها را بخواند. فقط جایی ذخیره کنید که اعتماد دارید.",
   "linkArchiveSaved": "ذخیره شد در {path}.",
   "linkArchiveDelete": "حذف این آرشیو",
-  "linkArchiveDeleteConfirm": "این گفتگوهای قدیمی برای همیشه حذف شوند؟"
+  "linkArchiveDeleteConfirm": "این گفتگوهای قدیمی برای همیشه حذف شوند؟",
+  "linkArchiveExportWithFiles": "برون‌بری با فایل‌ها",
+  "linkArchiveFileMissing": "فایل {name} دیگر روی این دستگاه نیست.",
+  "linkArchiveSavedWithFiles": "در {path} ذخیره شد، با {count} فایل.",
+  "contactKeysDifferTitle": "کلیدها فرق دارند: بررسی کنید",
+  "contactKeysDifferBody": "این دستگاه این مخاطب را با کلیدهایی غیر از کلیدهای حساب شما می‌شناخت. شماره امنیتی را از راه دیگری با او مقایسه کنید.",
+  "contactKeysDifferConfirm": "مقایسه کردم"
 }

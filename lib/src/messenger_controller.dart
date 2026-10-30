@@ -9883,6 +9883,10 @@ class MessengerController extends ChangeNotifier {
       for (final conversation in _snapshot.conversations)
         for (final message in conversation.messages)
           if (message.attachment != null) message.attachment!.id,
+      // The chats this device gave up when it joined an account keep their
+      // files and the references that protect them.
+      for (final message in _archivedMessages)
+        if (message.attachment != null) message.attachment!.id,
     };
     final originalCacheReferenceCount =
         _snapshot.attachmentCacheReferences.length;
@@ -15295,7 +15299,31 @@ class MessengerController extends ChangeNotifier {
 
   AttachmentDescriptor? attachmentDescriptorFor(String attachmentId) =>
       messageForAttachment(attachmentId)?.attachment ??
+      _archivedMessageForAttachment(attachmentId)?.attachment ??
       _deltaAttachmentDescriptorFor(attachmentId);
+
+  /// The message of an old-chats archive that holds [attachmentId], so its
+  /// file can be found, opened and kept.
+  ChatMessage? _archivedMessageForAttachment(String attachmentId) {
+    for (final message in _archivedMessages) {
+      if (message.attachment?.id == attachmentId) return message;
+    }
+    return null;
+  }
+
+  /// Whether an old-chats archive holds this file, by id or by content.
+  bool _archiveHoldsAttachment(String attachmentId, String fileHashBase64) {
+    for (final message in _archivedMessages) {
+      final attachment = message.attachment;
+      if (attachment == null) continue;
+      if (attachment.id == attachmentId) return true;
+      if (fileHashBase64.isNotEmpty &&
+          attachment.fileHashBase64 == fileHashBase64) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   /// Makes [contactDeviceId] look like a build without [capability].
   @visibleForTesting
@@ -15783,6 +15811,9 @@ class MessengerController extends ChangeNotifier {
     references += _deltaAttachments
         .where((a) => a.fileHashBase64 == fileHashBase64)
         .length;
+    for (final message in _archivedMessages) {
+      if (message.attachment?.fileHashBase64 == fileHashBase64) references++;
+    }
     return references;
   }
 
@@ -15869,6 +15900,11 @@ class MessengerController extends ChangeNotifier {
         'This attachment is saved or marked Keep offline and cannot be evicted.',
       );
     }
+    if (_archiveHoldsAttachment(attachmentId, descriptor.fileHashBase64)) {
+      throw StateError(
+        'This file belongs to an archive of old chats and cannot be evicted.',
+      );
+    }
     if (active) {
       final activeStates = _snapshot.transferSessions
           .where(
@@ -15915,6 +15951,16 @@ class MessengerController extends ChangeNotifier {
           )
           .add(record);
     }
+    // The files of the archived old chats are never evicted, whatever their
+    // age, the cache size or the free space.
+    final archivedKeys = <String>{
+      for (final message in _archivedMessages)
+        if (message.attachment case final attachment?) ...[
+          attachmentStorageKey(attachment.id),
+          if (attachment.fileHashBase64.isNotEmpty)
+            attachmentStorageKey('sha256:${attachment.fileHashBase64}'),
+        ],
+    };
     final candidates =
         <
           ({
@@ -15932,6 +15978,7 @@ class MessengerController extends ChangeNotifier {
         if (entity is! File) continue;
         final stat = await entity.stat();
         total += stat.size;
+        if (archivedKeys.contains(p.basename(entity.path))) continue;
         final matching = <AttachmentCacheReference>[];
         for (final entry in recordsByHash.entries) {
           if (attachmentStorageKey('sha256:${entry.key}') ==
@@ -16082,6 +16129,11 @@ class MessengerController extends ChangeNotifier {
       final session = _transferSessionById(attachmentId);
       if (session != null && session.relativePath.isNotEmpty) {
         candidates.add(p.join(root.path, session.relativePath));
+      }
+      if (_archivedMessageForAttachment(attachmentId) != null) {
+        // The same message is also in an archive: its cache file stays.
+        candidates.remove(p.join(root.path, 'cache', key));
+        candidates.remove(p.join(root.path, 'cache', '$key.tmp'));
       }
       for (final path in candidates) {
         if (!isContainedPath(root.path, path)) continue;
@@ -34141,7 +34193,8 @@ class MessengerController extends ChangeNotifier {
     if (asNew != null) {
       if (asNew.done) return LinkState.linked;
       if (asNew.confirmed) {
-        return asNew.details != null && asNew.choice == null
+        return asNew.details != null &&
+                (asNew.choice == null || asNew.choiceFailed)
             ? LinkState.chooseData
             : LinkState.waitingForOtherDevice;
       }
@@ -34829,6 +34882,10 @@ class MessengerController extends ChangeNotifier {
     final bio = grant['bio'];
     final replacing = choice.mode == LinkMode.replace;
     if (replacing && !choice.confirmReplace) return;
+    if (replacing && _linkArchiveFull) {
+      setStatus(_linkArchiveFullMessage);
+      return;
+    }
     await linkApplyPauseForTesting?.call();
     // The link may have been cancelled or taken over while the proofs were
     // checked; from here on nothing waits, so nothing can change under it.
@@ -35099,8 +35156,14 @@ class MessengerController extends ChangeNotifier {
         link.details == null) {
       throw StateError('There is no link waiting for a choice.');
     }
-    if (link.choice != null) {
+    final retrying = link.choice != null && link.choiceFailed;
+    if (link.choice != null && !retrying) {
       throw StateError('This link already has its choice.');
+    }
+    if (retrying) {
+      // The choice was bound by the first try and may have arrived: it is
+      // told again as it was.
+      choice = link.choice!;
     }
     if (choice.mode == LinkMode.separateProfile) {
       throw StateError('Not available yet.');
@@ -35108,40 +35171,64 @@ class MessengerController extends ChangeNotifier {
     if (choice.mode == LinkMode.replace && !choice.confirmReplace) {
       throw StateError('Replacing needs a second confirmation.');
     }
+    if (choice.mode == LinkMode.replace && _linkArchiveFull) {
+      throw StateError(_linkArchiveFullMessage);
+    }
     if (_linkExpired(link.startedAt)) {
       cancelLink();
       throw StateError('The link took too long. Start again.');
     }
     link.choice = choice;
+    link.choiceFailed = false;
     notifyListeners();
-    try {
-      await _sendLinkMessage(
-        toDeviceId: offer.deviceId,
-        encryptionKeyBase64: offer.encryptionKeyBase64,
-        signingKeyBase64: offer.signingKeyBase64,
-        irohEndpointId: offer.irohEndpointId,
-        linkSecret: link.invitation.linkSecret,
-        purpose: 'choice',
-        body: {
-          'mode': choice.mode.name,
-          'settings': choice.settings.name,
-          'signature': await _crypto.signInstallationBytes(
-            _transcriptAsNew(
-              link,
-              offer,
-              'choice',
-              bodyHash: _linkChoiceHash(choice.mode.name, choice.settings.name),
+    Object? failure;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        await _sendLinkMessage(
+          toDeviceId: offer.deviceId,
+          encryptionKeyBase64: offer.encryptionKeyBase64,
+          signingKeyBase64: offer.signingKeyBase64,
+          irohEndpointId: offer.irohEndpointId,
+          linkSecret: link.invitation.linkSecret,
+          purpose: 'choice',
+          body: {
+            'mode': choice.mode.name,
+            'settings': choice.settings.name,
+            'signature': await _crypto.signInstallationBytes(
+              _transcriptAsNew(
+                link,
+                offer,
+                'choice',
+                bodyHash: _linkChoiceHash(
+                  choice.mode.name,
+                  choice.settings.name,
+                ),
+              ),
             ),
-          ),
-        },
-      );
-    } catch (_) {
-      // Not told: the user may choose again.
-      if (identical(_linkAsNew, link)) link.choice = null;
-      notifyListeners();
-      rethrow;
+          },
+        );
+        await linkAfterChoiceSendForTesting?.call();
+        return;
+      } catch (error) {
+        failure = error;
+        if (!identical(_linkAsNew, link) || link.done) return;
+        if (attempt == 0) await Future<void>.delayed(linkChoiceRetryDelay);
+      }
     }
+    // The choice stays: it may have been delivered, and the account that
+    // follows must still be applied. The user can tell it again.
+    if (identical(_linkAsNew, link)) link.choiceFailed = true;
+    notifyListeners();
+    throw failure!;
   }
+
+  @visibleForTesting
+  Duration linkChoiceRetryDelay = const Duration(milliseconds: 300);
+
+  /// Runs after the choice was sent; a test throws here to model a send that
+  /// failed after it was delivered.
+  @visibleForTesting
+  Future<void> Function()? linkAfterChoiceSendForTesting;
 
   @visibleForTesting
   Future<void> Function()? linkApplyPauseForTesting;
@@ -35166,6 +35253,14 @@ class MessengerController extends ChangeNotifier {
   }
 
   @visibleForTesting
+  void markContactKeysDifferForTesting(String deviceId) {
+    final contact = _contactByDeviceId(deviceId);
+    if (contact != null) {
+      _replaceContactRecord(contact.copyWith(accountKeysDiffer: true));
+    }
+  }
+
+  @visibleForTesting
   Future<void> addLinkArchiveForTesting(LinkArchive archive) async {
     _snapshot = _snapshot.copyWith(
       linkArchives: _withArchive(_snapshot.linkArchives, archive),
@@ -35178,17 +35273,69 @@ class MessengerController extends ChangeNotifier {
       LinkSharedSetting.values;
 
   /// What this device gave up when it replaced its chats, newest last.
-  List<LinkArchive> get linkArchives => [
-    for (final json in _snapshot.linkArchives)
-      ?LinkArchive.tryParse(json),
-  ];
+  List<LinkArchive> get linkArchives {
+    final source = _snapshot.linkArchives;
+    if (!identical(source, _linkArchivesParsedFrom)) {
+      _linkArchivesParsed = List.unmodifiable([
+        for (final json in source) ?LinkArchive.tryParse(json),
+      ]);
+      _linkArchivesParsedFrom = source;
+    }
+    return _linkArchivesParsed;
+  }
+
+  List<Map<String, dynamic>>? _linkArchivesParsedFrom;
+  List<LinkArchive> _linkArchivesParsed = const [];
 
   /// The archive as a plain JSON file, for the user to save. This is the only
-  /// way it leaves the vault; whoever holds the file can read the chats.
+  /// way it leaves the vault; whoever holds the file can read the chats and
+  /// the contacts' addresses. Secrets and keys beyond public keys stay out.
   Uint8List exportLinkArchive(String id) {
     final archive = linkArchives.where((a) => a.id == id).firstOrNull;
     if (archive == null) throw ArgumentError('There is no such archive.');
-    return Uint8List.fromList(utf8.encode(jsonEncode(archive.toJson())));
+    return Uint8List.fromList(utf8.encode(jsonEncode(archive.toExportJson())));
+  }
+
+  /// The export (see [exportLinkArchive]) and the archive's files that are
+  /// still on this device, into [target] (a folder the user chose): the JSON
+  /// file and a `files` folder. Returns how many files were copied.
+  Future<int> exportLinkArchiveWithFiles(String id, Directory target) async {
+    final json = exportLinkArchive(id);
+    final archive = linkArchives.firstWhere((a) => a.id == id);
+    await target.create(recursive: true);
+    await File(
+      p.join(target.path, 'conest-old-chats.json'),
+    ).writeAsBytes(json, flush: true);
+    final files = Directory(p.join(target.path, 'files'));
+    var copied = 0;
+    final seen = <String>{};
+    for (final conversation in archive.conversations) {
+      for (final message in conversation.messages) {
+        final attachment = message.attachment;
+        if (attachment == null || !seen.add(attachment.id)) continue;
+        final path = await attachmentCachePathFor(attachment.id);
+        if (path == null) continue;
+        await files.create(recursive: true);
+        final name = sanitizeAttachmentFileName(attachment.fileName);
+        await File(path).copy(
+          p.join(
+            files.path,
+            '${attachmentStorageKey(attachment.id).substring(0, 12)}-$name',
+          ),
+        );
+        copied++;
+      }
+    }
+    return copied;
+  }
+
+  /// Marks the keys this device holds for [deviceId] as compared with the
+  /// contact (the safety number, through another channel).
+  Future<void> acknowledgeContactKeysDiffer(String deviceId) async {
+    final contact = _contactByDeviceId(deviceId);
+    if (contact == null || !contact.accountKeysDiffer) return;
+    _replaceContactRecord(contact.copyWith(accountKeysDiffer: false));
+    await _saveSnapshotSilently(notify: true);
   }
 
   /// Removes an archive (and, at the next start, the files only it used).
@@ -35241,15 +35388,20 @@ class MessengerController extends ChangeNotifier {
     );
   }
 
+  /// An archive is never dropped silently: when [_maxLinkArchives] are kept,
+  /// a new Replace is refused until the user exports or deletes one.
+  bool get _linkArchiveFull =>
+      _snapshot.linkArchives.length >= _maxLinkArchives;
+
+  String get _linkArchiveFullMessage =>
+      'This device already keeps $_maxLinkArchives archives of old chats. '
+      'Export or delete one under Settings > Devices > This device\'s old '
+      'chats, then replace again.';
+
   List<Map<String, dynamic>> _withArchive(
     List<Map<String, dynamic>> archives,
     LinkArchive archive,
-  ) {
-    final all = [...archives, archive.toJson()];
-    return all.length <= _maxLinkArchives
-        ? all
-        : all.sublist(all.length - _maxLinkArchives);
-  }
+  ) => [...archives, archive.toJson()];
 
   /// The messages of the archives, whose files the cleanup must keep.
   Iterable<ChatMessage> get _archivedMessages sync* {
@@ -41406,6 +41558,10 @@ class _LinkAsNew {
 
   /// What the user chose (see [MessengerController.completeLink]); set once.
   LinkChoice? choice;
+
+  /// Telling the other device the choice failed; the choice stays bound and
+  /// is told again when the user retries (the first try may have arrived).
+  bool choiceFailed = false;
 
   /// A grant is being applied.
   bool applying = false;

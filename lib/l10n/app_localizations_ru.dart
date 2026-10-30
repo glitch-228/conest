@@ -6614,7 +6614,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get linkArchiveExportWarning =>
-      'Файл не зашифрован. Любой, кто его получит, сможет прочитать эти чаты. Сохраняйте только там, где доверяете.';
+      'Файл не зашифрован. В нём ваши старые чаты, а также имена и адреса контактов. Любой, кто его получит, сможет это прочитать. Сохраняйте только там, где доверяете.';
 
   @override
   String linkArchiveSaved(String path) {
@@ -6626,4 +6626,27 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get linkArchiveDeleteConfirm => 'Удалить эти старые чаты навсегда?';
+
+  @override
+  String get linkArchiveExportWithFiles => 'Экспорт с файлами';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return 'Файла $name больше нет на этом устройстве.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'Сохранено в $path, файлов: $count.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'Ключи различаются: проверьте';
+
+  @override
+  String get contactKeysDifferBody =>
+      'Это устройство знало этот контакт с другими ключами, чем ваш аккаунт. Сверьте код безопасности с контактом по другому каналу.';
+
+  @override
+  String get contactKeysDifferConfirm => 'Я сверил(а)';
 }

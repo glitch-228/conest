@@ -6198,7 +6198,8 @@ class AppLocalizationsZh extends AppLocalizations {
   String get linkArchiveExport => '导出为文件';
 
   @override
-  String get linkArchiveExportWarning => '文件未加密。任何拿到它的人都能阅读这些聊天。请只保存在你信任的地方。';
+  String get linkArchiveExportWarning =>
+      '文件未加密。其中有你的旧聊天以及联系人的名字和地址。任何拿到它的人都能阅读。请只保存在你信任的地方。';
 
   @override
   String linkArchiveSaved(String path) {
@@ -6210,4 +6211,26 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get linkArchiveDeleteConfirm => '永久删除这些旧聊天吗？';
+
+  @override
+  String get linkArchiveExportWithFiles => '连同文件导出';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return '$name 已不在此设备上。';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return '已保存到 $path，含 $count 个文件。';
+  }
+
+  @override
+  String get contactKeysDifferTitle => '密钥不同：请验证';
+
+  @override
+  String get contactKeysDifferBody => '此设备所知的该联系人密钥与你的账户不同。请通过其他渠道与对方核对安全码。';
+
+  @override
+  String get contactKeysDifferConfirm => '我已核对';
 }
