@@ -19,6 +19,8 @@ import 'group_call/group_call_media.dart';
 import 'group_call/group_call_policy.dart';
 import 'group_history_coordinator.dart';
 import 'group_history_event.dart';
+import 'link/link_archive.dart';
+import 'link/link_choice.dart';
 import 'group_file_manifest.dart';
 import 'group_file_crypto.dart';
 import 'group_file_download.dart';
@@ -9667,6 +9669,22 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+    // The chats a device gave up when it joined an account stay readable.
+    for (final message in _archivedMessages) {
+      final attachment = message.attachment;
+      if (attachment == null) continue;
+      cacheAttachmentIds
+          .putIfAbsent(attachmentStorageKey(attachment.id), () => <String>{})
+          .add(attachment.id);
+      if (attachment.fileHashBase64.isNotEmpty) {
+        cacheAttachmentIds
+            .putIfAbsent(
+              attachmentStorageKey('sha256:${attachment.fileHashBase64}'),
+              () => <String>{},
+            )
+            .add(attachment.id);
+      }
+    }
     _addDeltaCacheKeys(cacheAttachmentIds);
     final referencedCacheKeys = cacheAttachmentIds.keys.toSet();
     final referencedInternalPaths = <String>{
@@ -9895,6 +9913,10 @@ class MessengerController extends ChangeNotifier {
       for (final conversation in _snapshot.conversations)
         for (final message in conversation.messages)
           if (message.attachment != null) message.attachment!.id,
+      // The chats this device gave up when it joined an account keep their
+      // files and the references that protect them.
+      for (final message in _archivedMessages)
+        if (message.attachment != null) message.attachment!.id,
     };
     final originalCacheReferenceCount =
         _snapshot.attachmentCacheReferences.length;
@@ -15307,7 +15329,31 @@ class MessengerController extends ChangeNotifier {
 
   AttachmentDescriptor? attachmentDescriptorFor(String attachmentId) =>
       messageForAttachment(attachmentId)?.attachment ??
+      _archivedMessageForAttachment(attachmentId)?.attachment ??
       _deltaAttachmentDescriptorFor(attachmentId);
+
+  /// The message of an old-chats archive that holds [attachmentId], so its
+  /// file can be found, opened and kept.
+  ChatMessage? _archivedMessageForAttachment(String attachmentId) {
+    for (final message in _archivedMessages) {
+      if (message.attachment?.id == attachmentId) return message;
+    }
+    return null;
+  }
+
+  /// Whether an old-chats archive holds this file, by id or by content.
+  bool _archiveHoldsAttachment(String attachmentId, String fileHashBase64) {
+    for (final message in _archivedMessages) {
+      final attachment = message.attachment;
+      if (attachment == null) continue;
+      if (attachment.id == attachmentId) return true;
+      if (fileHashBase64.isNotEmpty &&
+          attachment.fileHashBase64 == fileHashBase64) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   /// Makes [contactDeviceId] look like a build without [capability].
   @visibleForTesting
@@ -15795,6 +15841,9 @@ class MessengerController extends ChangeNotifier {
     references += _deltaAttachments
         .where((a) => a.fileHashBase64 == fileHashBase64)
         .length;
+    for (final message in _archivedMessages) {
+      if (message.attachment?.fileHashBase64 == fileHashBase64) references++;
+    }
     return references;
   }
 
@@ -15881,6 +15930,11 @@ class MessengerController extends ChangeNotifier {
         'This attachment is saved or marked Keep offline and cannot be evicted.',
       );
     }
+    if (_archiveHoldsAttachment(attachmentId, descriptor.fileHashBase64)) {
+      throw StateError(
+        'This file belongs to an archive of old chats and cannot be evicted.',
+      );
+    }
     if (active) {
       final activeStates = _snapshot.transferSessions
           .where(
@@ -15927,6 +15981,16 @@ class MessengerController extends ChangeNotifier {
           )
           .add(record);
     }
+    // The files of the archived old chats are never evicted, whatever their
+    // age, the cache size or the free space.
+    final archivedKeys = <String>{
+      for (final message in _archivedMessages)
+        if (message.attachment case final attachment?) ...[
+          attachmentStorageKey(attachment.id),
+          if (attachment.fileHashBase64.isNotEmpty)
+            attachmentStorageKey('sha256:${attachment.fileHashBase64}'),
+        ],
+    };
     final candidates =
         <
           ({
@@ -15944,6 +16008,7 @@ class MessengerController extends ChangeNotifier {
         if (entity is! File) continue;
         final stat = await entity.stat();
         total += stat.size;
+        if (archivedKeys.contains(p.basename(entity.path))) continue;
         final matching = <AttachmentCacheReference>[];
         for (final entry in recordsByHash.entries) {
           if (attachmentStorageKey('sha256:${entry.key}') ==
@@ -16094,6 +16159,11 @@ class MessengerController extends ChangeNotifier {
       final session = _transferSessionById(attachmentId);
       if (session != null && session.relativePath.isNotEmpty) {
         candidates.add(p.join(root.path, session.relativePath));
+      }
+      if (_archivedMessageForAttachment(attachmentId) != null) {
+        // The same message is also in an archive: its cache file stays.
+        candidates.remove(p.join(root.path, 'cache', key));
+        candidates.remove(p.join(root.path, 'cache', '$key.tmp'));
       }
       for (final path in candidates) {
         if (!isContainedPath(root.path, path)) continue;
@@ -34162,7 +34232,12 @@ class MessengerController extends ChangeNotifier {
     final asNew = _linkAsNew;
     if (asNew != null) {
       if (asNew.done) return LinkState.linked;
-      if (asNew.confirmed) return LinkState.waitingForOtherDevice;
+      if (asNew.confirmed) {
+        return asNew.details != null &&
+                (asNew.choice == null || asNew.choiceFailed)
+            ? LinkState.chooseData
+            : LinkState.waitingForOtherDevice;
+      }
       return asNew.code == null
           ? LinkState.showingQrCode
           : LinkState.compareCode;
@@ -34283,6 +34358,8 @@ class MessengerController extends ChangeNotifier {
         'accountId': current.accountId,
         'accountKey': current.accountKeyPublicBase64,
         'name': current.displayName,
+        // Counts only: names and ids go after both codes matched.
+        'summary': _linkCountsForOffer(),
         'encryptionKey': current.publicKeyBase64,
         'signingKey': current.signingPublicKeyBase64,
         if (current.irohEndpointId != null)
@@ -34380,7 +34457,7 @@ class MessengerController extends ChangeNotifier {
     }
     asExisting.confirmedHere = true;
     notifyListeners();
-    if (asExisting.proof != null) await _sendLinkGrant(asExisting);
+    if (asExisting.proof != null) await _sendLinkSummary(asExisting);
   }
 
   Future<void> _sendLinkMessage({
@@ -34522,6 +34599,32 @@ class MessengerController extends ChangeNotifier {
         return;
       }
       final offer = asNew.offer;
+      if (sealed['purpose'] == 'summary' &&
+          asNew.confirmed &&
+          asNew.details == null &&
+          offer != null &&
+          envelope.senderDeviceId == offer.deviceId) {
+        final body = await open('summary', secret);
+        final details = body?['summary'];
+        if (body == null || details is! Map<String, dynamic>) return;
+        final bodyHash = base64Encode(
+          sha256Bytes(accountSigningBytes('link-summary-body', details)),
+        );
+        if (!await signedBy(
+              body['signature'],
+              offer.signingKeyBase64,
+              _transcriptAsNew(asNew, offer, 'summary', bodyHash: bodyHash),
+            ) ||
+            _linkAsNew != asNew ||
+            asNew.details != null) {
+          return;
+        }
+        asNew.details = details;
+        notifyListeners();
+        // Nothing of its own to decide about: joins the plain way.
+        if (!_hasLinkableData) await completeLink(const LinkChoice());
+        return;
+      }
       if (sealed['purpose'] == 'grant' &&
           asNew.confirmed &&
           offer != null &&
@@ -34616,15 +34719,82 @@ class MessengerController extends ChangeNotifier {
       }
       asExisting.proof = proof;
       notifyListeners();
-      if (asExisting.confirmedHere) await _sendLinkGrant(asExisting);
+      if (asExisting.confirmedHere) await _sendLinkSummary(asExisting);
+      return;
     }
+    if (sealed['purpose'] == 'choice' &&
+        asExisting.summarySent &&
+        !asExisting.chosen) {
+      final body = await open('choice', invitation.linkSecret);
+      final mode = body?['mode'];
+      final settings = body?['settings'];
+      if (body == null ||
+          mode is! String ||
+          settings is! String ||
+          !const {'merge', 'replace'}.contains(mode) ||
+          !const {'keepMine', 'takeAccount'}.contains(settings) ||
+          !await signedBy(
+            body['signature'],
+            invitation.signingKeyBase64,
+            _transcriptAsExisting(
+              asExisting,
+              'choice',
+              bodyHash: _linkChoiceHash(mode, settings),
+            ),
+          ) ||
+          asExisting.chosen ||
+          _linkAsExisting != asExisting) {
+        return;
+      }
+      asExisting.chosen = true;
+      notifyListeners();
+      await _sendLinkGrant(asExisting);
+    }
+  }
+
+  String _linkChoiceHash(String mode, String settings) => base64Encode(
+    sha256Bytes(
+      accountSigningBytes('link-choice-body', {
+        'mode': mode,
+        'settings': settings,
+      }),
+    ),
+  );
+
+  /// Both codes matched: tells the new device what this one holds, with
+  /// names and keys (sealed, signed). The account only goes to it after it
+  /// chose how its own data joins.
+  Future<void> _sendLinkSummary(_LinkAsExisting link) async {
+    if (link.summarySent || link.proof == null || !link.confirmedHere) return;
+    link.summarySent = true;
+    final invitation = link.invitation;
+    final details = _linkDetails();
+    final bodyHash = base64Encode(
+      sha256Bytes(accountSigningBytes('link-summary-body', details)),
+    );
+    await _sendLinkMessage(
+      toDeviceId: invitation.deviceId,
+      encryptionKeyBase64: invitation.encryptionKeyBase64,
+      signingKeyBase64: invitation.signingKeyBase64,
+      irohEndpointId: invitation.irohEndpointId,
+      linkSecret: invitation.linkSecret,
+      purpose: 'summary',
+      body: {
+        'summary': details,
+        'signature': await _crypto.signInstallationBytes(
+          _transcriptAsExisting(link, 'summary', bodyHash: bodyHash),
+        ),
+      },
+    );
   }
 
   /// Both sides confirmed: the new device joins the account, and gets the
   /// account (keys, device list, contacts), signed by this device.
   Future<void> _sendLinkGrant(_LinkAsExisting link) async {
     final proof = link.proof;
-    if (link.granted || proof == null || !link.confirmedHere) return;
+    if (link.granted || proof == null || !link.confirmedHere || !link.chosen) {
+      return;
+    }
     link.granted = true;
     final invitation = link.invitation;
     await addAccountDevice(
@@ -34644,6 +34814,7 @@ class MessengerController extends ChangeNotifier {
       'accountKeyPrivate': me.accountKeyPrivateBase64,
       'accountUpgrade': me.accountUpgrade,
       'accountDeviceList': me.accountDeviceList,
+      'settings': _sharedSettingsOf(me.connectivity),
       'contacts': [
         for (final contact in _snapshot.contacts)
           if (!contact.isArchived && !contact.ownDevice) contact.toJson(),
@@ -34677,7 +34848,23 @@ class MessengerController extends ChangeNotifier {
     _LinkOffer offer,
     Map<String, dynamic> grant,
   ) async {
-    if (link.done) return;
+    // One grant at a time, and only after this device chose what happens to
+    // its data: a grant that arrives without that choice is not taken.
+    if (link.done || link.applying || link.choice == null) return;
+    link.applying = true;
+    try {
+      await _applyLinkGrantNow(link, offer, grant, link.choice!);
+    } finally {
+      link.applying = false;
+    }
+  }
+
+  Future<void> _applyLinkGrantNow(
+    _LinkAsNew link,
+    _LinkOffer offer,
+    Map<String, dynamic> grant,
+    LinkChoice choice,
+  ) async {
     final me = _requireIdentity();
     // A device in another account is only moved out of it when the user
     // said so when the link started.
@@ -34733,8 +34920,52 @@ class MessengerController extends ChangeNotifier {
     }
     final displayName = grant['displayName'];
     final bio = grant['bio'];
+    final replacing = choice.mode == LinkMode.replace;
+    if (replacing && !choice.confirmReplace) return;
+    if (replacing && _linkArchiveFull) {
+      setStatus(_linkArchiveFullMessage);
+      return;
+    }
+    await linkApplyPauseForTesting?.call();
+    // The link may have been cancelled or taken over while the proofs were
+    // checked; from here on nothing waits, so nothing can change under it.
+    if (!identical(_linkAsNew, link) || link.done) return;
     link.done = true;
-    _snapshot = _snapshot.copyWith(
+    final granted = _dedupeContacts(contacts);
+    // Contacts both devices know with the same keys: the account's records
+    // replace this device's. Others (other keys, or only here) stay.
+    final replacedIds = <String>{
+      if (replacing)
+        for (final c in granted)
+          if (_contactByDeviceId(c.deviceId) case final known?
+              when !known.ownDevice &&
+                  !known.isHiddenDevice &&
+                  _sameKeys(known, c))
+            c.deviceId,
+    };
+    var snapshot = _snapshot;
+    if (replacing) {
+      final archive = _archiveForReplace(replacedIds, grant['groups']);
+      if (archive != null) {
+        snapshot = snapshot.copyWith(
+          conversations: [
+            for (final c in snapshot.conversations)
+              if (!(c.kind == ConversationKind.direct &&
+                  (replacedIds.contains(c.id) ||
+                      replacedIds.contains(c.peerDeviceId))))
+                c,
+          ],
+          linkArchives: _withArchive(snapshot.linkArchives, archive),
+        );
+      }
+    }
+    final keysDiffer = {
+      for (final c in granted)
+        if (_contactByDeviceId(c.deviceId) case final known?
+            when !known.ownDevice && !_sameKeys(known, c))
+          c.deviceId,
+    };
+    _snapshot = snapshot.copyWith(
       identity: me.copyWith(
         accountId: accountId as String,
         displayName: displayName is String && displayName.length <= 128
@@ -34751,9 +34982,32 @@ class MessengerController extends ChangeNotifier {
       // The account's contacts replace what this new device had, except the
       // details only this device chose.
       contacts: _dedupeContacts(
-        _mergeLinkedContacts(contacts, _snapshot.contacts),
+        _mergeLinkedContacts(
+          granted,
+          snapshot.contacts,
+          accountWinsAll: replacing,
+        ),
       ),
     );
+    if (choice.settings == LinkSettingsChoice.takeAccount &&
+        grant['settings'] is Map) {
+      final before = identity!.connectivity;
+      final next = _connectivityWithSharedValues(
+        before,
+        grant['settings'] as Map,
+      );
+      // Through the one path settings take, and not told on again: the
+      // account's devices have these values already.
+      _applyingSharedSettings = true;
+      try {
+        await updateGlobalConnectivity(next);
+      } finally {
+        _applyingSharedSettings = false;
+      }
+      if (before.irohTransferLimitEnabled && !next.irohTransferLimitEnabled) {
+        _resumeTransfersAfterIrohLimitLifted();
+      }
+    }
     _reconcileOwnDevices(vouchedDeviceId: offer.deviceId);
     if (grant['groups'] case final List raw) {
       for (final item in raw.take(_maxMirroredGroups)) {
@@ -34765,8 +35019,444 @@ class MessengerController extends ChangeNotifier {
     // one (it has them all).
     _requestHistoryFrom(offer.deviceId);
     await _saveSnapshotSilently(notify: true);
-    setStatus('This device is now linked to your account.');
+    final flagged = _snapshot.contacts
+        .where((c) => c.accountKeysDiffer && keysDiffer.contains(c.deviceId))
+        .length;
+    setStatus(
+      flagged == 0
+          ? 'This device is now linked to your account.'
+          : 'This device is now linked to your account. $flagged '
+                'contact${flagged == 1 ? ' has' : 's have'} other keys here '
+                'than in the account: verify ${flagged == 1 ? 'it' : 'them'}.',
+    );
     _advertiseProfileToContacts();
+  }
+
+  /// The account's general settings as another device sent them, onto
+  /// [base] (only known keys, with values they can have).
+  GlobalConnectivityPreferences _connectivityWithSharedValues(
+    GlobalConnectivityPreferences base,
+    Map values,
+  ) {
+    var next = base;
+    final preset = values['autoDownloadPreset'];
+    if (preset is String) {
+      final found = AutoDownloadPreset.values
+          .where((value) => value.name == preset)
+          .firstOrNull;
+      if (found != null) next = next.copyWith(autoDownloadPreset: found);
+    }
+    if (values['storageReserveEnabled'] case final bool value) {
+      next = next.copyWith(storageReserveEnabled: value);
+    }
+    if (values['irohTransferLimitEnabled'] case final bool value) {
+      next = next.copyWith(irohTransferLimitEnabled: value);
+    }
+    return next;
+  }
+
+  static const int _maxLinkSummaryItems = 256;
+  static const int _maxLinkArchives = 16;
+
+  int get _fileCount => _snapshot.conversations.fold(
+    0,
+    (sum, c) => sum + c.messages.where((m) => m.attachment != null).length,
+  );
+
+  /// The contacts a link tells about: accepted ones only. Pending, declined
+  /// and cancelled requests, replaced and removed contacts, and the hidden
+  /// device records never leave this device.
+  Iterable<ContactRecord> get _linkableContacts => _snapshot.contacts.where(
+    (c) =>
+        !c.isHiddenDevice &&
+        !c.isArchived &&
+        !c.pendingVerification &&
+        c.pairingState == ContactPairingState.accepted,
+  );
+
+  /// What this device holds, as counts only: this goes out with the offer,
+  /// before the codes were compared, so it names nothing.
+  Map<String, Object> _linkCountsForOffer() => {
+    'contacts': _linkableContacts.length,
+    'chats': _snapshot.conversations.where((c) => c.messages.isNotEmpty).length,
+    'groups': _snapshot.groups.where((g) => !g.isDissolved).length,
+    'files': _fileCount,
+  };
+
+  /// Names, ids and key fingerprints: sent sealed, after both codes matched
+  /// and this device confirmed.
+  Map<String, Object?> _linkDetails() => {
+    ..._linkCountsForOffer(),
+    'contactList': [
+      for (final c in _linkableContacts.take(_maxLinkSummaryItems))
+        [c.deviceId, cleanLinkName(c.alias), _keyFingerprint(c)],
+    ],
+    'groupList': [
+      for (final g
+          in _snapshot.groups
+              .where((g) => !g.isDissolved)
+              .take(_maxLinkSummaryItems))
+        [g.groupId, cleanLinkName(g.title)],
+    ],
+  };
+
+  /// A short fingerprint of a contact's keys, for comparing two records.
+  static String _keyFingerprint(ContactRecord c) {
+    final digest = sha256Bytes(
+      utf8.encode('${c.publicKeyBase64}|${c.signingPublicKeyBase64 ?? ''}'),
+    );
+    final hex = [
+      for (final byte in digest.take(6)) byte.toRadixString(16).padLeft(2, '0'),
+    ].join();
+    return '${hex.substring(0, 4)}-${hex.substring(4, 8)}-${hex.substring(8)}'
+        .toUpperCase();
+  }
+
+  static bool _sameKeys(ContactRecord a, ContactRecord b) =>
+      a.publicKeyBase64 == b.publicKeyBase64 &&
+      a.signingPublicKeyBase64 == b.signingPublicKeyBase64;
+
+  /// Whether this device holds anything the link could ask about.
+  bool get _hasLinkableData =>
+      _linkableContacts.isNotEmpty ||
+      _snapshot.groups.any((g) => !g.isDissolved) ||
+      _snapshot.conversations.any((c) => c.messages.isNotEmpty);
+
+  /// Both sides in short. Before the existing device sent its details only
+  /// the counts it offered are there; after, the conflicts: the same contact
+  /// under different names, with different keys, and groups on both sides.
+  LinkSummary linkSummary() {
+    final link = _linkAsNew;
+    final details = link?.details;
+    final account = details ?? link?.offer?.summary;
+    int count(Object? v) => v is int && v >= 0 ? v : 0;
+    List<List<String>> triples(Object? raw, int width) => [
+      if (raw is List)
+        for (final item in raw.take(_maxLinkSummaryItems))
+          if (item is List &&
+              item.length == width &&
+              item.every((e) => e is String))
+            [for (final e in item) e as String],
+    ];
+    final accountContacts = triples(account?['contactList'], 3);
+    final accountGroups = triples(account?['groupList'], 2);
+    final mine = {for (final c in _linkableContacts) c.deviceId: c};
+    final myGroups = {
+      for (final g in _snapshot.groups.where((g) => !g.isDissolved))
+        g.groupId: g.title,
+    };
+    return LinkSummary(
+      thisContacts: mine.length,
+      thisChats: _snapshot.conversations
+          .where((c) => c.messages.isNotEmpty)
+          .length,
+      thisGroups: myGroups.length,
+      thisFiles: _fileCount,
+      accountContacts: count(account?['contacts']),
+      accountChats: count(account?['chats']),
+      accountGroups: count(account?['groups']),
+      accountFiles: count(account?['files']),
+      detailed: details != null,
+      conflicts: [
+        for (final c in accountContacts)
+          if (mine[c[0]] case final known?)
+            if (_keyFingerprint(known) != c[2])
+              LinkConflict.keys(
+                id: c[0],
+                thisName: cleanLinkName(known.alias),
+                thisFingerprint: _keyFingerprint(known),
+                accountFingerprint: cleanLinkName(c[2]),
+              )
+            else if (known.alias != c[1])
+              LinkConflict.contact(
+                id: c[0],
+                thisName: cleanLinkName(known.alias),
+                accountName: cleanLinkName(c[1]),
+              ),
+        for (final g in accountGroups)
+          if (myGroups.containsKey(g[0]))
+            LinkConflict.group(
+              id: g[0],
+              thisName: cleanLinkName(myGroups[g[0]]!),
+            ),
+      ],
+    );
+  }
+
+  /// On the new device, once the existing device told what it holds: how
+  /// this device's data joins, handed over as one value. It is bound here,
+  /// told to the existing device (which only then sends the account), and
+  /// cannot be changed afterwards. Replacing needs [LinkChoice.confirmReplace].
+  Future<void> completeLink(LinkChoice choice) async {
+    final link = _linkAsNew;
+    final offer = link?.offer;
+    if (link == null ||
+        offer == null ||
+        !link.confirmed ||
+        link.details == null) {
+      throw StateError('There is no link waiting for a choice.');
+    }
+    final retrying = link.choice != null && link.choiceFailed;
+    if (link.choice != null && !retrying) {
+      throw StateError('This link already has its choice.');
+    }
+    if (retrying) {
+      // The choice was bound by the first try and may have arrived: it is
+      // told again as it was.
+      choice = link.choice!;
+    }
+    if (choice.mode == LinkMode.separateProfile) {
+      throw StateError('Not available yet.');
+    }
+    if (choice.mode == LinkMode.replace && !choice.confirmReplace) {
+      throw StateError('Replacing needs a second confirmation.');
+    }
+    if (choice.mode == LinkMode.replace && _linkArchiveFull) {
+      throw StateError(_linkArchiveFullMessage);
+    }
+    if (_linkExpired(link.startedAt)) {
+      cancelLink();
+      throw StateError('The link took too long. Start again.');
+    }
+    link.choice = choice;
+    link.choiceFailed = false;
+    notifyListeners();
+    Object? failure;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        await _sendLinkMessage(
+          toDeviceId: offer.deviceId,
+          encryptionKeyBase64: offer.encryptionKeyBase64,
+          signingKeyBase64: offer.signingKeyBase64,
+          irohEndpointId: offer.irohEndpointId,
+          linkSecret: link.invitation.linkSecret,
+          purpose: 'choice',
+          body: {
+            'mode': choice.mode.name,
+            'settings': choice.settings.name,
+            'signature': await _crypto.signInstallationBytes(
+              _transcriptAsNew(
+                link,
+                offer,
+                'choice',
+                bodyHash: _linkChoiceHash(
+                  choice.mode.name,
+                  choice.settings.name,
+                ),
+              ),
+            ),
+          },
+        );
+        await linkAfterChoiceSendForTesting?.call();
+        return;
+      } catch (error) {
+        failure = error;
+        if (!identical(_linkAsNew, link) || link.done) return;
+        if (attempt == 0) await Future<void>.delayed(linkChoiceRetryDelay);
+      }
+    }
+    // The choice stays: it may have been delivered, and the account that
+    // follows must still be applied. The user can tell it again.
+    if (identical(_linkAsNew, link)) link.choiceFailed = true;
+    notifyListeners();
+    throw failure!;
+  }
+
+  /// The choice already bound to this link when telling it failed: a retry
+  /// sends exactly this, so the screen shows it and cannot change it.
+  LinkChoice? get boundLinkChoice {
+    final link = _linkAsNew;
+    return link != null && link.choiceFailed ? link.choice : null;
+  }
+
+  @visibleForTesting
+  Duration linkChoiceRetryDelay = const Duration(milliseconds: 300);
+
+  /// Runs after the choice was sent; a test throws here to model a send that
+  /// failed after it was delivered.
+  @visibleForTesting
+  Future<void> Function()? linkAfterChoiceSendForTesting;
+
+  @visibleForTesting
+  Future<void> Function()? linkApplyPauseForTesting;
+
+  @visibleForTesting
+  Map<String, Object> linkCountsForOfferForTesting() => _linkCountsForOffer();
+
+  @visibleForTesting
+  Map<String, Object?> linkDetailsForTesting() => _linkDetails();
+
+  @visibleForTesting
+  void setContactPairingStateForTesting(
+    String deviceId,
+    ContactPairingState state,
+  ) {
+    _snapshot = _snapshot.copyWith(
+      contacts: [
+        for (final c in _snapshot.contacts)
+          c.deviceId == deviceId ? c.copyWith(pairingState: state) : c,
+      ],
+    );
+  }
+
+  @visibleForTesting
+  void markContactKeysDifferForTesting(String deviceId) {
+    final contact = _contactByDeviceId(deviceId);
+    if (contact != null) {
+      _replaceContactRecord(contact.copyWith(accountKeysDiffer: true));
+    }
+  }
+
+  @visibleForTesting
+  Future<void> addLinkArchiveForTesting(LinkArchive archive) async {
+    _snapshot = _snapshot.copyWith(
+      linkArchives: _withArchive(_snapshot.linkArchives, archive),
+    );
+    await _saveSnapshotSilently(notify: false);
+  }
+
+  /// The settings "take the account's settings" changes.
+  static const List<LinkSharedSetting> linkSharedSettings =
+      LinkSharedSetting.values;
+
+  /// What this device gave up when it replaced its chats, newest last.
+  List<LinkArchive> get linkArchives {
+    final source = _snapshot.linkArchives;
+    if (!identical(source, _linkArchivesParsedFrom)) {
+      _linkArchivesParsed = List.unmodifiable([
+        for (final json in source) ?LinkArchive.tryParse(json),
+      ]);
+      _linkArchivesParsedFrom = source;
+    }
+    return _linkArchivesParsed;
+  }
+
+  List<Map<String, dynamic>>? _linkArchivesParsedFrom;
+  List<LinkArchive> _linkArchivesParsed = const [];
+
+  /// The archive as a plain JSON file, for the user to save. This is the only
+  /// way it leaves the vault; whoever holds the file can read the chats and
+  /// the contacts' addresses. Secrets and keys beyond public keys stay out.
+  Uint8List exportLinkArchive(String id) {
+    final archive = linkArchives.where((a) => a.id == id).firstOrNull;
+    if (archive == null) throw ArgumentError('There is no such archive.');
+    return Uint8List.fromList(utf8.encode(jsonEncode(archive.toExportJson())));
+  }
+
+  /// The export (see [exportLinkArchive]) and the archive's files that are
+  /// still on this device, into [target] (a folder the user chose): the JSON
+  /// file and a `files` folder. Returns how many files were copied.
+  Future<int> exportLinkArchiveWithFiles(String id, Directory target) async {
+    final json = exportLinkArchive(id);
+    final archive = linkArchives.firstWhere((a) => a.id == id);
+    await target.create(recursive: true);
+    await File(
+      p.join(target.path, 'conest-old-chats.json'),
+    ).writeAsBytes(json, flush: true);
+    final files = Directory(p.join(target.path, 'files'));
+    var copied = 0;
+    final seen = <String>{};
+    for (final conversation in archive.conversations) {
+      for (final message in conversation.messages) {
+        final attachment = message.attachment;
+        if (attachment == null || !seen.add(attachment.id)) continue;
+        final path = await attachmentCachePathFor(attachment.id);
+        if (path == null) continue;
+        await files.create(recursive: true);
+        final name = sanitizeAttachmentFileName(attachment.fileName);
+        await File(path).copy(
+          p.join(
+            files.path,
+            '${attachmentStorageKey(attachment.id).substring(0, 12)}-$name',
+          ),
+        );
+        copied++;
+      }
+    }
+    return copied;
+  }
+
+  /// Marks the keys this device holds for [deviceId] as compared with the
+  /// contact (the safety number, through another channel).
+  Future<void> acknowledgeContactKeysDiffer(String deviceId) async {
+    final contact = _contactByDeviceId(deviceId);
+    if (contact == null || !contact.accountKeysDiffer) return;
+    _replaceContactRecord(contact.copyWith(accountKeysDiffer: false));
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// Removes an archive (and, at the next start, the files only it used).
+  Future<void> deleteLinkArchive(String id) async {
+    _snapshot = _snapshot.copyWith(
+      linkArchives: [
+        for (final json in _snapshot.linkArchives)
+          if (json['id'] != id) json,
+      ],
+    );
+    await _saveSnapshotSilently(notify: true);
+  }
+
+  /// What replacing takes away: the chats with the contacts in [replacedIds],
+  /// their full records, and the state of the groups the account shares.
+  /// Null when there is nothing to keep.
+  LinkArchive? _archiveForReplace(Set<String> replacedIds, Object? groupsRaw) {
+    final conversations = [
+      for (final c in _snapshot.conversations)
+        if (c.kind == ConversationKind.direct &&
+            (replacedIds.contains(c.id) ||
+                replacedIds.contains(c.peerDeviceId)) &&
+            c.messages.isNotEmpty)
+          c,
+    ];
+    final contacts = [
+      for (final c in _snapshot.contacts)
+        if (replacedIds.contains(c.deviceId) ||
+            (c.accountAnchorDeviceId != null &&
+                replacedIds.contains(c.accountAnchorDeviceId)))
+          c,
+    ];
+    final accountGroupIds = <String>{
+      if (groupsRaw is List)
+        for (final item in groupsRaw.take(_maxMirroredGroups))
+          if (item is Map && item['groupId'] is String)
+            item['groupId'] as String,
+    };
+    final groups = [
+      for (final g in _snapshot.groups)
+        if (accountGroupIds.contains(g.groupId)) g,
+    ];
+    if (conversations.isEmpty && contacts.isEmpty) return null;
+    return LinkArchive(
+      id: _randomId('arc'),
+      createdAt: _now().toUtc(),
+      contacts: contacts,
+      conversations: conversations,
+      groups: groups,
+    );
+  }
+
+  /// An archive is never dropped silently: when [_maxLinkArchives] are kept,
+  /// a new Replace is refused until the user exports or deletes one.
+  bool get _linkArchiveFull =>
+      _snapshot.linkArchives.length >= _maxLinkArchives;
+
+  String get _linkArchiveFullMessage =>
+      'This device already keeps $_maxLinkArchives archives of old chats. '
+      'Export or delete one under Settings > Devices > This device\'s old '
+      'chats, then replace again.';
+
+  List<Map<String, dynamic>> _withArchive(
+    List<Map<String, dynamic>> archives,
+    LinkArchive archive,
+  ) => [...archives, archive.toJson()];
+
+  /// The messages of the archives, whose files the cleanup must keep.
+  Iterable<ChatMessage> get _archivedMessages sync* {
+    for (final archive in linkArchives) {
+      for (final conversation in archive.conversations) {
+        yield* conversation.messages;
+      }
+    }
   }
 
   @visibleForTesting
@@ -34776,37 +35466,38 @@ class MessengerController extends ChangeNotifier {
   ) => _mergeLinkedContacts(granted, own);
 
   /// The account's [granted] contacts, each with this device's own alias
-  /// and routing choices where it knew the contact already, then the
-  /// contacts only this device has.
+  /// and routing choices where it knew the contact already (the same keys),
+  /// then the contacts only this device has. A contact this device knows
+  /// under other keys keeps this device's own record, marked
+  /// [ContactRecord.accountKeysDiffer]: the account's keys are never taken
+  /// silently. With [accountWinsAll] the account's record wins, names too
+  /// (for the same keys).
   List<ContactRecord> _mergeLinkedContacts(
     List<ContactRecord> granted,
-    List<ContactRecord> own,
-  ) {
+    List<ContactRecord> own, {
+    bool accountWinsAll = false,
+  }) {
     final mine = {for (final c in own) c.deviceId: c};
-    return [
-      for (final c in granted)
-        // Only when it is the same device (same keys): a different key
-        // under the same id keeps the account's record and its name.
-        if (mine[c.deviceId] case final known?
-            when !known.ownDevice &&
-                known.publicKeyBase64 == c.publicKeyBase64 &&
-                known.signingPublicKeyBase64 == c.signingPublicKeyBase64)
-          c.copyWith(
-            alias: known.alias,
-            routing: known.routing,
-            accountDeviceListVersion: max(
-              known.accountDeviceListVersion,
-              c.accountDeviceListVersion,
-            ),
-            accountRevokedDeviceIds: {
-              ...known.accountRevokedDeviceIds,
-              ...c.accountRevokedDeviceIds,
-            }.toList(),
-          )
-        else
-          c,
-      ...own,
-    ];
+    ContactRecord one(ContactRecord c) {
+      final known = mine[c.deviceId];
+      if (known == null || known.ownDevice) return c;
+      if (!_sameKeys(known, c)) return known.copyWith(accountKeysDiffer: true);
+      if (accountWinsAll) return c;
+      return c.copyWith(
+        alias: known.alias,
+        routing: known.routing,
+        accountDeviceListVersion: max(
+          known.accountDeviceListVersion,
+          c.accountDeviceListVersion,
+        ),
+        accountRevokedDeviceIds: {
+          ...known.accountRevokedDeviceIds,
+          ...c.accountRevokedDeviceIds,
+        }.toList(),
+      );
+    }
+
+    return [for (final c in granted) one(c), ...own];
   }
 
   /// The chat a contact's messages belong to: their main record's, for
@@ -40828,6 +41519,10 @@ enum LinkState {
   /// Confirmed here; waiting for the other device.
   waitingForOtherDevice,
 
+  /// Both codes matched and the existing device told what it holds: the new
+  /// device chooses how its data joins (see [MessengerController.completeLink]).
+  chooseData,
+
   /// Done.
   linked,
 
@@ -40845,7 +41540,11 @@ class _LinkOffer {
     required this.encryptionKeyBase64,
     required this.signingKeyBase64,
     this.irohEndpointId,
+    this.summary,
   });
+
+  /// What the offering device holds, in short (informational only).
+  final Map<String, dynamic>? summary;
 
   final String deviceId;
   final String accountId;
@@ -40891,6 +41590,9 @@ class _LinkOffer {
       encryptionKeyBase64: json['encryptionKey'] as String,
       signingKeyBase64: json['signingKey'] as String,
       irohEndpointId: iroh as String?,
+      summary: json['summary'] is Map<String, dynamic>
+          ? json['summary'] as Map<String, dynamic>
+          : null,
     );
   }
 }
@@ -40903,6 +41605,20 @@ class _LinkAsNew {
 
   /// The user confirmed that this device leaves the account it is in now.
   final bool mayLeaveAccount;
+
+  /// What the existing device told after both codes matched (names, ids,
+  /// key fingerprints).
+  Map<String, dynamic>? details;
+
+  /// What the user chose (see [MessengerController.completeLink]); set once.
+  LinkChoice? choice;
+
+  /// Telling the other device the choice failed; the choice stays bound and
+  /// is told again when the user retries (the first try may have arrived).
+  bool choiceFailed = false;
+
+  /// A grant is being applied.
+  bool applying = false;
   _LinkOffer? offer;
   String? nonce;
   String? code;
@@ -40921,6 +41637,10 @@ class _LinkAsExisting {
 
   /// The new device's confirmation: its proof of holding its keys.
   String? proof;
+
+  /// The details were sent; the account waits for the new device's choice.
+  bool summarySent = false;
+  bool chosen = false;
   bool granted = false;
 }
 

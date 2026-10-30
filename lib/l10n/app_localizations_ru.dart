@@ -6539,4 +6539,127 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get xmppOpenWebsite => 'Открыть сайт';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: контактов $contacts, чатов $chats, групп $groups, файлов $files';
+  }
+
+  @override
+  String get linkSideThisDevice => 'Это устройство';
+
+  @override
+  String get linkSideAccount => 'Аккаунт';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName здесь, $accountName в аккаунте';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'Группа $name есть и там и там';
+  }
+
+  @override
+  String get linkModeMerge => 'Объединить (рекомендуется)';
+
+  @override
+  String get linkModeMergeHint =>
+      'Обе стороны становятся данными аккаунта. У общих контактов остаются имена, которые вы дали здесь. Остальные контакты, чаты и группы этого устройства остаются.';
+
+  @override
+  String get linkModeReplace => 'Заменить данными аккаунта';
+
+  @override
+  String get linkModeReplaceHint =>
+      'Это устройство берёт чаты аккаунта и записи общих контактов. Его прежние чаты сохраняются в зашифрованном виде в Настройки > Устройства > Старые чаты.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'Чаты этого устройства с контактами, которые есть и в аккаунте, будут заменены чатами аккаунта. Старые можно читать в разделе «Старые чаты» и выгрузить в файл. Продолжить?';
+
+  @override
+  String get linkModeSeparate => 'Отдельный профиль (пока нет)';
+
+  @override
+  String get linkSettingsKeep => 'Оставить настройки этого устройства';
+
+  @override
+  String get linkSettingsTake => 'Взять настройки аккаунта';
+
+  @override
+  String get linkSettingsTakeList =>
+      'Настройки аккаунта меняют только: автозагрузку, резерв места и лимит передачи Iroh.';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name: здесь другие ключи, чем в аккаунте ($thisFingerprint здесь, $accountFingerprint в аккаунте). Это устройство оставляет свою запись; проверьте контакт.';
+  }
+
+  @override
+  String get devicesOldChats => 'Старые чаты этого устройства';
+
+  @override
+  String get devicesOldChatsHint =>
+      'Чаты, от которых устройство отказалось при входе в аккаунт. Только чтение.';
+
+  @override
+  String get linkArchiveEmpty => 'Здесь ничего нет.';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return 'Чатов: $chats, сообщений: $messages';
+  }
+
+  @override
+  String get linkArchiveExport => 'Выгрузить в файл';
+
+  @override
+  String get linkArchiveExportWarning =>
+      'Файл не зашифрован. В нём ваши старые чаты, а также имена и адреса контактов. Любой, кто его получит, сможет это прочитать. Сохраняйте только там, где доверяете.';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return 'Сохранено: $path.';
+  }
+
+  @override
+  String get linkArchiveDelete => 'Удалить этот архив';
+
+  @override
+  String get linkArchiveDeleteConfirm => 'Удалить эти старые чаты навсегда?';
+
+  @override
+  String get linkArchiveExportWithFiles => 'Экспорт с файлами';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return 'Файла $name больше нет на этом устройстве.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'Сохранено в $path, файлов: $count.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'Ключи различаются: проверьте';
+
+  @override
+  String get contactKeysDifferBody =>
+      'Это устройство знало этот контакт с другими ключами, чем ваш аккаунт. Сверьте код безопасности с контактом по другому каналу.';
+
+  @override
+  String get contactKeysDifferConfirm => 'Я сверил(а)';
 }

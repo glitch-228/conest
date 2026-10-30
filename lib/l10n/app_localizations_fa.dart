@@ -6406,4 +6406,128 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get xmppOpenWebsite => 'باز کردن وب‌سایت';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: $contacts مخاطب، $chats گفتگو، $groups گروه، $files فایل';
+  }
+
+  @override
+  String get linkSideThisDevice => 'این دستگاه';
+
+  @override
+  String get linkSideAccount => 'حساب';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName اینجا، $accountName در حساب';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'گروه $name در هر دو است';
+  }
+
+  @override
+  String get linkModeMerge => 'ادغام (پیشنهادی)';
+
+  @override
+  String get linkModeMergeHint =>
+      'هر دو طرف به داده‌های حساب تبدیل می‌شوند. مخاطبان مشترک نام‌هایی را که اینجا داده‌اید نگه می‌دارند. مخاطبان، گفتگوها و گروه‌های دیگر این دستگاه می‌مانند.';
+
+  @override
+  String get linkModeReplace => 'جایگزینی با داده‌های حساب';
+
+  @override
+  String get linkModeReplaceHint =>
+      'این دستگاه گفتگوهای حساب و اطلاعات مخاطبان مشترک را می‌گیرد. گفتگوهایی که کنار می‌گذارد رمزگذاری‌شده در تنظیمات > دستگاه‌ها > گفتگوهای قدیمی نگه داشته می‌شوند.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'گفتگوهای این دستگاه با مخاطبانی که در حساب هم هستند با گفتگوهای حساب جایگزین می‌شود. قدیمی‌ها در «گفتگوهای قدیمی» خواندنی می‌مانند و می‌توانید آن‌ها را در فایل ذخیره کنید. ادامه؟';
+
+  @override
+  String get linkModeSeparate => 'نمایه جدا (هنوز نه)';
+
+  @override
+  String get linkSettingsKeep => 'نگه داشتن تنظیمات این دستگاه';
+
+  @override
+  String get linkSettingsTake => 'گرفتن تنظیمات حساب';
+
+  @override
+  String get linkSettingsTakeList =>
+      'گرفتن تنظیمات حساب فقط اینها را تغییر می‌دهد: دانلود خودکار، ذخیره فضا و محدودیت انتقال Iroh.';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name: کلیدها اینجا با حساب فرق دارند ($thisFingerprint اینجا، $accountFingerprint در حساب). این دستگاه رکورد خودش را نگه می‌دارد؛ مخاطب را تأیید کنید.';
+  }
+
+  @override
+  String get devicesOldChats => 'گفتگوهای قدیمی این دستگاه';
+
+  @override
+  String get devicesOldChatsHint =>
+      'گفتگوهایی که این دستگاه هنگام پیوستن به حساب کنار گذاشت. فقط خواندنی.';
+
+  @override
+  String get linkArchiveEmpty => 'اینجا چیزی نیست.';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return '$chats گفتگو، $messages پیام';
+  }
+
+  @override
+  String get linkArchiveExport => 'ذخیره در فایل';
+
+  @override
+  String get linkArchiveExportWarning =>
+      'فایل رمزگذاری نشده است. گفتگوهای قدیمی شما و نام و نشانی مخاطبان در آن است. هر کس آن را بگیرد می‌تواند آن‌ها را بخواند. فقط جایی ذخیره کنید که اعتماد دارید.';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return 'ذخیره شد در $path.';
+  }
+
+  @override
+  String get linkArchiveDelete => 'حذف این آرشیو';
+
+  @override
+  String get linkArchiveDeleteConfirm =>
+      'این گفتگوهای قدیمی برای همیشه حذف شوند؟';
+
+  @override
+  String get linkArchiveExportWithFiles => 'برون‌بری با فایل‌ها';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return 'فایل $name دیگر روی این دستگاه نیست.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'در $path ذخیره شد، با $count فایل.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'کلیدها فرق دارند: بررسی کنید';
+
+  @override
+  String get contactKeysDifferBody =>
+      'این دستگاه این مخاطب را با کلیدهایی غیر از کلیدهای حساب شما می‌شناخت. شماره امنیتی را از راه دیگری با او مقایسه کنید.';
+
+  @override
+  String get contactKeysDifferConfirm => 'مقایسه کردم';
 }

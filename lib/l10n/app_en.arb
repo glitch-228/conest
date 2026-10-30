@@ -9420,5 +9420,192 @@
   "xmppOpenWebsite": "Open website",
   "@xmppOpenWebsite": {
     "description": "Settings, XMPP setup: button opening a server's sign-up website."
+  },
+  "linkSummaryLine": "{side}: {contacts} contacts, {chats} chats, {groups} groups, {files} files",
+  "@linkSummaryLine": {
+    "description": "Link choice: counts on one side.",
+    "placeholders": {
+      "side": {
+        "type": "String"
+      },
+      "contacts": {
+        "type": "int"
+      },
+      "chats": {
+        "type": "int"
+      },
+      "groups": {
+        "type": "int"
+      },
+      "files": {
+        "type": "int"
+      }
+    }
+  },
+  "linkSideThisDevice": "This device",
+  "@linkSideThisDevice": {
+    "description": "Link choice: this device."
+  },
+  "linkSideAccount": "The account",
+  "@linkSideAccount": {
+    "description": "Link choice: the account."
+  },
+  "linkConflictContact": "{thisName} here, {accountName} in the account",
+  "@linkConflictContact": {
+    "description": "Link choice: a contact with two names.",
+    "placeholders": {
+      "thisName": {
+        "type": "String"
+      },
+      "accountName": {
+        "type": "String"
+      }
+    }
+  },
+  "linkConflictGroup": "Group {name} is on both",
+  "@linkConflictGroup": {
+    "description": "Link choice: a group on both sides.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "linkModeMerge": "Merge (recommended)",
+  "@linkModeMerge": {
+    "description": "Link choice: merge."
+  },
+  "linkModeMergeHint": "Both sides become the account's. Contacts you both know keep the names you gave them here. This device's other contacts, chats and groups stay.",
+  "@linkModeMergeHint": {
+    "description": "Link choice: merge explained."
+  },
+  "linkModeReplace": "Replace with the account's data",
+  "@linkModeReplace": {
+    "description": "Link choice: replace."
+  },
+  "linkModeReplaceHint": "This device takes the account's chats and the records of the contacts you both know. The chats it gives up are kept, encrypted, in Settings > Devices > Old chats.",
+  "@linkModeReplaceHint": {
+    "description": "Link choice: replace explained."
+  },
+  "linkModeReplaceConfirm": "This device's chats with contacts the account also has will be replaced by the account's. The old ones stay readable in Old chats, and you can export them to a file. Continue?",
+  "@linkModeReplaceConfirm": {
+    "description": "Link choice: second confirmation for replace."
+  },
+  "linkModeSeparate": "Separate profile (not yet)",
+  "@linkModeSeparate": {
+    "description": "Link choice: separate profile, not yet."
+  },
+  "linkSettingsKeep": "Keep this device's settings",
+  "@linkSettingsKeep": {
+    "description": "Link choice: keep this device's settings."
+  },
+  "linkSettingsTake": "Take the account's settings",
+  "@linkSettingsTake": {
+    "description": "Link choice: take the account's settings."
+  },
+  "linkSettingsTakeList": "Taking the account's settings changes only: automatic downloads, storage reserve and the Iroh transfer limit.",
+  "@linkSettingsTakeList": {
+    "description": "Link choice: lists the settings that taking the account's settings changes."
+  },
+  "linkConflictKeys": "{name}: other keys here than in the account ({thisFingerprint} here, {accountFingerprint} in the account). This device keeps its own record; verify the contact.",
+  "@linkConflictKeys": {
+    "description": "Link choice: a contact with different keys on the two sides.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "thisFingerprint": {
+        "type": "String"
+      },
+      "accountFingerprint": {
+        "type": "String"
+      }
+    }
+  },
+  "devicesOldChats": "This device's old chats",
+  "@devicesOldChats": {
+    "description": "Settings > Devices: entry for the chats this device gave up when it joined an account."
+  },
+  "devicesOldChatsHint": "Chats this device gave up when it joined the account. Read only.",
+  "@devicesOldChatsHint": {
+    "description": "Explains the old chats entry."
+  },
+  "linkArchiveEmpty": "Nothing here.",
+  "@linkArchiveEmpty": {
+    "description": "Old chats screen: nothing archived."
+  },
+  "linkArchiveSummary": "{chats} chats, {messages} messages",
+  "@linkArchiveSummary": {
+    "description": "Old chats screen: counts of one archive.",
+    "placeholders": {
+      "chats": {
+        "type": "int"
+      },
+      "messages": {
+        "type": "int"
+      }
+    }
+  },
+  "linkArchiveExport": "Export to a file",
+  "@linkArchiveExport": {
+    "description": "Button: save the old chats to a plain file."
+  },
+  "linkArchiveExportWarning": "The file is not encrypted. It holds your old chats and your contacts' names and addresses. Anyone who gets it can read them. Save it only where you trust.",
+  "@linkArchiveExportWarning": {
+    "description": "Warning before saving the old chats unencrypted."
+  },
+  "linkArchiveSaved": "Saved to {path}.",
+  "@linkArchiveSaved": {
+    "description": "Status: the old chats were saved to a file.",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      }
+    }
+  },
+  "linkArchiveDelete": "Delete this archive",
+  "@linkArchiveDelete": {
+    "description": "Button: delete an archive of old chats."
+  },
+  "linkArchiveDeleteConfirm": "Delete these old chats for good?",
+  "@linkArchiveDeleteConfirm": {
+    "description": "Confirms deleting an archive."
+  },
+  "linkArchiveExportWithFiles": "Export with files",
+  "@linkArchiveExportWithFiles": {
+    "description": "Button: save the old chats and their files to a folder."
+  },
+  "linkArchiveFileMissing": "{name} is no longer on this device.",
+  "@linkArchiveFileMissing": {
+    "description": "Status: an archived file is gone.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "linkArchiveSavedWithFiles": "Saved to {path} with {count} files.",
+  "@linkArchiveSavedWithFiles": {
+    "description": "Status: the old chats and files were saved.",
+    "placeholders": {
+      "path": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "contactKeysDifferTitle": "Keys differ: verify",
+  "@contactKeysDifferTitle": {
+    "description": "Contact details: keys differ from the account."
+  },
+  "contactKeysDifferBody": "This device knew this contact under other keys than your account does. Compare the safety number with them through another channel.",
+  "@contactKeysDifferBody": {
+    "description": "Contact details: what to do."
+  },
+  "contactKeysDifferConfirm": "I compared them",
+  "@contactKeysDifferConfirm": {
+    "description": "Button: the user compared the safety numbers."
   }
 }

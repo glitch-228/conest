@@ -6406,4 +6406,127 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get xmppOpenWebsite => 'Open website';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: $contacts contacts, $chats chats, $groups groups, $files files';
+  }
+
+  @override
+  String get linkSideThisDevice => 'This device';
+
+  @override
+  String get linkSideAccount => 'The account';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName here, $accountName in the account';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'Group $name is on both';
+  }
+
+  @override
+  String get linkModeMerge => 'Merge (recommended)';
+
+  @override
+  String get linkModeMergeHint =>
+      'Both sides become the account\'s. Contacts you both know keep the names you gave them here. This device\'s other contacts, chats and groups stay.';
+
+  @override
+  String get linkModeReplace => 'Replace with the account\'s data';
+
+  @override
+  String get linkModeReplaceHint =>
+      'This device takes the account\'s chats and the records of the contacts you both know. The chats it gives up are kept, encrypted, in Settings > Devices > Old chats.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'This device\'s chats with contacts the account also has will be replaced by the account\'s. The old ones stay readable in Old chats, and you can export them to a file. Continue?';
+
+  @override
+  String get linkModeSeparate => 'Separate profile (not yet)';
+
+  @override
+  String get linkSettingsKeep => 'Keep this device\'s settings';
+
+  @override
+  String get linkSettingsTake => 'Take the account\'s settings';
+
+  @override
+  String get linkSettingsTakeList =>
+      'Taking the account\'s settings changes only: automatic downloads, storage reserve and the Iroh transfer limit.';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name: other keys here than in the account ($thisFingerprint here, $accountFingerprint in the account). This device keeps its own record; verify the contact.';
+  }
+
+  @override
+  String get devicesOldChats => 'This device\'s old chats';
+
+  @override
+  String get devicesOldChatsHint =>
+      'Chats this device gave up when it joined the account. Read only.';
+
+  @override
+  String get linkArchiveEmpty => 'Nothing here.';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return '$chats chats, $messages messages';
+  }
+
+  @override
+  String get linkArchiveExport => 'Export to a file';
+
+  @override
+  String get linkArchiveExportWarning =>
+      'The file is not encrypted. It holds your old chats and your contacts\' names and addresses. Anyone who gets it can read them. Save it only where you trust.';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return 'Saved to $path.';
+  }
+
+  @override
+  String get linkArchiveDelete => 'Delete this archive';
+
+  @override
+  String get linkArchiveDeleteConfirm => 'Delete these old chats for good?';
+
+  @override
+  String get linkArchiveExportWithFiles => 'Export with files';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return '$name is no longer on this device.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'Saved to $path with $count files.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'Keys differ: verify';
+
+  @override
+  String get contactKeysDifferBody =>
+      'This device knew this contact under other keys than your account does. Compare the safety number with them through another channel.';
+
+  @override
+  String get contactKeysDifferConfirm => 'I compared them';
 }

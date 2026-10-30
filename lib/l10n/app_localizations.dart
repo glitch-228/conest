@@ -10354,6 +10354,196 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Open website'**
   String get xmppOpenWebsite;
+
+  /// Link choice: counts on one side.
+  ///
+  /// In en, this message translates to:
+  /// **'{side}: {contacts} contacts, {chats} chats, {groups} groups, {files} files'**
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  );
+
+  /// Link choice: this device.
+  ///
+  /// In en, this message translates to:
+  /// **'This device'**
+  String get linkSideThisDevice;
+
+  /// Link choice: the account.
+  ///
+  /// In en, this message translates to:
+  /// **'The account'**
+  String get linkSideAccount;
+
+  /// Link choice: a contact with two names.
+  ///
+  /// In en, this message translates to:
+  /// **'{thisName} here, {accountName} in the account'**
+  String linkConflictContact(String thisName, String accountName);
+
+  /// Link choice: a group on both sides.
+  ///
+  /// In en, this message translates to:
+  /// **'Group {name} is on both'**
+  String linkConflictGroup(String name);
+
+  /// Link choice: merge.
+  ///
+  /// In en, this message translates to:
+  /// **'Merge (recommended)'**
+  String get linkModeMerge;
+
+  /// Link choice: merge explained.
+  ///
+  /// In en, this message translates to:
+  /// **'Both sides become the account\'s. Contacts you both know keep the names you gave them here. This device\'s other contacts, chats and groups stay.'**
+  String get linkModeMergeHint;
+
+  /// Link choice: replace.
+  ///
+  /// In en, this message translates to:
+  /// **'Replace with the account\'s data'**
+  String get linkModeReplace;
+
+  /// Link choice: replace explained.
+  ///
+  /// In en, this message translates to:
+  /// **'This device takes the account\'s chats and the records of the contacts you both know. The chats it gives up are kept, encrypted, in Settings > Devices > Old chats.'**
+  String get linkModeReplaceHint;
+
+  /// Link choice: second confirmation for replace.
+  ///
+  /// In en, this message translates to:
+  /// **'This device\'s chats with contacts the account also has will be replaced by the account\'s. The old ones stay readable in Old chats, and you can export them to a file. Continue?'**
+  String get linkModeReplaceConfirm;
+
+  /// Link choice: separate profile, not yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Separate profile (not yet)'**
+  String get linkModeSeparate;
+
+  /// Link choice: keep this device's settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep this device\'s settings'**
+  String get linkSettingsKeep;
+
+  /// Link choice: take the account's settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Take the account\'s settings'**
+  String get linkSettingsTake;
+
+  /// Link choice: lists the settings that taking the account's settings changes.
+  ///
+  /// In en, this message translates to:
+  /// **'Taking the account\'s settings changes only: automatic downloads, storage reserve and the Iroh transfer limit.'**
+  String get linkSettingsTakeList;
+
+  /// Link choice: a contact with different keys on the two sides.
+  ///
+  /// In en, this message translates to:
+  /// **'{name}: other keys here than in the account ({thisFingerprint} here, {accountFingerprint} in the account). This device keeps its own record; verify the contact.'**
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  );
+
+  /// Settings > Devices: entry for the chats this device gave up when it joined an account.
+  ///
+  /// In en, this message translates to:
+  /// **'This device\'s old chats'**
+  String get devicesOldChats;
+
+  /// Explains the old chats entry.
+  ///
+  /// In en, this message translates to:
+  /// **'Chats this device gave up when it joined the account. Read only.'**
+  String get devicesOldChatsHint;
+
+  /// Old chats screen: nothing archived.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing here.'**
+  String get linkArchiveEmpty;
+
+  /// Old chats screen: counts of one archive.
+  ///
+  /// In en, this message translates to:
+  /// **'{chats} chats, {messages} messages'**
+  String linkArchiveSummary(int chats, int messages);
+
+  /// Button: save the old chats to a plain file.
+  ///
+  /// In en, this message translates to:
+  /// **'Export to a file'**
+  String get linkArchiveExport;
+
+  /// Warning before saving the old chats unencrypted.
+  ///
+  /// In en, this message translates to:
+  /// **'The file is not encrypted. It holds your old chats and your contacts\' names and addresses. Anyone who gets it can read them. Save it only where you trust.'**
+  String get linkArchiveExportWarning;
+
+  /// Status: the old chats were saved to a file.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved to {path}.'**
+  String linkArchiveSaved(String path);
+
+  /// Button: delete an archive of old chats.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete this archive'**
+  String get linkArchiveDelete;
+
+  /// Confirms deleting an archive.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete these old chats for good?'**
+  String get linkArchiveDeleteConfirm;
+
+  /// Button: save the old chats and their files to a folder.
+  ///
+  /// In en, this message translates to:
+  /// **'Export with files'**
+  String get linkArchiveExportWithFiles;
+
+  /// Status: an archived file is gone.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} is no longer on this device.'**
+  String linkArchiveFileMissing(String name);
+
+  /// Status: the old chats and files were saved.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved to {path} with {count} files.'**
+  String linkArchiveSavedWithFiles(String path, int count);
+
+  /// Contact details: keys differ from the account.
+  ///
+  /// In en, this message translates to:
+  /// **'Keys differ: verify'**
+  String get contactKeysDifferTitle;
+
+  /// Contact details: what to do.
+  ///
+  /// In en, this message translates to:
+  /// **'This device knew this contact under other keys than your account does. Compare the safety number with them through another channel.'**
+  String get contactKeysDifferBody;
+
+  /// Button: the user compared the safety numbers.
+  ///
+  /// In en, this message translates to:
+  /// **'I compared them'**
+  String get contactKeysDifferConfirm;
 }
 
 class _AppLocalizationsDelegate

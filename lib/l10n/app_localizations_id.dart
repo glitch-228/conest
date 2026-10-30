@@ -6402,4 +6402,127 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get xmppOpenWebsite => 'Buka situs';
+
+  @override
+  String linkSummaryLine(
+    String side,
+    int contacts,
+    int chats,
+    int groups,
+    int files,
+  ) {
+    return '$side: $contacts kontak, $chats obrolan, $groups grup, $files berkas';
+  }
+
+  @override
+  String get linkSideThisDevice => 'Perangkat ini';
+
+  @override
+  String get linkSideAccount => 'Akun';
+
+  @override
+  String linkConflictContact(String thisName, String accountName) {
+    return '$thisName di sini, $accountName di akun';
+  }
+
+  @override
+  String linkConflictGroup(String name) {
+    return 'Grup $name ada di keduanya';
+  }
+
+  @override
+  String get linkModeMerge => 'Gabungkan (disarankan)';
+
+  @override
+  String get linkModeMergeHint =>
+      'Kedua sisi menjadi milik akun. Kontak yang sama tetap memakai nama yang Anda beri di sini. Kontak, chat, dan grup lain di perangkat ini tetap ada.';
+
+  @override
+  String get linkModeReplace => 'Ganti dengan data akun';
+
+  @override
+  String get linkModeReplaceHint =>
+      'Perangkat ini mengambil chat akun dan data kontak yang sama-sama dikenal. Chat yang dilepas disimpan terenkripsi di Pengaturan > Perangkat > Chat lama.';
+
+  @override
+  String get linkModeReplaceConfirm =>
+      'Chat perangkat ini dengan kontak yang juga ada di akun akan diganti dengan chat akun. Yang lama tetap bisa dibaca di Chat lama dan bisa diekspor ke file. Lanjutkan?';
+
+  @override
+  String get linkModeSeparate => 'Profil terpisah (belum)';
+
+  @override
+  String get linkSettingsKeep => 'Pertahankan pengaturan perangkat ini';
+
+  @override
+  String get linkSettingsTake => 'Ambil pengaturan akun';
+
+  @override
+  String get linkSettingsTakeList =>
+      'Mengambil pengaturan akun hanya mengubah: unduhan otomatis, cadangan penyimpanan, dan batas transfer Iroh.';
+
+  @override
+  String linkConflictKeys(
+    String name,
+    String thisFingerprint,
+    String accountFingerprint,
+  ) {
+    return '$name: kunci di sini berbeda dari akun ($thisFingerprint di sini, $accountFingerprint di akun). Perangkat ini menyimpan catatannya sendiri; verifikasi kontaknya.';
+  }
+
+  @override
+  String get devicesOldChats => 'Chat lama perangkat ini';
+
+  @override
+  String get devicesOldChatsHint =>
+      'Chat yang dilepas perangkat ini saat bergabung ke akun. Hanya baca.';
+
+  @override
+  String get linkArchiveEmpty => 'Tidak ada apa-apa di sini.';
+
+  @override
+  String linkArchiveSummary(int chats, int messages) {
+    return '$chats chat, $messages pesan';
+  }
+
+  @override
+  String get linkArchiveExport => 'Ekspor ke file';
+
+  @override
+  String get linkArchiveExportWarning =>
+      'File ini tidak terenkripsi. Isinya chat lama Anda serta nama dan alamat kontak. Siapa pun yang memilikinya bisa membacanya. Simpan hanya di tempat yang Anda percaya.';
+
+  @override
+  String linkArchiveSaved(String path) {
+    return 'Disimpan ke $path.';
+  }
+
+  @override
+  String get linkArchiveDelete => 'Hapus arsip ini';
+
+  @override
+  String get linkArchiveDeleteConfirm => 'Hapus chat lama ini selamanya?';
+
+  @override
+  String get linkArchiveExportWithFiles => 'Ekspor dengan file';
+
+  @override
+  String linkArchiveFileMissing(String name) {
+    return '$name sudah tidak ada di perangkat ini.';
+  }
+
+  @override
+  String linkArchiveSavedWithFiles(String path, int count) {
+    return 'Disimpan di $path dengan $count file.';
+  }
+
+  @override
+  String get contactKeysDifferTitle => 'Kunci berbeda: verifikasi';
+
+  @override
+  String get contactKeysDifferBody =>
+      'Perangkat ini mengenal kontak ini dengan kunci yang berbeda dari akun Anda. Bandingkan nomor keamanan dengan kontak lewat saluran lain.';
+
+  @override
+  String get contactKeysDifferConfirm => 'Sudah saya bandingkan';
 }
