@@ -160,6 +160,22 @@ class RouteStriper<R> {
     state.restingUntil = _now().add(rest > _maxRest ? _maxRest : rest);
   }
 
+  /// The block was not needed after all (it came another way, or the
+  /// transfer ended): [lease]'s route is neither credited nor blamed.
+  void cancelled(StripeLease<R> lease) {
+    _end(lease);
+  }
+
+  /// [route] was heard from outside any block of its own (a block that
+  /// arrived after its ask was forgotten): it no longer rests.
+  void heardFrom(R route) {
+    final state = _state(route);
+    state.restingUntil = null;
+    state.lateUntil = null;
+    state.failures = 0;
+    state.lastSuccessAt = _now();
+  }
+
   bool _end(StripeLease<R> lease) {
     if (lease._ended) return false;
     lease._ended = true;

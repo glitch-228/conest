@@ -83,6 +83,7 @@ import 'package:conest/src/email/carrier_mail.dart' show maxCarrierMailBytes;
 import 'package:conest/src/email/delta_content.dart';
 import 'package:conest/src/email/pgp.dart';
 import 'package:conest/src/content_routing.dart';
+import 'package:conest/src/transfer/block_sources.dart';
 import 'package:conest/src/transfer/own_device_sync_policy.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/network_history.dart';
@@ -22722,6 +22723,310 @@ void main() {
           await File((await phone.attachmentCachePathFor(id))!).readAsBytes(),
           bytes,
         );
+      });
+
+      group('one file from several sources', () {
+        /// The laptop and two more devices of the account (the phone and
+        /// the tablet), and Bob, who sends a 9 MiB file (three blocks) to
+        /// the account. The laptop has the file; the phone and the tablet
+        /// wait for the user, each with the laptop as the device to fetch
+        /// it from.
+        Future<
+          ({
+            MessengerController laptop,
+            MessengerController bob,
+            MessengerController phone,
+            MessengerController tablet,
+            _InProcessIrohNetwork network,
+            _FakeRelayClient relay,
+            String id,
+            Uint8List bytes,
+          })
+        >
+        accountWithTwoWaiting() async {
+          final network = _InProcessIrohNetwork();
+          final relay = _FakeRelayClient();
+          var now = DateTime.now().toUtc();
+          Future<MessengerController> make(String name) async {
+            final controller = await _createController(
+              relayClient: relay,
+              displayName: name,
+              transportRegistryFactory: network.registry,
+              nowProvider: () => now,
+            );
+            addTearDown(controller.dispose);
+            return controller;
+          }
+
+          final laptop = await make('Alice');
+          final bob = await make('Bob');
+          final phone = await make('Phone');
+          final tablet = await make('Tablet');
+          final all = [laptop, bob, phone, tablet];
+          Future<void> pollAll() async {
+            for (final c in all) {
+              unawaited(c.pollNow());
+            }
+          }
+
+          await _pairControllers(laptop, bob);
+          for (final newDevice in [phone, tablet]) {
+            final qr = await newDevice.startLinkAsNewDevice();
+            await laptop.startLinkFromQrCode(qr);
+            await _waitForIroh(
+              () => newDevice.linkCode != null && laptop.linkCode != null,
+            );
+            await newDevice.confirmLinkCode();
+            await laptop.confirmLinkCode();
+            final deviceId = newDevice.identity!.deviceId;
+            await _waitForIroh(() {
+              unawaited(pollAll());
+              return newDevice.linkState == LinkState.linked &&
+                  laptop.ownDevices.any((d) => d.deviceId == deviceId);
+            }, reason: 'a device was not linked');
+          }
+          await _waitForIroh(
+            () {
+              unawaited(pollAll());
+              return phone.ownDevices.length == 2 &&
+                  tablet.ownDevices.length == 2;
+            },
+            reason: 'the devices did not learn of each other',
+            timeout: const Duration(seconds: 30),
+          );
+          for (final waiting in [phone, tablet]) {
+            await waiting.updateGlobalConnectivity(
+              waiting.identity!.connectivity.copyWith(
+                autoDownloadPreset: AutoDownloadPreset.custom,
+              ),
+            );
+          }
+          final bobId = bob.identity!.deviceId;
+          final bytes = Uint8List(9 * 1024 * 1024);
+          for (var i = 0; i < bytes.length; i += 3) {
+            bytes[i] = (i * 131 + (i >> 9)) & 0xff;
+          }
+          await bob.sendAttachment(
+            contact: bob.contacts.single,
+            bytes: bytes,
+            fileName: 'big.bin',
+          );
+          String? id;
+          await _waitForIroh(
+            () {
+              unawaited(pollAll());
+              final m = laptop
+                  .messagesFor(bobId)
+                  .where((m) => m.attachment?.fileName == 'big.bin')
+                  .firstOrNull;
+              id = m?.attachment?.id;
+              if (id != null && laptop.attachmentAwaitingAcceptance(id!)) {
+                unawaited(laptop.acceptIncomingAttachment(id!));
+              }
+              return id != null && laptop.attachmentAvailableLocally(id!);
+            },
+            reason: 'the laptop did not get the file',
+            timeout: const Duration(seconds: 40),
+          );
+          await _waitForIroh(
+            () {
+              unawaited(pollAll());
+              now = now.add(const Duration(seconds: 5));
+              return phone.blockSourcesForTesting(id!) != null &&
+                  tablet.blockSourcesForTesting(id!) != null;
+            },
+            reason:
+                'the phone and the tablet did not hear of the file: '
+                'phone=${phone.blockSourcesForTesting(id!)} '
+                'tablet=${tablet.blockSourcesForTesting(id!)} '
+                'phoneLog=${phone.recentDebugLog.reversed.take(5).join(' | ')}',
+            timeout: const Duration(seconds: 40),
+          );
+          return (
+            laptop: laptop,
+            bob: bob,
+            phone: phone,
+            tablet: tablet,
+            network: network,
+            relay: relay,
+            id: id!,
+            bytes: bytes,
+          );
+        }
+
+        void cutOff(
+          _InProcessIrohNetwork network,
+          _FakeRelayClient relay,
+          MessengerController a,
+          MessengerController b,
+        ) {
+          final one = a.identity!.deviceId;
+          final two = b.identity!.deviceId;
+          network.blockedPairs
+            ..add((a.identity!.irohEndpointId!, b.identity!.irohEndpointId!))
+            ..add((b.identity!.irohEndpointId!, a.identity!.irohEndpointId!));
+          final before = relay.shouldFailStore;
+          relay.shouldFailStore = (host, port, protocol, to, envelope) =>
+              (before?.call(host, port, protocol, to, envelope) ?? false) ||
+              (envelope.senderDeviceId == one && to == two) ||
+              (envelope.senderDeviceId == two && to == one);
+        }
+
+        Future<void> finish(
+          MessengerController who,
+          List<MessengerController> all,
+          String id,
+        ) => _waitForIroh(
+          () {
+            for (final other in all) {
+              unawaited(other.pollNow());
+            }
+            return who.attachmentAvailableLocally(id);
+          },
+          reason: 'the device did not get the file',
+          timeout: const Duration(seconds: 60),
+        );
+
+        /// The phone has the file; the tablet, still waiting, has taken the
+        /// phone as a second source from its "have".
+        Future<void> phoneFetchesAndTabletLearns(
+          ({
+            MessengerController laptop,
+            MessengerController bob,
+            MessengerController phone,
+            MessengerController tablet,
+            _InProcessIrohNetwork network,
+            _FakeRelayClient relay,
+            String id,
+            Uint8List bytes,
+          })
+          s,
+        ) async {
+          final all = [s.laptop, s.bob, s.phone, s.tablet];
+          await s.phone.acceptIncomingAttachment(s.id);
+          await finish(s.phone, all, s.id);
+          final phoneSource = BlockSource.peer(s.phone.identity!.deviceId);
+          await _waitForIroh(
+            () {
+              for (final c in all) {
+                unawaited(c.pollNow());
+              }
+              return s.tablet
+                      .blockSourcesForTesting(s.id)
+                      ?.contains(phoneSource) ==
+                  true;
+            },
+            reason: 'the tablet did not take the phone as a source',
+            timeout: const Duration(seconds: 40),
+          );
+        }
+
+        test('an own device that holds the file is a second source, and '
+            'both serve it', () async {
+          final s = await accountWithTwoWaiting();
+          await phoneFetchesAndTabletLearns(s);
+          final sources = s.tablet.blockSourcesForTesting(s.id)!;
+          final laptop = BlockSource.peer(s.laptop.identity!.deviceId);
+          final phone = BlockSource.peer(s.phone.identity!.deviceId);
+          expect(sources.sources, [laptop, phone]);
+          await s.tablet.acceptIncomingAttachment(s.id);
+          await finish(s.tablet, [s.laptop, s.bob, s.phone], s.id);
+          expect(
+            await File(
+              (await s.tablet.attachmentCachePathFor(s.id))!,
+            ).readAsBytes(),
+            s.bytes,
+          );
+          final blocks = s.tablet
+              .messageForAttachment(s.id)!
+              .attachment!
+              .effectiveChunkCount;
+          expect(blocks, greaterThan(2));
+          expect(sources.deliveredBy(laptop) + sources.deliveredBy(phone), blocks);
+          expect(sources.deliveredBy(laptop), greaterThan(0));
+          expect(
+            sources.deliveredBy(phone),
+            greaterThan(0),
+            reason: 'the phone was not asked for any block',
+          );
+        }, timeout: const Timeout(Duration(seconds: 240)));
+
+        test('the first source gone before the file is fetched: the other '
+            'serves all of it', () async {
+          final s = await accountWithTwoWaiting();
+          await phoneFetchesAndTabletLearns(s);
+          final sources = s.tablet.blockSourcesForTesting(s.id)!;
+          cutOff(s.network, s.relay, s.laptop, s.tablet);
+          await s.tablet.acceptIncomingAttachment(s.id);
+          await finish(s.tablet, [s.laptop, s.bob, s.phone], s.id);
+          expect(
+            await File(
+              (await s.tablet.attachmentCachePathFor(s.id))!,
+            ).readAsBytes(),
+            s.bytes,
+          );
+          expect(
+            sources.deliveredBy(BlockSource.peer(s.laptop.identity!.deviceId)),
+            0,
+          );
+        }, timeout: const Timeout(Duration(seconds: 240)));
+
+        test('a source that serves a bad block is dropped for the file and '
+            'the block is fetched again from the other', () async {
+          final s = await accountWithTwoWaiting();
+          await phoneFetchesAndTabletLearns(s);
+          final sources = s.tablet.blockSourcesForTesting(s.id)!;
+          final laptopId = s.laptop.identity!.deviceId;
+          final phoneId = s.phone.identity!.deviceId;
+          cutOff(s.network, s.relay, s.laptop, s.tablet);
+          cutOff(s.network, s.relay, s.phone, s.tablet);
+          await s.tablet.acceptIncomingAttachment(s.id);
+          final descriptor = s.tablet.messageForAttachment(s.id)!.attachment!;
+          // A block of the right size that does not verify, "from" the
+          // phone.
+          await s.tablet.receiveBlockForTesting(
+            phoneId,
+            s.id,
+            0,
+            Uint8List(descriptor.chunkSize + 16),
+            Uint8List(32),
+          );
+          expect(sources.contains(BlockSource.peer(phoneId)), isFalse);
+          expect(sources.wasDropped(BlockSource.peer(phoneId)), isTrue);
+          expect(sources.contains(BlockSource.peer(laptopId)), isTrue);
+          // Told again that the phone has it: not taken back.
+          s.tablet.ownDeviceHasFileForTesting(phoneId, s.id);
+          expect(sources.contains(BlockSource.peer(phoneId)), isFalse);
+          // A block from a dropped source is not taken, even a good one.
+          await s.tablet.receiveBlockForTesting(
+            phoneId,
+            s.id,
+            1,
+            Uint8List(descriptor.chunkSize + 16),
+            Uint8List(32),
+          );
+          expect(sources.deliveredBy(BlockSource.peer(phoneId)), 0);
+          // A bad block from the only source left does not drop it.
+          await s.tablet.receiveBlockForTesting(
+            laptopId,
+            s.id,
+            1,
+            Uint8List(descriptor.chunkSize + 16),
+            Uint8List(32),
+          );
+          expect(sources.contains(BlockSource.peer(laptopId)), isTrue);
+          // The laptop comes back: the whole file is fetched from it.
+          s.network.blockedPairs.clear();
+          s.relay.shouldFailStore = null;
+          await finish(s.tablet, [s.laptop, s.bob, s.phone], s.id);
+          expect(
+            await File(
+              (await s.tablet.attachmentCachePathFor(s.id))!,
+            ).readAsBytes(),
+            s.bytes,
+          );
+          expect(sources.deliveredBy(BlockSource.peer(phoneId)), 0);
+        }, timeout: const Timeout(Duration(seconds: 240)));
       });
 
       /// A phone that was off while Bob wrote to the laptop, and was not

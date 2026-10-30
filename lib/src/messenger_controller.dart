@@ -143,6 +143,7 @@ import 'storage.dart';
 import 'storage_capacity.dart';
 import 'tor_carrier.dart';
 import 'transport.dart';
+import 'transfer/block_sources.dart';
 import 'transfer/gateway_election.dart';
 import 'transfer/own_device_sync_policy.dart';
 import 'transfer/route_striper.dart';
@@ -9888,6 +9889,7 @@ class MessengerController extends ChangeNotifier {
           accepted: !restoredAwaitingAcceptance,
           receivedChunks: restoredSession.completedChunks,
           chatDeviceId: session.chatDeviceId,
+          now: _now,
         );
         final legacyPaused =
             session.state == TransferState.paused &&
@@ -9901,6 +9903,7 @@ class MessengerController extends ChangeNotifier {
         if (partialPath != null && !inboundState.paused) {
           _scheduleAttachmentRetry(session.id);
           _startInboundRequestWindow(inboundState, contact);
+          _lookForOtherSources(inboundState);
         }
       }
     }
@@ -15740,6 +15743,7 @@ class MessengerController extends ChangeNotifier {
       if (routeAvailable) {
         _scheduleAttachmentRetry(attachmentId);
         _startInboundRequestWindow(state, contact);
+        _lookForOtherSources(state);
       }
     } catch (error, stackTrace) {
       appendDebugLog(
@@ -21945,6 +21949,7 @@ class MessengerController extends ChangeNotifier {
       accepted: !awaitingAcceptance && partialPath != null,
       debugTest: debugTest,
       chatDeviceId: fromOwnDevice ? chatId : null,
+      now: _now,
     );
     _inboundAttachments[descriptor.id] = inboundState;
     _upsertTransferSession(
@@ -21985,6 +21990,7 @@ class MessengerController extends ChangeNotifier {
       _scheduleAttachmentRetry(descriptor.id);
     }
     notifyListeners();
+    _lookForOtherSources(inboundState);
     // Prime the chunk-request window as a microtask so it lands AFTER the
     // current `_processEnvelopes` batch commits its state. Without this,
     // back-to-back offers (multi-file send) could race: file 1's chunk
@@ -22985,7 +22991,10 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final state = _inboundAttachments[attachmentId];
-    if (state == null || state.peerDeviceId != sender.deviceId) {
+    // From the sender, or from a source this file has (an own device that
+    // said it holds it; a source dropped for this file is not heard).
+    final source = BlockSource.peer(sender.deviceId);
+    if (state == null || !state.sources.contains(source)) {
       return;
     }
     // Janitor: if the parent ChatMessage is gone (locally deleted), drop
@@ -23012,6 +23021,13 @@ class MessengerController extends ChangeNotifier {
     const authenticationTagLength = 16;
     if (packedBytes.length != expectedLength + authenticationTagLength) {
       state.requestedInFlight.remove(index);
+      await _sourceServedBadBlock(
+        state,
+        sender,
+        source,
+        index,
+        askAgain: false,
+      );
       return;
     }
     final Uint8List bytes;
@@ -23036,7 +23052,13 @@ class MessengerController extends ChangeNotifier {
           state.finalizing) {
         return;
       }
-      await _sendAttachmentChunkRequest(sender, attachmentId, index);
+      await _sourceServedBadBlock(
+        state,
+        sender,
+        source,
+        index,
+        askAgain: true,
+      );
       return;
     }
     if (!identical(_inboundAttachments[attachmentId], state) ||
@@ -23047,6 +23069,7 @@ class MessengerController extends ChangeNotifier {
       await state.writeChunk(offset, bytes);
       if (!identical(_inboundAttachments[attachmentId], state)) return;
       state.received.add(index);
+      state.sources.delivered(index, source);
       if (route != null) {
         state.routeBytes[route] = (state.routeBytes[route] ?? 0) + bytes.length;
       }
@@ -23155,6 +23178,9 @@ class MessengerController extends ChangeNotifier {
         _assembledAttachments[attachmentId] = await cacheFile.readAsBytes();
       }
       _inboundAttachments.remove(attachmentId);
+      if (state.debugTest == null) {
+        _announceFileHeld(attachmentId, state.descriptor.sizeBytes);
+      }
       _removeTransferSession(attachmentId);
       if (!hasActiveTransfer) _reschedulePolling();
       // A file an own device passed on keeps the message's own state (what
@@ -23349,54 +23375,135 @@ class MessengerController extends ChangeNotifier {
         state.partialPath == null) {
       return;
     }
-    final window = _inboundWindowFor(state.descriptor.chunkSize);
+    // Whatever left the caller's set without arriving is not asked of its
+    // source any more (the other places that clear or trim the set need no
+    // change).
+    state.sources.reconcile(state.requestedInFlight);
     final requests = <Future<void>>[];
-    while (state.requestedInFlight.length < window) {
+    while (true) {
       final next = state.nextUnrequestedIndex();
       if (next < 0) break;
+      final source = state.sources.choose(next);
+      if (source == null) break;
+      final target = source.id == sender.deviceId
+          ? sender
+          : _contactByDeviceId(source.id);
+      if (target == null || source.route != SourceRoute.peer) {
+        // The sender itself stays (it may be back); another device that is
+        // not a contact any more (or a source this build cannot ask) goes.
+        if (source.id == state.peerDeviceId) break;
+        state.requestedInFlight.removeAll(state.sources.remove(source));
+        continue;
+      }
       state.requestedInFlight.add(next);
-      appendDebugLog(
-        'chunk_req tx → ${sender.alias} idx=$next '
-        'attachmentId=${state.descriptor.id}',
-      );
-      requests.add(() async {
-        try {
-          final sent = await _sendAttachmentChunkRequest(
-            sender,
-            state.descriptor.id,
-            next,
-          );
-          if (!sent) {
-            state.requestedInFlight.remove(next);
-            unawaited(
-              Future<void>.delayed(const Duration(seconds: 5), () {
-                if (identical(
-                      _inboundAttachments[state.descriptor.id],
-                      state,
-                    ) &&
-                    !state.paused &&
-                    state.accepted &&
-                    state.partialPath != null) {
-                  _startInboundRequestWindow(state, sender);
-                }
-              }),
-            );
-          }
-        } catch (error, stackTrace) {
-          state.requestedInFlight.remove(next);
-          appendDebugLog(
-            'chunk_req setup failed → ${sender.alias} idx=$next '
-            'attachmentId=${state.descriptor.id}: $error\n$stackTrace',
-          );
-          _setTransferSessionState(
-            state.descriptor.id,
-            TransferState.reconnecting,
-            error: 'The transfer route failed. Retrying automatically.',
-          );
-        }
-      }());
+      state.sources.begin(next, source);
+      requests.add(_askSourceForBlock(state, source, target, next));
     }
+    _armHedgeTimer(state);
     await Future.wait(requests);
+  }
+
+  /// Asks [source] (the contact [target]) for block [index] of [state].
+  Future<void> _askSourceForBlock(
+    _InboundAttachmentState state,
+    BlockSource source,
+    ContactRecord target,
+    int index,
+  ) async {
+    appendDebugLog(
+      'chunk_req tx → ${target.alias} idx=$index '
+      'attachmentId=${state.descriptor.id}',
+    );
+    try {
+      final sent = await _sendAttachmentChunkRequest(
+        target,
+        state.descriptor.id,
+        index,
+      );
+      if (!sent) {
+        state.sources.failed(index, source);
+        state.requestedInFlight.remove(index);
+        unawaited(
+          Future<void>.delayed(const Duration(seconds: 5), () {
+            if (identical(_inboundAttachments[state.descriptor.id], state) &&
+                !state.paused &&
+                state.accepted &&
+                state.partialPath != null) {
+              _startInboundRequestWindow(state, target);
+            }
+          }),
+        );
+      }
+    } catch (error, stackTrace) {
+      state.sources.failed(index, source);
+      state.requestedInFlight.remove(index);
+      appendDebugLog(
+        'chunk_req setup failed → ${target.alias} idx=$index '
+        'attachmentId=${state.descriptor.id}: $error\n$stackTrace',
+      );
+      _setTransferSessionState(
+        state.descriptor.id,
+        TransferState.reconnecting,
+        error: 'The transfer route failed. Retrying automatically.',
+      );
+    }
+  }
+
+  /// One timer for the file: when a block asked of one source is late, it
+  /// is asked of a second too (within the hedging budget). Armed after each
+  /// round of requests, so nothing runs while nothing is asked.
+  void _armHedgeTimer(_InboundAttachmentState state) {
+    state.hedgeTimer?.cancel();
+    state.hedgeTimer = null;
+    if (state.paused) return;
+    final wait = state.sources.nextHedgeIn();
+    if (wait == null) return;
+    state.hedgeTimer = Timer(wait, () {
+      state.hedgeTimer = null;
+      if (!identical(_inboundAttachments[state.descriptor.id], state) ||
+          state.paused ||
+          state.finalizing) {
+        return;
+      }
+      state.sources.reconcile(state.requestedInFlight);
+      for (final (index, source) in state.sources.takeHedges()) {
+        final target = _contactByDeviceId(source.id);
+        if (target == null) {
+          state.sources.failed(index, source);
+          continue;
+        }
+        unawaited(_askSourceForBlock(state, source, target, index));
+      }
+      _armHedgeTimer(state);
+    });
+  }
+
+  /// [source] (the contact [sender]) served a bad block [index] of [state].
+  /// One of several sources is dropped for this file and the block is asked
+  /// of the others; the only source is asked again, as before there were
+  /// several ([askAgain] is false for a block of the wrong size, which only
+  /// waits for the retry).
+  Future<void> _sourceServedBadBlock(
+    _InboundAttachmentState state,
+    ContactRecord sender,
+    BlockSource source,
+    int index, {
+    required bool askAgain,
+  }) async {
+    final again = state.sources.corrupt(index, source);
+    appendDebugLog(
+      'A block of ${state.descriptor.id} from ${sender.alias} failed '
+      'verification (idx=$index)'
+      '${again.isEmpty ? '' : '; not asked of it again for this file'}.',
+    );
+    if (again.isNotEmpty) {
+      state.requestedInFlight.removeAll(again);
+      _startInboundRequestWindow(state, sender);
+      return;
+    }
+    if (askAgain) {
+      await _sendAttachmentChunkRequest(sender, state.descriptor.id, index);
+    }
   }
 
   void _scheduleAttachmentRetry(String attachmentId) {
@@ -23430,6 +23537,9 @@ class MessengerController extends ChangeNotifier {
       if (peer == null) return;
       s.nextRetryAt = null;
       s.retryAttempts = min(s.retryAttempts + 1, 1 << 20);
+      // Nothing came in time: the sources asked rest (the next round goes
+      // to those that did not stall).
+      s.sources.timedOut();
       s.requestedInFlight.clear();
       _setTransferSessionState(
         attachmentId,
@@ -36131,7 +36241,7 @@ class MessengerController extends ChangeNotifier {
     if (plaintext == null) return null;
     // Never folded: not worth decoding them for it.
     if (foldableOnly) {
-      for (final type in const ['sent', 'rx', 'seen']) {
+      for (final type in const ['sent', 'rx', 'seen', 'have', 'have_q']) {
         if (plaintext.contains('"type":"$type"')) return {'type': type};
       }
     }
@@ -36170,7 +36280,10 @@ class MessengerController extends ChangeNotifier {
         queued['chat'] == event['chat'] &&
         switch (event['type']) {
           'read' || 'group_state' || 'digest' || 'reach' || 'settings' => true,
-          'state' || 'group_message' => queued['id'] == event['id'],
+          'state' ||
+          'group_message' ||
+          'have' ||
+          'have_q' => queued['id'] == event['id'],
           _ => false,
         };
     for (final device in devices) {
@@ -36193,8 +36306,11 @@ class MessengerController extends ChangeNotifier {
       // messages, the oldest first.
       final excess = forDevice.length - (_maxQueuedSyncEvents - 1);
       if (excess > 0) {
-        bool seenOnly(PendingAckDelivery entry) =>
-            entry.payload?.plaintext.contains('"type":"seen"') ?? false;
+        bool seenOnly(PendingAckDelivery entry) {
+          final text = entry.payload?.plaintext ?? '';
+          return text.contains('"type":"seen"') ||
+              text.contains('"type":"have');
+        }
         final order = [...forDevice]
           ..sort((a, b) {
             if (seenOnly(a.$1) != seenOnly(b.$1)) {
@@ -36218,6 +36334,8 @@ class MessengerController extends ChangeNotifier {
       'group_message',
       'history_page',
       'tgx',
+      'have',
+      'have_q',
     }.contains(event['type']);
     for (final device in devices) {
       final payload = QueuedEnvelopePayload(
@@ -36972,6 +37090,125 @@ class MessengerController extends ChangeNotifier {
       'Got ${_boundedLogValue(state.descriptor.fileName)} from your '
       '${_contactByDeviceId(state.peerDeviceId)?.deviceName ?? "other device"}.',
     );
+  }
+
+  // One file from several sources (M27): the account's other devices say
+  // when they hold a file ("have", or when asked, "have_q"), and this device
+  // then asks them for blocks too, next to the sender. Every block is
+  // verified under the file's key whoever served it.
+
+  final OwnDeviceFileIndex _ownDeviceFiles = OwnDeviceFileIndex();
+
+  /// Files below this are fetched from one source: sharing them is not
+  /// worth the messages.
+  static const int _multiSourceMinBytes = 512 * 1024;
+
+  bool _speaksMultiSource(ContactRecord device) => device.featureCapabilities
+      .contains(ApplicationCapability.multiSourceTransferV1);
+
+  /// This device now holds [attachmentId]: the account's other devices that
+  /// understand it are told (they may be fetching it).
+  void _announceFileHeld(String attachmentId, int sizeBytes) {
+    if (sizeBytes < _multiSourceMinBytes ||
+        !ownDeviceSyncPermission.allowed) {
+      return;
+    }
+    _syncToOwnDevices({
+      'type': 'have',
+      'id': attachmentId,
+    }, to: _speaksMultiSource);
+  }
+
+  /// An own device says it holds [id].
+  void _takeFileHeld(ContactRecord sender, Object? id) {
+    if (id is! String || id.isEmpty || id.length > 160) return;
+    _ownDeviceFiles.note(id, sender.deviceId);
+    final state = _inboundAttachments[id];
+    if (state != null) _useOwnDeviceAsSource(state, sender);
+  }
+
+  /// An own device asks whether this one holds [id].
+  void _answerFileQuery(ContactRecord sender, Object? id) {
+    if (id is! String || id.isEmpty || id.length > 160) return;
+    if (!_locallyAvailableAttachments.contains(id) ||
+        !ownDeviceSyncPermission.allowed) {
+      return;
+    }
+    _syncToOwnDevices({'type': 'have', 'id': id}, only: sender.deviceId);
+  }
+
+  /// Takes [device] (an own device that holds the file) in as a source of
+  /// [state], and asks it for blocks.
+  void _useOwnDeviceAsSource(
+    _InboundAttachmentState state,
+    ContactRecord device,
+  ) {
+    if (state.finalizing ||
+        state.descriptor.sizeBytes < _multiSourceMinBytes ||
+        !device.ownDevice ||
+        !device.canSendOutbound ||
+        isOwnDeviceUnconfirmed(device) ||
+        !ownDeviceSyncPermission.allowed ||
+        !state.sources.add(BlockSource.peer(device.deviceId))) {
+      return;
+    }
+    appendDebugLog(
+      'Fetching ${_boundedLogValue(state.descriptor.fileName)} from your '
+      '${device.deviceName ?? "other device"} too.',
+    );
+    if (!state.paused &&
+        state.accepted &&
+        !state.awaitingAcceptance &&
+        state.partialPath != null) {
+      _startInboundRequestWindow(state, device);
+    }
+  }
+
+  /// A file starts (or resumes): own devices known to hold it are used,
+  /// and the others asked whether they do.
+  void _lookForOtherSources(_InboundAttachmentState state) {
+    if (state.descriptor.sizeBytes < _multiSourceMinBytes) return;
+    for (final deviceId in _ownDeviceFiles.devicesWith(state.descriptor.id)) {
+      final device = _contactByDeviceId(deviceId);
+      if (device != null) _useOwnDeviceAsSource(state, device);
+    }
+    if (!ownDeviceSyncPermission.allowed) return;
+    _syncToOwnDevices(
+      {'type': 'have_q', 'id': state.descriptor.id},
+      to: (device) =>
+          _speaksMultiSource(device) &&
+          !state.sources.contains(BlockSource.peer(device.deviceId)) &&
+          !state.sources.wasDropped(BlockSource.peer(device.deviceId)),
+    );
+  }
+
+  @visibleForTesting
+  BlockSourceSet? blockSourcesForTesting(String attachmentId) =>
+      _inboundAttachments[attachmentId]?.sources;
+
+  @visibleForTesting
+  Future<void> receiveBlockForTesting(
+    String senderDeviceId,
+    String attachmentId,
+    int index,
+    Uint8List packedBytes,
+    Uint8List hash,
+  ) async {
+    final sender = _contactByDeviceId(senderDeviceId);
+    if (sender == null) return;
+    await _handleAttachmentChunkBytes(
+      sender,
+      attachmentId: attachmentId,
+      index: index,
+      packedBytes: packedBytes,
+      expectedHash: hash,
+    );
+  }
+
+  @visibleForTesting
+  void ownDeviceHasFileForTesting(String deviceId, String attachmentId) {
+    final device = _contactByDeviceId(deviceId);
+    if (device != null) _takeFileHeld(device, attachmentId);
   }
 
   // Groups through a gateway (M29e, step 1): this account's other devices
@@ -37798,6 +38035,14 @@ class MessengerController extends ChangeNotifier {
       }
       if (event['type'] == 'digest') {
         _takeDigests(sender, event['chats']);
+        continue;
+      }
+      if (event['type'] == 'have') {
+        _takeFileHeld(sender, event['id']);
+        continue;
+      }
+      if (event['type'] == 'have_q') {
+        _answerFileQuery(sender, event['id']);
         continue;
       }
       try {
@@ -38742,6 +38987,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.xmppCarrierV1,
       ApplicationCapability.telegramCarrierV1,
       ApplicationCapability.discordCarrierV1,
+      ApplicationCapability.multiSourceTransferV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -40781,11 +41027,29 @@ class _InboundAttachmentState {
     this.debugTest,
     Iterable<int> receivedChunks = const <int>[],
     String? chatDeviceId,
+    DateTime Function()? now,
   }) : received = <int>{...receivedChunks},
-       _chatDeviceId = chatDeviceId;
+       _chatDeviceId = chatDeviceId,
+       sources = BlockSourceSet(
+         primary: BlockSource.peer(peerDeviceId),
+         blockBytes: descriptor.chunkSize,
+         now: now,
+         windowPerSource: MessengerController._inboundWindowFor(
+           descriptor.chunkSize,
+         ),
+       );
 
   final String messageId;
   final String peerDeviceId;
+
+  /// Where the blocks come from: [peerDeviceId] (the sender, or the own
+  /// device that passed the file on), and the account's other devices that
+  /// say they hold the file. Not persisted: a resumed transfer learns them
+  /// again, and the journal ([received]) is what survives.
+  final BlockSourceSet sources;
+
+  /// Asks late blocks of a second source.
+  Timer? hedgeTimer;
 
   /// The chat the message is in: [peerDeviceId], unless an own device of
   /// this account passed the file on (then the blocks come from it, but the
@@ -40858,6 +41122,8 @@ class _InboundAttachmentState {
   Future<void> closeFile() {
     checkpointTimer?.cancel();
     checkpointTimer = null;
+    hedgeTimer?.cancel();
+    hedgeTimer = null;
     final completer = Completer<void>();
     _partialIo = _partialIo.catchError((_) {}).then((_) async {
       try {
