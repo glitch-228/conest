@@ -1733,5 +1733,6 @@
   "energyBudgetSubtitle": "连接可使用多少电量。节能模式在未充电时保持最低用量。",
   "energyBudgetBalanced": "均衡",
   "energyBudgetEco": "节能：仅在充电时增加",
-  "energyBudgetFast": "快速"
+  "energyBudgetFast": "快速",
+  "airtimeBudgetUsed": "最近一分钟已用空中时间：{percent}%"
 }

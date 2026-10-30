@@ -1733,5 +1733,6 @@
   "energyBudgetSubtitle": "Seberapa banyak baterai boleh dipakai koneksi. Hemat menjaga minimum saat tidak diisi daya.",
   "energyBudgetBalanced": "Seimbang",
   "energyBudgetEco": "Hemat: lebih banyak hanya saat mengisi daya",
-  "energyBudgetFast": "Cepat"
+  "energyBudgetFast": "Cepat",
+  "airtimeBudgetUsed": "Airtime terpakai dalam semenit terakhir: {percent}%"
 }

@@ -48,6 +48,7 @@ import 'radio_chats.dart';
 import 'carrier.dart';
 import 'limits/network_budgets.dart';
 import 'limits/network_limiter.dart';
+import 'limits/radio_airtime.dart';
 import 'circumvention/circumvention.dart';
 import 'circumvention/lan_beacon_codec.dart';
 import 'attachment_safety.dart';
@@ -9053,7 +9054,6 @@ class MessengerController extends ChangeNotifier {
     await _carrierInboundSubscriptions.remove(kind)?.cancel();
     await _carrierReceiptSubscriptions.remove(kind)?.cancel();
     final carrier = _carrierTransports.remove(kind);
-    _limiters.remove(kind.name);
     if (carrier != null) {
       await carrier.detach();
       _advertiseProfileToContacts();
@@ -9158,6 +9158,11 @@ class MessengerController extends ChangeNotifier {
     );
     return budget == null ? null : _limiters.forAccount(kind.name, budget);
   }
+
+  /// How much of a radio's airtime budget is used (0 to 1), null when the
+  /// radio has no carrier running. Shown on the radio's page.
+  double? radioAirtimeUsed(TransportKind kind) =>
+      _limiters.peek(kind.name)?.usedShare;
 
   @visibleForTesting
   NetworkLimiter? limiterForTesting(TransportKind kind) =>
@@ -28585,7 +28590,10 @@ class MessengerController extends ChangeNotifier {
         for (final kind in TransportKind.values)
           if (!usedKinds.contains(kind) &&
               !(state.storedOnCarrier && _storingCarriers.contains(kind)) &&
-              (radiosAllowed || !_radioKinds.contains(kind)))
+              (radiosAllowed || !_radioKinds.contains(kind)) &&
+              // A spare copy by radio only while most of its airtime is free.
+              (!_radioKinds.contains(kind) ||
+                  RadioAirtime.allowsExtraCopy(_limiters.peek(kind.name))))
             kind,
       };
       final _DeliveryRoute route;

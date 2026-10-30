@@ -83,6 +83,7 @@ class LimiterBudget {
     this.maxWait = const Duration(seconds: 30),
     this.comfortWait = const Duration(seconds: 2),
     this.maxRest = const Duration(hours: 24),
+    this.costInBytes = false,
   });
 
   final String name;
@@ -114,6 +115,10 @@ class LimiterBudget {
   /// The longest rest a server's "slow down" is obeyed for.
   final Duration maxRest;
 
+  /// The quota counts bytes (radio airtime), not sends: each frame costs
+  /// its length.
+  final bool costInBytes;
+
   /// The same budget without a quota (tests and carriers whose quota is
   /// not wanted).
   LimiterBudget withoutQuota() => LimiterBudget(
@@ -126,6 +131,7 @@ class LimiterBudget {
     maxWait: maxWait,
     comfortWait: comfortWait,
     maxRest: maxRest,
+    costInBytes: costInBytes,
   );
 
   LimiterBudget copyWith({Duration? gap, int? burst, int? quota}) =>
@@ -140,6 +146,7 @@ class LimiterBudget {
         maxWait: maxWait,
         comfortWait: comfortWait,
         maxRest: maxRest,
+        costInBytes: costInBytes,
       );
 }
 
@@ -192,7 +199,21 @@ class NetworkLimiter {
   /// Whether the account is resting because a server said so.
   bool get isResting => restRemaining > Duration.zero;
 
+  /// The clock may jump: going back must not stall the account, and a rest
+  /// is never longer than [LimiterBudget.maxRest] from now.
+  void _sane(DateTime now) {
+    final rest = _restUntil;
+    if (now.isBefore(_refilledAt) &&
+        (rest == null || _refilledAt.isAfter(rest))) {
+      _refilledAt = now;
+    }
+    if (rest != null && rest.difference(now) > budget.maxRest) {
+      _restUntil = now.add(budget.maxRest);
+    }
+  }
+
   Duration get restRemaining {
+    _sane(_now());
     final until = _restUntil;
     if (until == null) return Duration.zero;
     final left = until.difference(_now());
@@ -216,10 +237,17 @@ class NetworkLimiter {
   Duration get projectedWait => _projectedWait(1);
 
   /// How long the last of [sends] sends made now would wait for its turn.
-  Duration projectedWaitFor(int sends) {
+  Duration projectedWaitFor(int sends, {int cost = 1}) {
     final now = _now();
     final extra = sends > 1 ? sends - 1 : 0;
-    final at = _earliest(now, 1).add(_gap * (_queue.length + extra));
+    final quota = budget.quota;
+    final charged = quota != null && cost > quota ? quota : cost;
+    // More than a window holds takes whole windows more.
+    final windows = quota != null && cost > quota ? (cost - 1) ~/ quota : 0;
+    final at = _earliest(
+      now,
+      charged,
+    ).add(budget.window * windows).add(_gap * (_queue.length + extra));
     final wait = at.difference(now);
     return wait.isNegative ? Duration.zero : wait;
   }
@@ -252,6 +280,7 @@ class NetworkLimiter {
   }) async {
     if (_closed) throw const LimiterRefused(LimiterRefusal.closed);
     final now = _now();
+    _sane(now);
     final quota = budget.quota;
     final charged = quota == null
         ? (cost < 1 ? 1 : cost)
@@ -304,6 +333,7 @@ class NetworkLimiter {
     _refill(_now());
     final eased = _gap * 3 ~/ 4;
     _gap = eased < budget.gap ? budget.gap : eased;
+    _arm();
   }
 
   /// A server asked to slow down. With [retryAfter] (a named wait) the
@@ -316,6 +346,10 @@ class NetworkLimiter {
       final until = now.add(rest);
       final current = _restUntil;
       if (current == null || until.isAfter(current)) _restUntil = until;
+      // The bucket does not refill while resting, nor hand out its whole
+      // burst the moment the rest ends.
+      _tokens = 0;
+      _refilledAt = _restUntil!;
     } else {
       _refill(now);
       final base = _gap > Duration.zero
@@ -466,6 +500,7 @@ class NetworkLimiter {
     _timer = null;
     if (_closed) return;
     final now = _now();
+    _sane(now);
     // The head may start when its turn has come; whoever missed their
     // deadline gives way.
     var progressed = true;

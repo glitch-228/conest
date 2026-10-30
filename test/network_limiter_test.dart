@@ -175,7 +175,9 @@ void main() {
       await clock.advance(const Duration(milliseconds: 6900));
       expect(turns, isEmpty, reason: 'not a moment early');
       await clock.advance(const Duration(milliseconds: 100));
-      expect(turns, [7000]);
+      expect(turns, isEmpty, reason: 'then one gap before the first send');
+      await clock.advance(const Duration(seconds: 1));
+      expect(turns, [8000]);
     });
 
     test('every chat on the account rests, not just the one that hit it', () {
@@ -253,7 +255,11 @@ void main() {
     expect(NetworkBudgets.forKind(TransportKind.telegram), isNotNull);
     expect(NetworkBudgets.forKind(TransportKind.matrix)!.burst, 10);
     expect(NetworkBudgets.forKind(TransportKind.lan), isNull);
-    expect(NetworkBudgets.forKind(TransportKind.meshtastic), isNull);
+    expect(
+      NetworkBudgets.forKind(TransportKind.meshtastic)!.costInBytes,
+      isTrue,
+    );
+    expect(NetworkBudgets.forKind(TransportKind.iroh), isNull);
     final chatmail = NetworkBudgets.forKind(
       TransportKind.deltaChat,
       chatmail: true,
@@ -262,6 +268,53 @@ void main() {
     expect(chatmail.quota, lessThan(60));
     expect(chatmail.window, const Duration(minutes: 1));
     expect(ordinary.window, const Duration(hours: 1));
+  });
+
+  group('hostile servers and clocks', () {
+    test('a rest does not hand out the whole burst when it ends', () async {
+      final clock = _Clock();
+      final limiter = _limiter(clock, NetworkBudgets.matrix);
+      limiter.pushedBack(retryAfter: const Duration(seconds: 60));
+      final turns = <int>[];
+      for (var i = 0; i < 4; i++) {
+        unawaited(
+          _note(clock, limiter, turns, maxWait: const Duration(minutes: 2)),
+        );
+      }
+      await clock.advance(const Duration(seconds: 70));
+      // After the rest the bucket is empty: one a gap, not ten at once.
+      expect(turns.length, 4);
+      expect(turns.first, greaterThanOrEqualTo(60000));
+      expect(turns.last - turns.first, greaterThanOrEqualTo(2000));
+    });
+
+    test('a clock that jumps back does not stall the account', () async {
+      final clock = _Clock();
+      final limiter = _limiter(clock, paced);
+      await limiter.acquire();
+      await limiter.acquire();
+      clock.now = clock.now.subtract(const Duration(hours: 1));
+      final turns = <int>[];
+      unawaited(
+        _note(clock, limiter, turns, maxWait: const Duration(seconds: 5)),
+      );
+      await clock.advance(const Duration(seconds: 3));
+      expect(turns, hasLength(1));
+    });
+
+    test('an absurd retry-after is capped, not trusted', () {
+      final clock = _Clock();
+      final limiter = _limiter(clock, NetworkBudgets.matrix);
+      limiter.pushedBack(retryAfter: const Duration(days: 4000));
+      expect(
+        limiter.restRemaining,
+        lessThanOrEqualTo(const Duration(hours: 24)),
+      );
+      expect(
+        const DiscordException('/x', 429, 'x', retryAfter: 86400).slowDownFor,
+        const Duration(days: 1),
+      );
+    });
   });
 
   group('a full queue', () {

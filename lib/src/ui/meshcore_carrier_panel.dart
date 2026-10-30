@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 
 import '../meshcore_carrier.dart';
 import '../messenger_controller.dart';
+import '../transport_models.dart';
+import 'airtime_budget_line.dart';
 import '../network_errors.dart';
 import '../radio/android_radio_link.dart';
 import 'radio_chats_screen.dart';
@@ -122,6 +124,11 @@ class _MeshCoreCarrierPanelState extends State<MeshCoreCarrierPanel> {
             subtitle: channel?.lastError == null
                 ? null
                 : Text(channel!.lastError!, maxLines: 2),
+          ),
+        if (config != null)
+          AirtimeBudgetLine(
+            controller: controller,
+            kind: TransportKind.meshCore,
           ),
         SegmentedButton<MeshCoreLink>(
           segments: [

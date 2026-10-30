@@ -6545,4 +6545,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get energyBudgetFast => 'Fast';
+
+  @override
+  String airtimeBudgetUsed(int percent) {
+    return 'Airtime used in the last minute: $percent%';
+  }
 }

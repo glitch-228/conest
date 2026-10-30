@@ -1733,5 +1733,6 @@
   "energyBudgetSubtitle": "Сколько заряда могут тратить соединения. Эко держит минимум без зарядки.",
   "energyBudgetBalanced": "Сбалансированный",
   "energyBudgetEco": "Эко: больше только при зарядке",
-  "energyBudgetFast": "Быстрый"
+  "energyBudgetFast": "Быстрый",
+  "airtimeBudgetUsed": "Эфирное время за последнюю минуту: {percent}%"
 }

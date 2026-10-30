@@ -6546,4 +6546,9 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get energyBudgetFast => 'سریع';
+
+  @override
+  String airtimeBudgetUsed(int percent) {
+    return 'زمان پخش مصرف‌شده در دقیقهٔ گذشته: $percent٪';
+  }
 }

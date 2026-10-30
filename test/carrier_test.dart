@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:conest/src/carrier.dart';
 import 'package:conest/src/limits/network_limiter.dart';
+import 'package:conest/src/limits/radio_airtime.dart';
 import 'package:conest/src/telegram/telegram_bot_api.dart';
 import 'package:conest/src/matrix_carrier.dart';
 import 'package:conest/src/models.dart';
@@ -487,6 +488,58 @@ void main() {
         expect(limiter.restRemaining.inSeconds, inInclusiveRange(10, 11));
       },
     );
+
+    test('a radio sends within its airtime budget and skips spare copies '
+        'when it runs low', () async {
+      var now = DateTime.utc(2026, 10, 30, 12);
+      final limiter = NetworkLimiter(
+        RadioAirtime.forRate(name: 'test radio', bitsPerSecond: 8000),
+        now: () => now,
+      );
+      // 8000 bit/s with half kept for others: 30000 bytes a minute.
+      expect(limiter.budget.quota, 30000);
+      final small = NetworkLimiter(
+        RadioAirtime.conservative('test radio'),
+        now: () => now,
+      );
+      adapter.limiter = small;
+      await adapter.start();
+      final route = (await adapter.discoverRoutes(peer)).single;
+      TransportEnvelope envelope(String id, int size) => TransportEnvelope(
+        id: id,
+        recipientDeviceId: 'dev-bob',
+        bytes: pattern(size),
+        createdAt: DateTime.utc(2026, 10, 30),
+      );
+      expect(RadioAirtime.allowsExtraCopy(small), isTrue);
+      await adapter.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: envelope('m1', 300),
+      );
+      expect(small.usedShare, greaterThan(0.5));
+      expect(
+        RadioAirtime.allowsExtraCopy(small),
+        isFalse,
+        reason: 'over half the minute used',
+      );
+      // An envelope that would need more airtime than the minute holds is
+      // refused before any frame leaves.
+      final framesBefore = channel.sent.length;
+      await expectLater(
+        adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: envelope('m2', 40 * 1024),
+        ),
+        throwsA(isA<LimiterRefused>()),
+      );
+      expect(channel.sent.length, framesBefore);
+      // The minute passes: the budget is free again.
+      now = now.add(const Duration(minutes: 2));
+      expect(small.usedShare, 0);
+      expect(RadioAirtime.allowsExtraCopy(small), isTrue);
+    });
 
     test('a confirmation that beats the send call still counts', () async {
       final radio = _AckingChannel(

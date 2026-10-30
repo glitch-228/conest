@@ -632,7 +632,12 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
     // frame goes out, so no half-sent envelope is left behind.
     final turns = channelPacesFrames ? null : limiter;
     if (turns != null) {
-      final wait = turns.projectedWaitFor(frames.length);
+      final wait = turns.projectedWaitFor(
+        frames.length,
+        cost: turns.budget.costInBytes
+            ? frames.fold<int>(0, (total, frame) => total + frame.length)
+            : 1,
+      );
       if (wait > turns.budget.maxWait) {
         throw LimiterRefused(LimiterRefusal.wouldWait, retryIn: wait);
       }
@@ -654,6 +659,8 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
       if (channel is AcknowledgingCarrierChannel) {
         final id = await _paced(
           () => channel.sendTrackedFrame(address, frames[index]),
+          cost: frames[index].length,
+          started: index > 0,
         );
         pending.tracked = true;
         pending.waiting.add(id);
@@ -667,6 +674,8 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
         if (early != null) _onFrameAck((frameId: id, ok: early));
       } else if (inboxSender != null) {
         await _paced(
+          cost: frames[index].length,
+          started: index > 0,
           () => (channel as InboxCarrierChannel).sendInboxFrame(
             address,
             frames[index],
@@ -675,7 +684,11 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
           ),
         );
       } else {
-        await _paced(() => channel.sendFrame(address, frames[index]));
+        await _paced(
+          () => channel.sendFrame(address, frames[index]),
+          cost: frames[index].length,
+          started: index > 0,
+        );
       }
     }
     pending.allSent = true;
@@ -703,9 +716,20 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
 
   /// One frame, when the account's limiter lets it go; a server's
   /// "slow down" in the error is obeyed by the limiter.
-  Future<T> _paced<T>(Future<T> Function() send) {
+  Future<T> _paced<T>(
+    Future<T> Function() send, {
+    int cost = 1,
+    bool started = false,
+  }) {
     final turns = channelPacesFrames ? null : limiter;
-    return turns == null ? send() : turns.run(send);
+    return turns == null
+        ? send()
+        : turns.run(
+            send,
+            cost: turns.budget.costInBytes ? cost : 1,
+            // An envelope that has begun is finished, not dropped half-way.
+            maxWait: started ? const Duration(minutes: 10) : null,
+          );
   }
 
   @override

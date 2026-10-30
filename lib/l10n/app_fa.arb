@@ -1733,5 +1733,6 @@
   "energyBudgetSubtitle": "اتصال‌ها چقدر از باتری مصرف کنند. حالت صرفه‌جویی هنگام بی‌شارژری حداقل را نگه می‌دارد.",
   "energyBudgetBalanced": "متعادل",
   "energyBudgetEco": "صرفه‌جویی: بیشتر فقط هنگام شارژ",
-  "energyBudgetFast": "سریع"
+  "energyBudgetFast": "سریع",
+  "airtimeBudgetUsed": "زمان پخش مصرف‌شده در دقیقهٔ گذشته: {percent}٪"
 }

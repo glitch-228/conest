@@ -270,7 +270,7 @@ class DiscordCarrierChannel
         await _wait(
           error.retryAfter != null
               ? Duration(
-                  milliseconds: (min(error.retryAfter!, 120) * 1000).ceil(),
+                  milliseconds: (min(error.retryAfter!, 3600) * 1000).ceil(),
                 )
               : _backoff(failures),
         );
@@ -391,7 +391,7 @@ class DiscordCarrierChannel
         return;
       } on DiscordException catch (error) {
         if (error.rateLimited) onRateLimited?.call(error.slowDownFor!);
-        if (error.rateLimited && attempt < 3) {
+        if (error.rateLimited && attempt < 3 && (error.retryAfter ?? 1) <= 30) {
           await _wait(
             Duration(
               milliseconds: (min(error.retryAfter ?? 1, 30) * 1000).ceil(),

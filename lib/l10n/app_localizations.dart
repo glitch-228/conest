@@ -10574,6 +10574,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Fast'**
   String get energyBudgetFast;
+
+  /// Radio page: share of the airtime budget used in the last minute.
+  ///
+  /// In en, this message translates to:
+  /// **'Airtime used in the last minute: {percent}%'**
+  String airtimeBudgetUsed(int percent);
 }
 
 class _AppLocalizationsDelegate

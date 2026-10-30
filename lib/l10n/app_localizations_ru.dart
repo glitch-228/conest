@@ -6678,4 +6678,9 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get energyBudgetFast => 'Быстрый';
+
+  @override
+  String airtimeBudgetUsed(int percent) {
+    return 'Эфирное время за последнюю минуту: $percent%';
+  }
 }

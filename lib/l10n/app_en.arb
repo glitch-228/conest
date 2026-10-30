@@ -9627,5 +9627,14 @@
   "energyBudgetFast": "Fast",
   "@energyBudgetFast": {
     "description": "Power use choice: treat battery like mains power."
+  },
+  "airtimeBudgetUsed": "Airtime used in the last minute: {percent}%",
+  "@airtimeBudgetUsed": {
+    "description": "Radio page: share of the airtime budget used in the last minute.",
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
   }
 }

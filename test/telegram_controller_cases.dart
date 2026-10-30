@@ -119,10 +119,13 @@ void _telegramControllerTests() {
       );
       expect(limiter.restRemaining.inSeconds, inInclusiveRange(29, 30));
       expect(limiter.nearLimit, isTrue);
-      // The same limiter every time, until the carrier is removed.
+      // The same limiter every time, also across re-enabling (a rest the
+      // server asked for is not forgotten by switching the carrier off/on).
       expect(alice.limiterForTesting(TransportKind.telegram), same(limiter));
       await alice.disableTelegramCarrier();
-      expect(alice.limiterForTesting(TransportKind.telegram), isNull);
+      await alice.enableTelegramCarrier(aliceBot.token);
+      expect(alice.limiterForTesting(TransportKind.telegram), same(limiter));
+      expect(limiter.isResting, isTrue);
     });
 
     test('a mutual add works over Telegram alone', () async {

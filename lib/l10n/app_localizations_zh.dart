@@ -6261,4 +6261,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get energyBudgetFast => '快速';
+
+  @override
+  String airtimeBudgetUsed(int percent) {
+    return '最近一分钟已用空中时间：$percent%';
+  }
 }

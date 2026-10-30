@@ -136,7 +136,10 @@ class HttpDiscordApi implements DiscordApi {
               ? decoded['message'] as String
               : 'failed')
           .replaceAll(token, '***'),
-      retryAfter: retry is num ? retry.toDouble() : null,
+      // A hostile value (Infinity, negative, huge) is dropped or capped.
+      retryAfter: retry is num && retry.isFinite && retry >= 0
+          ? (retry > 86400 ? 86400.0 : retry.toDouble())
+          : null,
     );
   }
 

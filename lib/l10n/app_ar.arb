@@ -1733,5 +1733,6 @@
   "energyBudgetSubtitle": "مقدار البطارية التي قد تستهلكها الاتصالات. وضع التوفير يبقي الحد الأدنى عند فصل الشاحن.",
   "energyBudgetBalanced": "متوازن",
   "energyBudgetEco": "توفير: المزيد أثناء الشحن فقط",
-  "energyBudgetFast": "سريع"
+  "energyBudgetFast": "سريع",
+  "airtimeBudgetUsed": "زمن البث المستخدم في آخر دقيقة: {percent}%"
 }

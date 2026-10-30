@@ -7,6 +7,7 @@ library;
 
 import '../transport_models.dart';
 import 'network_limiter.dart';
+import 'radio_airtime.dart';
 
 abstract final class NetworkBudgets {
   /// Telegram Bot API (core.telegram.org/bots/faq#broadcasting-to-users):
@@ -31,7 +32,7 @@ abstract final class NetworkBudgets {
   static const LimiterBudget discord = LimiterBudget(
     name: 'Discord',
     gap: Duration(seconds: 1),
-    burst: 2,
+    burst: 1,
     maxGap: Duration(seconds: 30),
     maxQueue: 64,
     maxWait: Duration(seconds: 45),
@@ -75,7 +76,7 @@ abstract final class NetworkBudgets {
     gap: Duration(milliseconds: 200),
     burst: 1,
     maxGap: Duration(seconds: 8),
-    maxQueue: 32,
+    maxQueue: 64,
     maxWait: Duration(seconds: 15),
   );
 
@@ -128,6 +129,9 @@ abstract final class NetworkBudgets {
         TransportKind.xmpp => xmpp,
         TransportKind.conestRelay => conestRelay,
         TransportKind.tor => generic,
+        TransportKind.meshtastic ||
+        TransportKind.meshCore ||
+        TransportKind.reticulum => RadioAirtime.forKind(kind),
         _ => null,
       };
 }

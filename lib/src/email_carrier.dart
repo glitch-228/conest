@@ -437,11 +437,8 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   Duration get currentSendSpacing => _limiter.currentGap;
 
   Future<void> _waitForSendSlot() async {
-    try {
-      await _limiter.acquire(maxWait: maxSendWait);
-    } on LimiterRefused {
-      throw StateError('Too many mails waiting to be sent from this account.');
-    }
+    // A LimiterRefused: this account is busy, not the route broken.
+    await _limiter.acquire(maxWait: maxSendWait);
   }
 
   /// A refusal that says the account sends too fast, or a connection the

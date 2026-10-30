@@ -323,8 +323,19 @@ class MatrixTransportAdapter implements TransportAdapter, RateLimited {
         throw LimiterRefused(LimiterRefusal.wouldWait, retryIn: wait);
       }
     }
-    Future<T> paced<T>(Future<T> Function() send) =>
-        turns == null ? send() : turns.run(send);
+    var begun = false;
+    Future<T> paced<T>(Future<T> Function() send) async {
+      if (turns == null) return send();
+      // The first frame may be refused; once one has gone the envelope is
+      // finished, not dropped half-way.
+      final result = await turns.run(
+        send,
+        maxWait: begun ? const Duration(minutes: 10) : null,
+      );
+      begun = true;
+      return result;
+    }
+
     for (final frame in frames) {
       final transactionId = MatrixClient.newTransactionId();
       if (channel != null) {

@@ -229,7 +229,7 @@ class TelegramCarrierChannel
         }
         await _wait(
           error.retryAfter != null
-              ? Duration(seconds: min(error.retryAfter!, 120))
+              ? Duration(seconds: min(error.retryAfter!, 3600))
               : _backoff(failures),
         );
       } catch (error) {
@@ -327,7 +327,11 @@ class TelegramCarrierChannel
         if (error.rateLimited) {
           onRateLimited?.call(Duration(seconds: error.retryAfter ?? 0));
         }
-        if (error.rateLimited && attempt < maxRateRetries) {
+        // A short wait is retried here; a long one is left to the account's
+        // limiter (it rests that long and the send is tried again later).
+        if (error.rateLimited &&
+            attempt < maxRateRetries &&
+            (error.retryAfter ?? 1) <= 30) {
           await _wait(Duration(seconds: min(error.retryAfter ?? 1, 30)));
           continue;
         }
