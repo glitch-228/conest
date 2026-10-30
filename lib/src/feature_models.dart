@@ -69,6 +69,10 @@ enum ApplicationCapability {
   /// answers when asked, so a file is fetched from several of them at once
   /// (own devices only; M27).
   multiSourceTransferV1,
+
+  /// Takes a file's encrypted blocks from relay blobs the sender left
+  /// (attachment_blobs), and leaves them when the receiver is slow (M27).
+  relayBlobAttachmentsV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

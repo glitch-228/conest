@@ -143,6 +143,12 @@ class RelayClient {
   static final Map<String, List<int>> _mailboxSecrets = {};
   static final Map<String, SimpleKeyPair> _authKeys = {};
 
+  /// Blob requests (M27): only ever inside an encrypted session.
+  static const Set<String> _blobActions = {'blob_put', 'blob_get', 'blob_has'};
+
+  /// The most a blob part carries (the relay's limit).
+  static const int blobPartBytes = 192 * 1024;
+
   /// Requests that read or acknowledge a mailbox (its owner's to make).
   static const Set<String> _ownedActions = {
     'fetch',
@@ -526,6 +532,105 @@ class RelayClient {
     return result.body['stored'] == true;
   }
 
+  /// Which of [hashes] (lowercase hex SHA-256, at most 64) the relay holds
+  /// as blobs. Throws when the relay keeps none.
+  Future<Set<String>> hasBlobs({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required List<String> hashes,
+    Duration timeout = const Duration(seconds: 6),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    final result = await _sendRequest(
+      host: host,
+      port: port,
+      protocol: protocol,
+      timeout: timeout,
+      request: {'action': 'blob_has', 'hashes': hashes},
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+    final have = result.body['have'];
+    return {if (have is List) ...have.whereType<String>()};
+  }
+
+  /// Uploads [bytes] as a blob named by [hash] (its SHA-256, lowercase
+  /// hex), in parts, for up to [ttl]. False when the relay refuses.
+  Future<bool> putBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    required Uint8List bytes,
+    Duration ttl = const Duration(hours: 24),
+    Duration timeout = const Duration(seconds: 10),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    var offset = 0;
+    while (offset < bytes.length) {
+      final end = min(offset + blobPartBytes, bytes.length);
+      final result = await _sendRequest(
+        host: host,
+        port: port,
+        protocol: protocol,
+        timeout: timeout,
+        request: {
+          'action': 'blob_put',
+          'hash': hash,
+          'total': bytes.length,
+          'offset': offset,
+          'ttl_secs': ttl.inSeconds,
+          'data': base64Encode(bytes.sublist(offset, end)),
+        },
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+      if (result.body['complete'] == true) return true;
+      offset = end;
+    }
+    return false;
+  }
+
+  /// The blob named by [hash], [size] bytes (the caller checks them).
+  Future<Uint8List> getBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    required int size,
+    Duration timeout = const Duration(seconds: 10),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    if (size <= 0 || size > 4 * 1024 * 1024) {
+      throw ArgumentError('A blob is at most 4 MiB.');
+    }
+    final out = BytesBuilder(copy: false);
+    while (out.length < size) {
+      final result = await _sendRequest(
+        host: host,
+        port: port,
+        protocol: protocol,
+        timeout: timeout,
+        request: {
+          'action': 'blob_get',
+          'hash': hash,
+          'offset': out.length,
+          'len': min(blobPartBytes, size - out.length),
+        },
+        expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+      );
+      final data = result.body['data'];
+      if (data is! String || data.length > blobPartBytes * 2) {
+        throw StateError('The relay sent no blob data.');
+      }
+      final part = base64Decode(data);
+      if (part.isEmpty || out.length + part.length > size) {
+        throw StateError('The relay sent a blob of the wrong size.');
+      }
+      out.add(part);
+    }
+    return out.takeBytes();
+  }
+
   Future<List<RelayEnvelope>> fetchEnvelopes({
     required String host,
     required int port,
@@ -825,6 +930,9 @@ class RelayClient {
         maxResponseBytes: maxResponseBytes,
       );
       if (viaSession != null) return viaSession;
+    }
+    if (_blobActions.contains(action)) {
+      throw StateError('Blobs need an encrypted relay session.');
     }
     final mailbox = request['recipient_device_id'];
     if (_ownedActions.contains(action) &&
@@ -1239,7 +1347,8 @@ class RelayClient {
     }
     if (!known.sessions) return null;
     final mustStayPrivate =
-        _ownedActions.contains(request['action']) &&
+        (_ownedActions.contains(request['action']) ||
+            _blobActions.contains(request['action'])) &&
         !isHiddenRouteProtocol(protocol);
     _RelayCallResult? fallback(String why) {
       if (mustStayPrivate) {
@@ -1285,7 +1394,9 @@ class RelayClient {
     // tell a registered user from a passer-by before it says its hidden
     // addresses).
     final outgoing =
-        (request['action'] == 'store' || request['action'] == 'health') &&
+        (request['action'] == 'store' ||
+                request['action'] == 'health' ||
+                request['action'] == 'blob_put') &&
             token != null
         ? {...request, 'token': token}
         : request;

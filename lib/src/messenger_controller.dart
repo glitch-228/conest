@@ -146,6 +146,7 @@ import 'transport.dart';
 import 'transfer/block_sources.dart';
 import 'transfer/gateway_election.dart';
 import 'transfer/own_device_sync_policy.dart';
+import 'transfer/relay_blobs.dart';
 import 'transfer/route_striper.dart';
 import 'content_routing.dart';
 
@@ -369,6 +370,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'attachment_cancel',
   'attachment_pause_control',
   'attachment_progress',
+  'attachment_blobs',
   'group_file_part',
   'message_edit',
   'message_delete',
@@ -14912,6 +14914,7 @@ class MessengerController extends ChangeNotifier {
             : DeliveryState.relayed,
         route: route,
       );
+      _scheduleBlobLeave(contact, state);
     } catch (error) {
       _statusMessage = 'Attachment is waiting for a route: $error';
       appendDebugLog(
@@ -21111,6 +21114,7 @@ class MessengerController extends ChangeNotifier {
             envelope.kind == 'attachment_complete' ||
             envelope.kind == 'attachment_cancel' ||
             envelope.kind == 'attachment_pause_control' ||
+            envelope.kind == 'attachment_blobs' ||
             envelope.kind == 'attachment_progress') {
           await _handleAttachmentEnvelope(envelope);
           _markSeen(envelope.messageId);
@@ -21743,6 +21747,9 @@ class MessengerController extends ChangeNotifier {
         return;
       case 'attachment_progress':
         _handleAttachmentProgress(contact, payload);
+        return;
+      case 'attachment_blobs':
+        _handleAttachmentBlobs(contact, payload);
         return;
     }
   }
@@ -22960,8 +22967,10 @@ class MessengerController extends ChangeNotifier {
     required Uint8List expectedHash,
     // The route the block came by; the envelope's route when null.
     MessageRoute? route,
+    // The source it came from, when not [sender] itself (a relay blob).
+    BlockSource? via,
   }) async {
-    final key = '${sender.deviceId}|$attachmentId|$index';
+    final key = '${via?.toString() ?? sender.deviceId}|$attachmentId|$index';
     if (!_receivingAttachmentBlocks.add(key)) return;
     try {
       await _receiveAttachmentChunkBytes(
@@ -22971,6 +22980,7 @@ class MessengerController extends ChangeNotifier {
         packedBytes: packedBytes,
         expectedHash: expectedHash,
         route: route ?? _ingressRoute,
+        via: via,
       );
     } finally {
       _receivingAttachmentBlocks.remove(key);
@@ -22984,6 +22994,7 @@ class MessengerController extends ChangeNotifier {
     required Uint8List packedBytes,
     required Uint8List expectedHash,
     MessageRoute? route,
+    BlockSource? via,
   }) async {
     if (attachmentId.isEmpty ||
         attachmentId.length > 160 ||
@@ -22993,13 +23004,14 @@ class MessengerController extends ChangeNotifier {
     final state = _inboundAttachments[attachmentId];
     // From the sender, or from a source this file has (an own device that
     // said it holds it; a source dropped for this file is not heard).
-    final source = BlockSource.peer(sender.deviceId);
+    final source = via ?? BlockSource.peer(sender.deviceId);
     if (state == null || !state.sources.contains(source)) {
       return;
     }
     // Another device is a source only while it is still one of this
     // account's devices.
-    if (source.id != state.peerDeviceId &&
+    if (via == null &&
+        source.id != state.peerDeviceId &&
         !(sender.ownDevice &&
             accountDevices?.deviceFor(sender.deviceId) != null)) {
       state.requestedInFlight.removeAll(state.sources.drop(source));
@@ -23401,10 +23413,23 @@ class MessengerController extends ChangeNotifier {
       if (next < 0) break;
       final source = state.sources.choose(next);
       if (source == null) break;
+      if (source.route == SourceRoute.relayBlob) {
+        state.requestedInFlight.add(next);
+        state.sources.begin(next, source);
+        requests.add(
+          _fetchBlobBlock(
+            state,
+            source,
+            _contactByDeviceId(state.peerDeviceId) ?? sender,
+            next,
+          ),
+        );
+        continue;
+      }
       final target = source.id == sender.deviceId
           ? sender
           : _contactByDeviceId(source.id);
-      if (target == null || source.route != SourceRoute.peer) {
+      if (target == null) {
         // The sender itself stays (it may be back); another device that is
         // not a contact any more (or a source this build cannot ask) goes.
         if (source.id == state.peerDeviceId) break;
@@ -23483,6 +23508,13 @@ class MessengerController extends ChangeNotifier {
       }
       state.sources.reconcile(state.requestedInFlight);
       for (final (index, source) in state.sources.takeHedges()) {
+        if (source.route == SourceRoute.relayBlob) {
+          final primary = _contactByDeviceId(state.peerDeviceId);
+          if (primary != null) {
+            unawaited(_fetchBlobBlock(state, source, primary, index));
+          }
+          continue;
+        }
         final target = _contactByDeviceId(source.id);
         if (target == null) {
           state.sources.failed(index, source);
@@ -23521,6 +23553,246 @@ class MessengerController extends ChangeNotifier {
     if (askAgain) {
       await _sendAttachmentChunkRequest(sender, state.descriptor.id, index);
     }
+  }
+
+  // Relay blobs (M27 tier 2): the sender leaves a file's encrypted blocks
+  // on relays it is registered with when the receiver has not come for
+  // them; the receiver takes them as one more source. Every block still
+  // goes through the same check under the file key.
+
+  /// How long the receiver gets to start before the blocks are left on
+  /// relays.
+  @visibleForTesting
+  static Duration blobLeaveDelay = const Duration(seconds: 20);
+
+  final Set<String> _leavingBlobs = <String>{};
+
+  void _scheduleBlobLeave(
+    ContactRecord contact,
+    _OutboundAttachmentState state,
+  ) {
+    if (state.descriptor.chunkSize != _attachmentChunkSize ||
+        state.requiresLan ||
+        state.servesOwnDevice ||
+        !contact.featureCapabilities.contains(
+          ApplicationCapability.relayBlobAttachmentsV1,
+        )) {
+      return;
+    }
+    final id = state.descriptor.id;
+    Timer(blobLeaveDelay, () {
+      if (_disposed || !identical(_outboundAttachments[id], state)) return;
+      unawaited(
+        _leaveBlobs(contact, state).catchError((Object error) {
+          appendDebugLog('Could not leave blobs for $id: ${error.runtimeType}');
+        }),
+      );
+    });
+  }
+
+  /// Whether the energy policy and the network allow uploading for others.
+  bool get _blobUploadAllowed {
+    final cost = _networkCostClass;
+    return _energyPolicy.modeFor(cost) != EnergyMode.saver &&
+        cost == NetworkCostClass.unmetered;
+  }
+
+  Future<void> _leaveBlobs(
+    ContactRecord contact,
+    _OutboundAttachmentState state,
+  ) async {
+    final descriptor = state.descriptor;
+    final id = descriptor.id;
+    // The receiver started: nothing to leave.
+    if (state.highestChunkSent >= 0 ||
+        state.paused ||
+        !_blobUploadAllowed ||
+        !_leavingBlobs.add(id)) {
+      return;
+    }
+    try {
+      final me = _requireIdentity();
+      final relays = <PeerEndpoint, String>{};
+      for (final relay in me.configuredRelays) {
+        final key = _pinnedIdentityKeyForRoute(relay);
+        if (key != null && _snapshot.relayTokens[key] != null) {
+          relays[relay] = key;
+        }
+        if (relays.length >= BlobAnnouncement.maxRelays) break;
+      }
+      if (relays.isEmpty) return;
+      bool active() =>
+          identical(_outboundAttachments[id], state) &&
+          !state.paused &&
+          !_disposed;
+      final blobHashes = <String>[];
+      final plainHashes = <Uint8List>[];
+      final working = relays.keys.toSet();
+      for (var index = 0; index < descriptor.effectiveChunkCount; index++) {
+        if (!active() || working.isEmpty) return;
+        final chunk = await _readOutboundAttachmentChunk(state, index);
+        final block = await _encryptAttachmentBlock(descriptor, index, chunk);
+        final name = blobHashOf(block.ciphertext);
+        blobHashes.add(name);
+        plainHashes.add(block.hash);
+        for (final relay in working.toList()) {
+          try {
+            final done = await _relayClient.putBlob(
+              host: relay.host,
+              port: relay.port,
+              protocol: relay.protocol,
+              hash: name,
+              bytes: block.ciphertext,
+              expectedIdentityPublicKeyBase64: relays[relay],
+            );
+            if (!done) working.remove(relay);
+          } catch (error) {
+            appendDebugLog(
+              'Blob upload to ${relay.label} failed: ${error.runtimeType}',
+            );
+            working.remove(relay);
+          }
+        }
+      }
+      if (!active() || working.isEmpty) return;
+      final announcement = BlobAnnouncement(
+        attachmentId: id,
+        relays: [for (final relay in working) relay.routeKey],
+        blobHashes: blobHashes,
+        plainHashes: plainHashes,
+      );
+      final envelope = await _crypto.encryptPayloadEnvelope(
+        kind: 'attachment_blobs',
+        messageId: _randomId('ablob'),
+        conversationId: _crypto.conversationIdFor(contact.deviceId),
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: jsonEncode(announcement.toJson()),
+      );
+      await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: envelope,
+      );
+    } finally {
+      _leavingBlobs.remove(id);
+    }
+  }
+
+  /// The sender left [payload]'s blocks on relays: they become a source of
+  /// the file when this device has the same relays configured (a sender
+  /// cannot send this device to a server of its choosing).
+  void _handleAttachmentBlobs(
+    ContactRecord sender,
+    Map<String, dynamic> payload,
+  ) {
+    final id = payload['attachmentId'];
+    final state = id is String ? _inboundAttachments[id] : null;
+    final me = identity;
+    if (state == null ||
+        me == null ||
+        state.peerDeviceId != sender.deviceId ||
+        state.blobs != null ||
+        state.fromOwnDevice ||
+        state.descriptor.chunkSize != _attachmentChunkSize) {
+      return;
+    }
+    final announcement = BlobAnnouncement.parse(
+      payload,
+      blocks: state.descriptor.effectiveChunkCount,
+    );
+    if (announcement == null) return;
+    final mine = {for (final r in me.configuredRelays) r.routeKey: r};
+    final relays = <PeerEndpoint>[
+      for (final key in announcement.relays)
+        if (mine[key] case final relay?
+            when _pinnedIdentityKeyForRoute(relay) != null)
+          relay,
+    ];
+    if (relays.isEmpty) return;
+    state.blobs = announcement;
+    for (final relay in relays) {
+      state.blobRelays[relay.routeKey] = relay;
+      state.sources.add(BlockSource.relayBlob(relay.routeKey));
+    }
+    appendDebugLog('Blocks of ${state.descriptor.id} are also on a relay.');
+    if (!state.paused &&
+        state.accepted &&
+        !state.awaitingAcceptance &&
+        state.partialPath != null) {
+      _startInboundRequestWindow(state, sender);
+    }
+  }
+
+  /// Fetches block [index] of [state] from the relay behind [source].
+  Future<void> _fetchBlobBlock(
+    _InboundAttachmentState state,
+    BlockSource source,
+    ContactRecord primary,
+    int index,
+  ) async {
+    final blobs = state.blobs;
+    final relay = state.blobRelays[source.id];
+    final key = relay == null ? null : _pinnedIdentityKeyForRoute(relay);
+    try {
+      if (blobs == null ||
+          relay == null ||
+          key == null ||
+          index < 0 ||
+          index >= blobs.blobHashes.length) {
+        throw StateError('No blob for this block.');
+      }
+      final size =
+          min(
+            state.descriptor.chunkSize,
+            state.descriptor.sizeBytes - index * state.descriptor.chunkSize,
+          ) +
+          16;
+      final bytes = await _relayClient.getBlob(
+        host: relay.host,
+        port: relay.port,
+        protocol: relay.protocol,
+        hash: blobs.blobHashes[index],
+        size: size,
+        expectedIdentityPublicKeyBase64: key,
+      );
+      if (!identical(_inboundAttachments[state.descriptor.id], state)) return;
+      await _handleAttachmentChunkBytes(
+        primary,
+        attachmentId: state.descriptor.id,
+        index: index,
+        packedBytes: bytes,
+        expectedHash: blobs.plainHashes[index],
+        route: MessageRoute.conestRelay,
+        via: source,
+      );
+    } catch (error) {
+      appendDebugLog('Blob fetch failed: ${error.runtimeType}');
+      if (!identical(_inboundAttachments[state.descriptor.id], state)) return;
+      state.sources.failed(index, source);
+      state.requestedInFlight.remove(index);
+      unawaited(
+        Future<void>.delayed(const Duration(seconds: 5), () {
+          if (identical(_inboundAttachments[state.descriptor.id], state) &&
+              !state.paused &&
+              state.accepted &&
+              state.partialPath != null) {
+            _startInboundRequestWindow(state, primary);
+          }
+        }),
+      );
+    }
+  }
+
+  @visibleForTesting
+  Future<void> leaveBlobsForTesting(String attachmentId) async {
+    final state = _outboundAttachments[attachmentId];
+    final contact = state == null
+        ? null
+        : _contactByDeviceId(state.peerDeviceId);
+    if (state != null && contact != null) await _leaveBlobs(contact, state);
   }
 
   void _scheduleAttachmentRetry(String attachmentId) {
@@ -39020,6 +39292,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.telegramCarrierV1,
       ApplicationCapability.discordCarrierV1,
       ApplicationCapability.multiSourceTransferV1,
+      ApplicationCapability.relayBlobAttachmentsV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -41083,6 +41356,11 @@ class _InboundAttachmentState {
   /// Asks late blocks of a second source.
   Timer? hedgeTimer;
 
+  /// Relay blobs the sender left (M27 tier 2): per block, the blob's name
+  /// and the plaintext hash; and the relays by source key.
+  BlobAnnouncement? blobs;
+  final Map<String, PeerEndpoint> blobRelays = {};
+
   /// The chat the message is in: [peerDeviceId], unless an own device of
   /// this account passed the file on (then the blocks come from it, but the
   /// message is in the contact's chat, or Saved).
@@ -41476,6 +41754,63 @@ class _ScoringRelayClient implements RelayClient {
       ),
     );
   }
+
+  @override
+  Future<Set<String>> hasBlobs({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required List<String> hashes,
+    Duration timeout = const Duration(seconds: 6),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.hasBlobs(
+    host: host,
+    port: port,
+    protocol: protocol,
+    hashes: hashes,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
+  @override
+  Future<bool> putBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    required Uint8List bytes,
+    Duration ttl = const Duration(hours: 24),
+    Duration timeout = const Duration(seconds: 10),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.putBlob(
+    host: host,
+    port: port,
+    protocol: protocol,
+    hash: hash,
+    bytes: bytes,
+    ttl: ttl,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
+  @override
+  Future<Uint8List> getBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    required int size,
+    Duration timeout = const Duration(seconds: 10),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.getBlob(
+    host: host,
+    port: port,
+    protocol: protocol,
+    hash: hash,
+    size: size,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
 
   @override
   Future<bool> storeEnvelope({
