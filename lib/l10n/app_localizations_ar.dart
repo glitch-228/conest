@@ -4063,7 +4063,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get uiYouReadTheMeshChatAEACC5 =>
-      'يمكنك قراءة محادثة الشبكة، لكن مستخدمي bitchat لا يرونك ولا يكتبون إليك. فعّل «إمكانية التواصل عبر bitchat» في الإعدادات ← الاتصال للكتابة.';
+      'يمكنك رؤية الأشخاص القريبين وقراءة دردشة الشبكة. لمراسلة شخص، فعّل «متاح لمستخدمي bitchat» ليصبح جهازك مرئيًا للأشخاص القريبين.';
 
   @override
   String get uiEveryoneNearbyOverBluetooth7B8D63 =>
@@ -6654,4 +6654,9 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => 'قارنتها';
+
+  @override
+  String bitchatLastHeard(String time) {
+    return 'آخر إشارة في $time';
+  }
 }

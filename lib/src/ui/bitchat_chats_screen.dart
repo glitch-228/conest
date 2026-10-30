@@ -21,6 +21,7 @@ class BitchatChatsScreen extends StatelessWidget {
       builder: (context, _) {
         final chats = controller.bitchatChats;
         final nearby = controller.bitchatNearbyPeers;
+        final nearbyById = {for (final peer in nearby) peer.peerId: peer};
         final peers =
             <String>{
               ...chats.direct.keys,
@@ -31,12 +32,8 @@ class BitchatChatsScreen extends StatelessWidget {
                   DateTime.fromMillisecondsSinceEpoch(0);
               return last(b).compareTo(last(a));
             });
-        final nearbyIds = {for (final peer in nearby) peer.peerId};
         String name(String peer) =>
-            nearby
-                .where((candidate) => candidate.peerId == peer)
-                .firstOrNull
-                ?.nickname ??
+            nearbyById[peer]?.nickname ??
             chats.nicknameOf(peer) ??
             peer.substring(0, 8);
         return Scaffold(
@@ -74,21 +71,39 @@ class BitchatChatsScreen extends StatelessWidget {
               for (final peer in peers)
                 ListTile(
                   leading: Icon(
-                    nearbyIds.contains(peer)
+                    nearbyById.containsKey(peer)
                         ? Icons.bluetooth_connected
                         : Icons.bluetooth_disabled,
                   ),
                   title: Text(name(peer)),
                   subtitle: Text(
-                    chats.direct[peer]?.last.text ??
-                        (nearbyIds.contains(peer)
-                            ? l10nOf(context).uiNearbyF1536C
-                            : ''),
-                    maxLines: 1,
+                    [
+                      ?chats.direct[peer]?.last.text,
+                      if (nearbyById[peer] case final nearbyPeer?)
+                        l10nOf(context).bitchatLastHeard(
+                          TimeOfDay.fromDateTime(
+                            nearbyPeer.lastSeen.toLocal(),
+                          ).format(context),
+                        ),
+                    ].join('\n'),
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  trailing: _Unread(chats.unread[peer] ?? 0),
-                  onTap: () => _open(context, peer, name(peer)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _Unread(chats.unread[peer] ?? 0),
+                      if (nearbyById.containsKey(peer))
+                        TextButton(
+                          key: ValueKey('bitchat-message-$peer'),
+                          onPressed: () => _message(context, peer, name(peer)),
+                          child: Text(l10nOf(context).uiMessage68F414),
+                        ),
+                    ],
+                  ),
+                  onTap: () => chats.direct.containsKey(peer)
+                      ? _open(context, peer, name(peer))
+                      : _message(context, peer, name(peer)),
                 ),
             ],
           ),
@@ -99,10 +114,59 @@ class BitchatChatsScreen extends StatelessWidget {
 
   void _open(BuildContext context, String key, String title) =>
       openBitchatChat(context, controller, key, title);
+
+  void _message(BuildContext context, String key, String title) =>
+      messageBitchatPeer(context, controller, key, title);
 }
 
-/// Opens one bitchat chat: [chatKey] is [BitchatChats.meshKey] or a peer
-/// id.
+/// Asks before becoming visible to start messaging a nearby bitchat peer.
+Future<void> messageBitchatPeer(
+  BuildContext context,
+  MessengerController controller,
+  String chatKey,
+  String title,
+) async {
+  if (!controller.bitchatReachable) {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10nOf(context).uiReachableByBitchatUsers568021),
+        content: Text(
+          l10nOf(
+            context,
+          ).uiBitchatUsersNearbySeeYou1B54FC(controller.bitchatNickname),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(l10nOf(context).actionCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(l10nOf(context).actionContinue),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !context.mounted) return;
+    try {
+      await controller.setBitchatReachable(true);
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+      return;
+    }
+    if (!context.mounted || !controller.bitchatReachable) return;
+  }
+  if (!context.mounted) return;
+  openBitchatChat(context, controller, chatKey, title);
+}
+
+/// Opens one bitchat chat, including saved history while hidden.
+/// [chatKey] is [BitchatChats.meshKey] or a peer id.
 void openBitchatChat(
   BuildContext context,
   MessengerController controller,

@@ -3984,7 +3984,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get uiYouReadTheMeshChatAEACC5 =>
-      'You read the mesh chat, but bitchat users cannot see you or write to you. Turn on \"Reachable by bitchat users\" in Settings → Connectivity to write.';
+      'You can see people nearby and read the mesh chat. To message someone, turn on “Reachable by bitchat users” and become visible to people nearby.';
 
   @override
   String get uiEveryoneNearbyOverBluetooth7B8D63 =>
@@ -6529,4 +6529,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => 'I compared them';
+
+  @override
+  String bitchatLastHeard(String time) {
+    return 'Last heard $time';
+  }
 }

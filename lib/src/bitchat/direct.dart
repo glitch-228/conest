@@ -16,6 +16,12 @@ abstract final class BitchatPayloadType {
   static const int delivered = 0x03;
 }
 
+/// How long a hidden listener remembers an unheard peer.
+const Duration bitchatNearbyLifetime = Duration(minutes: 5);
+
+/// The most peers a hidden listener remembers at once.
+const int bitchatNearbyMaxPeers = 256;
+
 /// How long a Noise session is used before a fresh handshake.
 const Duration bitchatSessionLifetime = Duration(hours: 24);
 
@@ -122,11 +128,12 @@ class BitchatPeerSeen extends BitchatDirectEvent {
 
 /// A bitchat identity that announces itself and talks to bitchat users:
 /// signed announces, Noise XX sessions per peer and private messages with
-/// receipts, as the bitchat apps do. Only used when the person chose to be
-/// reachable by bitchat users.
+/// receipts, as the bitchat apps do. A hidden, throwaway identity only
+/// reads announces and public messages; its carrier never sends as it.
 class BitchatDirect {
   BitchatDirect._({
     required this.nickname,
+    required this.listeningOnly,
     required List<int> noiseSeed,
     required SimpleKeyPair signing,
     required this.noisePublicKey,
@@ -141,12 +148,14 @@ class BitchatDirect {
     required String nickname,
     required List<int> noiseSeed,
     required List<int> signingSeed,
+    bool listeningOnly = false,
     DateTime Function()? now,
   }) async {
     final noise = await X25519().newKeyPairFromSeed(noiseSeed);
     final signing = await Ed25519().newKeyPairFromSeed(signingSeed);
     return BitchatDirect._(
       nickname: nickname,
+      listeningOnly: listeningOnly,
       noiseSeed: noiseSeed,
       signing: signing,
       noisePublicKey: Uint8List.fromList(
@@ -160,6 +169,10 @@ class BitchatDirect {
   }
 
   final String nickname;
+
+  /// A hidden listener keeps only recent nearby peers, without sessions.
+  /// The carrier must also keep this identity off the air.
+  final bool listeningOnly;
   final List<int> _noiseSeed;
   final SimpleKeyPair _signing;
   final Uint8List noisePublicKey;
@@ -178,13 +191,13 @@ class BitchatDirect {
   int _handshakesThisMinute = 0;
   final Map<String, int> _handshakesByPeer = {};
 
-  static const int _maxPeers = 512;
+  int get _maxPeers => listeningOnly ? bitchatNearbyMaxPeers : 512;
   static const int _maxSessions = 256;
   static const int _maxWaitingPerPeer = 32;
   static const int _maxHandshakesPerPeerPerMinute = 10;
   static const int _maxHandshakesPerMinute = 30;
   static const int _maxCounter = 0xffffffff;
-  static const Duration _announceMaxAge = Duration(seconds: 900);
+  Duration get _announceMaxAge => Duration(seconds: listeningOnly ? 120 : 900);
 
   String get peerIdHex => _hex(peerId);
 
@@ -217,7 +230,22 @@ class BitchatDirect {
   }
 
   Stream<BitchatDirectEvent> get events => _events.stream;
-  Iterable<BitchatPeer> get peers => _peers.values;
+  Iterable<BitchatPeer> get peers {
+    prunePeers();
+    return _peers.values;
+  }
+
+  /// Expires hidden discovery using the carrier's existing maintenance tick.
+  /// Returns whether the nearby list changed.
+  bool prunePeers() {
+    if (!listeningOnly) return false;
+    final before = _peers.length;
+    final now = _now();
+    _peers.removeWhere(
+      (_, peer) => now.difference(peer.lastSeen) >= bitchatNearbyLifetime,
+    );
+    return before != _peers.length;
+  }
   BitchatPeer? peer(String peerIdHex) => _peers[peerIdHex];
 
   /// Peers another identity of this device has seen (it was just replaced),
@@ -225,6 +253,10 @@ class BitchatDirect {
   /// with this identity.
   void adoptPeers(Iterable<BitchatPeer> peers) {
     for (final peer in peers) {
+      if (listeningOnly &&
+          _now().difference(peer.lastSeen) >= bitchatNearbyLifetime) {
+        continue;
+      }
       if (_peers.length >= _maxPeers) return;
       if (peer.peerId == peerIdHex || _peers.containsKey(peer.peerId)) {
         continue;
@@ -280,6 +312,7 @@ class BitchatDirect {
   /// A peer's announce: kept when its signature, id and age check out.
   /// False only when the signature fails: that copy is not passed on.
   Future<bool> handleAnnounce(BitchatPacket packet) async {
+    prunePeers();
     final payload = packet.expandedPayload();
     if (payload == null) return true;
     final announcement = BitchatAnnouncement.decode(payload);
@@ -294,7 +327,7 @@ class BitchatDirect {
     if (id != _hex(packet.senderId) || id == peerIdHex) return true;
     final age = _now().millisecondsSinceEpoch - packet.timestamp;
     if (age.abs() > _announceMaxAge.inMilliseconds) return true;
-    final known = _peers[id];
+    var known = _peers[id];
     // The first signing key checked for an id stays, as bitchat keeps it:
     // someone re-announcing a peer's Noise key with their own signing key
     // cannot write in the mesh chat as that peer (or silence them).
@@ -322,6 +355,15 @@ class BitchatDirect {
       ),
     );
     if (!valid) return false;
+    // Verification yields: a switch may have closed this listener, or a
+    // different announce may have pinned this id while it was checked.
+    if (_events.isClosed) return true;
+    prunePeers();
+    known = _peers[id];
+    if (known != null &&
+        !_equal(known.signingKey, announcement.signingPublicKey)) {
+      return true;
+    }
     if (known != null) {
       known
         ..nickname = announcement.nickname

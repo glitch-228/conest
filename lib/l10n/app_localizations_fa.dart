@@ -3983,7 +3983,7 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get uiYouReadTheMeshChatAEACC5 =>
-      'گفت‌وگوی مش را می‌خوانید، اما کاربران bitchat شما را نمی‌بینند و نمی‌توانند بنویسند. برای نوشتن، «دسترسی کاربران bitchat به شما» را در تنظیمات ← اتصال روشن کنید.';
+      'می‌توانید افراد نزدیک را ببینید و گفتگوی شبکه را بخوانید. برای پیام دادن، «دردسترس کاربران bitchat» را روشن کنید تا دستگاه شما برای افراد نزدیک نمایان شود.';
 
   @override
   String get uiEveryoneNearbyOverBluetooth7B8D63 => 'همهٔ نزدیکان از Bluetooth';
@@ -6530,4 +6530,9 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => 'مقایسه کردم';
+
+  @override
+  String bitchatLastHeard(String time) {
+    return 'آخرین سیگنال: $time';
+  }
 }

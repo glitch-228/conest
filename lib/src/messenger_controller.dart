@@ -7793,6 +7793,7 @@ class MessengerController extends ChangeNotifier {
     ).convert(utf8.encode(label)).bytes;
     final direct = await BitchatDirect.create(
       nickname: bitchatNickname,
+      listeningOnly: !config.visible,
       noiseSeed: derive('conest.bitchat.identity.noise'),
       signingSeed: derive('conest.bitchat.identity.signing'),
       now: _now,

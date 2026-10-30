@@ -6459,7 +6459,7 @@ abstract class AppLocalizations {
   /// App-owned interface/status text in lib/src/ui/bitchat_chats_screen.dart:48. English: You read the mesh chat, but bitchat users cannot see you or write to you. Turn on "Reachable by bitchat users" in Settings → Connectivity to write.
   ///
   /// In en, this message translates to:
-  /// **'You read the mesh chat, but bitchat users cannot see you or write to you. Turn on \"Reachable by bitchat users\" in Settings → Connectivity to write.'**
+  /// **'You can see people nearby and read the mesh chat. To message someone, turn on “Reachable by bitchat users” and become visible to people nearby.'**
   String get uiYouReadTheMeshChatAEACC5;
 
   /// App-owned interface/status text in lib/src/ui/bitchat_chats_screen.dart:59. English: Everyone nearby, over Bluetooth
@@ -10544,6 +10544,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'I compared them'**
   String get contactKeysDifferConfirm;
+
+  /// When a verified bitchat announce was last received from a nearby person.
+  ///
+  /// In en, this message translates to:
+  /// **'Last heard {time}'**
+  String bitchatLastHeard(String time);
 }
 
 class _AppLocalizationsDelegate
