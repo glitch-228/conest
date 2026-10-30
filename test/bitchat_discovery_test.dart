@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:conest/src/bitchat/direct.dart';
 import 'package:conest/src/bitchat/packet.dart';
+import 'package:conest/src/bitchat/mesh.dart';
 import 'package:conest/src/bitchat_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cryptography/cryptography.dart';
@@ -204,6 +205,96 @@ void main() {
       )!;
       await listener.handleAnnounce(received);
       expect(listener.peers, isEmpty);
+    },
+  );
+
+  test(
+    'mesh chat rejects a signed wire timestamp that overflows age',
+    () async {
+      final listener = await person(0, listeningOnly: true);
+      final phone = await person(1);
+      await listener.handleAnnounce(await phone.announce());
+      final unsigned = BitchatPacket(
+        type: BitchatType.message,
+        senderId: phone.peerId,
+        timestamp: clock.millisecondsSinceEpoch + (-0x8000000000000000),
+        payload: Uint8List.fromList([104, 105]),
+      );
+      final signing = await Ed25519().newKeyPairFromSeed(
+        List.generate(32, (i) => (1 + i + 100) & 0xff),
+      );
+      final signature = await Ed25519().sign(
+        unsigned.bytesToSign(),
+        keyPair: signing,
+      );
+      final received = BitchatPacket.decode(
+        unsigned
+            .copyWith(signature: Uint8List.fromList(signature.bytes))
+            .encode(),
+      )!;
+      expect(await listener.readPublic(received), isNull);
+    },
+  );
+
+  test(
+    'mesh chat rejects timestamps outside DateTime range without throwing',
+    () async {
+      clock = DateTime.fromMillisecondsSinceEpoch(
+        8640000000000000,
+        isUtc: true,
+      );
+      final listener = await person(0, listeningOnly: true);
+      final phone = await person(1);
+      await listener.handleAnnounce(await phone.announce());
+      final unsigned = BitchatPacket(
+        type: BitchatType.message,
+        senderId: phone.peerId,
+        timestamp: clock.millisecondsSinceEpoch + 1,
+        payload: Uint8List.fromList([104, 105]),
+      );
+      final signing = await Ed25519().newKeyPairFromSeed(
+        List.generate(32, (i) => (1 + i + 100) & 0xff),
+      );
+      final signature = await Ed25519().sign(
+        unsigned.bytesToSign(),
+        keyPair: signing,
+      );
+      final received = BitchatPacket.decode(
+        unsigned
+            .copyWith(signature: Uint8List.fromList(signature.bytes))
+            .encode(),
+      )!;
+      expect(await listener.readPublic(received), isNull);
+    },
+  );
+
+  test(
+    'mesh neither reads nor relays a wire timestamp that overflows age',
+    () async {
+      final area = FakeBleNeighbourhood()
+        ..connect('sender', 'listener')
+        ..connect('listener', 'other');
+      var read = 0;
+      final node = BitchatNode(
+        links: area.node('listener'),
+        onPrivate: (_, _) => BitchatPrivate.notMine,
+        onPacket: (_) async {
+          read++;
+          return true;
+        },
+        now: () => clock,
+      );
+      addTearDown(node.stop);
+      final bad = BitchatPacket(
+        type: BitchatType.announce,
+        senderId: Uint8List(8),
+        timestamp: clock.millisecondsSinceEpoch + (-0x8000000000000000),
+        payload: Uint8List(0),
+      );
+      await area.node('sender').broadcast(bad.encode());
+      await Future<void>.delayed(Duration.zero);
+      expect(read, 0);
+      expect(area.airtime, hasLength(1));
     },
   );
 

@@ -519,8 +519,11 @@ class BitchatDirect {
     final peer = _peers[from];
     final signature = packet.signature;
     if (from == peerIdHex || peer == null || signature == null) return unread;
-    final age = _now().millisecondsSinceEpoch - packet.timestamp;
-    if (age.abs() > bitchatPublicMaxAge.inMilliseconds) return unread;
+    final now = _now().millisecondsSinceEpoch;
+    final maxAge = bitchatPublicMaxAge.inMilliseconds;
+    if (packet.timestamp < now - maxAge || packet.timestamp > now + maxAge) {
+      return unread;
+    }
     // Checked as signed: compressed, as carried.
     if (!_messageBudget.take()) return unread;
     final valid = await Ed25519().verify(
@@ -545,16 +548,22 @@ class BitchatDirect {
       text =
           '${String.fromCharCodes(text.runes.take(bitchatMaxReceivedChars))}…';
     }
+    final DateTime sentAt;
+    try {
+      sentAt = DateTime.fromMillisecondsSinceEpoch(
+        packet.timestamp,
+        isUtc: true,
+      );
+    } on ArgumentError {
+      return unread;
+    }
     return (
       BitchatPublicMessage(
         id: id,
         peerId: from,
         nickname: peer.nickname,
         text: text,
-        sentAt: DateTime.fromMillisecondsSinceEpoch(
-          packet.timestamp,
-          isUtc: true,
-        ),
+        sentAt: sentAt,
       ),
       false,
     );
