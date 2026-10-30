@@ -23787,6 +23787,15 @@ class MessengerController extends ChangeNotifier {
   }
 
   @visibleForTesting
+  void handleBlobAnnouncementForTesting(
+    String senderDeviceId,
+    Map<String, dynamic> payload,
+  ) {
+    final sender = _contactByDeviceId(senderDeviceId);
+    if (sender != null) _handleAttachmentBlobs(sender, payload);
+  }
+
+  @visibleForTesting
   Future<void> leaveBlobsForTesting(String attachmentId) async {
     final state = _outboundAttachments[attachmentId];
     final contact = state == null

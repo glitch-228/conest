@@ -24409,19 +24409,24 @@ void main() {
       );
       final bobId = bob.identity!.deviceId;
       String? id;
-      await _waitForIroh(() {
-        unawaited(alice.pollNow());
-        final m = alice
-            .messagesFor(bobId)
-            .where((m) => m.attachment?.fileName == 'blobbed.bin')
-            .firstOrNull;
-        unawaited(bob.pollNow());
-        id = m?.attachment?.id;
-        if (id != null && alice.attachmentAwaitingAcceptance(id!)) {
-          unawaited(alice.acceptIncomingAttachment(id!));
-        }
-        return id != null && relay.blobs.length >= 4;
-      }, timeout: const Duration(seconds: 20), reason: 'the blocks were not left on the relay: blobs=${relay.blobs.length} chunk=${alice.messagesFor(bobId).map((m) => m.attachment?.chunkSize)} caps=${bob.contacts.single.featureCapabilities.contains(ApplicationCapability.relayBlobAttachmentsV1)} bobLog=${bob.recentDebugLog.reversed.take(8).join(' | ')}');
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          final m = alice
+              .messagesFor(bobId)
+              .where((m) => m.attachment?.fileName == 'blobbed.bin')
+              .firstOrNull;
+          unawaited(bob.pollNow());
+          id = m?.attachment?.id;
+          if (id != null && alice.attachmentAwaitingAcceptance(id!)) {
+            unawaited(alice.acceptIncomingAttachment(id!));
+          }
+          return id != null && relay.blobs.length >= 4;
+        },
+        timeout: const Duration(seconds: 20),
+        reason:
+            'the blocks were not left on the relay: blobs=${relay.blobs.length} chunk=${alice.messagesFor(bobId).map((m) => m.attachment?.chunkSize)} caps=${bob.contacts.single.featureCapabilities.contains(ApplicationCapability.relayBlobAttachmentsV1)} bobLog=${bob.recentDebugLog.reversed.take(8).join(' | ')}',
+      );
       return (alice: alice, bob: bob, relay: relay, id: id!, bytes: bytes);
     }
 
@@ -24499,20 +24504,24 @@ void main() {
       final bobId = bob.identity!.deviceId;
       String? id;
       BlockSourceSet? sources;
-      await _waitForIroh(() {
-        unawaited(alice.pollNow());
-        final m = alice
-            .messagesFor(bobId)
-            .where((m) => m.attachment?.fileName == 'tampered.bin')
-            .firstOrNull;
-        id = m?.attachment?.id;
-        if (id != null && alice.attachmentAwaitingAcceptance(id!)) {
-          unawaited(alice.acceptIncomingAttachment(id!));
-        }
-        unawaited(bob.pollNow());
-        sources = id == null ? null : alice.blockSourcesForTesting(id!);
-        return sources != null && sources!.sources.length > 1;
-      }, timeout: const Duration(seconds: 20), reason: 'the relay did not become a source');
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          final m = alice
+              .messagesFor(bobId)
+              .where((m) => m.attachment?.fileName == 'tampered.bin')
+              .firstOrNull;
+          id = m?.attachment?.id;
+          if (id != null && alice.attachmentAwaitingAcceptance(id!)) {
+            unawaited(alice.acceptIncomingAttachment(id!));
+          }
+          unawaited(bob.pollNow());
+          sources = id == null ? null : alice.blockSourcesForTesting(id!);
+          return sources != null && sources!.sources.length > 1;
+        },
+        timeout: const Duration(seconds: 20),
+        reason: 'the relay did not become a source',
+      );
       final blobSource = sources!.sources.last;
       expect(blobSource.route, SourceRoute.relayBlob);
       await _waitForIroh(
@@ -24545,8 +24554,123 @@ void main() {
       );
     }, timeout: const Timeout(Duration(seconds: 150)));
 
-    test('an announcement is taken only from the sender, once, for relays '
-        'this device has, and within bounds', () {
+    test('on battery saver nothing is left on relays', () async {
+      final saved = MessengerController.blobLeaveDelay;
+      MessengerController.blobLeaveDelay = Duration.zero;
+      addTearDown(() => MessengerController.blobLeaveDelay = saved);
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name, EnergyMode mode) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          energyPolicy: EnergyPolicy.fixed(mode),
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice', EnergyMode.unconstrained);
+      final bob = await make('Bob', EnergyMode.saver);
+      await _pairControllers(alice, bob);
+      for (final c in [alice, bob]) {
+        await c.registerWithRelay(c.identity!.configuredRelays.first);
+      }
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          unawaited(bob.pollNow());
+          return bob.contacts.single.featureCapabilities.contains(
+            ApplicationCapability.relayBlobAttachmentsV1,
+          );
+        },
+        reason: 'Bob did not learn what Alice can do',
+        timeout: const Duration(seconds: 20),
+      );
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.kind == 'attachment_chunk_request' ||
+          envelope.kind == 'attachment_chunk';
+      await bob.sendAttachment(
+        contact: bob.contacts.single,
+        bytes: Uint8List(300 * 1024),
+        fileName: 'saver.bin',
+      );
+      for (var i = 0; i < 40; i++) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(relay.blobs, isEmpty);
+    });
+
+    test('an announcement is taken only from the sender', () async {
+      final saved = MessengerController.blobLeaveDelay;
+      MessengerController.blobLeaveDelay = const Duration(hours: 1);
+      addTearDown(() => MessengerController.blobLeaveDelay = saved);
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      final carol = await make('Carol');
+      await _pairControllers(alice, bob);
+      await _pairControllers(alice, carol);
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.kind == 'attachment_chunk_request' ||
+          envelope.kind == 'attachment_chunk';
+      await bob.sendAttachment(
+        contact: bob.contacts.single,
+        bytes: Uint8List(400 * 1024),
+        fileName: 'who.bin',
+      );
+      final bobId = bob.identity!.deviceId;
+      String? id;
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          unawaited(bob.pollNow());
+          id = alice
+              .messagesFor(bobId)
+              .where((m) => m.attachment?.fileName == 'who.bin')
+              .firstOrNull
+              ?.attachment
+              ?.id;
+          if (id != null && alice.attachmentAwaitingAcceptance(id!)) {
+            unawaited(alice.acceptIncomingAttachment(id!));
+          }
+          return id != null && alice.blockSourcesForTesting(id!) != null;
+        },
+        reason: 'the offer did not arrive',
+        timeout: const Duration(seconds: 20),
+      );
+      final announcement = {
+        'attachmentId': id,
+        'relays': [alice.identity!.configuredRelays.first.routeKey],
+        'blobs': [for (var i = 0; i < 4; i++) '$i' * 64],
+        'plain': [for (var i = 0; i < 4; i++) base64Encode(Uint8List(32))],
+      };
+      alice.handleBlobAnnouncementForTesting(
+        carol.identity!.deviceId,
+        announcement,
+      );
+      expect(alice.blockSourcesForTesting(id!)!.sources.length, 1);
+      alice.handleBlobAnnouncementForTesting(bobId, announcement);
+      expect(alice.blockSourcesForTesting(id!)!.sources.length, 2);
+      // Once: a second announcement changes nothing.
+      alice.handleBlobAnnouncementForTesting(bobId, {
+        ...announcement,
+        'relays': ['relay:tcp:other.example:1'],
+      });
+      expect(alice.blockSourcesForTesting(id!)!.sources.length, 2);
+    });
+
+    test('an announcement is taken only within bounds', () {
       final good = BlobAnnouncement(
         attachmentId: 'a',
         relays: const ['relay:tcp:relay.example:7667'],
