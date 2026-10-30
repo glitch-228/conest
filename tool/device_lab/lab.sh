@@ -327,7 +327,25 @@ else
 fi
 
 # --- Reports ------------------------------------------------------------------------
-[ -n "$linux_pid" ] && { wait "$linux_pid" || echo "Linux run ended with an error (see linux.log)."; }
+# A run that never finishes (a device waiting for contacts that cannot
+# reach it, as Tor on a censored network did all night on 2026-10-29) is
+# stopped after its linger and idle time plus 40 minutes (MAX_RUN), so the
+# others' reports and the series still go on.
+if [ -n "$linux_pid" ]; then
+  max_run=${MAX_RUN:-$((LINGER + IDLE + 2400))}
+  waited=0
+  while kill -0 "$linux_pid" 2>/dev/null && [ "$waited" -lt "$max_run" ]; do
+    sleep 5
+    waited=$((waited + 5))
+  done
+  if kill -0 "$linux_pid" 2>/dev/null; then
+    echo "Linux run still going after ${max_run} s: stopped."
+    kill "$linux_pid" 2>/dev/null || true
+    sleep 10
+    kill -9 "$linux_pid" 2>/dev/null || true
+  fi
+  wait "$linux_pid" || echo "Linux run ended with an error (see linux.log)."
+fi
 # A missing report must not cost the others (or the clean-up below).
 if wait_for "the Windows report" "win \"if exist \\\"$win_report\\\" (exit 0) else (exit 1)\"" 300; then
   sshpass -e scp -q "$WINDOWS:conest-lab/conest-debug-windows-x64/lab-report.json" "$out/windows.json" ||
