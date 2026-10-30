@@ -22942,7 +22942,10 @@ void main() {
               .attachment!
               .effectiveChunkCount;
           expect(blocks, greaterThan(2));
-          expect(sources.deliveredBy(laptop) + sources.deliveredBy(phone), blocks);
+          expect(
+            sources.deliveredBy(laptop) + sources.deliveredBy(phone),
+            blocks,
+          );
           expect(sources.deliveredBy(laptop), greaterThan(0));
           expect(
             sources.deliveredBy(phone),

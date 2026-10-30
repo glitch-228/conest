@@ -23052,13 +23052,7 @@ class MessengerController extends ChangeNotifier {
           state.finalizing) {
         return;
       }
-      await _sourceServedBadBlock(
-        state,
-        sender,
-        source,
-        index,
-        askAgain: true,
-      );
+      await _sourceServedBadBlock(state, sender, source, index, askAgain: true);
       return;
     }
     if (!identical(_inboundAttachments[attachmentId], state) ||
@@ -37109,8 +37103,7 @@ class MessengerController extends ChangeNotifier {
   /// This device now holds [attachmentId]: the account's other devices that
   /// understand it are told (they may be fetching it).
   void _announceFileHeld(String attachmentId, int sizeBytes) {
-    if (sizeBytes < _multiSourceMinBytes ||
-        !ownDeviceSyncPermission.allowed) {
+    if (sizeBytes < _multiSourceMinBytes || !ownDeviceSyncPermission.allowed) {
       return;
     }
     _syncToOwnDevices({
