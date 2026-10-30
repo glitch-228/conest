@@ -18311,8 +18311,15 @@ class MessengerController extends ChangeNotifier {
           irohFirst: true,
         );
         delivered = true;
-      } catch (_) {
+      } catch (error) {
         // A later authenticated profile exchange can retry failed updates.
+        // Said in the log: a pairing request that never arrives (device lab,
+        // contacts added back over LAN and Iroh) left no trace here.
+        appendDebugLog(
+          'contact_exchange to ${contact.alias} not delivered'
+          '${pairingResponse == null ? '' : ' ($pairingResponse)'}: '
+          '${_boundedLogValue('$error', 200)}',
+        );
       }
     }
     return delivered;
