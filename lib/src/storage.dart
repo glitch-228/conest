@@ -351,6 +351,11 @@ class VaultStore {
   final Future<File> Function()? _vaultFileProvider;
   final VaultKeyProvider _keyProvider;
   static const _vaultFileName = 'conest.vault';
+
+  /// Bumped by [clear]: a session store opened before it writes nothing
+  /// more, so a reset never leaves session state behind.
+  int _ratchetEpoch = 0;
+  final Set<Future<void>> _ratchetWrites = <Future<void>>{};
   Future<void> _saveTail = Future<void>.value();
   final _groupJournals = <String, Future<GroupHistoryJournal>>{};
   Future<void> _groupCloseTail = Future<void>.value();
@@ -420,6 +425,7 @@ class VaultStore {
       this,
       Directory('${vault.path}.ratchet'),
       await pickleKey.extractBytes(),
+      _ratchetEpoch,
     );
   }
 
@@ -593,11 +599,24 @@ class VaultStore {
   Future<void> clear() async {
     await _saveTail.catchError((_) {});
     await closeGroupHistory();
+    // Session writes already under way finish first; any later one is
+    // refused (a write landing mid-delete failed it, or brought it back).
+    _ratchetEpoch++;
+    await Future.wait([
+      for (final write in _ratchetWrites.toList())
+        write.catchError((Object _) {}),
+    ]);
     final file = await _vaultFile();
     final history = Directory('${file.path}.groups');
     if (await history.exists()) await history.delete(recursive: true);
     final ratchet = Directory('${file.path}.ratchet');
-    if (await ratchet.exists()) await ratchet.delete(recursive: true);
+    if (await ratchet.exists()) {
+      await deleteDirectoryWithRetries(
+        ratchet,
+        attempts: 5,
+        pause: const Duration(milliseconds: 50),
+      );
+    }
     final matrix = Directory('${file.path}.matrix');
     if (await matrix.exists()) await matrix.delete(recursive: true);
     for (final candidate in <File>[
@@ -683,10 +702,11 @@ class VaultStore {
 }
 
 class _FileRatchetStore implements RatchetStore {
-  _FileRatchetStore(this._vault, this._directory, this.pickleKey);
+  _FileRatchetStore(this._vault, this._directory, this.pickleKey, this._epoch);
 
   final VaultStore _vault;
   final Directory _directory;
+  final int _epoch;
   @override
   final List<int> pickleKey;
 
@@ -722,10 +742,16 @@ class _FileRatchetStore implements RatchetStore {
     if (await file.exists()) await file.delete();
   }
 
-  Future<void> _write(File file, String contents) async {
-    final temporary = File('${file.path}.tmp');
-    await _vault._writeFlushed(temporary, contents);
-    await _vault._atomicReplace(temporary, file);
+  Future<void> _write(File file, String contents) {
+    // After a reset this store is gone: a late write must not bring it back.
+    if (_vault._ratchetEpoch != _epoch) return Future<void>.value();
+    final write = () async {
+      final temporary = File('${file.path}.tmp');
+      await _vault._writeFlushed(temporary, contents);
+      await _vault._atomicReplace(temporary, file);
+    }();
+    _vault._ratchetWrites.add(write);
+    return write.whenComplete(() => _vault._ratchetWrites.remove(write));
   }
 }
 

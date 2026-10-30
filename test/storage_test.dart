@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:conest/src/app_storage.dart';
 import 'package:conest/src/models.dart';
+import 'package:conest/src/ratchet.dart';
 import 'package:conest/src/storage.dart';
 
 void main() {
@@ -172,6 +173,31 @@ void main() {
         ).load(),
         throwsA(anything),
       );
+    },
+  );
+
+  test(
+    'a reset leaves no session state behind, even with writes under way',
+    () async {
+      final root = await createTempRoot('conest_vault_ratchet_clear_');
+      final vaultFile = File(p.join(root.path, 'conest.vault'));
+      final keyFile = File(p.join(root.path, 'conest.key'));
+      final store = VaultStore(
+        vaultFileProvider: () async => vaultFile,
+        keyProvider: FileVaultKeyProvider(fileProvider: () async => keyFile),
+      );
+      final sessions = await store.openRatchetStore();
+      await sessions.writeAccount('account pickle');
+      final underWay = [
+        for (var i = 0; i < 20; i++)
+          sessions.writePeer('peer-$i', const RatchetPeerState()),
+      ];
+      await store.clear();
+      await Future.wait(underWay);
+      // A late write from the old store (a reset bundle landing after it).
+      await sessions.writePeer('late', const RatchetPeerState());
+      await sessions.writeAccount('late pickle');
+      expect(Directory('${vaultFile.path}.ratchet').existsSync(), isFalse);
     },
   );
 
