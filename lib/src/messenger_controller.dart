@@ -9149,7 +9149,7 @@ class MessengerController extends ChangeNotifier {
   /// One limiter per network account, shared by every chat, group and own
   /// device that sends through it (M25). The key is the network until
   /// several accounts per network exist (M45).
-  late final LimiterBook _limiters = LimiterBook(now: _now);
+  late final LimiterBook _limiters = LimiterBook();
 
   NetworkLimiter? _limiterFor(TransportKind kind) {
     final budget = NetworkBudgets.forKind(
