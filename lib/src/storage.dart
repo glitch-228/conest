@@ -596,6 +596,20 @@ class VaultStore {
     await _atomicReplace(temporary, file);
   }
 
+  /// Deletes [directory] with everything in it. A write that was already
+  /// under way (a session saved in the background) can add a file while the
+  /// delete runs: "Directory not empty"; the delete then runs again.
+  static Future<void> _deleteTree(Directory directory) async {
+    for (var attempt = 0; await directory.exists(); attempt++) {
+      try {
+        await directory.delete(recursive: true);
+      } on FileSystemException {
+        if (attempt >= 10) rethrow;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+  }
+
   Future<void> clear() async {
     await _saveTail.catchError((_) {});
     await closeGroupHistory();
@@ -607,18 +621,9 @@ class VaultStore {
         write.catchError((Object _) {}),
     ]);
     final file = await _vaultFile();
-    final history = Directory('${file.path}.groups');
-    if (await history.exists()) await history.delete(recursive: true);
-    final ratchet = Directory('${file.path}.ratchet');
-    if (await ratchet.exists()) {
-      await deleteDirectoryWithRetries(
-        ratchet,
-        attempts: 5,
-        pause: const Duration(milliseconds: 50),
-      );
-    }
-    final matrix = Directory('${file.path}.matrix');
-    if (await matrix.exists()) await matrix.delete(recursive: true);
+    await _deleteTree(Directory('${file.path}.groups'));
+    await _deleteTree(Directory('${file.path}.ratchet'));
+    await _deleteTree(Directory('${file.path}.matrix'));
     for (final candidate in <File>[
       file,
       File('${file.path}.tmp'),
