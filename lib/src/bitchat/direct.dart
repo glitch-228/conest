@@ -181,6 +181,7 @@ class BitchatDirect {
   final DateTime Function() _now;
 
   final Map<String, BitchatPeer> _peers = {};
+  bool _peerExpiryPending = false;
   final Map<String, _Session> _sessions = {};
   final Map<String, List<Uint8List>> _waiting = {};
   final Map<String, Future<void>> _queues = {};
@@ -244,8 +245,20 @@ class BitchatDirect {
     _peers.removeWhere(
       (_, peer) => now.difference(peer.lastSeen) >= bitchatNearbyLifetime,
     );
-    return before != _peers.length;
+    final changed = before != _peers.length;
+    _peerExpiryPending |= changed;
+    return changed;
   }
+
+  /// Reports expiry once, including removals made by reads or invalid
+  /// announces before the carrier's existing maintenance tick.
+  bool takePeerExpiry() {
+    prunePeers();
+    final changed = _peerExpiryPending;
+    _peerExpiryPending = false;
+    return changed;
+  }
+
   BitchatPeer? peer(String peerIdHex) => _peers[peerIdHex];
 
   /// Peers another identity of this device has seen (it was just replaced),

@@ -195,7 +195,9 @@ void registerBitchatHiddenControllerTests({
       expect(find.byKey(const ValueKey('bitchat-composer')), findsOneWidget);
       await tester.pageBack();
       await tester.pumpAndSettle();
-      await tester.runAsync(() => controller.setBitchatReachable(false));
+      var hidden = false;
+      controller.setBitchatReachable(false).then((_) => hidden = true);
+      await pumpUntil(() => hidden);
       await tester.pumpAndSettle();
       final hiddenAirtime = area.airtime.length;
       // Reading saved history is still possible without becoming visible.

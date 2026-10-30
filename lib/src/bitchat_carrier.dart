@@ -810,7 +810,7 @@ class BitchatCarrierChannel
     if (direct == null || _node == null) return;
     _knownLinks = {...?_links?.linkLimits.keys};
     _tickTimer = Timer.periodic(_tickEvery, (_) {
-      if (direct.prunePeers()) onStatusChanged?.call();
+      if (direct.takePeerExpiry()) onStatusChanged?.call();
       unawaited(
         direct
             .tick()

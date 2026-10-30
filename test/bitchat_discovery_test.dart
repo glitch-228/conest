@@ -1,7 +1,11 @@
 import 'dart:typed_data';
 
 import 'package:conest/src/bitchat/direct.dart';
+import 'package:conest/src/bitchat/packet.dart';
+import 'package:conest/src/bitchat_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fake_ble_mesh.dart';
 
 void main() {
   late DateTime clock;
@@ -139,6 +143,61 @@ void main() {
     },
   );
 
+  for (final pruneThroughGetter in [false, true]) {
+    testWidgets(
+      'expiry notification survives ${pruneThroughGetter ? 'a getter' : 'an invalid announce'} before the mesh tick',
+      (tester) async {
+        late BitchatDirect listener;
+        late BitchatDirect phone;
+        late BitchatPacket announce;
+        await tester.runAsync(() async {
+          listener = await person(0, listeningOnly: true);
+          phone = await person(1);
+          announce = await phone.announce();
+          await listener.handleAnnounce(announce);
+        });
+        final area = FakeBleNeighbourhood();
+        var notifications = 0;
+        final channel = BitchatCarrierChannel(
+          config: BitchatCarrierConfig.create(clock),
+          connector: () async => area.node('listener'),
+          keyFor: (_) async => [],
+          onFrame: (_, _) {},
+          onStatusChanged: () => notifications++,
+          now: () => clock,
+        )..useDirect(listener, visible: false);
+        channel.start();
+        await tester.pump();
+        expect(channel.state, BitchatCarrierState.running);
+        final before = notifications;
+        clock = clock.add(const Duration(minutes: 5));
+        if (pruneThroughGetter) {
+          expect(listener.peers, isEmpty);
+        } else {
+          await listener.handleAnnounce(
+            BitchatPacket(
+              type: BitchatType.announce,
+              senderId: phone.peerId,
+              timestamp: clock.millisecondsSinceEpoch,
+              payload: announce.payload,
+              // Unsigned: must not produce a peer-seen event.
+            ),
+          );
+        }
+        expect(notifications, before);
+        await tester.pump(const Duration(seconds: 5));
+        expect(notifications, before + 1);
+        expect(listener.peers, isEmpty);
+        await tester.pump(const Duration(seconds: 5));
+        expect(notifications, before + 1);
+        expect(area.airtime, isEmpty);
+        final stopped = channel.stop();
+        await tester.pump();
+        await stopped;
+      },
+    );
+  }
+
   test(
     'visible discovery keeps its previous timestamp window and retention',
     () async {
@@ -147,9 +206,11 @@ void main() {
       final announce = await phone.announce();
       clock = clock.add(const Duration(minutes: 3));
       await visible.handleAnnounce(announce);
+      expect(visible.peers, hasLength(1));
       expect(visible.peers.single.peerId, phone.peerIdHex);
       clock = clock.add(const Duration(minutes: 6));
       expect(visible.prunePeers(), isFalse);
+      expect(visible.peers, hasLength(1));
       expect(visible.peers.single.peerId, phone.peerIdHex);
     },
   );
