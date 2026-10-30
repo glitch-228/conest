@@ -178,8 +178,7 @@ class BlockSourceSet {
     }
     final withRoom = [
       for (final source in _sources)
-        if (!asked.contains(source) &&
-            (counts[source] ?? 0) < windowPerSource)
+        if (!asked.contains(source) && (counts[source] ?? 0) < windowPerSource)
           source,
     ];
     if (withRoom.isEmpty) return null;

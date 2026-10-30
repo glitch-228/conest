@@ -22951,6 +22951,29 @@ void main() {
           );
         }, timeout: const Timeout(Duration(seconds: 240)));
 
+        test('a device that starts or resumes a fetch asks the others who '
+            'hold the file', () async {
+          final s = await accountWithTwoWaiting();
+          await phoneFetchesAndTabletLearns(s);
+          final sources = s.tablet.blockSourcesForTesting(s.id)!;
+          final phone = BlockSource.peer(s.phone.identity!.deviceId);
+          s.tablet.askForOtherSourcesForTesting(
+            s.id,
+            forgetDevice: s.phone.identity!.deviceId,
+          );
+          expect(sources.contains(phone), isFalse);
+          await _waitForIroh(
+            () {
+              for (final c in [s.laptop, s.bob, s.phone, s.tablet]) {
+                unawaited(c.pollNow());
+              }
+              return sources.contains(phone);
+            },
+            reason: 'the phone did not answer that it has the file',
+            timeout: const Duration(seconds: 40),
+          );
+        }, timeout: const Timeout(Duration(seconds: 240)));
+
         test('the first source gone before the file is fetched: the other '
             'serves all of it', () async {
           final s = await accountWithTwoWaiting();

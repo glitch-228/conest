@@ -81,11 +81,9 @@ void main() {
   group('BlockSourceSet', () {
     test('two sources at different speeds share the blocks by speed', () {
       final counts = _fetch(
-        (now) => BlockSourceSet(
-          primary: _sender,
-          blockBytes: _block,
-          now: now,
-        )..add(_laptop),
+        (now) =>
+            BlockSourceSet(primary: _sender, blockBytes: _block, now: now)
+              ..add(_laptop),
         blocks: 200,
         paths: {_sender: _Path(0.5), _laptop: _Path(0.05)},
       );
@@ -98,14 +96,39 @@ void main() {
       expect(slow, greaterThan(0));
     });
 
+    test('with room on both, the next block goes to the faster source, '
+        'less as it fills up', () {
+      var now = DateTime.utc(2026);
+      final set = BlockSourceSet(
+        primary: _sender,
+        blockBytes: _block,
+        now: () => now,
+      )..add(_laptop);
+      // Measured: the sender takes 1 s a block, the laptop 0.1 s.
+      for (var i = 0; i < 3; i++) {
+        set.begin(i, _sender);
+        now = now.add(const Duration(seconds: 1));
+        set.delivered(i, _sender);
+        set.begin(10 + i, _laptop);
+        now = now.add(const Duration(milliseconds: 100));
+        set.delivered(10 + i, _laptop);
+      }
+      expect(set.choose(20), _laptop);
+      set.begin(20, _laptop);
+      // Shared with what is on it: a laptop with many blocks asked is
+      // worth less than an idle sender.
+      for (var i = 21; i < 28; i++) {
+        set.begin(i, _laptop);
+      }
+      expect(set.choose(30), _sender);
+    });
+
     test('a source that drops out mid-file loses nothing', () {
       final received = <int>{};
       final counts = _fetch(
-        (now) => BlockSourceSet(
-          primary: _sender,
-          blockBytes: _block,
-          now: now,
-        )..add(_laptop),
+        (now) =>
+            BlockSourceSet(primary: _sender, blockBytes: _block, now: now)
+              ..add(_laptop),
         blocks: 60,
         paths: {_sender: _Path(0.1), _laptop: _Path(0.1)},
         received: received,
@@ -286,6 +309,12 @@ void main() {
       final set = BlockSourceSet(primary: _sender, blockBytes: _block);
       expect(set.delivered(5, _sender), isFalse);
       expect(set.deliveredBy(_sender), 1);
+      // From a source that rested after a stall: it works after all.
+      set.begin(6, _sender);
+      set.timedOut();
+      expect(set.striper.isResting(_sender), isTrue);
+      expect(set.delivered(6, _sender), isFalse);
+      expect(set.striper.isResting(_sender), isFalse);
     });
 
     test('dropped sources are remembered within a bound', () {

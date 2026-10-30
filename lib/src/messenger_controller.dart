@@ -37186,6 +37186,22 @@ class MessengerController extends ChangeNotifier {
   BlockSourceSet? blockSourcesForTesting(String attachmentId) =>
       _inboundAttachments[attachmentId]?.sources;
 
+  /// As after a restart: [attachmentId]'s sources forget [forgetDevice],
+  /// and the other devices are asked who holds the file.
+  @visibleForTesting
+  void askForOtherSourcesForTesting(
+    String attachmentId, {
+    required String forgetDevice,
+  }) {
+    final state = _inboundAttachments[attachmentId];
+    if (state == null) return;
+    state.requestedInFlight.removeAll(
+      state.sources.remove(BlockSource.peer(forgetDevice)),
+    );
+    _ownDeviceFiles.forgetDevice(forgetDevice);
+    _lookForOtherSources(state);
+  }
+
   @visibleForTesting
   Future<void> receiveBlockForTesting(
     String senderDeviceId,
