@@ -22,6 +22,7 @@ class _Side {
       pollTimeout: const Duration(milliseconds: 300),
       retryDelay: const Duration(milliseconds: 10),
       sendSpacing: sendSpacing,
+      onRateLimited: rested.add,
       wait: (delay) async {
         waits.add(delay);
         await Future<void>.delayed(const Duration(milliseconds: 5));
@@ -34,6 +35,9 @@ class _Side {
   late final TelegramCarrierChannel channel;
   final received = <(String, Uint8List)>[];
   final waits = <Duration>[];
+
+  /// Waits Telegram named, as told to the account's limiter.
+  final rested = <Duration>[];
 }
 
 Future<void> until(bool Function() done) async {
@@ -163,6 +167,7 @@ void main() {
     );
     await alice.channel.sendFrame('bob_conest_bot', Uint8List.fromList([9]));
     expect(alice.waits, contains(const Duration(seconds: 7)));
+    expect(alice.rested, [const Duration(seconds: 7)]);
     await until(() => bob.received.isNotEmpty);
   });
 

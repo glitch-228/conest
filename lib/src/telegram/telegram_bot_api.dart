@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../limits/network_limiter.dart';
+
 /// A Bot API call that Telegram answered with `ok: false` (or an HTTP error).
-class TelegramBotException implements Exception {
+class TelegramBotException implements Exception, ServerSlowDown {
   const TelegramBotException(
     this.method,
     this.code,
@@ -24,6 +26,10 @@ class TelegramBotException implements Exception {
   bool get unauthorized => code == 401 || code == 404;
   bool get conflict => code == 409;
   bool get rateLimited => code == 429;
+
+  @override
+  Duration? get slowDownFor =>
+      rateLimited ? Duration(seconds: retryAfter ?? 0) : null;
 
   @override
   String toString() => 'Telegram $method failed ($code): $description';

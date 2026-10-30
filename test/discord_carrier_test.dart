@@ -26,6 +26,7 @@ class _Side {
       pollInterval: const Duration(milliseconds: 10),
       retryDelay: const Duration(milliseconds: 10),
       sendSpacing: Duration.zero,
+      onRateLimited: rested.add,
       wait: (delay) async {
         waits.add(delay);
         await Future<void>.delayed(
@@ -42,6 +43,9 @@ class _Side {
   late final DiscordCarrierChannel channel;
   final received = <(String, Uint8List)>[];
   final waits = <Duration>[];
+
+  /// Waits Discord named, as told to the account's limiter.
+  final rested = <Duration>[];
 }
 
 Future<void> until(bool Function() done) async {
@@ -291,6 +295,7 @@ void main() {
     );
     await alice.channel.sendFrame(bob.config.address, Uint8List(3));
     expect(alice.waits, contains(const Duration(milliseconds: 2500)));
+    expect(alice.rested, [const Duration(milliseconds: 2500)]);
     await until(() => bob.received.isNotEmpty);
   });
 

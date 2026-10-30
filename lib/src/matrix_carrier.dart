@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'carrier.dart';
+import 'limits/network_limiter.dart';
 import 'matrix_client.dart';
 import 'transport.dart';
 import 'transport_models.dart';
@@ -113,7 +114,7 @@ class MatrixCarrierStatus {
 /// Store-and-forward route through the user's Matrix account: Conest
 /// envelopes are sealed, chunked and sent as to-device messages to the
 /// peer's Conest-specific Matrix device, and read back from `/sync`.
-class MatrixTransportAdapter implements TransportAdapter {
+class MatrixTransportAdapter implements TransportAdapter, RateLimited {
   MatrixTransportAdapter({
     required MatrixCarrierSealer sealer,
     MatrixClient Function(MatrixSession session)? clientFactory,
@@ -133,6 +134,12 @@ class MatrixTransportAdapter implements TransportAdapter {
 
   final MatrixCarrierSealer _sealer;
   final MatrixCarrierChannel? _channel;
+
+  /// The account's turn-taking on Matrix (see [NetworkBudgets.matrix]): a
+  /// server's `retry_after_ms` is obeyed exactly, by every chat sending
+  /// through this account. Set by the controller.
+  @override
+  NetworkLimiter? limiter;
   MatrixSession? _externalSession;
 
   /// Frames forwarded while stopped: the owning client has already
@@ -309,17 +316,26 @@ class MatrixTransportAdapter implements TransportAdapter {
     }
     final sealed = await _sealer.seal(peer.deviceId, envelope.bytes);
     final frames = matrixCarrierFrames(MatrixClient.newTransactionId(), sealed);
+    final turns = limiter;
+    if (turns != null) {
+      final wait = turns.projectedWaitFor(frames.length);
+      if (wait > turns.budget.maxWait) {
+        throw LimiterRefused(LimiterRefusal.wouldWait, retryIn: wait);
+      }
+    }
+    Future<T> paced<T>(Future<T> Function() send) =>
+        turns == null ? send() : turns.run(send);
     for (final frame in frames) {
       final transactionId = MatrixClient.newTransactionId();
       if (channel != null) {
-        await channel.sendFrame(address, frame, transactionId);
+        await paced(() => channel.sendFrame(address, frame, transactionId));
         continue;
       }
       Future<void> send() => client!.sendToDevice(matrixCarrierEventType, {
         address.userId: {address.deviceId: frame},
       }, transactionId: transactionId);
       try {
-        await send();
+        await paced(send);
       } on MatrixException catch (error) {
         final wait = error.retryAfter;
         if (!error.isRateLimited ||
@@ -327,9 +343,10 @@ class MatrixTransportAdapter implements TransportAdapter {
             wait > const Duration(seconds: 5)) {
           rethrow;
         }
-        // Same transaction id: the homeserver treats it as a retry.
-        await Future<void>.delayed(wait);
-        await send();
+        // Same transaction id: the homeserver treats it as a retry. The
+        // limiter has the account rest that long; without one, wait here.
+        if (turns == null) await Future<void>.delayed(wait);
+        await paced(send);
       }
     }
     return DeliveryReceipt(

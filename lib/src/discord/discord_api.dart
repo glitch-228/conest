@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../limits/network_limiter.dart';
+
 /// A Discord REST call that failed.
-class DiscordException implements Exception {
+class DiscordException implements Exception, ServerSlowDown {
   const DiscordException(this.path, this.code, this.message, {this.retryAfter});
 
   final String path;
@@ -18,6 +20,11 @@ class DiscordException implements Exception {
   bool get unauthorized => code == 401;
   bool get forbidden => code == 403;
   bool get rateLimited => code == 429;
+
+  @override
+  Duration? get slowDownFor => rateLimited
+      ? Duration(milliseconds: ((retryAfter ?? 0) * 1000).ceil())
+      : null;
 
   @override
   String toString() => 'Discord $path failed ($code): $message';

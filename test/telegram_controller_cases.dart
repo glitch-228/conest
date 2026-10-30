@@ -102,6 +102,29 @@ void _telegramControllerTests() {
       );
     });
 
+    test('the bot account has one limiter that a flood wait rests', () async {
+      final hub = FakeTelegramBots();
+      final aliceBot = hub.addBot('alice_conest_bot');
+      final relay = _FakeRelayClient();
+      final alice = await person(hub, relay, 'Alice');
+      expect(alice.limiterForTesting(TransportKind.telegram), isNull);
+      await alice.enableTelegramCarrier(aliceBot.token);
+      await connected(alice);
+      final limiter = alice.limiterForTesting(TransportKind.telegram)!;
+      expect(limiter.isResting, isFalse);
+      // The channel is told of the wait Telegram names.
+      alice.noteServerSlowDownForTesting(
+        TransportKind.telegram,
+        const Duration(seconds: 30),
+      );
+      expect(limiter.restRemaining.inSeconds, inInclusiveRange(29, 30));
+      expect(limiter.nearLimit, isTrue);
+      // The same limiter every time, until the carrier is removed.
+      expect(alice.limiterForTesting(TransportKind.telegram), same(limiter));
+      await alice.disableTelegramCarrier();
+      expect(alice.limiterForTesting(TransportKind.telegram), isNull);
+    });
+
     test('a mutual add works over Telegram alone', () async {
       final hub = FakeTelegramBots();
       final aliceBot = hub.addBot('alice_conest_bot');

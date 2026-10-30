@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'limits/network_limiter.dart';
 import 'transport.dart';
 import 'transport_models.dart';
 
@@ -401,7 +402,7 @@ class CarrierStatus {
 /// Store-and-forward route over a carrier network: envelopes are sealed,
 /// split into binary frames and sent through a [CarrierChannel]; frames the
 /// channel receives come in through [receiveFrame].
-class CarrierTransportAdapter implements TransportAdapter {
+class CarrierTransportAdapter implements TransportAdapter, RateLimited {
   CarrierTransportAdapter({
     required this.kind,
     required CarrierSealer sealer,
@@ -431,6 +432,16 @@ class CarrierTransportAdapter implements TransportAdapter {
 
   /// Pause between frames of one envelope, for networks that rate-limit.
   final Duration frameSpacing;
+
+  /// The account's turn-taking on this network (see [NetworkBudgets]): every
+  /// frame passes it, whichever chat, group or own device sends it. Set by
+  /// the controller; null where the network names no limit.
+  @override
+  NetworkLimiter? limiter;
+
+  /// True where the channel takes the limiter's turns itself (one mail is
+  /// one turn): the adapter then only reports the limiter to the dispatcher.
+  bool channelPacesFrames = false;
   final CarrierSealer _sealer;
   final bool Function(String address) _isValidAddress;
   final DateTime Function() _now;
@@ -617,6 +628,15 @@ class CarrierTransportAdapter implements TransportAdapter {
     // Registered before the first frame: confirmations of early frames
     // can come while later ones are still going out.
     final pending = _RadioEnvelope(envelope.id, peer.deviceId);
+    // A burst that cannot get its turns in time is refused before the first
+    // frame goes out, so no half-sent envelope is left behind.
+    final turns = channelPacesFrames ? null : limiter;
+    if (turns != null) {
+      final wait = turns.projectedWaitFor(frames.length);
+      if (wait > turns.budget.maxWait) {
+        throw LimiterRefused(LimiterRefusal.wouldWait, retryIn: wait);
+      }
+    }
     for (var index = 0; index < frames.length; index++) {
       if (index > 0 && frameSpacing > Duration.zero) {
         await Future<void>.delayed(frameSpacing);
@@ -632,7 +652,9 @@ class CarrierTransportAdapter implements TransportAdapter {
         throw TransportSendCancelled('${kind.label}: no longer needed.');
       }
       if (channel is AcknowledgingCarrierChannel) {
-        final id = await channel.sendTrackedFrame(address, frames[index]);
+        final id = await _paced(
+          () => channel.sendTrackedFrame(address, frames[index]),
+        );
         pending.tracked = true;
         pending.waiting.add(id);
         _unconfirmedFrames.remove(id);
@@ -644,14 +666,16 @@ class CarrierTransportAdapter implements TransportAdapter {
         final early = _earlyFrameAcks.remove(id);
         if (early != null) _onFrameAck((frameId: id, ok: early));
       } else if (inboxSender != null) {
-        await (channel as InboxCarrierChannel).sendInboxFrame(
-          address,
-          frames[index],
-          inboxSender,
-          inboxKey!,
+        await _paced(
+          () => (channel as InboxCarrierChannel).sendInboxFrame(
+            address,
+            frames[index],
+            inboxSender,
+            inboxKey!,
+          ),
         );
       } else {
-        await channel.sendFrame(address, frames[index]);
+        await _paced(() => channel.sendFrame(address, frames[index]));
       }
     }
     pending.allSent = true;
@@ -676,6 +700,13 @@ class CarrierTransportAdapter implements TransportAdapter {
     at: _now().toUtc(),
     detail: '${kind.label} carries messages, not file streams.',
   );
+
+  /// One frame, when the account's limiter lets it go; a server's
+  /// "slow down" in the error is obeyed by the limiter.
+  Future<T> _paced<T>(Future<T> Function() send) {
+    final turns = channelPacesFrames ? null : limiter;
+    return turns == null ? send() : turns.run(send);
+  }
 
   @override
   Future<void> cancel(String operationId) async {

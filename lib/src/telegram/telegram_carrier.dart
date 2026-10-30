@@ -110,6 +110,7 @@ class TelegramCarrierChannel
     this.retryDelay = const Duration(seconds: 5),
     this.sendSpacing = const Duration(milliseconds: 1100),
     this.maxRateRetries = 3,
+    this.onRateLimited,
     Future<void> Function(Duration delay)? wait,
   }) : _wait = wait ?? Future<void>.delayed;
 
@@ -124,6 +125,10 @@ class TelegramCarrierChannel
   /// Telegram allows about one message a second into one chat.
   final Duration sendSpacing;
   final int maxRateRetries;
+
+  /// Told of every wait Telegram asks for (FLOOD_WAIT), so the account's
+  /// limiter rests that long for every chat, not just this send.
+  final void Function(Duration wait)? onRateLimited;
   final Future<void> Function(Duration delay) _wait;
 
   static final int _maxFrameChars =
@@ -219,6 +224,9 @@ class TelegramCarrierChannel
         }
         failures++;
         _set(TelegramCarrierState.failed, _scrub(error));
+        if (error.rateLimited) {
+          onRateLimited?.call(Duration(seconds: error.retryAfter ?? 0));
+        }
         await _wait(
           error.retryAfter != null
               ? Duration(seconds: min(error.retryAfter!, 120))
@@ -316,6 +324,9 @@ class TelegramCarrierChannel
         });
         return;
       } on TelegramBotException catch (error) {
+        if (error.rateLimited) {
+          onRateLimited?.call(Duration(seconds: error.retryAfter ?? 0));
+        }
         if (error.rateLimited && attempt < maxRateRetries) {
           await _wait(Duration(seconds: min(error.retryAfter ?? 1, 30)));
           continue;

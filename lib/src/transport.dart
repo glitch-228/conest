@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'limits/network_limiter.dart';
 import 'path_stats.dart';
 import 'transport_models.dart';
 
@@ -296,6 +297,13 @@ class TransportRegistry {
     final now = _now();
     bool cooling(RouteCandidate route) =>
         statsFor(peer.deviceId, route.transport)?.coolingAt(now) ?? false;
+    // A route whose account is near its rate limit goes behind routes that
+    // are not: better another route now than a queue (or a ban) there.
+    bool throttled(RouteCandidate route) {
+      final Object? adapter = _adapters[route.transport];
+      return adapter is RateLimited && (adapter.limiter?.nearLimit ?? false);
+    }
+
     double speed(RouteCandidate route) =>
         statsFor(peer.deviceId, route.transport)?.rttMs ??
         _expectedLatencyMs(route);
@@ -311,6 +319,10 @@ class TransportRegistry {
         cooling(right) ? 1 : 0,
       );
       if (coolingOrder != 0) return coolingOrder;
+      final throttledOrder = (throttled(left) ? 1 : 0).compareTo(
+        throttled(right) ? 1 : 0,
+      );
+      if (throttledOrder != 0) return throttledOrder;
       final pathOrder = _routePriority(left).compareTo(_routePriority(right));
       if (pathOrder != 0) return pathOrder;
       final speedOrder = speed(left).compareTo(speed(right));
@@ -389,7 +401,11 @@ class TransportRegistry {
         rethrow;
       } catch (error) {
         lastError = error;
-        _recordFailure(peer.deviceId, route.transport, error);
+        // The account's own limiter holding a send back says nothing about
+        // the route: the next route goes, and this one is not marked failed.
+        if (error is! LimiterRefused) {
+          _recordFailure(peer.deviceId, route.transport, error);
+        }
         attempts.add(
           DeliveryAttempt(
             route: route,

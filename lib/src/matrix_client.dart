@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'circumvention/circumvention.dart';
+import 'limits/network_limiter.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -73,7 +74,7 @@ class IoMatrixHttp implements MatrixHttp {
   void close() => _client.close(force: true);
 }
 
-class MatrixException implements Exception {
+class MatrixException implements Exception, ServerSlowDown {
   const MatrixException(
     this.message, {
     this.status,
@@ -87,6 +88,10 @@ class MatrixException implements Exception {
   final Duration? retryAfter;
 
   bool get isRateLimited => status == 429 || errcode == 'M_LIMIT_EXCEEDED';
+
+  @override
+  Duration? get slowDownFor =>
+      isRateLimited ? (retryAfter ?? Duration.zero) : null;
   bool get isUnknownToken => errcode == 'M_UNKNOWN_TOKEN';
 
   @override

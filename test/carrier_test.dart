@@ -4,6 +4,8 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:conest/src/carrier.dart';
+import 'package:conest/src/limits/network_limiter.dart';
+import 'package:conest/src/telegram/telegram_bot_api.dart';
 import 'package:conest/src/matrix_carrier.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/transport.dart';
@@ -394,6 +396,97 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(receipts.length, 1);
     });
+
+    test(
+      'an account limiter paces frames, and a flood wait is shared',
+      () async {
+        var now = DateTime.utc(2026, 10, 30, 12);
+        final limiter = NetworkLimiter(
+          const LimiterBudget(
+            name: 'test',
+            gap: Duration(milliseconds: 5),
+            burst: 100,
+            maxWait: Duration(seconds: 30),
+          ),
+          now: () => now,
+        );
+        adapter.limiter = limiter;
+        await adapter.start();
+        final route = (await adapter.discoverRoutes(peer)).single;
+        TransportEnvelope envelope(String id, int size) => TransportEnvelope(
+          id: id,
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(size),
+          createdAt: DateTime.utc(2026, 10, 30),
+        );
+        // Frames pass the limiter (three frames of a 50 KB envelope).
+        await adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: envelope('m1', 50 * 1024),
+        );
+        expect(channel.sent, hasLength(3));
+        // The server named a wait on another chat's send: the account rests.
+        limiter.pushedBack(retryAfter: const Duration(minutes: 5));
+        // This envelope would wait out its deadline: refused before any frame.
+        await expectLater(
+          adapter.sendEnvelope(
+            peer: peer,
+            route: route,
+            envelope: envelope('m2', 50 * 1024),
+          ),
+          throwsA(isA<LimiterRefused>()),
+        );
+        expect(channel.sent, hasLength(3), reason: 'no half-sent envelope');
+        // Time passes; the account may send again.
+        now = now.add(const Duration(minutes: 6));
+        await adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: envelope('m3', 50 * 1024),
+        );
+        expect(channel.sent, hasLength(6));
+      },
+    );
+
+    test(
+      'a server\'s slow-down in a frame\'s error makes the account rest',
+      () async {
+        final limiter = NetworkLimiter(
+          const LimiterBudget(name: 'test', maxWait: Duration(seconds: 30)),
+        );
+        final failing = _FailingChannel(
+          const TelegramBotException(
+            'sendMessage',
+            429,
+            'Too Many Requests',
+            retryAfter: 11,
+          ),
+        );
+        final telegram = CarrierTransportAdapter(
+          kind: TransportKind.nostr,
+          sealer: sealer,
+          framing: CarrierFraming.nostr,
+        )..attach(failing);
+        telegram.limiter = limiter;
+        await telegram.start();
+        final route = (await telegram.discoverRoutes(peer)).single;
+        await expectLater(
+          telegram.sendEnvelope(
+            peer: peer,
+            route: route,
+            envelope: TransportEnvelope(
+              id: 'm1',
+              recipientDeviceId: 'dev-bob',
+              bytes: pattern(100),
+              createdAt: DateTime.utc(2026, 10, 30),
+            ),
+          ),
+          throwsA(isA<TelegramBotException>()),
+        );
+        expect(limiter.restRemaining.inSeconds, inInclusiveRange(10, 11));
+      },
+    );
 
     test('a confirmation that beats the send call still counts', () async {
       final radio = _AckingChannel(
@@ -854,6 +947,20 @@ class _AckingChannel implements AcknowledgingCarrierChannel {
   Stream<({int frameId, bool ok})> get frameAcks => _acks.stream;
 
   void ack(int id, {bool ok = true}) => _acks.add((frameId: id, ok: ok));
+}
+
+class _FailingChannel implements CarrierChannel {
+  _FailingChannel(this.error);
+  final Object error;
+
+  @override
+  String get localAddress => 'npub-me|wss://relay.one';
+
+  @override
+  String get routeLabel => 'failing';
+
+  @override
+  Future<void> sendFrame(String address, Uint8List frame) async => throw error;
 }
 
 class _RecordingChannel implements CarrierChannel {

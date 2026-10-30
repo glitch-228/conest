@@ -46,6 +46,8 @@ import 'email/delta_content.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
+import 'limits/network_budgets.dart';
+import 'limits/network_limiter.dart';
 import 'circumvention/circumvention.dart';
 import 'circumvention/lan_beacon_codec.dart';
 import 'attachment_safety.dart';
@@ -5893,6 +5895,8 @@ class MessengerController extends ChangeNotifier {
     final channel = TelegramCarrierChannel(
       config: config,
       api: _telegramNetwork.botApi(config.token),
+      onRateLimited: (wait) =>
+          _noteServerSlowDown(TransportKind.telegram, wait),
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
       log: (line) => appendDebugLog(line),
@@ -5955,6 +5959,7 @@ class MessengerController extends ChangeNotifier {
     final channel = DiscordCarrierChannel(
       config: config,
       api: _discordNetwork.api(config.token, DiscordAuth.bot),
+      onRateLimited: (wait) => _noteServerSlowDown(TransportKind.discord, wait),
       pollInterval: _discordNetwork.pollInterval,
       slowdown: () =>
           (_appInForeground ? 1 : 3) *
@@ -8781,6 +8786,7 @@ class MessengerController extends ChangeNotifier {
         createEmailCarrierAdapter(sealer: carrierSealer, now: _now);
     final channel = EmailCarrierChannel(
       config: config,
+      limiter: _limiterFor(TransportKind.deltaChat),
       connector: _mailConnector,
       now: _now,
       log: (line) => appendDebugLog('Email: $line'),
@@ -9032,6 +9038,7 @@ class MessengerController extends ChangeNotifier {
     await _carrierInboundSubscriptions.remove(kind)?.cancel();
     await _carrierReceiptSubscriptions.remove(kind)?.cancel();
     final carrier = _carrierTransports.remove(kind);
+    _limiters.remove(kind.name);
     if (carrier != null) {
       await carrier.detach();
       _advertiseProfileToContacts();
@@ -9124,11 +9131,39 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// One limiter per network account, shared by every chat, group and own
+  /// device that sends through it (M25). The key is the network until
+  /// several accounts per network exist (M45).
+  late final LimiterBook _limiters = LimiterBook(now: _now);
+
+  NetworkLimiter? _limiterFor(TransportKind kind) {
+    final budget = NetworkBudgets.forKind(
+      kind,
+      chatmail: emailCarrierConfig?.chatmail ?? false,
+    );
+    return budget == null ? null : _limiters.forAccount(kind.name, budget);
+  }
+
+  @visibleForTesting
+  NetworkLimiter? limiterForTesting(TransportKind kind) =>
+      _limiters.peek(kind.name);
+
+  @visibleForTesting
+  void noteServerSlowDownForTesting(TransportKind kind, Duration wait) =>
+      _noteServerSlowDown(kind, wait);
+
+  /// A server named a wait (FLOOD_WAIT, `retry_after`): the account rests
+  /// that long, for every chat sending through it.
+  void _noteServerSlowDown(TransportKind kind, Duration wait) =>
+      _limiters.peek(kind.name)?.pushedBack(retryAfter: wait);
+
   /// Joins a carrier to the transport registry, creating a carrier-only
   /// registry if native transports are unavailable.
   Future<void> _attachCarrier(TransportKind kind) async {
     final carrier = _carrierTransports[kind];
     if (carrier == null) return;
+    carrier.limiter ??= _limiterFor(kind);
+    carrier.channelPacesFrames = kind == TransportKind.deltaChat;
     if (_snapshot.identity == null || !_carrierAllowed(kind)) {
       await _detachCarrier(kind);
       return;
@@ -9167,6 +9202,7 @@ class MessengerController extends ChangeNotifier {
       await _detachMatrixTransport();
       return;
     }
+    matrix.limiter ??= _limiterFor(TransportKind.matrix);
     if (matrix.session == null) {
       matrix.attach(session, since: _snapshot.matrixSyncToken);
     }
@@ -40611,6 +40647,7 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _ratchetControlRetries.clear();
+    _limiters.close();
     _matrixClient?.dispose();
     _linkPreviews?.dispose();
     for (final subscription in _carrierReceiptSubscriptions.values) {

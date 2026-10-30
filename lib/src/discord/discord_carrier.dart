@@ -149,12 +149,17 @@ class DiscordCarrierChannel
     this.slowdown,
     this.retryDelay = const Duration(seconds: 5),
     this.sendSpacing = const Duration(milliseconds: 700),
+    this.onRateLimited,
     Future<void> Function(Duration delay)? wait,
   }) : _wait = wait ?? Future<void>.delayed;
 
   final DiscordBotConfig config;
   final DiscordApi api;
   final void Function(String sender, Uint8List frame) onFrame;
+
+  /// Told of every wait Discord asks for (a 429's `retry_after`), so the
+  /// account's limiter rests that long for every chat.
+  final void Function(Duration wait)? onRateLimited;
   final void Function()? onStatusChanged;
   final void Function(String line)? log;
 
@@ -261,6 +266,7 @@ class DiscordCarrierChannel
         }
         failures++;
         _set(DiscordCarrierState.failed, error.toString());
+        if (error.rateLimited) onRateLimited?.call(error.slowDownFor!);
         await _wait(
           error.retryAfter != null
               ? Duration(
@@ -384,6 +390,7 @@ class DiscordCarrierChannel
         );
         return;
       } on DiscordException catch (error) {
+        if (error.rateLimited) onRateLimited?.call(error.slowDownFor!);
         if (error.rateLimited && attempt < 3) {
           await _wait(
             Duration(

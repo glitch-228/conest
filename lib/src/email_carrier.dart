@@ -12,6 +12,8 @@ import 'email/carrier_mail.dart';
 import 'email/imap.dart';
 import 'email/mail_socket.dart';
 import 'email/smtp.dart';
+import 'limits/network_budgets.dart';
+import 'limits/network_limiter.dart';
 import 'network_errors.dart';
 import 'transport_models.dart';
 
@@ -378,11 +380,18 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.connectionLimitWait = const Duration(minutes: 10),
     this.readTimeout = const Duration(seconds: 60),
     this.sendSpacing = defaultSendSpacing,
+    NetworkLimiter? limiter,
     DateTime Function()? now,
     void Function(String line)? log,
   }) : _config = config,
        _log = log,
-       _spacing = sendSpacing,
+       _limiter =
+           limiter ??
+           NetworkLimiter(
+             NetworkBudgets.email(
+               chatmail: config.chatmail,
+             ).copyWith(gap: sendSpacing).withoutQuota(),
+           ),
        // Chatmail servers also listen on 443, for networks that block the
        // mail ports.
        _connector =
@@ -413,30 +422,26 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// limit what one account sends (chatmail relays answer "450 Too much
   /// mail" and later cut the connection of an account that keeps pushing:
   /// device lab, a phone whose every send then failed); the gap doubles
-  /// when a server pushes back and eases after each mail it takes.
+  /// when a server pushes back and eases after each mail it takes. The
+  /// account's [NetworkLimiter] (see [NetworkBudgets.email]) keeps it.
   static const Duration defaultSendSpacing = Duration(milliseconds: 1200);
-  static const Duration _maxSendSpacing = Duration(seconds: 30);
 
   /// The longest a mail waits for its turn; a longer queue is refused at
   /// once and the caller tries again later.
   static const Duration maxSendWait = Duration(seconds: 30);
   final Duration sendSpacing;
-  Duration _spacing;
-  DateTime _nextSendAt = DateTime.fromMillisecondsSinceEpoch(0);
+  final NetworkLimiter _limiter;
 
   /// The gap now in force between two mails.
   @visibleForTesting
-  Duration get currentSendSpacing => _spacing;
+  Duration get currentSendSpacing => _limiter.currentGap;
 
   Future<void> _waitForSendSlot() async {
-    final now = DateTime.now();
-    final slot = _nextSendAt.isAfter(now) ? _nextSendAt : now;
-    final wait = slot.difference(now);
-    if (wait > maxSendWait) {
+    try {
+      await _limiter.acquire(maxWait: maxSendWait);
+    } on LimiterRefused {
       throw StateError('Too many mails waiting to be sent from this account.');
     }
-    _nextSendAt = slot.add(_spacing);
-    if (wait > Duration.zero) await Future<void>.delayed(wait);
   }
 
   /// A refusal that says the account sends too fast, or a connection the
@@ -462,16 +467,10 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     try {
       await send();
     } catch (error) {
-      if (_serverPushedBack(error)) {
-        final doubled = _spacing * 2;
-        _spacing = doubled > _maxSendSpacing ? _maxSendSpacing : doubled;
-      }
+      if (_serverPushedBack(error)) _limiter.pushedBack();
       rethrow;
     }
-    if (_spacing > sendSpacing) {
-      final eased = _spacing * 3 ~/ 4;
-      _spacing = eased < sendSpacing ? sendSpacing : eased;
-    }
+    _limiter.succeeded();
   }
 
   /// A frame from the mail address [sender].
