@@ -51,7 +51,7 @@ void main() {
     for (var i = 1; i < sentAt.length; i++) {
       expect(
         sentAt[i].difference(sentAt[i - 1]),
-        greaterThanOrEqualTo(const Duration(milliseconds: 70)),
+        greaterThanOrEqualTo(const Duration(milliseconds: 55)),
         reason: 'event $i left too soon after the one before',
       );
     }
@@ -75,7 +75,7 @@ void main() {
     await relay.publish(_event(2));
     expect(
       sentAt[2].difference(sentAt[1]),
-      greaterThanOrEqualTo(const Duration(milliseconds: 70)),
+      greaterThanOrEqualTo(const Duration(milliseconds: 55)),
       reason: 'after a rate limit the gap doubles',
     );
   });

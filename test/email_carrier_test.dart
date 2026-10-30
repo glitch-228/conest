@@ -80,7 +80,7 @@ void main() {
       },
       onFrame: (_, _) {},
       pollInterval: const Duration(milliseconds: 200),
-      sendSpacing: const Duration(milliseconds: 150),
+      sendSpacing: const Duration(milliseconds: 400),
     );
     channels.add(bob);
     final alice = channel(account('alice'), []);
@@ -93,7 +93,7 @@ void main() {
     for (var i = 1; i < connects.length; i++) {
       expect(
         connects[i].difference(connects[i - 1]),
-        greaterThanOrEqualTo(const Duration(milliseconds: 100)),
+        greaterThanOrEqualTo(const Duration(milliseconds: 250)),
       );
     }
     refuse = true;
@@ -101,10 +101,10 @@ void main() {
       bob.sendFrame(alice.localAddress!, frame),
       throwsA(isA<SmtpException>()),
     );
-    expect(bob.currentSendSpacing, const Duration(milliseconds: 300));
+    expect(bob.currentSendSpacing, const Duration(milliseconds: 800));
     refuse = false;
     await bob.sendFrame(alice.localAddress!, frame);
-    expect(bob.currentSendSpacing, lessThan(const Duration(milliseconds: 300)));
+    expect(bob.currentSendSpacing, lessThan(const Duration(milliseconds: 800)));
   });
 
   test(
