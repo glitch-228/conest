@@ -24662,7 +24662,7 @@ void main() {
       expect(alice.blockSourcesForTesting(id!)!.sources.length, 1);
       alice.handleBlobAnnouncementForTesting(bobId, announcement);
       expect(alice.blockSourcesForTesting(id!)!.sources.length, 2);
-      // Once: a second announcement changes nothing.
+      // A relay this device has not configured is not taken.
       alice.handleBlobAnnouncementForTesting(bobId, {
         ...announcement,
         'relays': ['relay:tcp:other.example:1'],
