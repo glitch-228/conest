@@ -700,6 +700,10 @@ class MessengerController extends ChangeNotifier {
                     ? PlatformBridgePowerSource(_platformBridge)
                     : null,
               ));
+    // Always the user's current choice, whatever read it.
+    _energyPolicy.settingSource = () =>
+        _snapshot.identity?.connectivity.energyBudget ??
+        EnergyBudgetSetting.balanced;
     voiceMessageService = VoiceMessageService(
       platformBridge: _platformBridge,
       applicationSupportDirectory: _dataRootProvider,
@@ -2282,9 +2286,6 @@ class MessengerController extends ChangeNotifier {
   /// What the device may spend now: the user's Connectivity choice (balanced,
   /// eco, fast) with the power state (M25).
   EnergyBudget get _currentEnergyBudget {
-    _energyPolicy.setting =
-        _snapshot.identity?.connectivity.energyBudget ??
-        EnergyBudgetSetting.balanced;
     return _energyPolicy.budgetFor(_networkCostClass);
   }
 
@@ -9155,6 +9156,8 @@ class MessengerController extends ChangeNotifier {
     final budget = NetworkBudgets.forKind(
       kind,
       chatmail: emailCarrierConfig?.chatmail ?? false,
+      // Reticulum over TCP is no radio: no airtime budget.
+      radio: reticulumCarrierConfig?.isRadio ?? true,
     );
     return budget == null ? null : _limiters.forAccount(kind.name, budget);
   }
@@ -28512,7 +28515,6 @@ class MessengerController extends ChangeNotifier {
   }) {
     if (first.forwarded || _disposed) return;
     unawaited(_energyPolicy.refresh());
-    _currentEnergyBudget; // Brings the user's setting up to date.
     final fanout = _energyPolicy.fanoutFor(
       _networkCostClass,
       copiesAllowed: contact.featureCapabilities.contains(

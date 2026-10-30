@@ -6,7 +6,13 @@ import '../limits/network_limiter.dart';
 
 /// A Discord REST call that failed.
 class DiscordException implements Exception, ServerSlowDown {
-  const DiscordException(this.path, this.code, this.message, {this.retryAfter});
+  const DiscordException(
+    this.path,
+    this.code,
+    this.message, {
+    this.retryAfter,
+    this.global = false,
+  });
 
   final String path;
 
@@ -17,12 +23,15 @@ class DiscordException implements Exception, ServerSlowDown {
   /// Seconds Discord asked to wait (429).
   final double? retryAfter;
 
+  /// The 429 is the account-wide limit, not one route's bucket.
+  final bool global;
+
   bool get unauthorized => code == 401;
   bool get forbidden => code == 403;
   bool get rateLimited => code == 429;
 
   @override
-  Duration? get slowDownFor => rateLimited
+  Duration? get slowDownFor => rateLimited && global
       ? Duration(milliseconds: ((retryAfter ?? 0) * 1000).ceil())
       : null;
 
@@ -140,6 +149,7 @@ class HttpDiscordApi implements DiscordApi {
       retryAfter: retry is num && retry.isFinite && retry >= 0
           ? (retry > 86400 ? 86400.0 : retry.toDouble())
           : null,
+      global: decoded is Map && decoded['global'] == true,
     );
   }
 

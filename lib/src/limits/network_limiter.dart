@@ -167,12 +167,22 @@ class _Waiter {
 
 typedef LimiterTimerFactory = Timer Function(Duration after, void Function());
 
+final Stopwatch _monotonicWatch = Stopwatch()..start();
+final DateTime _monotonicBase = DateTime.now();
+
+/// A clock that never goes back and never jumps when the user (or the
+/// network time) sets the wall clock: the time the app started plus the
+/// time it has run. Limiters measure their windows, gaps and rests on it;
+/// a wait a server names is converted to a deadline on this clock when it is
+/// received.
+DateTime monotonicNow() => _monotonicBase.add(_monotonicWatch.elapsed);
+
 class NetworkLimiter {
   NetworkLimiter(
     this.budget, {
     DateTime Function()? now,
     LimiterTimerFactory? timer,
-  }) : _now = now ?? DateTime.now,
+  }) : _now = now ?? monotonicNow,
        _timerFactory = timer ?? Timer.new,
        _gap = budget.gap,
        _tokens = budget.burst.toDouble() {
@@ -189,6 +199,9 @@ class NetworkLimiter {
   DateTime? _restUntil;
   final List<(DateTime, int)> _spent = [];
   final List<_Waiter> _queue = [];
+
+  /// The cost of everything waiting (kept in step with [_queue]).
+  int _queuedCost = 0;
   Timer? _timer;
   bool _closed = false;
 
@@ -209,6 +222,12 @@ class NetworkLimiter {
     }
     if (rest != null && rest.difference(now) > budget.maxRest) {
       _restUntil = now.add(budget.maxRest);
+    }
+    // Sends booked in the future (the clock went back) count as now, so
+    // they do not block the quota for the size of the jump on top of a
+    // window.
+    for (var i = _spent.length - 1; i >= 0 && _spent[i].$1.isAfter(now); i--) {
+      _spent[i] = (now, _spent[i].$2);
     }
   }
 
@@ -236,27 +255,40 @@ class NetworkLimiter {
   /// How long a send of [cost] would wait for its turn now.
   Duration get projectedWait => _projectedWait(1);
 
-  /// How long the last of [sends] sends made now would wait for its turn.
+  /// How long the last of [sends] sends made now would wait for its turn,
+  /// behind everything already waiting.
   Duration projectedWaitFor(int sends, {int cost = 1}) {
     final now = _now();
+    _sane(now);
     final extra = sends > 1 ? sends - 1 : 0;
-    final quota = budget.quota;
-    final charged = quota != null && cost > quota ? quota : cost;
-    // More than a window holds takes whole windows more.
-    final windows = quota != null && cost > quota ? (cost - 1) ~/ quota : 0;
-    final at = _earliest(
-      now,
-      charged,
-    ).add(budget.window * windows).add(_gap * (_queue.length + extra));
+    final at = _projectedStart(now, cost, extra);
     final wait = at.difference(now);
     return wait.isNegative ? Duration.zero : wait;
   }
 
   Duration _projectedWait(int cost) {
     final now = _now();
-    final at = _earliest(now, cost).add(_gap * _queue.length);
+    _sane(now);
+    final at = _projectedStart(now, cost, 0);
     final wait = at.difference(now);
     return wait.isNegative ? Duration.zero : wait;
+  }
+
+  /// When the last of [extra] more sends after one of [cost] could start,
+  /// counting what is already waiting: the quota is shared by all of it, so
+  /// more than a window holds takes whole windows more.
+  DateTime _projectedStart(DateTime now, int cost, int extra) {
+    final quota = budget.quota;
+    var at = _earliest(now, 1);
+    if (quota != null && quota > 0) {
+      // A send costs one unit unless the quota counts bytes.
+      final mine = (cost < 1 ? 1 : cost) + (budget.costInBytes ? 0 : extra);
+      final total = _queuedCost + mine;
+      final charged = total > quota ? quota : total;
+      at = _earliest(now, charged);
+      if (total > quota) at = at.add(budget.window * ((total - 1) ~/ quota));
+    }
+    return at.add(_gap * (_queue.length + extra));
   }
 
   /// Whether the dispatcher should prefer another route: resting, a turn
@@ -291,7 +323,7 @@ class NetworkLimiter {
       _start(now, charged);
       return;
     }
-    final projected = first.add(_gap * _queue.length);
+    final projected = _projectedStart(now, charged, 0);
     if (projected.isAfter(deadline)) {
       throw LimiterRefused(
         LimiterRefusal.wouldWait,
@@ -303,6 +335,7 @@ class NetworkLimiter {
     }
     final waiter = _Waiter(charged, priority, deadline);
     _queue.add(waiter);
+    _queuedCost += charged;
     _arm();
     return waiter.done.future;
   }
@@ -364,7 +397,7 @@ class NetworkLimiter {
     final earliest = _earliest(now, 1);
     for (final waiter in List.of(_queue)) {
       if (earliest.isAfter(waiter.deadline)) {
-        _queue.remove(waiter);
+        _drop(waiter);
         waiter.done.completeError(
           LimiterRefused(
             LimiterRefusal.wouldWait,
@@ -385,6 +418,7 @@ class NetworkLimiter {
       waiter.done.completeError(const LimiterRefused(LimiterRefusal.closed));
     }
     _queue.clear();
+    _queuedCost = 0;
   }
 
   // Making room: first anything past its deadline, then the oldest bulk send
@@ -392,7 +426,7 @@ class NetworkLimiter {
   bool _makeRoom(DateTime now, LimiterPriority incoming) {
     for (final waiter in List.of(_queue)) {
       if (waiter.deadline.isBefore(now)) {
-        _queue.remove(waiter);
+        _drop(waiter);
         waiter.done.completeError(const LimiterRefused(LimiterRefusal.expired));
         return true;
       }
@@ -400,13 +434,17 @@ class NetworkLimiter {
     if (incoming == LimiterPriority.interactive) {
       for (final waiter in _queue) {
         if (waiter.priority == LimiterPriority.bulk) {
-          _queue.remove(waiter);
+          _drop(waiter);
           waiter.done.completeError(const LimiterRefused(LimiterRefusal.shed));
           return true;
         }
       }
     }
     return false;
+  }
+
+  void _drop(_Waiter waiter) {
+    if (_queue.remove(waiter)) _queuedCost -= waiter.cost;
   }
 
   void _refill(DateTime now) {
@@ -508,13 +546,13 @@ class NetworkLimiter {
       progressed = false;
       final head = _queue.first;
       if (head.deadline.isBefore(now)) {
-        _queue.removeAt(0);
+        _drop(head);
         head.done.completeError(const LimiterRefused(LimiterRefusal.expired));
         progressed = true;
         continue;
       }
       if (!_earliest(now, head.cost).isAfter(now)) {
-        _queue.removeAt(0);
+        _drop(head);
         _start(now, head.cost);
         head.done.complete();
         progressed = true;
@@ -523,7 +561,7 @@ class NetworkLimiter {
     // Others behind the head that missed their deadline.
     for (final waiter in List.of(_queue)) {
       if (waiter.deadline.isBefore(now)) {
-        _queue.remove(waiter);
+        _drop(waiter);
         waiter.done.completeError(const LimiterRefused(LimiterRefusal.expired));
       }
     }

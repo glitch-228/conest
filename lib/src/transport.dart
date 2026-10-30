@@ -164,6 +164,10 @@ class TransportDeliveryResult {
   final List<DeliveryAttempt> attempts;
 }
 
+/// What [TransportAdapter.cancel] takes: one envelope to one device.
+String transportOperationId(String deviceId, String envelopeId) =>
+    '$deviceId|$envelopeId';
+
 abstract interface class TransportAdapter {
   TransportKind get kind;
   TransportCapabilities get capabilities;
@@ -362,6 +366,13 @@ class TransportRegistry {
         throw const TransportSendCancelled('Its receipt already came.');
       }
       final startedAt = DateTime.now().toUtc();
+      // A send that waits for its turn behind the account's limiter would
+      // measure the queue, not the route: no sample from it.
+      final NetworkLimiter? turns = switch (adapter) {
+        RateLimited(:final limiter) => limiter,
+        _ => null,
+      };
+      final queued = turns != null && turns.projectedWait > Duration.zero;
       try {
         final receipt = await adapter
             .sendEnvelope(peer: peer, route: route, envelope: envelope)
@@ -386,9 +397,9 @@ class TransportRegistry {
           _recordSuccess(
             peer.deviceId,
             route.transport,
-            small ? took : null,
-            bytes: small ? null : envelope.bytes.length,
-            transferTook: small ? null : took,
+            small && !queued ? took : null,
+            bytes: small || queued ? null : envelope.bytes.length,
+            transferTook: small || queued ? null : took,
           );
           return TransportDeliveryResult(
             receipt: receipt,
@@ -401,9 +412,23 @@ class TransportRegistry {
         rethrow;
       } catch (error) {
         lastError = error;
+        var limiterHeld = error is LimiterRefused;
+        if (error is TimeoutException) {
+          // The attempt ran out: stop the send, so it does not go on
+          // sending frames the caller has given up on.
+          unawaited(
+            adapter
+                .cancel(transportOperationId(peer.deviceId, envelope.id))
+                .catchError((Object _) {}),
+          );
+          // Waiting its turn behind the account's limiter (or a rest the
+          // server asked for) says nothing about the route either.
+          limiterHeld =
+              turns != null && (turns.queueLength > 0 || turns.isResting);
+        }
         // The account's own limiter holding a send back says nothing about
         // the route: the next route goes, and this one is not marked failed.
-        if (error is! LimiterRefused) {
+        if (!limiterHeld) {
           _recordFailure(peer.deviceId, route.transport, error);
         }
         attempts.add(

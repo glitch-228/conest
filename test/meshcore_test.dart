@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:conest/src/meshcore/companion.dart';
@@ -190,5 +191,23 @@ void main() {
       isFalse,
     );
     expect(isValidMeshCoreAddress('abc'), isFalse);
+  });
+
+  test('airtime counts the base64 text, not the raw frame', () {
+    final channel = MeshCoreCarrierChannel(
+      config: const MeshCoreCarrierConfig(
+        link: MeshCoreLink.serial,
+        host: '/dev/ttyACM0',
+      ),
+      connector: (_) async => FakeMeshCoreMesh().radio(1),
+      onFrame: (_, _) {},
+    );
+    for (var length = 0; length < 40; length++) {
+      expect(
+        channel.airBytes(length),
+        base64Encode(List<int>.filled(length + 1, 7)).length,
+        reason: 'frame of $length bytes',
+      );
+    }
   });
 }

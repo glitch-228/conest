@@ -266,7 +266,9 @@ class DiscordCarrierChannel
         }
         failures++;
         _set(DiscordCarrierState.failed, error.toString());
-        if (error.rateLimited) onRateLimited?.call(error.slowDownFor!);
+        // Only the account-wide limit rests the whole account; one route's
+        // bucket is waited out on that route (below).
+        if (error.slowDownFor case final wait?) onRateLimited?.call(wait);
         await _wait(
           error.retryAfter != null
               ? Duration(
@@ -390,7 +392,9 @@ class DiscordCarrierChannel
         );
         return;
       } on DiscordException catch (error) {
-        if (error.rateLimited) onRateLimited?.call(error.slowDownFor!);
+        // Only the account-wide limit rests the whole account; one route's
+        // bucket is waited out on that route (below).
+        if (error.slowDownFor case final wait?) onRateLimited?.call(wait);
         if (error.rateLimited && attempt < 3 && (error.retryAfter ?? 1) <= 30) {
           await _wait(
             Duration(

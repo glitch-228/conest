@@ -282,22 +282,51 @@ void main() {
     expect(waits.every((w) => w <= const Duration(milliseconds: 160)), isTrue);
   });
 
-  test('a rate limit waits the time Discord names, then sends', () async {
-    final alice = _Side(hub, aliceBot, channel);
-    final bob = _Side(hub, bobBot, channel);
-    alice.channel.start();
-    bob.channel.start();
-    addTearDown(alice.channel.stop);
-    addTearDown(bob.channel.stop);
-    await until(() => bob.channel.state == DiscordCarrierState.connected);
-    aliceBot.failNextPost.add(
-      const DiscordException('/x', 429, 'rate limited', retryAfter: 2.5),
-    );
-    await alice.channel.sendFrame(bob.config.address, Uint8List(3));
-    expect(alice.waits, contains(const Duration(milliseconds: 2500)));
-    expect(alice.rested, [const Duration(milliseconds: 2500)]);
-    await until(() => bob.received.isNotEmpty);
-  });
+  test(
+    'a global rate limit waits the time Discord names, then sends',
+    () async {
+      final alice = _Side(hub, aliceBot, channel);
+      final bob = _Side(hub, bobBot, channel);
+      alice.channel.start();
+      bob.channel.start();
+      addTearDown(alice.channel.stop);
+      addTearDown(bob.channel.stop);
+      await until(() => bob.channel.state == DiscordCarrierState.connected);
+      aliceBot.failNextPost.add(
+        const DiscordException(
+          '/x',
+          429,
+          'rate limited',
+          retryAfter: 2.5,
+          global: true,
+        ),
+      );
+      await alice.channel.sendFrame(bob.config.address, Uint8List(3));
+      expect(alice.waits, contains(const Duration(milliseconds: 2500)));
+      expect(alice.rested, [const Duration(milliseconds: 2500)]);
+      await until(() => bob.received.isNotEmpty);
+    },
+  );
+
+  test(
+    'one route rate limit is waited out without resting the account',
+    () async {
+      final alice = _Side(hub, aliceBot, channel);
+      final bob = _Side(hub, bobBot, channel);
+      alice.channel.start();
+      bob.channel.start();
+      addTearDown(alice.channel.stop);
+      addTearDown(bob.channel.stop);
+      await until(() => bob.channel.state == DiscordCarrierState.connected);
+      aliceBot.failNextPost.add(
+        const DiscordException('/x', 429, 'rate limited', retryAfter: 2.5),
+      );
+      await alice.channel.sendFrame(bob.config.address, Uint8List(3));
+      expect(alice.waits, contains(const Duration(milliseconds: 2500)));
+      expect(alice.rested, isEmpty, reason: 'only a global limit rests it');
+      await until(() => bob.received.isNotEmpty);
+    },
+  );
 
   test('a refusal says what the bot needs', () async {
     final alice = _Side(hub, aliceBot, channel);
@@ -422,7 +451,16 @@ void main() {
       } on DiscordException catch (error) {
         expect(error.rateLimited, isTrue);
         expect(error.retryAfter, 1.5);
+        expect(error.global, isFalse, reason: 'a route bucket');
         expect(error.toString(), isNot(contains('TOKEN123')));
+      }
+      body = {'message': 'slow', 'retry_after': 1.5, 'global': true};
+      try {
+        await api('TOKEN123', DiscordAuth.bot).call('POST', '/x', body: {});
+        fail('should throw');
+      } on DiscordException catch (error) {
+        expect(error.global, isTrue);
+        expect(error.slowDownFor, const Duration(milliseconds: 1500));
       }
     });
   });

@@ -120,18 +120,21 @@ abstract final class NetworkBudgets {
   /// The budget of the carrier on [kind]; null for transports that need no
   /// account limit (LAN, Iroh) or limit by airtime (radios, see
   /// `radio_airtime.dart`).
-  static LimiterBudget? forKind(TransportKind kind, {bool chatmail = false}) =>
-      switch (kind) {
-        TransportKind.telegram => telegram,
-        TransportKind.discord => discord,
-        TransportKind.matrix => matrix,
-        TransportKind.deltaChat => email(chatmail: chatmail),
-        TransportKind.xmpp => xmpp,
-        TransportKind.conestRelay => conestRelay,
-        TransportKind.tor => generic,
-        TransportKind.meshtastic ||
-        TransportKind.meshCore ||
-        TransportKind.reticulum => RadioAirtime.forKind(kind),
-        _ => null,
-      };
+  static LimiterBudget? forKind(
+    TransportKind kind, {
+    bool chatmail = false,
+    bool radio = true,
+  }) => switch (kind) {
+    TransportKind.telegram => telegram,
+    TransportKind.discord => discord,
+    TransportKind.matrix => matrix,
+    TransportKind.deltaChat => email(chatmail: chatmail),
+    TransportKind.xmpp => xmpp,
+    TransportKind.conestRelay => conestRelay,
+    TransportKind.tor => generic,
+    TransportKind.meshtastic ||
+    TransportKind.meshCore ||
+    TransportKind.reticulum => RadioAirtime.forKind(kind, radio: radio),
+    _ => null,
+  };
 }

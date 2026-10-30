@@ -60,6 +60,29 @@ void main() {
     expect(fast.fanoutFor(net, copiesAllowed: true), isA<AllRoutesFanout>());
   });
 
+  test('fast lifts the battery limit, never metered or roaming', () async {
+    final source = _Source();
+    final fast = await policy(source, EnergyBudgetSetting.fast);
+    expect(fast.modeFor(net), EnergyMode.unconstrained);
+    for (final costly in [
+      NetworkCostClass.metered,
+      NetworkCostClass.roaming,
+    ]) {
+      expect(fast.modeFor(costly), EnergyMode.limited, reason: costly.name);
+      expect(fast.budgetFor(costly).pollFactor, greaterThan(1));
+    }
+  });
+
+  test('the setting is read from its source each time', () async {
+    var chosen = EnergyBudgetSetting.balanced;
+    final p = await policy(_Source(), EnergyBudgetSetting.balanced)
+      ..settingSource = () => chosen;
+    expect(p.budgetFor(net).pollFactor, 2);
+    chosen = EnergyBudgetSetting.fast;
+    expect(p.setting, EnergyBudgetSetting.fast);
+    expect(p.budgetFor(net).pollFactor, 1);
+  });
+
   test('battery saver stays the strictest whatever the setting', () async {
     final source = _Source()
       ..state = const PowerState(

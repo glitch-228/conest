@@ -15,6 +15,11 @@ abstract final class RadioAirtime {
   /// is under 400, rounded up so a short message still fits.
   static const int defaultBytesPerMinute = 450;
 
+  /// How long the registry lets one radio send run: the largest sealed
+  /// envelope (4 KiB) takes nine minutes of the default budget, plus the
+  /// wait for a frame's first turn and the pause between frames.
+  static const Duration sendAttemptTimeout = Duration(minutes: 14);
+
   /// The most radio frames waiting for their turn.
   static const int maxQueue = 16;
 
@@ -48,12 +53,16 @@ abstract final class RadioAirtime {
       );
 
   /// The budget for the carrier on [kind], null for other transports.
-  static LimiterBudget? forKind(TransportKind kind) => switch (kind) {
-    TransportKind.meshtastic => conservative('Meshtastic'),
-    TransportKind.meshCore => conservative('MeshCore'),
-    TransportKind.reticulum => conservative('Reticulum radio'),
-    _ => null,
-  };
+  ///
+  /// Reticulum has an airtime budget only over a radio ([radio]); over TCP
+  /// (rnsd) it is an ordinary network link.
+  static LimiterBudget? forKind(TransportKind kind, {bool radio = true}) =>
+      switch (kind) {
+        TransportKind.meshtastic => conservative('Meshtastic'),
+        TransportKind.meshCore => conservative('MeshCore'),
+        TransportKind.reticulum when radio => conservative('Reticulum radio'),
+        _ => null,
+      };
 
   /// Whether a spare copy may go by radio: only while most of the budget is
   /// still free.

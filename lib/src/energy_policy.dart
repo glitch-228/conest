@@ -155,8 +155,12 @@ class EnergyPolicy {
   final PowerStateSource _source;
   final Duration escalateInterval;
 
-  /// The user's choice; the controller keeps it current.
-  EnergyBudgetSetting setting = EnergyBudgetSetting.balanced;
+  /// The user's choice. With a [settingSource] (the controller's) it is read
+  /// from there every time, so it is never stale.
+  EnergyBudgetSetting get setting => settingSource?.call() ?? _setting;
+  set setting(EnergyBudgetSetting value) => _setting = value;
+  EnergyBudgetSetting _setting = EnergyBudgetSetting.balanced;
+  EnergyBudgetSetting Function()? settingSource;
 
   /// Larger groups escalate even when the device can afford more: every
   /// copy goes to every member.
@@ -192,8 +196,12 @@ class EnergyPolicy {
   EnergyMode modeFor(NetworkCostClass network) {
     final fixed = _fixedMode;
     final mode = fixed ?? modeOf(_power, network);
-    // Fast treats battery like mains; battery saver still wins.
-    if (setting == EnergyBudgetSetting.fast && mode == EnergyMode.limited) {
+    // Fast treats battery like mains; battery saver still wins, and a
+    // metered or roaming network stays limited.
+    if (setting == EnergyBudgetSetting.fast &&
+        mode == EnergyMode.limited &&
+        network != NetworkCostClass.metered &&
+        network != NetworkCostClass.roaming) {
       return EnergyMode.unconstrained;
     }
     return mode;

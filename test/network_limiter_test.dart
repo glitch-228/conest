@@ -217,7 +217,13 @@ void main() {
       expect(limiter.restRemaining, const Duration(hours: 24));
       expect(
         serverSlowDownOf(
-          const DiscordException('/x', 429, 'slow', retryAfter: 2.5),
+          const DiscordException(
+            '/x',
+            429,
+            'slow',
+            retryAfter: 2.5,
+            global: true,
+          ),
         ),
         const Duration(milliseconds: 2500),
       );
@@ -311,7 +317,13 @@ void main() {
         lessThanOrEqualTo(const Duration(hours: 24)),
       );
       expect(
-        const DiscordException('/x', 429, 'x', retryAfter: 86400).slowDownFor,
+        const DiscordException(
+          '/x',
+          429,
+          'x',
+          retryAfter: 86400,
+          global: true,
+        ).slowDownFor,
         const Duration(days: 1),
       );
     });
@@ -430,6 +442,163 @@ void main() {
     });
   });
 
+  group('review fixes', () {
+    final peer = const TransportPeer(
+      deviceId: 'peer',
+      transportIdentity: 'peer',
+      identityPinned: true,
+    );
+
+    test('Reticulum over TCP has no airtime budget, over a radio it has', () {
+      expect(
+        NetworkBudgets.forKind(TransportKind.reticulum, radio: false),
+        isNull,
+      );
+      expect(
+        NetworkBudgets.forKind(TransportKind.reticulum)!.costInBytes,
+        isTrue,
+      );
+    });
+
+    test('queued bytes count for the next send\'s turn', () async {
+      final clock = _Clock();
+      final limiter = _limiter(
+        clock,
+        const LimiterBudget(
+          name: 'radio',
+          costInBytes: true,
+          quota: 450,
+          maxQueue: 16,
+          maxWait: Duration(seconds: 90),
+        ),
+      );
+      final turns = <int>[];
+      unawaited(_note(clock, limiter, turns, cost: 300));
+      unawaited(_note(clock, limiter, turns, cost: 300));
+      await clock.advance(Duration.zero);
+      expect(turns, [0], reason: 'the second waits for the window');
+      // The second takes the next window; a third 300 bytes is a window
+      // further, so it is past 90 s and refused, not queued.
+      expect(limiter.projectedWaitFor(1, cost: 300).inSeconds, 120);
+      await expectLater(
+        limiter.acquire(cost: 300),
+        throwsA(isA<LimiterRefused>()),
+      );
+      await clock.advance(const Duration(minutes: 3));
+      expect(turns, [0, 60000]);
+    });
+
+    test('a clock that jumps back does not hold the quota longer', () async {
+      final clock = _Clock();
+      final limiter = _limiter(
+        clock,
+        const LimiterBudget(
+          name: 'quota',
+          quota: 2,
+          maxWait: Duration(minutes: 3),
+        ),
+      );
+      await limiter.acquire();
+      await limiter.acquire();
+      clock.now = clock.now.subtract(const Duration(hours: 1));
+      // The window is a minute from now, not an hour and a minute.
+      expect(limiter.projectedWait.inSeconds, lessThanOrEqualTo(60));
+      final turns = <int>[];
+      unawaited(
+        _note(clock, limiter, turns, maxWait: const Duration(minutes: 3)),
+      );
+      await clock.advance(const Duration(minutes: 2));
+      expect(turns, hasLength(1));
+    });
+
+    test('one Discord route\'s 429 does not rest the whole account', () {
+      expect(
+        serverSlowDownOf(
+          const DiscordException('/x', 429, 'slow', retryAfter: 2.5),
+        ),
+        isNull,
+      );
+    });
+
+    test('the limiter\'s own clock only moves forward', () async {
+      var last = monotonicNow();
+      for (var i = 0; i < 50; i++) {
+        final next = monotonicNow();
+        expect(next.isBefore(last), isFalse);
+        last = next;
+      }
+    });
+
+    test(
+      'an attempt that times out while the account rests is not a failure',
+      () async {
+        final clock = _Clock();
+        final held = _Adapter(TransportKind.iroh, TransportPathKind.direct)
+          ..limiter = _limiter(clock, paced)
+          ..hang = true;
+        held.limiter!.pushedBack(retryAfter: const Duration(minutes: 5));
+        final registry = TransportRegistry([held]);
+        await expectLater(
+          registry.deliverEnvelope(
+            peer: peer,
+            envelope: _envelope(),
+            policies: const {},
+            attemptTimeout: const Duration(milliseconds: 30),
+          ),
+          throwsA(isA<StateError>()),
+        );
+        expect(
+          registry.statsFor('peer', TransportKind.iroh)?.failureStreak ?? 0,
+          0,
+        );
+        expect(held.cancelled, [
+          'peer|m-peer',
+        ], reason: 'the abandoned send is told to stop');
+      },
+    );
+
+    test('an attempt that times out for its own sake is still a failure', () {
+      final held = _Adapter(TransportKind.iroh, TransportPathKind.direct)
+        ..hang = true;
+      final registry = TransportRegistry([held]);
+      return expectLater(
+        registry
+            .deliverEnvelope(
+              peer: peer,
+              envelope: _envelope(),
+              policies: const {},
+              attemptTimeout: const Duration(milliseconds: 30),
+            )
+            .catchError((Object _) => throw 'x'),
+        throwsA(anything),
+      ).then((_) {
+        expect(registry.statsFor('peer', TransportKind.iroh)!.failureStreak, 1);
+      });
+    });
+
+    test('a send that queued gives no round-trip sample', () async {
+      final clock = _Clock();
+      final queued = _Adapter(TransportKind.iroh, TransportPathKind.direct)
+        ..limiter = _limiter(clock, paced);
+      queued.limiter!.pushedBack(retryAfter: const Duration(minutes: 1));
+      final registry = TransportRegistry([queued]);
+      await registry.deliverEnvelope(
+        peer: peer,
+        envelope: _envelope(),
+        policies: const {},
+      );
+      expect(registry.statsFor('peer', TransportKind.iroh)!.rttMs, isNull);
+      final free = _Adapter(TransportKind.matrix, TransportPathKind.relayed);
+      final other = TransportRegistry([free]);
+      await other.deliverEnvelope(
+        peer: peer,
+        envelope: _envelope(),
+        policies: const {},
+      );
+      expect(other.statsFor('peer', TransportKind.matrix)!.rttMs, isNotNull);
+    });
+  });
+
   group('the dispatcher', () {
     final peer = const TransportPeer(
       deviceId: 'peer',
@@ -505,6 +674,10 @@ class _Adapter implements TransportAdapter, RateLimited {
   int sent = 0;
   bool refuse = false;
 
+  /// The send never finishes (a send stuck waiting for its turn).
+  bool hang = false;
+  final List<String> cancelled = [];
+
   @override
   TransportCapabilities get capabilities => const TransportCapabilities(
     requiresPeerOnline: false,
@@ -532,7 +705,7 @@ class _Adapter implements TransportAdapter, RateLimited {
   @override
   Future<void> stop() async {}
   @override
-  Future<void> cancel(String operationId) async {}
+  Future<void> cancel(String operationId) async => cancelled.add(operationId);
   @override
   Future<List<RouteCandidate>> discoverRoutes(TransportPeer peer) async => [
     _route,
@@ -545,6 +718,7 @@ class _Adapter implements TransportAdapter, RateLimited {
     required TransportEnvelope envelope,
   }) async {
     if (refuse) throw const LimiterRefused(LimiterRefusal.wouldWait);
+    if (hang) await Completer<void>().future;
     sent++;
     return DeliveryReceipt(
       state: DeliveryReceiptState.deliveredToPeer,

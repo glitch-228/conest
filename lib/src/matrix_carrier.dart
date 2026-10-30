@@ -317,9 +317,22 @@ class MatrixTransportAdapter implements TransportAdapter, RateLimited {
     final sealed = await _sealer.seal(peer.deviceId, envelope.bytes);
     final frames = matrixCarrierFrames(MatrixClient.newTransactionId(), sealed);
     final turns = limiter;
+    // The registry cuts this attempt off after the capability's timeout: the
+    // limiter's waits end before that, so waiting for a turn is never
+    // marked as a failing route.
+    final attemptWatch = Stopwatch()..start();
+    Duration timeLeft() {
+      final left =
+          capabilities.sendAttemptTimeout! -
+          attemptWatch.elapsed -
+          const Duration(seconds: 2);
+      return left.isNegative ? Duration.zero : left;
+    }
+
     if (turns != null) {
       final wait = turns.projectedWaitFor(frames.length);
-      if (wait > turns.budget.maxWait) {
+      final allowed = turns.budget.maxWait;
+      if (wait > (allowed < timeLeft() ? allowed : timeLeft())) {
         throw LimiterRefused(LimiterRefusal.wouldWait, retryIn: wait);
       }
     }
@@ -328,10 +341,9 @@ class MatrixTransportAdapter implements TransportAdapter, RateLimited {
       if (turns == null) return send();
       // The first frame may be refused; once one has gone the envelope is
       // finished, not dropped half-way.
-      final result = await turns.run(
-        send,
-        maxWait: begun ? const Duration(minutes: 10) : null,
-      );
+      final base = begun ? const Duration(minutes: 10) : turns.budget.maxWait;
+      final left = timeLeft();
+      final result = await turns.run(send, maxWait: base < left ? base : left);
       begun = true;
       return result;
     }

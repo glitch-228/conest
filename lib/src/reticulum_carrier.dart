@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'carrier.dart';
+import 'limits/radio_airtime.dart';
 import 'nostr/secp256k1.dart' show hexDecode, hexEncode;
 import 'radio/android_radio_link.dart';
 import 'radio/byte_link.dart';
@@ -477,7 +478,7 @@ CarrierTransportAdapter createReticulumCarrierAdapter({
       ? const Duration(milliseconds: 1500)
       : const Duration(milliseconds: 20),
   sendAttemptTimeout: radio
-      ? const Duration(minutes: 3)
+      ? RadioAirtime.sendAttemptTimeout
       : const Duration(seconds: 120),
   isValidAddress: isValidReticulumAddress,
   now: now,

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'carrier.dart';
+import 'limits/radio_airtime.dart';
 import 'meshcore/companion.dart';
 import 'nostr/secp256k1.dart' show hexDecode, hexEncode;
 import 'radio/android_radio_link.dart';
@@ -164,6 +165,7 @@ class MeshCoreCarrierChannel
     implements
         ManagedCarrierChannel,
         PeerAwareCarrierChannel,
+        AirtimeSizedCarrierChannel,
         AcknowledgingCarrierChannel {
   MeshCoreCarrierChannel({
     required this.config,
@@ -306,6 +308,10 @@ class MeshCoreCarrierChannel
   @override
   Future<int> sendTrackedFrame(String address, Uint8List frame) =>
       _sendFrame(address, frame);
+
+  /// MeshCore text carries the frame in base64 behind a version byte.
+  @override
+  int airBytes(int frameLength) => (frameLength + 1 + 2) ~/ 3 * 4;
 
   Future<int> _sendFrame(String address, Uint8List frame) async {
     final radio = _radio;
@@ -460,7 +466,7 @@ CarrierTransportAdapter createMeshCoreCarrierAdapter({
   sealer: sealer,
   framing: meshCoreFraming,
   frameSpacing: const Duration(seconds: 3),
-  sendAttemptTimeout: const Duration(minutes: 5),
+  sendAttemptTimeout: RadioAirtime.sendAttemptTimeout,
   isValidAddress: isValidMeshCoreAddress,
   now: now,
 );
