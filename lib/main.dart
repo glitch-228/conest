@@ -80,6 +80,7 @@ import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
 import 'src/ui/delta_attachment_card.dart';
 import 'src/ui/message_info_dialog.dart';
+import 'src/ui/message_times.dart';
 import 'l10n/app_localizations.dart';
 import 'src/app_locales.dart';
 import 'src/ui/calls_list.dart';
@@ -10019,10 +10020,14 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    widget.telegramLayout
-                        ? chatMessageTime(context, message.createdAt)
-                        : formatTimestamp(message.createdAt),
+                  MessageTimeLabel(
+                    message: message,
+                    format: widget.telegramLayout
+                        ? (time) => chatMessageTime(context, time)
+                        : formatTimestamp,
+                    senderClockOffset: outbound
+                        ? null
+                        : controller.clockOffsetFor(message.senderDeviceId),
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       fontFamily: ConestPalette.monoFont,
                       color: outbound
@@ -11979,10 +11984,14 @@ class _ChatPanelState extends State<_ChatPanel> {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    widget.telegramLayout
-                        ? chatMessageTime(context, message.createdAt)
-                        : formatTimestamp(message.createdAt),
+                  MessageTimeLabel(
+                    message: message,
+                    format: widget.telegramLayout
+                        ? (time) => chatMessageTime(context, time)
+                        : formatTimestamp,
+                    senderClockOffset: outbound
+                        ? null
+                        : controller.clockOffsetFor(message.senderDeviceId),
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       fontFamily: ConestPalette.monoFont,
                       color: outbound

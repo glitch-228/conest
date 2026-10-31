@@ -127,6 +127,21 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'تحویل شد $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'رسید $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'به $delivered از $total نفر تحویل شد';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'خوانده شد: $time';
   }

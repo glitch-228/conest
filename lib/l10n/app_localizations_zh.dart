@@ -120,6 +120,21 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return '送达 $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return '到达 $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return '已送达 $delivered/$total';
+  }
+
+  @override
   String messageReadAt(String time) {
     return '已读于 $time';
   }

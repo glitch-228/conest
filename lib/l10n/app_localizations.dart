@@ -298,6 +298,24 @@ abstract class AppLocalizations {
   /// **'Delivered {time}'**
   String messageDeliveredAt(String time);
 
+  /// Under a sent message that was delivered more than a minute after it was sent: the delivery time next to the sent time, for example '14:02 · delivered 14:20'.
+  ///
+  /// In en, this message translates to:
+  /// **'delivered {time}'**
+  String messageTimeDelivered(String time);
+
+  /// Under a received message that arrived more than a minute after it was sent: the arrival time next to the sent time, for example '14:02 · arrived 14:20'.
+  ///
+  /// In en, this message translates to:
+  /// **'arrived {time}'**
+  String messageTimeArrived(String time);
+
+  /// Message details of a group message: how many of the members have it.
+  ///
+  /// In en, this message translates to:
+  /// **'Delivered to {delivered} of {total}'**
+  String messageDeliveredToCount(int delivered, int total);
+
   /// When the other person read the message.
   ///
   /// In en, this message translates to:

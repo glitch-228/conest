@@ -127,6 +127,21 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'доставлено $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'пришло $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'Доставлено $delivered из $total';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'Прочитано $time';
   }

@@ -151,6 +151,36 @@
       }
     }
   },
+  "messageTimeDelivered": "delivered {time}",
+  "@messageTimeDelivered": {
+    "description": "Under a sent message that was delivered more than a minute after it was sent: the delivery time next to the sent time, for example '14:02 · delivered 14:20'.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "messageTimeArrived": "arrived {time}",
+  "@messageTimeArrived": {
+    "description": "Under a received message that arrived more than a minute after it was sent: the arrival time next to the sent time, for example '14:02 · arrived 14:20'.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "messageDeliveredToCount": "Delivered to {delivered} of {total}",
+  "@messageDeliveredToCount": {
+    "description": "Message details of a group message: how many of the members have it.",
+    "placeholders": {
+      "delivered": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
   "messageReadAt": "Read {time}",
   "@messageReadAt": {
     "description": "When the other person read the message.",

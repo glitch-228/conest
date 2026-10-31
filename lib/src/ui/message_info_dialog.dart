@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_locales.dart';
 import 'localized_labels.dart';
 import '../models.dart';
+import 'message_times.dart';
 
 /// What happened to a message on its way: when it was sent, every route it
 /// took or arrived by, how far it got on each, and when it was read. In a
@@ -111,14 +112,8 @@ class MessageInfoDialog extends StatelessWidget {
   };
 
   /// When it first reached them (their receipt, or their radio).
-  static DateTime? _deliveredAt(Iterable<RouteTrace> traces) {
-    DateTime? first;
-    for (final trace in traces) {
-      if (trace.mark.index < MessageRouteMark.reachedDevice.index) continue;
-      if (first == null || trace.at.isBefore(first)) first = trace.at;
-    }
-    return first;
-  }
+  static DateTime? _deliveredAt(Iterable<RouteTrace> traces) =>
+      MessageTimes.firstReachedAt(traces);
 
   List<Widget> _routeLines(
     BuildContext context,
@@ -228,6 +223,16 @@ class MessageInfoDialog extends StatelessWidget {
         for (final trace in message.routeTrace)
           if (trace.deviceId != null) trace.deviceId!,
       }.toList()..sort((a, b) => members(a).compareTo(members(b)));
+      if (MessageTimes.groupProgress(message) case final progress?) {
+        children
+          ..add(const SizedBox(height: 8))
+          ..add(
+            Text(
+              l10n.messageDeliveredToCount(progress.delivered, progress.total),
+              key: const ValueKey('message-info-delivered-count'),
+            ),
+          );
+      }
       for (final deviceId in memberIds) {
         final state = message.recipientStates[deviceId];
         final readAt = message.recipientReadAt[deviceId];

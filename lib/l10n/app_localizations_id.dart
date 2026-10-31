@@ -127,6 +127,21 @@ class AppLocalizationsId extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'terkirim $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'tiba $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'Terkirim ke $delivered dari $total';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'Dibaca $time';
   }

@@ -125,6 +125,21 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'delivered $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'arrived $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'Delivered to $delivered of $total';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'Read $time';
   }
