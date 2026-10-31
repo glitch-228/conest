@@ -465,6 +465,14 @@ class _MetadataNotRemoved implements Exception {
   final bool partial;
 }
 
+/// A session hello that waits until its answer bundle is delivered.
+class _RatchetControlHeld implements Exception {
+  const _RatchetControlHeld();
+
+  @override
+  String toString() => 'The session hello waits for its answer bundle.';
+}
+
 enum DefaultRelaysRefreshStatus { upToDate, updated, error }
 
 class DebugFileTestResult {
@@ -33685,6 +33693,14 @@ class MessengerController extends ChangeNotifier {
   }
 
   final Map<String, Timer> _ratchetControlRetries = {};
+
+  /// Answer bundles still being delivered or retried (a hello waits for
+  /// them). Unlike the retry timers, a key stays here while an attempt is in
+  /// flight.
+  final Set<String> _ratchetAnswersPending = {};
+
+  /// The pending retry of each control, to run it before its timer.
+  final Map<String, void Function()> _ratchetControlDue = {};
   final Map<String, int> _ratchetControlGeneration = {};
   static const int _ratchetControlRetryCap = 64;
 
@@ -33715,10 +33731,13 @@ class MessengerController extends ChangeNotifier {
   }) async {
     // A newer copy of the same control (a new answer or hello) replaces the
     // pending one, also when it goes out at the first try.
-    if (attempt == 0) {
+    if (generation == null) {
       _ratchetControlRetries.remove(retryKey)?.cancel();
       generation = _ratchetControlGeneration[retryKey] =
           (_ratchetControlGeneration[retryKey] ?? 0) + 1;
+      if (retryKey.contains('|bundle|answer')) {
+        _ratchetAnswersPending.add(retryKey);
+      }
       if (_ratchetControlGeneration.length > 4 * _ratchetControlRetryCap) {
         _ratchetControlGeneration.removeWhere(
           (key, _) =>
@@ -33731,10 +33750,10 @@ class MessengerController extends ChangeNotifier {
       // (the peer has no session yet) and is dropped, and nothing sends it
       // again: it waits for the answer, which is retried.
       if (retryKey.endsWith('|hello') &&
-          _ratchetControlRetries.containsKey(
+          _ratchetAnswersPending.contains(
             '${retryKey.substring(0, retryKey.length - 5)}bundle|answer',
           )) {
-        throw StateError('The session hello waits for its answer bundle.');
+        throw const _RatchetControlHeld();
       }
       await _deliverToContact(
         contact: peer,
@@ -33744,8 +33763,14 @@ class MessengerController extends ChangeNotifier {
         // awaits it); the retries, in timers, also use resting routes.
         ignoreRouteBackoff: attempt > 0,
       );
-      if (attempt > 0 && _ratchetControlGeneration[retryKey] == generation) {
-        _ratchetControlRetries.remove(retryKey);
+      if (_ratchetControlGeneration[retryKey] == generation) {
+        if (attempt > 0) _ratchetControlRetries.remove(retryKey);
+        // The answer got through: the hello that waited for it goes now.
+        if (_ratchetAnswersPending.remove(retryKey)) {
+          _ratchetControlDue
+              .remove(retryKey.replaceFirst('|bundle|answer', '|hello'))
+              ?.call();
+        }
       }
     } catch (error) {
       final delays = ratchetControlRetryDelays;
@@ -33756,7 +33781,15 @@ class MessengerController extends ChangeNotifier {
           (_ratchetControlRetries.containsKey(retryKey) ||
               _ratchetControlRetries.length < _ratchetControlRetryCap)) {
         _ratchetControlRetries.remove(retryKey)?.cancel();
-        _ratchetControlRetries[retryKey] = Timer(delays[attempt], () {
+        // A hello held for its answer does not use up a retry: the answer's
+        // own retries bound the wait.
+        final nextAttempt = error is _RatchetControlHeld
+            ? attempt
+            : attempt + 1;
+        late final Timer timer;
+        void fire() {
+          _ratchetControlDue.remove(retryKey);
+          timer.cancel();
           if (_disposed || _ratchetControlGeneration[retryKey] != generation) {
             return;
           }
@@ -33764,6 +33797,7 @@ class MessengerController extends ChangeNotifier {
           final current = _ratchetPeer(peer.deviceId);
           if (current == null || !current.canSendOutbound) {
             _ratchetControlRetries.remove(retryKey);
+            _ratchetAnswersPending.remove(retryKey);
             return;
           }
           unawaited(
@@ -33772,14 +33806,23 @@ class MessengerController extends ChangeNotifier {
               envelope,
               retryKey: retryKey,
               retry: true,
-              attempt: attempt + 1,
+              attempt: nextAttempt,
               generation: generation,
             ).catchError((Object _) {}),
           );
-        });
-      } else if (attempt > 0 &&
-          _ratchetControlGeneration[retryKey] == generation) {
-        _ratchetControlRetries.remove(retryKey);
+        }
+
+        timer = Timer(delays[attempt], fire);
+        _ratchetControlRetries[retryKey] = timer;
+        _ratchetControlDue[retryKey] = fire;
+      } else {
+        if (attempt > 0 && _ratchetControlGeneration[retryKey] == generation) {
+          _ratchetControlRetries.remove(retryKey);
+        }
+        // No more tries: a hello no longer waits for this answer.
+        if (_ratchetControlGeneration[retryKey] == generation) {
+          _ratchetAnswersPending.remove(retryKey);
+        }
       }
       rethrow;
     }

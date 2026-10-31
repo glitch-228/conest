@@ -306,6 +306,50 @@ void main() {
     }
   });
 
+  test('a blackholed route does not excuse the sends queued behind its stuck '
+      'call, and abandoned sends make no call', () async {
+    final gate = Completer<void>();
+    var posts = 0;
+    final api = _PostApi(hub.network.api(bobBot.token, DiscordAuth.bot), () {
+      posts++;
+    }, hang: gate.future);
+    final bob = DiscordCarrierChannel(
+      config: DiscordBotConfig(
+        token: bobBot.token,
+        botId: bobBot.id,
+        username: 'b',
+        channelId: channel,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollInterval: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+    )..start();
+    addTearDown(bob.stop);
+    final probes = [for (var i = 0; i < 4; i++) LimiterWaitProbe()];
+    final outcomes = [
+      for (final probe in probes)
+        runZoned(
+          () => bob.sendFrame('${aliceBot.id}|$channel', Uint8List(3)),
+          zoneValues: {LimiterWaitProbe.zoneKey: probe},
+        ).then((_) => 'sent', onError: (_) => 'x'),
+    ];
+    await until(() => posts == 1);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(probes.skip(1).map((probe) => probe.excusesTimeout), [
+      false,
+      false,
+      false,
+    ]);
+    for (final probe in probes) {
+      probe.abandoned = true;
+    }
+    gate.complete();
+    await Future.wait(outcomes);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(posts, 1, reason: 'abandoned sends made no call');
+  });
+
   test('the slowdown stretches every look', () async {
     final waits = <Duration>[];
     final bob = DiscordCarrierChannel(
@@ -545,9 +589,13 @@ class _CountingApi implements DiscordApi {
 
 /// Throws from [onPost] before each message post goes through.
 class _PostApi implements DiscordApi {
-  _PostApi(this.inner, this.onPost);
+  _PostApi(this.inner, this.onPost, {this.hang});
   final DiscordApi inner;
   final void Function() onPost;
+
+  /// When set, a post waits for it, then fails (a route that answers
+  /// nothing).
+  final Future<void>? hang;
 
   @override
   Future<Object?> call(
@@ -557,7 +605,12 @@ class _PostApi implements DiscordApi {
     Object? body,
     Duration timeout = const Duration(seconds: 30),
   }) {
-    if (method == 'POST' && path.endsWith('/messages')) onPost();
+    if (method == 'POST' && path.endsWith('/messages')) {
+      onPost();
+      if (hang case final gate?) {
+        return gate.then((_) => throw DiscordException(path, 0, "x"));
+      }
+    }
     return inner.call(method, path, query: query, body: body, timeout: timeout);
   }
 

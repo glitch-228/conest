@@ -621,30 +621,52 @@ void main() {
         peer: peer,
         envelope: _envelope(),
         policies: const {},
-        attemptTimeout: const Duration(seconds: 4),
+        attemptTimeout: const Duration(milliseconds: 300),
       );
       final failed = expectLater(result, throwsA(isA<StateError>()));
-      // Its turn comes at once (the fake clock moves on), long before the
-      // attempt ends; the network call then hangs for good.
+      // Its turn comes (the fake clock moves on) and the margin after it
+      // passes; the network call then hangs for good.
       await clock.advance(const Duration(seconds: 2));
+      await clock.advance(const Duration(seconds: 10));
       await failed;
       expect(registry.statsFor('peer', TransportKind.iroh)!.failureStreak, 1);
     });
 
     test('a frame let through just before the attempt ends is not blamed '
-        'on the route', () async {
+        'on the route, until the margin has passed', () async {
+      final clock = _Clock();
+      final limiter = _limiter(clock, paced);
+      await limiter.acquire();
+      await limiter.acquire();
       final probe = LimiterWaitProbe();
-      final release = runZoned(
-        LimiterWaitProbe.enter,
+      final turn = runZoned(
+        limiter.acquire,
         zoneValues: {LimiterWaitProbe.zoneKey: probe},
       );
       expect(probe.excusesTimeout, isTrue);
-      release();
+      await clock.advance(const Duration(seconds: 1));
+      await turn;
       expect(probe.isWaiting, isFalse);
-      // Just released: a timeout now still comes from the wait.
+      // Just let through: a timeout now still comes from the wait.
       expect(probe.excusesTimeout, isTrue);
-      final late = LimiterWaitProbe();
-      expect(late.excusesTimeout, isFalse);
+      await clock.advance(const Duration(seconds: 4));
+      expect(probe.excusesTimeout, isFalse);
+    });
+
+    test('a send the registry gave up on is marked abandoned', () async {
+      final hung = _Adapter(TransportKind.iroh, TransportPathKind.direct)
+        ..hang = true;
+      final registry = TransportRegistry([hung]);
+      await expectLater(
+        registry.deliverEnvelope(
+          peer: peer,
+          envelope: _envelope(),
+          policies: const {},
+          attemptTimeout: const Duration(milliseconds: 30),
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(hung.probe!.abandoned, isTrue);
     });
 
     test('an attempt that times out for its own sake is still a failure', () {
@@ -767,6 +789,9 @@ class _Adapter implements TransportAdapter, RateLimited {
   /// The send never finishes (a send stuck waiting for its turn).
   bool hang = false;
 
+  /// The wait probe the registry handed this adapter's last send.
+  LimiterWaitProbe? probe;
+
   /// The send first waits for its turn behind [limiter], as the carrier
   /// adapters do.
   bool queueFirst = false;
@@ -811,6 +836,7 @@ class _Adapter implements TransportAdapter, RateLimited {
     required RouteCandidate route,
     required TransportEnvelope envelope,
   }) async {
+    probe = Zone.current[LimiterWaitProbe.zoneKey] as LimiterWaitProbe?;
     if (refuse) throw const LimiterRefused(LimiterRefusal.wouldWait);
     if (queueFirst) await limiter!.acquire(maxWait: const Duration(hours: 1));
     if (hang) await Completer<void>().future;

@@ -187,6 +187,9 @@ class DiscordCarrierChannel
   bool _running = false;
   String? _after;
   Future<void> _sendQueue = Future.value();
+
+  /// Sends resting for a server's named wait (inside the send slot).
+  int _resting = 0;
   int _queued = 0;
   final Random _random = Random.secure();
 
@@ -362,9 +365,18 @@ class DiscordCarrierChannel
     final text = '<@${target.botId}> ${base64.encode(frame)}';
     final done = Completer<void>();
     // Waiting for the send slot is not the route hanging.
-    final leaveQueue = LimiterWaitProbe.enter();
+    // Only a send ahead of it resting for a server's named wait excuses
+    // this one; a send ahead stuck in a network call does not.
+    final leaveQueue = LimiterWaitProbe.enter(whileTrue: () => _resting > 0);
+    final sender = Zone.current[LimiterWaitProbe.zoneKey];
     _sendQueue = _sendQueue.then((_) async {
       leaveQueue();
+      if (sender is LimiterWaitProbe && sender.abandoned) {
+        // The registry gave this send up while it queued: no network call.
+        done.completeError(StateError('Discord: no longer needed.'));
+        _queued--;
+        return;
+      }
       try {
         await _sendOne(target.channelId, target.botId, text);
         done.complete();
@@ -400,13 +412,18 @@ class DiscordCarrierChannel
         // bucket is waited out on that route (below).
         if (error.slowDownFor case final wait?) onRateLimited?.call(wait);
         if (error.rateLimited && attempt < 3 && (error.retryAfter ?? 1) <= 30) {
-          await LimiterWaitProbe.hold(
+          _resting++;
+          try {
+            await LimiterWaitProbe.hold(
             _wait(
               Duration(
                 milliseconds: (min(error.retryAfter ?? 1, 30) * 1000).ceil(),
               ),
             ),
           );
+          } finally {
+            _resting--;
+          }
           continue;
         }
         if (error.forbidden || error.code == 404) {

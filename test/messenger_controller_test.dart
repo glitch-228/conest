@@ -573,6 +573,10 @@ class _FakeRelayClient extends RelayClient {
     RelayEnvelope envelope,
   )?
   shouldFailStore;
+
+  /// How long a store takes before it answers (a route that is slow to
+  /// fail).
+  Duration Function(RelayEnvelope envelope)? storeDelayFor;
   final List<String> storeAttempts = <String>[];
 
   /// An error to throw for stores to [host] (a network's own error).
@@ -803,6 +807,10 @@ class _FakeRelayClient extends RelayClient {
     // jitter + route-timeline gating before any of the static checks fire.
     if (!_simClock.isRunning) _simClock.start();
     await _maybeApplyLatency();
+    if (storeDelayFor?.call(envelope) case final delay?
+        when delay > Duration.zero) {
+      await Future<void>.delayed(delay);
+    }
     if (_shouldFailDueToRouteTimeline(host, protocol)) {
       throw StateError(
         'Simulated outage (route timeline) for ${_key(host, port, protocol)}',
@@ -29653,6 +29661,70 @@ void main() {
       }
       expect(await offerer.hasRatchetSessionForTesting(starterId), isTrue);
       expect(await starter.hasRatchetSessionForTesting(offererId), isTrue);
+    });
+
+    test('a held hello keeps its retries while the answer is slow, and goes '
+        'as soon as the answer gets through', () async {
+      final relay = _FakeRelayClient();
+      final clock = DateTime.utc(2026, 10, 29, 16);
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        ratchetEngine: FakeRatchetEngine(),
+        nowProvider: () => clock,
+        keepErrorHistory: true,
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      final offerer =
+          alice.identity!.deviceId.compareTo(bob.identity!.deviceId) < 0
+          ? alice
+          : bob;
+      final starter = identical(offerer, alice) ? bob : alice;
+      // The real shape: five slots. The answer's tries are slow to fail, so
+      // the hello's timers would run out long before the answer's.
+      for (final controller in [alice, bob]) {
+        controller.ratchetControlRetryDelays = List.filled(
+          5,
+          const Duration(milliseconds: 40),
+        );
+      }
+      bool isAnswer(RelayEnvelope envelope) =>
+          envelope.kind == 'ratchet_bundle' &&
+          envelope.senderDeviceId == starter.identity!.deviceId;
+      relay.storeDelayFor = (envelope) => isAnswer(envelope)
+          ? const Duration(milliseconds: 150)
+          : Duration.zero;
+      final order = <String>[];
+      DateTime? firstAnswerAt;
+      relay.shouldFailStore = (_, _, _, recipient, envelope) {
+        if (recipient != offerer.identity!.deviceId) return false;
+        final fails =
+            isAnswer(envelope) &&
+            DateTime.now().difference(firstAnswerAt ??= DateTime.now()) <
+                const Duration(milliseconds: 6000);
+        if (envelope.kind == 'ratchet_hello') order.add('hello');
+        if (isAnswer(envelope)) {
+          order.add(fails ? 'answer-fail' : 'answer');
+        }
+        return fails;
+      };
+      await _pairControllers(alice, bob);
+      final offererId = offerer.identity!.deviceId;
+      final starterId = starter.identity!.deviceId;
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (DateTime.now().isBefore(deadline) &&
+          !(await offerer.hasRatchetSessionForTesting(starterId) &&
+              await starter.hasRatchetSessionForTesting(offererId))) {
+        await settle([alice, bob], rounds: 1);
+      }
+      expect(await offerer.hasRatchetSessionForTesting(starterId), isTrue);
+      expect(await starter.hasRatchetSessionForTesting(offererId), isTrue);
+      // The hello was kept for the answer, and went only after it.
+      expect(order, contains('hello'));
+      expect(order.indexOf('hello'), greaterThan(order.indexOf('answer')));
     });
 
     test('ratchet peers switch to forward-secret envelopes', () async {

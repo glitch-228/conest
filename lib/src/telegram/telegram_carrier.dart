@@ -141,6 +141,9 @@ class TelegramCarrierChannel
   bool _running = false;
   int _offset = 0;
   Future<void> _sendQueue = Future.value();
+
+  /// Sends resting for a server's named wait (inside the send slot).
+  int _resting = 0;
   int _queued = 0;
   final Random _random = Random.secure();
 
@@ -292,9 +295,18 @@ class TelegramCarrierChannel
     final text = base64.encode(frame);
     final done = Completer<void>();
     // Waiting for the send slot is not the route hanging.
-    final leaveQueue = LimiterWaitProbe.enter();
+    // Only a send ahead of it resting for a server's named wait excuses
+    // this one; a send ahead stuck in a network call does not.
+    final leaveQueue = LimiterWaitProbe.enter(whileTrue: () => _resting > 0);
+    final sender = Zone.current[LimiterWaitProbe.zoneKey];
     _sendQueue = _sendQueue.then((_) async {
       leaveQueue();
+      if (sender is LimiterWaitProbe && sender.abandoned) {
+        // The registry gave this send up while it queued: no network call.
+        done.completeError(StateError('Telegram: no longer needed.'));
+        _queued--;
+        return;
+      }
       try {
         await _sendOne(address, text);
         done.complete();
@@ -336,9 +348,14 @@ class TelegramCarrierChannel
         if (error.rateLimited &&
             attempt < maxRateRetries &&
             (error.retryAfter ?? 1) <= 30) {
-          await LimiterWaitProbe.hold(
-            _wait(Duration(seconds: min(error.retryAfter ?? 1, 30))),
-          );
+          _resting++;
+          try {
+            await LimiterWaitProbe.hold(
+              _wait(Duration(seconds: min(error.retryAfter ?? 1, 30))),
+            );
+          } finally {
+            _resting--;
+          }
           continue;
         }
         if (error.code == 400 || error.code == 403) {

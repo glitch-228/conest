@@ -113,6 +113,57 @@ void main() {
     }
   });
 
+  test('a blackholed route does not excuse the sends queued behind its stuck '
+      'call, and abandoned sends make no call', () async {
+    final hub = FakeTelegramBots();
+    final bot = hub.addBot('alice_conest_bot');
+    hub.addBot('bob_conest_bot');
+    final api = _HangingSendApi(hub.network.botApi(bot.token));
+    final channel = TelegramCarrierChannel(
+      config: TelegramBotConfig(
+        token: bot.token,
+        username: bot.username,
+        botId: bot.id,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollTimeout: const Duration(milliseconds: 300),
+      retryDelay: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+      wait: (delay) => Future<void>.delayed(const Duration(milliseconds: 5)),
+    )..start();
+    addTearDown(channel.stop);
+    await until(() => channel.state == TelegramCarrierState.connected);
+    final probes = [for (var i = 0; i < 4; i++) LimiterWaitProbe()];
+    final sends = [
+      for (final probe in probes)
+        runZoned(
+          () => channel.sendFrame('bob_conest_bot', Uint8List(4)),
+          zoneValues: {LimiterWaitProbe.zoneKey: probe},
+        ),
+    ];
+    final outcomes = [
+      for (final send in sends) send.then((_) => 'sent', onError: (_) => 'x'),
+    ];
+    await until(() => api.sendCalls == 1);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    // The head is stuck in a network call: nobody queued behind it is
+    // excused, the registry's timeout counts against the route.
+    expect(probes.skip(1).map((probe) => probe.excusesTimeout), [
+      false,
+      false,
+      false,
+    ]);
+    // The registry gave the queued sends up; the stuck call then ends.
+    for (final probe in probes) {
+      probe.abandoned = true;
+    }
+    api.release();
+    await Future.wait(outcomes);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(api.sendCalls, 1, reason: 'abandoned sends made no call');
+  });
+
   test('only frames from other bots in private chats are read', () async {
     final hub = FakeTelegramBots();
     final bobBot = hub.addBot('bob_conest_bot');
@@ -443,6 +494,33 @@ class _RateLimitOnceApi implements TelegramBotApi {
         'Too Many Requests',
         retryAfter: 25,
       );
+    }
+    return inner.call(method, parameters, timeout);
+  }
+
+  @override
+  void close() => inner.close();
+}
+
+/// sendMessage never answers until [release].
+class _HangingSendApi implements TelegramBotApi {
+  _HangingSendApi(this.inner);
+  final TelegramBotApi inner;
+  int sendCalls = 0;
+  final Completer<void> _gate = Completer<void>();
+
+  void release() => _gate.complete();
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> parameters = const {},
+    Duration timeout = const Duration(seconds: 30),
+  ]) async {
+    if (method == 'sendMessage') {
+      sendCalls++;
+      await _gate.future;
+      throw const TelegramBotException('sendMessage', 0, 'timed out');
     }
     return inner.call(method, parameters, timeout);
   }

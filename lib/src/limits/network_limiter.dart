@@ -165,29 +165,49 @@ abstract interface class RateLimited {
 class LimiterWaitProbe {
   static const Object zoneKey = #conestLimiterWaitProbe;
   int waiting = 0;
+  final List<bool Function()> _conditions = [];
   DateTime? _heldUntil;
+  DateTime Function() _heldClock = monotonicNow;
 
-  bool get isWaiting => waiting > 0;
+  /// Set by the registry when it gave up on the send: whatever still waits
+  /// for it (a channel's queue) must not start its network call.
+  bool abandoned = false;
+
+  bool get isWaiting => waiting > 0 || _conditions.any((holds) => holds());
 
   /// Whether the send is waiting for its turn, or was let through so
   /// recently that a timeout most likely came from the wait (a frame
   /// released with only the attempt's margin left).
   bool get excusesTimeout =>
-      isWaiting || (_heldUntil != null && monotonicNow().isBefore(_heldUntil!));
+      isWaiting || (_heldUntil != null && _heldClock().isBefore(_heldUntil!));
 
   /// Marks the current zone's send as waiting; the returned function ends
   /// the wait (once). [margin] is how long after the end a timeout is still
-  /// put down to the wait.
-  static void Function() enter({Duration margin = const Duration(seconds: 3)}) {
+  /// put down to the wait. [now] is the clock of whatever held it.
+  static void Function() enter({
+    Duration margin = const Duration(seconds: 3),
+    DateTime Function()? now,
+    bool Function()? whileTrue,
+  }) {
     final probe = Zone.current[zoneKey];
     if (probe is! LimiterWaitProbe) return () {};
-    probe.waiting++;
+    if (whileTrue == null) {
+      probe.waiting++;
+    } else {
+      probe._conditions.add(whileTrue);
+    }
     var open = true;
     return () {
       if (!open) return;
       open = false;
-      probe.waiting--;
-      probe._heldUntil = monotonicNow().add(margin);
+      if (whileTrue == null) {
+        probe.waiting--;
+      } else {
+        probe._conditions.remove(whileTrue);
+      }
+      final clock = now ?? monotonicNow;
+      probe._heldClock = clock;
+      probe._heldUntil = clock().add(margin);
     };
   }
 
@@ -195,8 +215,9 @@ class LimiterWaitProbe {
   static Future<T> hold<T>(
     Future<T> wait, {
     Duration margin = const Duration(seconds: 3),
+    DateTime Function()? now,
   }) {
-    final leave = enter(margin: margin);
+    final leave = enter(margin: margin, now: now);
     return wait.whenComplete(leave);
   }
 }
@@ -394,6 +415,7 @@ class NetworkLimiter {
       margin: budget.costInBytes
           ? const Duration(seconds: 30)
           : const Duration(seconds: 3),
+      now: _now,
     );
   }
 
