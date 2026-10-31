@@ -527,6 +527,13 @@ void main() {
         expect(next.isBefore(last), isFalse);
         last = next;
       }
+      // And that is what a limiter measures on unless a test injects one.
+      expect(
+        NetworkLimiter(
+          const LimiterBudget(name: 'x'),
+        ).usesMonotonicClockForTesting,
+        isTrue,
+      );
     });
 
     test(

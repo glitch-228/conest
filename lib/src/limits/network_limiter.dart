@@ -189,6 +189,10 @@ class NetworkLimiter {
     _refilledAt = _now();
   }
 
+  /// Whether this limiter measures on the clock that never jumps (the
+  /// default), not on the wall clock.
+  bool get usesMonotonicClockForTesting => identical(_now, monotonicNow);
+
   final LimiterBudget budget;
   final DateTime Function() _now;
   final LimiterTimerFactory _timerFactory;
