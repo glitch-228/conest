@@ -37,6 +37,7 @@ DOMAIN=""
 TLS_CERT=""
 TLS_KEY=""
 NO_HIDDEN=0
+BLOBS=""
 WS_PATH=""
 ASSUME_YES=0
 MODE="install"
@@ -67,6 +68,8 @@ Conest relay installer
   --cert PEM --key PEM  the certificate and key for that domain (default:
                         Let's Encrypt's /etc/letsencrypt/live/NAME)
   --no-hidden           keep 7667 only
+  --blobs               let the relay hold encrypted file blocks (uses disk;
+                        off by default)
   --tag TAG             a specific release instead of the newest
   --release-key BASE64  the release signing key (if this copy has none)
   --uninstall           stop and remove the service (keeps the data)
@@ -90,6 +93,7 @@ while [ $# -gt 0 ]; do
   --cert) TLS_CERT="${2:?}"; shift ;;
   --key) TLS_KEY="${2:?}"; shift ;;
   --no-hidden) NO_HIDDEN=1 ;;
+  --blobs) BLOBS=1 ;;
   --uninstall) MODE="uninstall" ;;
   --help | -h)
     usage
@@ -352,6 +356,15 @@ if [ "$NO_HIDDEN" -eq 0 ]; then
   fi
 fi
 
+# --- File blobs -----------------------------------------------------------------
+# Off by default: they use disk. With --yes only --blobs turns them on.
+if [ -z "$BLOBS" ]; then
+  BLOBS=0
+  if ask "Let this relay hold encrypted file blocks for a day, so files reach contacts who are offline? (Uses disk, up to 1 GiB.)" n; then
+    BLOBS=1
+  fi
+fi
+
 # --- Account and folders --------------------------------------------------------
 USE_ACCOUNT=0
 if ask "Run it as its own system account ($SERVICE_USER) instead of root?" y; then
@@ -375,6 +388,16 @@ if [ "$USE_ACCOUNT" -eq 1 ]; then
   as_root chmod 0700 "$DATA_DIR"
 fi
 say "Installed in $BUNDLE_DIR; data in $DATA_DIR."
+
+if [ "$BLOBS" -eq 1 ]; then
+  CONF="$DATA_DIR/relay.conf"
+  if ! as_root test -f "$CONF" || ! as_root grep -q '^blob-max-bytes' "$CONF"; then
+    as_root tee -a "$CONF" >/dev/null <<CONF
+blob-max-bytes = 4194304
+CONF
+  fi
+  say "File blobs on (settings in $CONF)."
+fi
 
 if [ "$HIDDEN" -eq 1 ]; then
   # The relay reads its certificate at start: keep a copy it may read (the

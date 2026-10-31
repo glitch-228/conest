@@ -67,6 +67,41 @@ conest_relay_supervisor quota set ACCOUNT_KEY BYTES_PER_MINUTE
 relay sees new invites at once, removed accounts and new quotas at its
 next start.
 
+## File blobs (off by default)
+
+A relay can hold encrypted file blocks for a while, so a file reaches a
+contact who was offline when it was sent. The relay sees only ciphertext
+and only a hash of each blob's read secret. It is off until you set
+`blob-max-bytes` (the largest blob, in bytes; 4194304 is a sensible value):
+
+```
+# relay.conf
+blob-max-bytes = 4194304
+blob-ttl-hours = 24
+blob-account-bytes = 67108864     # one account
+blob-address-bytes = 134217728    # all accounts made from one address
+blob-total-bytes = 1073741824     # the whole relay
+```
+
+Blobs live in `blobs/` beside the database and count against your disk.
+Each relay needs its own blob directory: the relay writes a marker file
+(`.conest-relay-owner`) with its identity there and refuses to start if
+another relay's marker is already in it.
+
+Limits worth knowing:
+
+- `blob-serve-factor` (default 8, which leaves room for retries on slow links): a blob stops being served once it has
+  been read this many times its size, so the relay is no public file host.
+  0 turns the limit off.
+- `blob-get-bytes-per-minute` (default 32 MiB) limits what one address may
+  read.
+- "Address" in `blob-address-bytes` means the address an account registered
+  from (for accounts that registered earlier: the address of their first
+  upload). People behind CGNAT, a proxy or the hidden service on 443 share
+  one budget.
+- Upgrading from a nightly that had an older blob layout drops the blobs
+  held at the first start; files left behind are removed then too.
+
 ## Mailbox owners
 
 A device claims its mailbox the first time it uses a relay that keeps

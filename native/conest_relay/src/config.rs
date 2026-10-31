@@ -122,6 +122,19 @@ pub(crate) struct ExtConfig {
     pub(crate) account_quota_bytes: u64,
     /// How long a token lasts (clients refresh before).
     pub(crate) token_lifetime: Duration,
+    /// Relay blobs (M27): where they are kept (default `blobs/` beside the
+    /// database), the largest one (0: no blobs), the longest they live,
+    /// what one account may hold, what the relay holds in all, and what
+    /// one address may fetch a minute.
+    pub(crate) blob_dir: Option<PathBuf>,
+    pub(crate) blob_max_bytes: u64,
+    pub(crate) blob_max_ttl: Duration,
+    pub(crate) blob_account_bytes: u64,
+    pub(crate) blob_total_bytes: u64,
+    pub(crate) blob_address_bytes: u64,
+    /// A blob is served at most this many times its size (0: no limit).
+    pub(crate) blob_serve_factor: u64,
+    pub(crate) blob_get_bytes_per_minute: u64,
     /// Where TLS (the outer layer) listens, e.g. 0.0.0.0:443 (off: none).
     pub(crate) tls_bind: Option<String>,
     /// The certificate chain and private key (PEM) TLS serves.
@@ -162,6 +175,14 @@ impl Default for ExtConfig {
             registration_password: None,
             account_quota_bytes: DEFAULT_MAX_STORE_BYTES_PER_MINUTE,
             token_lifetime: DEFAULT_TOKEN_LIFETIME,
+            blob_dir: None,
+            blob_max_bytes: 0,
+            blob_max_ttl: Duration::from_secs(24 * 3600),
+            blob_account_bytes: 64 * 1024 * 1024,
+            blob_total_bytes: 1024 * 1024 * 1024,
+            blob_address_bytes: 128 * 1024 * 1024,
+            blob_serve_factor: 8,
+            blob_get_bytes_per_minute: 32 * 1024 * 1024,
             tls_bind: None,
             tls_cert: None,
             tls_key: None,
@@ -472,6 +493,32 @@ impl RelayConfig {
                 "--account-quota-bytes" => {
                     config.ext.account_quota_bytes = parse_next_u64(&mut args, &arg)?;
                 }
+                "--blob-dir" => {
+                    config.ext.blob_dir = Some(PathBuf::from(parse_next_string(&mut args, &arg)?));
+                }
+                "--blob-max-bytes" => {
+                    config.ext.blob_max_bytes = parse_next_u64(&mut args, &arg)?;
+                }
+                "--blob-ttl-hours" => {
+                    config.ext.blob_max_ttl = Duration::from_secs(
+                        parse_next_u64(&mut args, &arg)?.clamp(1, 24 * 30) * 3600,
+                    );
+                }
+                "--blob-account-bytes" => {
+                    config.ext.blob_account_bytes = parse_next_u64(&mut args, &arg)?;
+                }
+                "--blob-total-bytes" => {
+                    config.ext.blob_total_bytes = parse_next_u64(&mut args, &arg)?;
+                }
+                "--blob-address-bytes" => {
+                    config.ext.blob_address_bytes = parse_next_u64(&mut args, &arg)?;
+                }
+                "--blob-serve-factor" => {
+                    config.ext.blob_serve_factor = parse_next_u64(&mut args, &arg)?;
+                }
+                "--blob-get-bytes-per-minute" => {
+                    config.ext.blob_get_bytes_per_minute = parse_next_u64(&mut args, &arg)?;
+                }
                 "--token-days" => {
                     config.ext.token_lifetime = Duration::from_secs(
                         parse_next_u64(&mut args, &arg)?.clamp(1, 365) * 86_400,
@@ -659,6 +706,14 @@ pub(crate) fn usage() -> String {
            --registration open|invite|password|closed  (default closed)\n\
            --registration-password TEXT     (or CONEST_RELAY_REGISTRATION_PASSWORD)\n\
            --account-quota-bytes N          an account's bytes a minute\n\
+           --blob-dir PATH                  where relay blobs are kept\n\
+           --blob-max-bytes N               the largest blob (default 0: no blobs; set it to keep them)\n\
+           --blob-ttl-hours N               the longest a blob lives\n\
+           --blob-account-bytes N           blob bytes one account may hold\n\
+           --blob-total-bytes N             blob bytes the relay holds\n\
+           --blob-address-bytes N           blob bytes the accounts made from one address hold\n\
+           --blob-serve-factor N            a blob is served at most N times its size (default 8; 0: no limit)\n\
+           --blob-get-bytes-per-minute N    blob bytes one address may fetch\n\
            --token-days N                   how long a token lasts (default 30)\n\
            --tls-bind ADDR --tls-cert PEM --tls-key PEM  TLS (e.g. on 443) with a\n\
                                   WebSocket on a secret path and a decoy site\n\

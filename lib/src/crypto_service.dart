@@ -33,6 +33,7 @@ const Set<String> ratchetedEnvelopeKinds = <String>{
   'attachment_complete',
   'attachment_cancel',
   'attachment_pause_control',
+  'attachment_blobs',
   'message_edit',
   'message_delete',
   'message_reaction',
