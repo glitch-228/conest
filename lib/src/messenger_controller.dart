@@ -1067,6 +1067,7 @@ class MessengerController extends ChangeNotifier {
     // A key released while the window was elsewhere never reaches us.
     if (!focused) unawaited(releasePushToTalk());
   }
+
   DateTime? _appBackgroundedAtUtc;
   NetworkCostClass _networkCostClass = NetworkCostClass.unmetered;
   String? _statusMessage;
@@ -9160,8 +9161,22 @@ class MessengerController extends ChangeNotifier {
       // Reticulum over TCP is no radio: no airtime budget.
       radio: reticulumCarrierConfig?.isRadio ?? true,
     );
-    return budget == null ? null : _limiters.forAccount(kind.name, budget);
+    if (budget == null) return null;
+    return _limiters.forAccount(
+      kind.name,
+      _limiterBudgetForTesting?.call(kind, budget) ?? budget,
+    );
   }
+
+  /// Lets a test give a network a faster budget than its real one, so a
+  /// test that runs in real time does not wait for real airtime.
+  LimiterBudget Function(TransportKind kind, LimiterBudget budget)?
+  _limiterBudgetForTesting;
+
+  @visibleForTesting
+  set limiterBudgetForTesting(
+    LimiterBudget Function(TransportKind kind, LimiterBudget budget)? value,
+  ) => _limiterBudgetForTesting = value;
 
   /// How much of a radio's airtime budget is used (0 to 1), null when the
   /// radio has no carrier running. Shown on the radio's page.

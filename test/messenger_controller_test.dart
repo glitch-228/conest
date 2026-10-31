@@ -52,6 +52,7 @@ import 'package:conest/src/ui/connections_screen.dart';
 import 'package:conest/src/ui/error_history_screen.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/ui/link_cleaning.dart';
+import 'package:conest/src/limits/network_limiter.dart';
 import 'package:conest/src/links/link_cleaner.dart';
 import 'package:conest/src/links/link_preview.dart';
 import 'package:conest/src/group_file_crypto.dart';
@@ -27187,6 +27188,16 @@ void main() {
       );
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
+      // The real airtime budget (450 bytes a minute) would hold this
+      // real-time test for minutes: give the radios a fast one.
+      for (final controller in [alice, bob]) {
+        controller.limiterBudgetForTesting = (_, budget) => LimiterBudget(
+          name: budget.name,
+          costInBytes: true,
+          quota: 1000000,
+          window: const Duration(seconds: 1),
+        );
+      }
       await _pairControllers(alice, bob);
       await alice.enableMeshtasticCarrier(
         link: MeshtasticLink.serial,
