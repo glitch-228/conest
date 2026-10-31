@@ -1180,7 +1180,10 @@ mod tests {
         assert!(get(&state, &hash, 0, 10).is_err());
         assert!(!blob_path(&dir, &hash, &[1_u8; 32]).exists());
         assert!(put(&state, &token, &other_hash, &other[300..], 900, 300).is_err());
-        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().collect();
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name() != OWNER_MARKER)
+            .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
@@ -1310,7 +1313,10 @@ mod tests {
         assert_eq!(delete(&a, &hash).unwrap()["deleted"], true);
         assert!(get(&state, &hash, 0, 10).is_err());
         assert!(has(&state, &hash, SECRET).is_empty());
-        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().collect();
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name() != OWNER_MARKER)
+            .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
         // The quota is free again.
         upload(&state, &a, &blob(800, 5)).expect("room after the delete");
@@ -1525,7 +1531,10 @@ mod tests {
         drop(busy);
         state.sweep_blobs(&dir, now_millis());
         assert_eq!(row_count(&state, "blobs"), 0);
-        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().collect();
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name() != OWNER_MARKER)
+            .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
