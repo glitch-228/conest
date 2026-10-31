@@ -679,8 +679,9 @@ abstract final class DeltaMail {
                 'to',
                 'message-id',
                 'chat-version',
-              ].any((name) => content.headers.raw(name).length != 1)))
+              ].any((name) => content.headers.raw(name).length != 1))) {
         return null;
+      }
       encrypted = true;
       // Protected headers replace the outer ones, and only routing fields
       // come from outside: an outer Secure-Join or group header around
@@ -979,26 +980,31 @@ DateTime? parseRfc5322Date(String? value) {
 
 // Top-level boundaries prevent a caller's callback/controller from being
 // captured in an isolate message. Keys contain only checked bytes.
-Future<String?> _senderInWorker(Uint8List raw) => Isolate.run(() {
-  final limit = min(raw.length, 512 * 1024 + 4);
-  for (var i = 0; i < limit - 1; i++) {
-    final lf = raw[i] == 10 && raw[i + 1] == 10;
-    final crlf =
-        i + 3 < limit &&
-        raw[i] == 13 &&
-        raw[i + 1] == 10 &&
-        raw[i + 2] == 13 &&
-        raw[i + 3] == 10;
-    if (lf || crlf) {
-      return parseMailAddress(
-        MimeHeaders.parse(
-          latin1.decode(Uint8List.sublistView(raw, 0, i)),
-        )['from'],
-      );
+Future<String?> _senderInWorker(Uint8List raw) {
+  final header = Uint8List.fromList(
+    Uint8List.sublistView(raw, 0, min(raw.length, 512 * 1024 + 4)),
+  );
+  return Isolate.run(() {
+    final limit = min(header.length, 512 * 1024 + 4);
+    for (var i = 0; i < limit - 1; i++) {
+      final lf = header[i] == 10 && header[i + 1] == 10;
+      final crlf =
+          i + 3 < limit &&
+          header[i] == 13 &&
+          header[i + 1] == 10 &&
+          header[i + 2] == 13 &&
+          header[i + 3] == 10;
+      if (lf || crlf) {
+        return parseMailAddress(
+          MimeHeaders.parse(
+            latin1.decode(Uint8List.sublistView(header, 0, i)),
+          )['from'],
+        );
+      }
     }
-  }
-  return null;
-});
+    return null;
+  });
+}
 
 Future<DeltaIncoming?> _readInWorker(
   (Uint8List, PgpSecretKey, List<PgpPublicKey>, List<String>, DateTime?) job,

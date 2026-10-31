@@ -60,6 +60,30 @@ void main() {
     },
   );
 
+  test(
+    'Delta legacy pinned caches remain readable while new admissions obey the cap',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('delta-pinned');
+      addTearDown(() => dir.delete(recursive: true));
+      for (final name in ['a', 'b']) {
+        await File('${dir.path}/$name').writeAsBytes(List.filled(4, 1));
+      }
+      final cache = DeltaAttachmentCache(
+        dir,
+        maxBytes: 4,
+        onEvicted: (_) => fail('pinned file evicted'),
+      );
+      await cache.load(['a', 'b']);
+      await cache.reserve('', 0, {'a', 'b'});
+      expect(await File('${dir.path}/a').readAsBytes(), List.filled(4, 1));
+      await expectLater(
+        cache.reserve('c', 1, {'a', 'b'}),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(cache.sizeBytes, 8);
+    },
+  );
+
   test('Delta startup and unchanged saves never decode avatars', () {
     final avatar = base64Encode(img.encodePng(img.Image(width: 2, height: 2)));
     final store = DeltaChats.fromJson({
@@ -89,6 +113,45 @@ void main() {
     expect(peer.avatarLoaded, isTrue);
     expect(identical(peer.copyWith(name: 'Alice').avatar, bytes), isTrue);
   });
+
+  test(
+    'Delta lazy avatars never expand the size admitted before later mutations',
+    () {
+      final noisy = img.Image(width: 64, height: 64);
+      final random = Random(24);
+      for (final pixel in noisy) {
+        pixel.setRgb(
+          random.nextInt(256),
+          random.nextInt(256),
+          random.nextInt(256),
+        );
+      }
+      final jpeg = Uint8List.fromList(img.encodeJpg(noisy, quality: 25));
+      final encoded = base64Encode(jpeg);
+      var store = DeltaChats.fromJson({
+        'peers': [
+          {
+            'fingerprint': 'A' * 40,
+            'addr': 'alice@example.org',
+            'avatar': encoded,
+          },
+        ],
+      });
+      final before = store.peers.values.single.avatarEncodedSize;
+      store = store.withPeer(
+        DeltaPeer(
+          fingerprint: 'B' * 40,
+          addr: 'bob@example.org',
+          avatar: Uint8List.fromList(
+            img.encodePng(img.Image(width: 2, height: 2)),
+          ),
+        ),
+      );
+      final avatar = store.peers['A' * 40]!.avatar;
+      expect(avatar, isNotNull);
+      expect(base64Encode(avatar!).length, lessThanOrEqualTo(before));
+    },
+  );
 
   test('Delta saves reuse unchanged message JSON', () {
     final first = DeltaChatMessage(
@@ -127,7 +190,7 @@ void main() {
     () {
       expect(
         DeltaInvite.parse(
-          'https://i.delta.chat/#${'A' * 40}&a=a@example.org&s=${'x' * 9000}',
+          'https://i.delta.chat/#${'A' * 40}&a=a@example.org&s=valid&n=${'x' * 9000}',
         ),
         isNull,
       );

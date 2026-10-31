@@ -216,6 +216,7 @@ class EmailCarrierConfig {
     this.uidValidity,
     this.lastUid = 0,
     this.deferred = const [],
+    this.deferredFloorUid,
     this.serverPicked = true,
     this.movedAt,
   });
@@ -263,6 +264,7 @@ class EmailCarrierConfig {
   final int? uidValidity;
   final int lastUid;
   final List<DeferredDeltaMail> deferred;
+  final int? deferredFloorUid;
 
   /// A chatmail server this app picked (one the user named is never left
   /// for another). True for accounts from before this was kept.
@@ -280,6 +282,8 @@ class EmailCarrierConfig {
     int? uidValidity,
     int? lastUid,
     List<DeferredDeltaMail>? deferred,
+    int? deferredFloorUid,
+    bool clearDeferredFloor = false,
   }) => EmailCarrierConfig(
     mail: mail,
     password: password,
@@ -292,6 +296,9 @@ class EmailCarrierConfig {
     uidValidity: uidValidity ?? this.uidValidity,
     lastUid: lastUid ?? this.lastUid,
     deferred: deferred ?? this.deferred,
+    deferredFloorUid: clearDeferredFloor
+        ? null
+        : deferredFloorUid ?? this.deferredFloorUid,
     serverPicked: serverPicked,
     movedAt: movedAt,
   );
@@ -309,6 +316,7 @@ class EmailCarrierConfig {
     if (lastUid > 0) 'lastUid': lastUid,
     if (deferred.isNotEmpty)
       'deferred': [for (final mail in deferred) mail.toJson()],
+    if (deferredFloorUid != null) 'deferredFloorUid': deferredFloorUid,
     if (!serverPicked) 'serverPicked': false,
     if (movedAt case final at?) 'movedAt': at.toUtc().toIso8601String(),
   };
@@ -356,6 +364,11 @@ class EmailCarrierConfig {
                 .take(DeferredDeltaMail.maxCount))
           ?DeferredDeltaMail.fromJson(item),
       ],
+      deferredFloorUid:
+          json['deferredFloorUid'] is int &&
+              (json['deferredFloorUid'] as int) > 0
+          ? json['deferredFloorUid'] as int
+          : null,
       serverPicked: json['serverPicked'] != false,
       movedAt: DateTime.tryParse(json['movedAt'] as String? ?? '')?.toUtc(),
     );
@@ -367,7 +380,9 @@ class EmailCarrierConfig {
 
 /// Recognized external mail could not yet be durably saved. Keep its UID.
 class OtherMailRetryException implements Exception {
-  const OtherMailRetryException();
+  const OtherMailRetryException({this.uid, this.deferredUids = const []});
+  final List<int> deferredUids;
+  final int? uid;
 }
 
 enum EmailCarrierState { stopped, connecting, connected, failed }
@@ -541,6 +556,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
 
   static const maxOtherMailAttempts = 3;
   final Map<int, int> _otherMailAttempts = {};
+  final Set<int> _parkedOtherMail = {};
 
   /// Explicit larger budget for enabled external chats; carrier cap is unchanged.
   final int Function()? otherMailMaxBytes;
@@ -646,8 +662,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     _wake?.complete();
     _wake = null;
     for (final done in _requestedDownloads.values) {
-      if (!done.isCompleted)
+      if (!done.isCompleted) {
         done.completeError(StateError('Email is stopped.'));
+      }
     }
     _requestedDownloads.clear();
     _setState(EmailCarrierState.stopped);
@@ -727,12 +744,26 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           final start = _config.uidValidity == null
               ? (next == null ? 0 : next - 1)
               : 0;
-          _config = _config.copyWith(
+          final reset = _config.copyWith(
             uidValidity: validity,
             lastUid: start,
             deferred: const [],
+            clearDeferredFloor: true,
           );
-          onCursor?.call(validity, start);
+          for (final done in _requestedDownloads.values) {
+            if (!done.isCompleted) {
+              done.completeError(StateError('The mailbox changed.'));
+            }
+          }
+          _requestedDownloads.clear();
+          _parkedOtherMail.clear();
+          _otherMailAttempts.clear();
+          if (onOtherMailBatch != null) {
+            await onOtherMailBatch!(const [], reset);
+          } else {
+            onCursor?.call(validity, start);
+          }
+          _config = reset;
         }
         _lastError = null;
         _setState(EmailCarrierState.connected);
@@ -760,7 +791,12 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           storageBackoff = const Duration(seconds: 2);
           if (!current()) break;
           // Mail announced while reading: read again before waiting.
-          if (client.takeNewMail()) continue;
+          if (_requestedDownloads.isNotEmpty ||
+              (_config.deferredFloorUid != null &&
+                  _config.deferred.length < DeferredDeltaMail.maxCount) ||
+              client.takeNewMail()) {
+            continue;
+          }
           final wake = Completer<void>();
           _wake = wake;
           step = 'waiting for mail';
@@ -888,15 +924,48 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   Future<bool> _readNewBatch(ImapClient client, int generation) async {
     bool current() => _started && generation == _generation;
     final requested = _requestedDownloads.keys.toSet();
+    final initialLast = _config.lastUid;
+    final floor = _config.deferredFloorUid;
+    final revisit =
+        floor != null &&
+        (_config.deferred.length < DeferredDeltaMail.maxCount ||
+            requested.isNotEmpty);
+    final known = _config.deferred.map((m) => m.uid).toSet();
+    final backlog = SplayTreeSet<int>();
+    if (revisit) {
+      backlog.addAll(
+        (await client.uidsAfter(
+          floor - 1,
+        )).where((uid) => uid <= initialLast && !known.contains(uid)),
+      );
+    }
+    final initialBacklog = backlog.toSet();
     final uids = {
       ...requested,
-      ...await client.uidsAfter(_config.lastUid),
+      ...backlog,
+      ...await client.uidsAfter(initialLast),
     }.toList()..sort();
+    if (uids.isEmpty && revisit) {
+      final cursor = _config.copyWith(clearDeferredFloor: true);
+      await onOtherMailBatch!(const [], cursor);
+      _config = cursor;
+      return false;
+    }
+    int? overflow = revisit ? null : floor;
+    int? oldest(int? a, int? b) => a == null
+        ? b
+        : b == null
+        ? a
+        : min(a, b);
+    var storageBackoff = const Duration(seconds: 2);
     for (var offset = 0; offset < uids.length;) {
+      final batchStart = offset;
+      final previousOverflow = overflow;
       var cursor = _config;
       final external = <FetchedDeltaMail>[];
       final handled = <int>[];
       final completed = <int>[];
+      final batchUids = <int>[];
       var bytes = 0;
       var count = 0;
       while (offset < uids.length && count < 20) {
@@ -908,15 +977,38 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
             .clamp(maxCarrierMailBytes, 42 * 1024 * 1024);
         if (size != null && size >= 0 && size <= maxBytes) {
           if (bytes > 0 && bytes + size > 48 * 1024 * 1024) break;
-          if (!manual && (deferOtherMail?.call(size) ?? false)) {
-            if (cursor.deferred.length >= DeferredDeltaMail.maxCount) break;
-            final header = await client.headers(uid);
-            if (header != null) {
-              final entry = DeferredDeltaMail.fromHeaders(uid, size, header);
+          var defer =
+              !manual &&
+              (_parkedOtherMail.contains(uid) ||
+                  (deferOtherMail?.call(size) ?? false));
+          if (defer &&
+              !_parkedOtherMail.contains(uid) &&
+              size <= maxCarrierMailBytes) {
+            final prefix = await client.prefix(uid);
+            if (prefix != null && hasCarrierPacketPrefix(prefix)) defer = false;
+          }
+          if (defer) {
+            if (cursor.deferred.length >= DeferredDeltaMail.maxCount) {
+              // The server is the overflow queue. Keep one durable floor;
+              // later small/carrier mail must still get through a full list.
+              overflow = oldest(overflow, uid);
+            } else {
+              var entry = DeferredDeltaMail(uid: uid, size: size);
+              try {
+                final header = await client.headers(uid);
+                if (header != null) {
+                  entry = DeferredDeltaMail.fromHeaders(uid, size, header);
+                }
+              } on FormatException {
+                /* Optional, untrusted hints. UID survives. */
+              }
               cursor = cursor.copyWith(deferred: [...cursor.deferred, entry]);
             }
           } else {
-            final raw = await client.fetch(uid, maxBytes: maxBytes);
+            final raw = await client.fetch(
+              uid,
+              maxBytes: min(maxBytes, 48 * 1024 * 1024 - bytes),
+            );
             if (!current()) return false;
             if (raw != null) {
               bytes += raw.length;
@@ -925,7 +1017,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
                 onFrame(mail.from, mail.frame);
                 handled.add(uid);
               } else {
-                external.add(FetchedDeltaMail(uid, raw));
+                external.add(FetchedDeltaMail(uid, raw, userRequested: manual));
               }
             }
             cursor = cursor.copyWith(
@@ -943,21 +1035,53 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
             ],
           );
         }
-        if (!manual && uid > cursor.lastUid)
-          cursor = cursor.copyWith(lastUid: uid);
+        if (uid > cursor.lastUid) cursor = cursor.copyWith(lastUid: uid);
         if (manual) completed.add(uid);
+        backlog.remove(uid);
+        batchUids.add(uid);
         offset++;
         count++;
       }
-      if (count == 0) return false; // bounded deferred list is full
+      final nextFloor = oldest(
+        overflow,
+        backlog.isEmpty ? null : backlog.first,
+      );
+      cursor = cursor.copyWith(
+        deferredFloorUid: nextFloor,
+        clearDeferredFloor: nextFloor == null,
+      );
       try {
         final consumed = await onOtherMailBatch!(external, cursor);
-        if (consumed.length != external.length)
+        if (consumed.length != external.length) {
           throw const OtherMailRetryException();
+        }
         for (var i = 0; i < consumed.length; i++) {
           if (consumed[i]) handled.add(external[i].uid);
         }
-      } on OtherMailRetryException {
+      } on OtherMailRetryException catch (error) {
+        if (error.deferredUids.isNotEmpty) {
+          _parkedOtherMail.addAll(error.deferredUids.take(20));
+          offset = batchStart;
+          overflow = previousOverflow;
+          backlog.addAll(batchUids.where(initialBacklog.contains));
+          continue;
+        }
+        final uid = error.uid;
+        if (uid != null && !requested.contains(uid)) {
+          if (_otherMailAttempts.length >= 64 &&
+              !_otherMailAttempts.containsKey(uid)) {
+            _otherMailAttempts.remove(_otherMailAttempts.keys.first);
+          }
+          final attempts = (_otherMailAttempts[uid] ?? 0) + 1;
+          _otherMailAttempts[uid] = attempts;
+          if (attempts >= maxOtherMailAttempts) {
+            if (_parkedOtherMail.length >= 64) {
+              _parkedOtherMail.remove(_parkedOtherMail.first);
+            }
+            _parkedOtherMail.add(uid);
+            onOtherMailGaveUp?.call(uid);
+          }
+        }
         for (final uid in completed) {
           _requestedDownloads
               .remove(uid)
@@ -965,10 +1089,27 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
                 StateError('Could not save this mail. Try again.'),
               );
         }
-        return true;
+        if (completed.isNotEmpty || !current()) return true;
+        offset = batchStart;
+        overflow = previousOverflow;
+        backlog.addAll(batchUids.where(initialBacklog.contains));
+        if (uid == null || !_parkedOtherMail.contains(uid)) {
+          final wake = Completer<void>();
+          _wake = wake;
+          await Future.any([wake.future, Future<void>.delayed(storageBackoff)]);
+          storageBackoff = Duration(
+            seconds: min(storageBackoff.inSeconds * 2, 300),
+          );
+        }
+        continue;
       }
       if (!current()) return false;
       _config = cursor;
+      storageBackoff = const Duration(seconds: 2);
+      for (final uid in batchUids) {
+        _parkedOtherMail.remove(uid);
+        _otherMailAttempts.remove(uid);
+      }
       for (final uid in handled) {
         try {
           await client.delete(uid);

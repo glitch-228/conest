@@ -44,6 +44,7 @@ import 'delta_protocol.dart';
 import 'email/pgp.dart';
 import 'email/delta_content.dart';
 import 'email/delta_download.dart';
+import 'email/delta_mail.dart' show DeltaIncoming;
 import 'email/delta_cache.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
@@ -6773,6 +6774,8 @@ class MessengerController extends ChangeNotifier {
   Map<String, Set<String>> _deltaIdsByCacheName = {};
   DeltaChats? _deltaReferencedChats;
   Future<DeltaAttachmentCache>? _deltaFileCache;
+  @visibleForTesting
+  int deltaAttachmentCacheLimitBytes = 256 * 1024 * 1024;
 
   DeltaChats get deltaChats {
     final json = _snapshot.networkChats['deltaChat'];
@@ -6965,8 +6968,9 @@ class MessengerController extends ChangeNotifier {
     try {
       await _saveSnapshotSilently(notify: true);
     } catch (_) {
-      if (mailCursor != null && previousCursor != null)
+      if (mailCursor != null && previousCursor != null) {
         _setDeltaMailCursor(previousCursor);
+      }
       rethrow;
     }
   }
@@ -15871,7 +15875,7 @@ class MessengerController extends ChangeNotifier {
     if (hash == null || hash.isEmpty) return legacy;
     if (attachmentId.startsWith('delta:')) {
       await (await _openDeltaFileCache()).touch(
-        attachmentStorageKey('sha256:$hash'),
+        'delta-${attachmentStorageKey('sha256:$hash')}',
         _now().toUtc(),
       );
     }
@@ -15881,6 +15885,12 @@ class MessengerController extends ChangeNotifier {
         '${attachmentId.startsWith('delta:') ? 'delta-' : ''}${attachmentStorageKey('sha256:$hash')}',
       ),
     );
+    if (attachmentId.startsWith('delta:') && !await managed.exists()) {
+      final previous = File(
+        p.join(cache.path, attachmentStorageKey('sha256:$hash')),
+      );
+      if (await previous.exists()) return previous;
+    }
     if (!await managed.exists() && await legacy.exists()) {
       try {
         await legacy.rename(managed.path);

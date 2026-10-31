@@ -16,10 +16,34 @@ extension DeltaDownloadsController on MessengerController {
         );
   }
 
+  bool _deltaFilesAllowed(DeltaChats chats, DeltaIncoming read) {
+    if (_networkCostClass != NetworkCostClass.unmetered) return false;
+    final author = read.signer?.fingerprintHex;
+    final group = read.header('chat-group-id');
+    final chat = group == null
+        ? chats.chats[author]
+        : chats.chats[DeltaChat.groupKey(group)];
+    final trusted =
+        (chats.peers[author]?.verified ?? false) ||
+        ((chat?.kept ?? false) && (chat?.members.contains(author) ?? false));
+    final preset =
+        _snapshot.identity?.connectivity.autoDownloadPreset ??
+        AutoDownloadPreset.medium;
+    return read.files.every(
+      (file) => preset.allows(
+        mimeType: file.mimeType,
+        sizeBytes: file.bytes.length,
+        network: _networkCostClass,
+        verifiedContact: trusted,
+      ),
+    );
+  }
+
   void _setDeltaMailCursor(EmailCarrierConfig cursor) {
     final current = emailCarrierConfig;
-    if (current == null || current.mail != cursor.mail)
+    if (current == null || current.mail != cursor.mail) {
       throw const OtherMailRetryException();
+    }
     _snapshot = _snapshot.copyWith(
       carrierAccounts: {
         ..._snapshot.carrierAccounts,
@@ -28,6 +52,8 @@ extension DeltaDownloadsController on MessengerController {
               uidValidity: cursor.uidValidity,
               lastUid: cursor.lastUid,
               deferred: cursor.deferred,
+              deferredFloorUid: cursor.deferredFloorUid,
+              clearDeferredFloor: cursor.deferredFloorUid == null,
             )
             .toJson(),
       },
@@ -48,12 +74,22 @@ extension DeltaDownloadsController on MessengerController {
       (protocol, chats) async {
         var next = chats;
         final outgoing = <DeltaOutgoingMail>[];
+        final deferred = <int>[];
         for (final mail in mails) {
-          final step = await protocol.receive(next, mail.raw);
-          if (step.retry) throw const OtherMailRetryException();
+          final step = await protocol.receive(
+            next,
+            mail.raw,
+            filesAllowed: (read) =>
+                mail.userRequested || _deltaFilesAllowed(next, read),
+          );
+          if (step.deferred) deferred.add(mail.uid);
+          if (step.retry) throw OtherMailRetryException(uid: mail.uid);
           next = step.chats;
           consumed.add(step.consumed);
           outgoing.addAll(step.mails);
+        }
+        if (deferred.isNotEmpty) {
+          throw OtherMailRetryException(deferredUids: deferred);
         }
         return DeltaStep(
           next,

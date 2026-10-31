@@ -36,13 +36,18 @@ extension DeltaAttachmentsController on MessengerController {
     return _deltaDescriptorIndex[id];
   }
 
-  Future<DeltaAttachmentCache> _openDeltaFileCache() =>
-      _deltaFileCache ??= () async {
+  Future<DeltaAttachmentCache> _openDeltaFileCache() => _deltaFileCache ??=
+      () async {
         final root = await _attachmentRoot();
         final directory = Directory(p.join(root.path, 'cache'));
         await directory.create(recursive: true);
         _deltaAttachmentDescriptorFor(''); // refresh the content index once
         final shared = {
+          for (final message in _archivedMessages)
+            if (message.attachment != null)
+              attachmentStorageKey(
+                'sha256:${message.attachment!.fileHashBase64}',
+              ),
           for (final conversation in _snapshot.conversations)
             for (final message in conversation.messages)
               if (message.attachment != null)
@@ -56,15 +61,23 @@ extension DeltaAttachmentsController on MessengerController {
           final old = File(p.join(directory.path, oldName));
           final target = File(p.join(directory.path, name));
           if (!await target.exists() && await old.exists()) {
-            if (shared.contains(oldName)) {
-              await old.copy(target.path);
-            } else {
-              await old.rename(target.path);
+            try {
+              if (shared.contains(oldName)) {
+                final capacity = await _storageCapacityProvider(root.path);
+                final size = await old.length();
+                if (!_canAllocateStorage(capacity, size)) continue;
+                await old.copy(target.path);
+              } else {
+                await old.rename(target.path);
+              }
+            } on FileSystemException {
+              // Old cache paths remain usable when migration cannot allocate.
             }
           }
         }
         final cache = DeltaAttachmentCache(
           directory,
+          maxBytes: deltaAttachmentCacheLimitBytes,
           onEvicted: (name) {
             _deltaAttachmentDescriptorFor('');
             for (final id in _deltaIdsByCacheName[name] ?? const <String>{}) {
@@ -76,7 +89,10 @@ extension DeltaAttachmentsController on MessengerController {
         await cache.load(_deltaIdsByCacheName.keys);
         await cache.reserve('', 0, _protectedDeltaCacheKeys);
         return cache;
-      }();
+      }().catchError((Object error, StackTrace stack) {
+        _deltaFileCache = null;
+        Error.throwWithStackTrace(error, stack);
+      });
 
   Set<String> get _protectedDeltaCacheKeys => {
     for (final r in _snapshot.attachmentCacheReferences)
@@ -258,8 +274,12 @@ extension DeltaAttachmentsController on MessengerController {
   void _recordDeltaCacheReferences() {
     final chats = deltaChats;
     final old = _deltaReferencedChats;
+    _deltaAttachmentDescriptorFor('');
     final references = {
-      for (final r in _snapshot.attachmentCacheReferences) r.attachmentId: r,
+      for (final r in _snapshot.attachmentCacheReferences)
+        if (!r.attachmentId.startsWith('delta:') ||
+            _deltaDescriptorIndex.containsKey(r.attachmentId))
+          r.attachmentId: r,
     };
     for (final chat in chats.chats.values) {
       if (identical(chat, old?.chats[chat.key])) continue;

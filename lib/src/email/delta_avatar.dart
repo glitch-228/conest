@@ -8,7 +8,10 @@ const maxDeltaAvatarEncodedBytes = 256 * 1024;
 
 /// Validate the actual compressed image before any pixel decoder runs, then
 /// keep only a small, static PNG with no ancillary metadata or profiles.
-Uint8List? deltaAvatar(String? header) {
+Uint8List? deltaAvatar(
+  String? header, {
+  int maxEncodedBytes = maxDeltaAvatarEncodedBytes,
+}) {
   if (header == null ||
       !header.startsWith('base64:') ||
       header.length > maxDeltaAvatarEncodedBytes + 7) {
@@ -47,7 +50,7 @@ Uint8List? deltaAvatar(String? header) {
     decoded.textData = null;
     var image = decoded;
     var clean = img.encodePng(image);
-    while (base64.encode(clean).length > maxDeltaAvatarEncodedBytes) {
+    while (base64.encode(clean).length > maxEncodedBytes) {
       if (image.width <= 1 && image.height <= 1) return null;
       image = img.copyResize(
         image,
@@ -357,7 +360,10 @@ class DeltaStoredAvatar {
   Uint8List? get bytes {
     if (!_loaded) {
       _loaded = true;
-      final clean = deltaAvatar('base64:$_encoded');
+      final clean = deltaAvatar(
+        'base64:$_encoded',
+        maxEncodedBytes: _encoded.length,
+      );
       if (clean != null) {
         final encoded = base64.encode(clean);
         final extra = encoded.length - _encoded.length;

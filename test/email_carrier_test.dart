@@ -614,6 +614,38 @@ void main() {
     await until(() => bobGot.isNotEmpty);
   });
 
+  test(
+    'Delta UIDVALIDITY resets clear durable deferred mail before fetching',
+    () async {
+      var saved = account('validity');
+      final bob = EmailCarrierChannel(
+        config: saved,
+        connector: server.connect,
+        onFrame: (_, _) {},
+        deferOtherMail: (_) => true,
+        onOtherMailBatch: (mails, cursor) async {
+          saved = cursor;
+          return List.filled(mails.length, false);
+        },
+      );
+      channels.add(bob);
+      bob.start();
+      await until(() => bob.state == EmailCarrierState.connected);
+      server.deliver(
+        saved.mail,
+        'From: <alice@chat.test>\r\nMessage-ID: <deferred@chat.test>\r\nContent-Type: multipart/encrypted\r\n\r\nbody',
+      );
+      await until(() => saved.deferred.isNotEmpty);
+      final previous = saved.deferred.single.uid;
+      server.uidValidity = 8;
+      server.mailboxes[saved.mail]!.clear();
+      await server.dropConnections();
+      await until(() => saved.uidValidity == 8);
+      expect(saved.deferred, isEmpty);
+      expect(server.fetched, isNot(contains(previous)));
+    },
+  );
+
   test('a stopped channel sends nothing', () async {
     final alice = channel(account('alice'), []);
     final bob = channel(account('bob'), []);

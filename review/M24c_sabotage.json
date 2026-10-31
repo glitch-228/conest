@@ -1,0 +1,157 @@
+[
+  {
+    "name": "metered-download",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-metered-download.log"
+  },
+  {
+    "name": "one-save-per-batch",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-one-save-per-batch.log"
+  },
+  {
+    "name": "cache-cap",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-cache-cap.log"
+  },
+  {
+    "name": "parser-isolate",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-parser-isolate.log"
+  },
+  {
+    "name": "lazy-startup-avatars",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-lazy-startup-avatars.log"
+  },
+  {
+    "name": "reused-message-json",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-reused-message-json.log"
+  },
+  {
+    "name": "protected-identity",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-protected-identity.log"
+  },
+  {
+    "name": "duplicate-control-headers",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-duplicate-control-headers.log"
+  },
+  {
+    "name": "autocrypt-attributes",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-autocrypt-attributes.log"
+  },
+  {
+    "name": "autocrypt-size",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-autocrypt-size.log"
+  },
+  {
+    "name": "mime-header-names",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-mime-header-names.log"
+  },
+  {
+    "name": "mime-boundary",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-mime-boundary.log"
+  },
+  {
+    "name": "invite-length",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-invite-length.log"
+  },
+  {
+    "name": "token-count",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-token-count.log"
+  },
+  {
+    "name": "token-length",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-token-length.log"
+  },
+  {
+    "name": "overflow-progress",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-overflow-progress.log"
+  },
+  {
+    "name": "bounded-mail-retries",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-bounded-mail-retries.log"
+  },
+  {
+    "name": "partial-headers",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-partial-headers.log"
+  },
+  {
+    "name": "carrier-probe",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-carrier-probe.log"
+  },
+  {
+    "name": "download-wake",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-download-wake.log"
+  },
+  {
+    "name": "pruned-cache-references",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-pruned-cache-references.log"
+  },
+  {
+    "name": "access-updates-lru",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-access-updates-lru.log"
+  },
+  {
+    "name": "bounded-deferred-hints",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-bounded-deferred-hints.log"
+  },
+  {
+    "name": "lazy-avatar-expansion",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-lazy-avatar-expansion.log"
+  },
+  {
+    "name": "pinned-legacy-cache",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-pinned-legacy-cache.log"
+  },
+  {
+    "name": "actual-file-policy",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-actual-file-policy.log"
+  },
+  {
+    "name": "linear-uid-discovery",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-linear-uid-discovery.log"
+  },
+  {
+    "name": "legacy-migration-fallback",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-legacy-migration-fallback.log"
+  },
+  {
+    "name": "archive-cache-ownership",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-archive-cache-ownership.log"
+  },
+  {
+    "name": "migration-storage-admission",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-migration-storage-admission.log"
+  },
+  {
+    "name": "uid-namespace-reset",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-uid-namespace-reset.log"
+  }
+]

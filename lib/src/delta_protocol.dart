@@ -44,6 +44,7 @@ class DeltaStep {
     this.consumed = false,
     this.chatKey,
     this.retry = false,
+    this.deferred = false,
   });
 
   final DeltaChats chats;
@@ -54,6 +55,7 @@ class DeltaStep {
 
   /// Recognized mail that must be retried after a transient storage failure.
   final bool retry;
+  final bool deferred;
 
   /// The chat the call made or wrote in, if any.
   final String? chatKey;
@@ -215,8 +217,9 @@ class DeltaTokens {
     if (invitenumber is! String ||
         auth is! String ||
         !DeltaInvite._validToken(invitenumber) ||
-        !DeltaInvite._validToken(auth))
+        !DeltaInvite._validToken(auth)) {
       return null;
+    }
     final groups = json['groups'];
     return DeltaTokens(
       invitenumber: invitenumber,
@@ -375,7 +378,12 @@ class DeltaProtocol {
 
   /// Reads one mail from the inbox. Mail that is not Delta Chat's (or not
   /// for this key) is left alone: `consumed` false.
-  Future<DeltaStep> receive(DeltaChats chats, Uint8List raw) async {
+  Future<DeltaStep> receive(
+    DeltaChats chats,
+    Uint8List raw, {
+    bool allowFiles = true,
+    bool Function(DeltaIncoming mail)? filesAllowed,
+  }) async {
     final read = await DeltaMail.read(
       raw,
       key,
@@ -427,6 +435,10 @@ class DeltaProtocol {
         !read.isChat ||
         !_forMe(read)) {
       return DeltaStep(chats);
+    }
+    if (read.files.isNotEmpty &&
+        (!allowFiles || !(filesAllowed?.call(read) ?? true))) {
+      return DeltaStep(chats, deferred: true);
     }
     _remember(signer);
     var next = _learn(chats, read, signer);

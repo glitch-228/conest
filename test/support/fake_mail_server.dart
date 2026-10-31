@@ -37,6 +37,7 @@ class FakeMailServer {
   /// UIDs whose bodies were downloaded.
   final List<int> fetched = [];
   final List<int> headersFetched = [];
+  final List<int> prefixesFetched = [];
   final List<int> fetchedSizes = [];
   Future<void> Function(FakeMail mail)? beforeBodyFetch;
 
@@ -64,6 +65,8 @@ class FakeMailServer {
   final List<Socket> _open = [];
   final _arrivals = StreamController<String>.broadcast();
   int _nextUid = 1;
+  int uidValidity = 7;
+  int uidSearches = 0;
 
   int get imapPort => _imap.port;
   int get smtpPort => _smtp.port;
@@ -243,6 +246,7 @@ class FakeMailServer {
   }
 
   void _serveImap(Socket socket) {
+    socket.setOption(SocketOption.tcpNoDelay, true);
     _open.add(socket);
     socket.done.catchError((Object _) {});
     String? user;
@@ -338,7 +342,7 @@ class FakeMailServer {
         } else if (upper.startsWith('SELECT')) {
           reported = newest();
           reply('* ${box().length} EXISTS');
-          reply('* OK [UIDVALIDITY 7] ok');
+          reply('* OK [UIDVALIDITY $uidValidity] ok');
           reply('* OK [UIDNEXT $_nextUid] ok');
           reply('$tag OK [READ-WRITE] selected');
         } else if (upper.startsWith('APPEND ')) {
@@ -365,6 +369,7 @@ class FakeMailServer {
           reply('* SEARCH ${uids.join(' ')}'.trimRight());
           reply('$tag OK');
         } else if (upper.startsWith('UID SEARCH UID ')) {
+          uidSearches++;
           reported = newest();
           final from = int.parse(command.substring(15).split(':').first);
           final encryptedOnly = upper.contains(
@@ -392,7 +397,8 @@ class FakeMailServer {
           if (index >= 0) {
             final mail = box()[index];
             if (!upper.contains('RFC822.SIZE') &&
-                !upper.contains('HEADER.FIELDS')) {
+                !upper.contains('HEADER.FIELDS') &&
+                !upper.contains('<0.4096>')) {
               fetched.add(uid);
               fetchedSizes.add(mail.raw.length);
             }
@@ -400,12 +406,27 @@ class FakeMailServer {
               reply(
                 '* ${index + 1} FETCH (UID $uid RFC822.SIZE ${reportedSizes[uid] ?? mail.raw.length})',
               );
+            } else if (upper.contains('<0.4096>')) {
+              prefixesFetched.add(uid);
+              final prefix = Uint8List.sublistView(
+                mail.raw,
+                0,
+                min(4096, mail.raw.length),
+              );
+              reply(
+                '* ${index + 1} FETCH (UID $uid BODY[]<0> {${prefix.length}}',
+              );
+              send(prefix);
+              reply(')');
             } else if (upper.contains('HEADER.FIELDS')) {
               headersFetched.add(uid);
               final text = latin1.decode(mail.raw);
               final end = text.indexOf('\r\n\r\n');
+              final textHeader = end < 0 ? text : text.substring(0, end + 4);
               final header = latin1.encode(
-                end < 0 ? text : text.substring(0, end + 4),
+                upper.contains('<0.16384>')
+                    ? textHeader.substring(0, min(16384, textHeader.length))
+                    : textHeader,
               );
               reply(
                 '* ${index + 1} FETCH (UID $uid BODY[HEADER.FIELDS (FROM MESSAGE-ID DATE CHAT-VERSION)] {${header.length}}',

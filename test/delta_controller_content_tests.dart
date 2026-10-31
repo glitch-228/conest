@@ -31,8 +31,9 @@ class _DeltaPersistenceVault extends _MemoryVaultStore {
     if (!identical(
       snapshot.networkChats['deltaChat'],
       _snapshot.networkChats['deltaChat'],
-    ))
+    )) {
       deltaSaves++;
+    }
     await super.save(snapshot);
   }
 }
@@ -271,6 +272,264 @@ void deltaContentControllerTests() {
       expect(server.fetched, isNot(contains(mail.uid)));
       expect(mail.deleted, isFalse);
     });
+
+    test(
+      'Delta opening a cached file updates the LRU used by admission',
+      () async {
+        bob.deltaAttachmentCacheLimitBytes = 12;
+        for (var i = 1; i <= 2; i++) {
+          server.deliver(
+            bobMail,
+            await fixture(
+              id: 'lru-$i@example.org',
+              files: [
+                DeltaFile(
+                  name: '$i.bin',
+                  bytes: Uint8List.fromList(List.filled(4, i)),
+                ),
+              ],
+            ),
+          );
+          await until(
+            () => bob.deltaChats.chats[aliceFp]!.messages.any(
+              (m) => m.id == 'lru-$i@example.org',
+            ),
+          );
+        }
+        final first = bob.deltaChats.chats[aliceFp]!.messages
+            .firstWhere((m) => m.id == 'lru-1@example.org')
+            .attachments
+            .single;
+        final second = bob.deltaChats.chats[aliceFp]!.messages
+            .firstWhere((m) => m.id == 'lru-2@example.org')
+            .attachments
+            .single;
+        clock = clock.add(const Duration(seconds: 1));
+        expect(await bob.attachmentCachePathFor(first.id), isNotNull);
+        server.deliver(
+          bobMail,
+          await fixture(
+            id: 'lru-3@example.org',
+            files: [
+              DeltaFile(
+                name: '3.bin',
+                bytes: Uint8List.fromList(List.filled(8, 3)),
+              ),
+            ],
+          ),
+        );
+        await until(
+          () => bob.deltaChats.chats[aliceFp]!.messages.any(
+            (m) => m.id == 'lru-3@example.org',
+          ),
+        );
+        expect(bob.attachmentAvailableLocally(first.id), isTrue);
+        expect(bob.attachmentAvailableLocally(second.id), isFalse);
+      },
+    );
+
+    test(
+      'Delta deleting a chat prunes its persisted cache references',
+      () async {
+        server.deliver(
+          bobMail,
+          await fixture(
+            id: 'reference@example.org',
+            files: [
+              DeltaFile(
+                name: 'file.bin',
+                bytes: Uint8List.fromList([1, 2, 3, 4]),
+              ),
+            ],
+          ),
+        );
+        await until(
+          () => bob.deltaChats.chats[aliceFp]!.messages.any(
+            (m) => m.attachments.isNotEmpty,
+          ),
+        );
+        final descriptor =
+            bob.deltaChats.chats[aliceFp]!.messages.last.attachments.single;
+        expect(
+          bobVault._snapshot.attachmentCacheReferences.any(
+            (r) => r.attachmentId == descriptor.id,
+          ),
+          isTrue,
+        );
+        await bob.deleteDeltaChat(aliceFp);
+        expect(
+          bobVault._snapshot.attachmentCacheReferences.any(
+            (r) => r.attachmentId == descriptor.id,
+          ),
+          isFalse,
+        );
+      },
+    );
+
+    for (final fullDisk in [false, true]) {
+      test(
+        'Delta legacy cache migration preserves files shared with archived chats${fullDisk ? ' on a full disk' : ''}',
+        () async {
+          server.deliver(
+            bobMail,
+            await fixture(
+              id: 'archived@example.org',
+              files: [
+                DeltaFile(
+                  name: 'file.bin',
+                  bytes: Uint8List.fromList([1, 2, 3, 4]),
+                ),
+              ],
+            ),
+          );
+          await until(
+            () => bob.deltaChats.chats[aliceFp]!.messages.any(
+              (m) => m.attachments.isNotEmpty,
+            ),
+          );
+          final descriptor =
+              bob.deltaChats.chats[aliceFp]!.messages.last.attachments.single;
+          final archiveFile = AttachmentDescriptor.fromJson({
+            ...descriptor.toJson(),
+            'id': 'archive-shared',
+          });
+          await bob.addLinkArchiveForTesting(
+            LinkArchive(
+              id: 'delta-shared',
+              createdAt: clock,
+              contacts: const [],
+              groups: const [],
+              conversations: [
+                ConversationRecord(
+                  id: 'old-chat',
+                  kind: ConversationKind.direct,
+                  peerDeviceId: 'old-peer',
+                  messages: [
+                    ChatMessage(
+                      id: 'old-message',
+                      conversationId: 'old-chat',
+                      senderDeviceId: 'old-peer',
+                      recipientDeviceId: bob.identity!.deviceId,
+                      body: '',
+                      outbound: false,
+                      state: DeliveryState.delivered,
+                      createdAt: clock,
+                      attachment: archiveFile,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+          final prefix = File(
+            (await bob.attachmentCachePathFor(descriptor.id))!,
+          );
+          final legacy = File(
+            '${root.path}/bob/cache/${attachmentStorageKey('sha256:${descriptor.fileHashBase64}')}',
+          );
+          await prefix.rename(legacy.path);
+          await bob.flushPendingChanges();
+          bob.dispose();
+          bob = await _createController(
+            relayClient: _FakeRelayClient(),
+            displayName: 'Bob',
+            vaultStore: bobVault,
+            createIdentity: false,
+            mailConnector: server.connect,
+            storageCapacityProvider: (_) async => StorageCapacity(
+              freeBytes: fullDisk ? 0 : 100 * 1024 * 1024 * 1024,
+              totalBytes: 100 * 1024 * 1024 * 1024,
+            ),
+            attachmentRootProvider: () async => Directory('${root.path}/bob'),
+          );
+          await until(() => bob.deltaFingerprint != null);
+          expect(await bob.attachmentCachePathFor(descriptor.id), isNotNull);
+          expect(await legacy.readAsBytes(), [1, 2, 3, 4]);
+          if (fullDisk) {
+            expect(await prefix.exists(), isFalse);
+            expect(
+              await bob.attachmentCachePathFor(descriptor.id),
+              legacy.path,
+            );
+          }
+          expect(await bob.attachmentCachePathFor(archiveFile.id), legacy.path);
+        },
+      );
+    }
+
+    test(
+      'Delta small metered attachments wait for explicit Download after the bounded control read',
+      () async {
+        bob.onConnectivityChanged(interfaceLabel: 'mobile');
+        server.deliver(
+          bobMail,
+          await fixture(
+            id: 'small-metered@example.org',
+            files: [
+              DeltaFile(
+                name: 'small.bin',
+                bytes: Uint8List.fromList([1, 2, 3, 4]),
+              ),
+            ],
+          ),
+        );
+        final mail = server.mailboxes[bobMail]!.last;
+        await until(
+          () => bob.emailCarrierConfig!.deferred.any((m) => m.uid == mail.uid),
+        );
+        expect(mail.deleted, isFalse);
+        expect(
+          bob.deltaChats.chats[aliceFp]!.messages.where(
+            (m) => m.attachments.isNotEmpty,
+          ),
+          isEmpty,
+        );
+        final message = bob.deltaChats.chats.values
+            .firstWhere((c) => c.key.startsWith('deferred:'))
+            .messages
+            .single;
+        await bob.downloadDeltaMail(message);
+        expect(mail.deleted, isTrue);
+        expect(
+          bob.deltaChats.chats[aliceFp]!.messages.last.attachments,
+          hasLength(1),
+        );
+      },
+    );
+
+    test(
+      'Delta custom preset defers even tiny authenticated files on unmetered links',
+      () async {
+        await bob.updateGlobalConnectivity(
+          bob.identity!.connectivity.copyWith(
+            autoDownloadPreset: AutoDownloadPreset.custom,
+          ),
+        );
+        server.deliver(
+          bobMail,
+          await fixture(
+            id: 'custom-small@example.org',
+            files: [
+              DeltaFile(
+                name: 'small.bin',
+                bytes: Uint8List.fromList([1, 2, 3, 4]),
+              ),
+            ],
+          ),
+        );
+        final mail = server.mailboxes[bobMail]!.last;
+        await until(
+          () => bob.emailCarrierConfig!.deferred.any((m) => m.uid == mail.uid),
+        );
+        expect(mail.deleted, isFalse);
+        expect(
+          bob.deltaChats.chats[aliceFp]!.messages.where(
+            (m) => m.attachments.isNotEmpty,
+          ),
+          isEmpty,
+        );
+      },
+    );
 
     test('photo round trip direct and group, cache survives restart', () async {
       final photo = Uint8List.fromList(

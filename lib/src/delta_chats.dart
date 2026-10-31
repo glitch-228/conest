@@ -45,7 +45,7 @@ class DeltaPeer {
   Uint8List? get avatar => _avatar ?? _storedAvatar?.bytes;
   int get avatarEncodedSize =>
       _storedAvatar?.encodedSize ??
-      (_avatar == null ? 0 : ((_avatar!.length + 2) ~/ 3) * 4);
+      (_avatar == null ? 0 : ((_avatar.length + 2) ~/ 3) * 4);
   bool get avatarLoaded => _storedAvatar == null || _storedAvatar.loaded;
   final DateTime? avatarAt;
 
@@ -395,7 +395,7 @@ class DeltaChat {
   Uint8List? get avatar => _avatar ?? _storedAvatar?.bytes;
   int get avatarEncodedSize =>
       _storedAvatar?.encodedSize ??
-      (_avatar == null ? 0 : ((_avatar!.length + 2) ~/ 3) * 4);
+      (_avatar == null ? 0 : ((_avatar.length + 2) ~/ 3) * 4);
   bool get avatarLoaded => _storedAvatar == null || _storedAvatar.loaded;
   final DateTime? avatarAt;
   final List<DeltaPendingControl> pendingControls;

@@ -53,11 +53,13 @@ class DeltaAttachmentCache {
 
   /// Reserve space before writing; pinned/shared content stays protected.
   Future<void> reserve(String name, int size, Set<String> protected) async {
-    if (size < 0 || size > maxBytes)
+    if (size < 0 || size > maxBytes) {
       throw const FileSystemException('Delta cache limit exceeded');
+    }
     final previous = _entries[name];
     var projected = _bytes - (previous?.size ?? 0) + size;
-    var count = _entries.length + (previous == null ? 1 : 0);
+    var count = _entries.length + (previous == null && name.isNotEmpty ? 1 : 0);
+    if (projected <= maxBytes && count <= maxFiles) return;
     for (final key in _entries.keys.toList()) {
       if (projected <= maxBytes && count <= maxFiles) break;
       if (key == name || protected.contains(key)) continue;
@@ -70,8 +72,12 @@ class DeltaAttachmentCache {
       count--;
       onEvicted(key);
     }
-    if (projected > maxBytes || count > maxFiles)
+    if (projected > maxBytes || count > maxFiles) {
+      // Existing pinned files from older vaults remain readable. Only new
+      // admissions require room; starting the cache must not hide saved files.
+      if (name.isEmpty) return;
       throw const FileSystemException('Delta cache is full');
+    }
   }
 
   Future<void> record(String name, int size, DateTime now) async {
