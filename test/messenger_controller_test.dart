@@ -12179,6 +12179,104 @@ void main() {
         }
       },
     );
+
+    test('a read receipt for a later message does not mark earlier ones that '
+        'never arrived as read, and they still arrive', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'one');
+      await alice.sendMessage(contact: alice.contacts.single, body: 'two');
+      // The relay lost them (stored, never fetched).
+      for (final queue in relayClient._queues.values) {
+        queue.removeWhere((e) => e.kind == 'direct_message');
+      }
+      await alice.sendMessage(contact: alice.contacts.single, body: 'three');
+      await bob.pollNow();
+      await bob.markConversationReadThroughMessage(
+        aliceId,
+        bob.messagesFor(aliceId).singleWhere((m) => m.body == 'three'),
+      );
+      await alice.pollNow();
+      DeliveryState stateOf(String body) => alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.outbound && m.body == body)
+          .state;
+      expect(stateOf('three'), DeliveryState.read);
+      expect(stateOf('one').awaitsRecipientAck, isTrue);
+      expect(stateOf('two').awaitsRecipientAck, isTrue);
+      // They keep being retried and arrive.
+      await alice.retryUnacknowledgedMessagesNow();
+      await bob.pollNow();
+      await alice.pollNow();
+      expect(
+        bob.messagesFor(aliceId).where((m) => !m.outbound).map((m) => m.body),
+        containsAll(['one', 'two', 'three']),
+      );
+      expect(stateOf('one'), DeliveryState.delivered);
+      expect(stateOf('two'), DeliveryState.delivered);
+    });
+
+    test('in a group, a member reading a later message does not mark ones '
+        'that never reached them as read', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Lost ones',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      final bobId = bob.identity!.deviceId;
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'one');
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'two');
+      for (final queue in relayClient._queues.values) {
+        queue.removeWhere((e) => e.kind == 'group_message');
+      }
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'three');
+      await bob.pollNow();
+      await bob.markGroupReadThroughMessage(
+        group.groupId,
+        bob
+            .messagesForGroup(group.groupId)
+            .singleWhere((m) => m.body == 'three'),
+      );
+      await alice.pollNow();
+      DeliveryState? stateOf(String body) => alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((m) => m.outbound && m.body == body)
+          .recipientStates[bobId];
+      expect(stateOf('three'), DeliveryState.read);
+      expect(stateOf('one')!.awaitsRecipientAck, isTrue);
+      expect(stateOf('two')!.awaitsRecipientAck, isTrue);
+      await alice.retryUnacknowledgedMessagesNow();
+      await bob.pollNow();
+      await alice.pollNow();
+      expect(
+        bob.messagesForGroup(group.groupId).map((m) => m.body),
+        containsAll(['one', 'two', 'three']),
+      );
+    });
   });
 
   testWidgets('Courier navigation keeps private and lobby drafts separate', (

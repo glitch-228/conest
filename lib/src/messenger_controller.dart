@@ -40913,6 +40913,12 @@ class MessengerController extends ChangeNotifier {
       if (current == DeliveryState.read) {
         return message;
       }
+      // Read through: only what this member already confirmed (an earlier
+      // message that never reached them stays unconfirmed and keeps
+      // being retried).
+      if (message.id != messageId && current != DeliveryState.delivered) {
+        return message;
+      }
       if (current == DeliveryState.delivered &&
           state != DeliveryState.delivered &&
           state != DeliveryState.read) {
@@ -41010,6 +41016,12 @@ class MessengerController extends ChangeNotifier {
       if (message.state == DeliveryState.canceled ||
           message.state == DeliveryState.failed ||
           message.state == DeliveryState.read) {
+        return message;
+      }
+      // Reading one message says nothing about the ones before it that
+      // never arrived: only those the recipient already confirmed turn
+      // read. The others keep their state and keep being retried.
+      if (message.id != messageId && message.state != DeliveryState.delivered) {
         return message;
       }
       _clearOutboundAttempt(peerDeviceId, message.id);
