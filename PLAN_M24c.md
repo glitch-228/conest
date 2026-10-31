@@ -37,7 +37,7 @@ These items are about stalls and battery. Name any remaining hot path in the han
 
 ## Handoff
 
-Implemented on agent/m24c-delta-leftovers, source commit b73c80e; latest base c80f136 merged.
+Implemented on agent/m24c-delta-leftovers, source commit b7dff0e; latest base c80f136 merged.
 
 Done:
 - UID-based deferred Delta downloads obey network cost and the storage preset, expose Download, survive restart and UID resets, and keep server mail until successful durable receipt. Bounded overflow does not block later mail; groups use the same authenticated-content policy.
@@ -52,7 +52,7 @@ Verification:
 - All 34 sabotage checks failed as expected with individual guards removed, then source was restored. Evidence: review/M24c_sabotage.json; repeatable runner: tool/m24c_sabotage.py.
 - Analyzer: 28 baseline issues, no new issues.
 - Full local suite: queued under the shared flock; final result pending below.
-- Qualified CI run: 41237119393, https://github.com/glitch-228/conest/actions/runs/41237119393; final result pending below.
+- Qualified final CI run: 41238305679, https://github.com/glitch-228/conest/actions/runs/41238305679; final result pending below.
 - Independent security reviewer m24c_security_review: confirmed findings fixed with tests; final follow-up found no additional concrete findings. Review record: review/M24c.md. Maintainer review/merge approval remains separate.
 
 Performance handoff:
@@ -95,3 +95,7 @@ Device checks:
 - Ownership regression passed, with separate routing and reference-preservation sabotage checks; total 33 detected mutations, all restored. Independent narrow follow-up found no remaining concrete issue. Requeued the full suite after cancelling only this task's still-waiting lock process during mutation checks; no other session was interrupted.
 
 - Final ownership policy also avoids pinning a separate Delta copy through a saved Conest reference. Positive shared-content test passed; analyzer has 28 baseline issues. Total sabotage checks: 34, all detected and restored. Initial CI 41237119393 passed its full qualification job and real email/XMPP/Nostr/Reticulum/Meshtastic jobs; it is superseded by the final source revision for platform builds.
+
+- Final source b7dff0e pushed. Qualified run 41238305679 confirmed against that exact commit. Superseded run 41237119393 was cancelled after its qualification job passed; final run tests the ownership fix as well. The final full-suite waiter is active under the shared lock.
+
+- Shared machine full-suite queue remained occupied (one active full run and another waiter ahead). Added a dedicated full Flutter suite job to the qualified debug workflow, on its own GitHub runner. It excludes only the exact native-Iroh case explicitly exempted by PLAN_AGENTS.md; all other tests must pass. This completes full-suite verification without overlapping another agent's local suite. Local queued waiter will be cancelled; no other session is touched.

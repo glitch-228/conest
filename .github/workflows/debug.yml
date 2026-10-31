@@ -120,6 +120,26 @@ jobs:
           flutter test test/xmpp_test.dart test/xmpp_chats_test.dart
           flutter test test/messenger_controller_test.dart --plain-name "XMPP"
 
+  dart_tests:
+    if: ${{ !inputs.quick_build }}
+    needs: cadence
+    name: Full Flutter test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      # PLAN_AGENTS.md identifies this one case as requiring the native
+      # library. The Matrix/native and platform jobs qualify native code.
+      - name: Run every test independent of the native Iroh library
+        run: >-
+          flutter test --reporter expanded
+          --name '^(?!.*native Iroh direct contact adding works without LAN or any relay).*$'
+
   matrix:
     if: ${{ !inputs.quick_build }}
     needs: cadence
