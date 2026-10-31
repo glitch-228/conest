@@ -27480,6 +27480,15 @@ void main() {
       );
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
+      // The real airtime budget would hold this real-time test for minutes.
+      for (final controller in [alice, bob]) {
+        controller.limiterBudgetForTesting = (_, budget) => LimiterBudget(
+          name: budget.name,
+          costInBytes: true,
+          quota: 1000000,
+          window: const Duration(seconds: 1),
+        );
+      }
       await _pairControllers(alice, bob);
       await alice.enableMeshCoreCarrier(
         link: MeshCoreLink.serial,
