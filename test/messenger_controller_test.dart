@@ -20740,6 +20740,46 @@ void main() {
       });
     }
 
+    test('a group message stored on a relay still goes on to a route that '
+        'was failing', () async {
+      var now = DateTime.now().toUtc();
+      final (alice, bob, network, _, _, _) = await storeOnlyPair(
+        EnergyMode.saver,
+        () => now,
+      );
+      final group = await alice.createGroup(
+        title: 'Kept',
+        members: alice.contacts,
+      );
+      await _waitForIroh(
+        () => bob.groups.any((g) => g.groupId == group.groupId),
+        reason: 'Bob did not join',
+      );
+      network.blockedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'kept');
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(
+        bob.messagesForGroup(group.groupId).where((m) => m.body == 'kept'),
+        isEmpty,
+      );
+      network.blockedPairs.clear();
+      for (var pass = 0; pass < 3; pass++) {
+        now = now.add(const Duration(seconds: 20));
+        await alice.retryUnacknowledgedMessagesNow();
+        await bob.pollNow();
+        if (bob.messagesForGroup(group.groupId).any((m) => m.body == 'kept')) {
+          break;
+        }
+      }
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.messagesForGroup(group.groupId).any((m) => m.body == 'kept');
+      }, reason: 'the group message stayed on the relay that held it');
+    });
+
     for (final (label, mode) in [
       ('on battery', EnergyMode.limited),
       ('on mains power', EnergyMode.unconstrained),
