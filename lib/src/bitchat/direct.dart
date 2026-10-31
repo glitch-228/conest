@@ -16,6 +16,12 @@ abstract final class BitchatPayloadType {
   static const int delivered = 0x03;
 }
 
+/// How long a hidden listener remembers an unheard peer.
+const Duration bitchatNearbyLifetime = Duration(minutes: 5);
+
+/// The most peers a hidden listener remembers at once.
+const int bitchatNearbyMaxPeers = 256;
+
 /// How long a Noise session is used before a fresh handshake.
 const Duration bitchatSessionLifetime = Duration(hours: 24);
 
@@ -122,11 +128,12 @@ class BitchatPeerSeen extends BitchatDirectEvent {
 
 /// A bitchat identity that announces itself and talks to bitchat users:
 /// signed announces, Noise XX sessions per peer and private messages with
-/// receipts, as the bitchat apps do. Only used when the person chose to be
-/// reachable by bitchat users.
+/// receipts, as the bitchat apps do. A hidden, throwaway identity only
+/// reads announces and public messages; its carrier never sends as it.
 class BitchatDirect {
   BitchatDirect._({
     required this.nickname,
+    required this.listeningOnly,
     required List<int> noiseSeed,
     required SimpleKeyPair signing,
     required this.noisePublicKey,
@@ -141,12 +148,14 @@ class BitchatDirect {
     required String nickname,
     required List<int> noiseSeed,
     required List<int> signingSeed,
+    bool listeningOnly = false,
     DateTime Function()? now,
   }) async {
     final noise = await X25519().newKeyPairFromSeed(noiseSeed);
     final signing = await Ed25519().newKeyPairFromSeed(signingSeed);
     return BitchatDirect._(
       nickname: nickname,
+      listeningOnly: listeningOnly,
       noiseSeed: noiseSeed,
       signing: signing,
       noisePublicKey: Uint8List.fromList(
@@ -160,6 +169,10 @@ class BitchatDirect {
   }
 
   final String nickname;
+
+  /// A hidden listener keeps only recent nearby peers, without sessions.
+  /// The carrier must also keep this identity off the air.
+  final bool listeningOnly;
   final List<int> _noiseSeed;
   final SimpleKeyPair _signing;
   final Uint8List noisePublicKey;
@@ -168,6 +181,12 @@ class BitchatDirect {
   final DateTime Function() _now;
 
   final Map<String, BitchatPeer> _peers = {};
+  bool _peerExpiryPending = false;
+
+  /// First signing keys survive nearby expiry, as in reachable mode.
+  /// Ordered by last verified announce and bounded independently of rows.
+  final Map<String, Uint8List> _signingPins = {};
+  static const int _maxSigningPins = 512;
   final Map<String, _Session> _sessions = {};
   final Map<String, List<Uint8List>> _waiting = {};
   final Map<String, Future<void>> _queues = {};
@@ -178,13 +197,15 @@ class BitchatDirect {
   int _handshakesThisMinute = 0;
   final Map<String, int> _handshakesByPeer = {};
 
-  static const int _maxPeers = 512;
+  int get _maxPeers => listeningOnly ? bitchatNearbyMaxPeers : 512;
   static const int _maxSessions = 256;
   static const int _maxWaitingPerPeer = 32;
   static const int _maxHandshakesPerPeerPerMinute = 10;
   static const int _maxHandshakesPerMinute = 30;
   static const int _maxCounter = 0xffffffff;
-  static const Duration _announceMaxAge = Duration(seconds: 900);
+  Duration get _announceMaxAge => listeningOnly
+      ? const Duration(seconds: 120)
+      : const Duration(seconds: 900);
 
   String get peerIdHex => _hex(peerId);
 
@@ -217,18 +238,57 @@ class BitchatDirect {
   }
 
   Stream<BitchatDirectEvent> get events => _events.stream;
-  Iterable<BitchatPeer> get peers => _peers.values;
+  Iterable<BitchatPeer> get peers {
+    prunePeers();
+    return _peers.values;
+  }
+
+  /// Expires hidden discovery using the carrier's existing maintenance tick.
+  /// Returns whether the nearby list changed.
+  bool prunePeers() {
+    if (!listeningOnly) return false;
+    final before = _peers.length;
+    final now = _now();
+    _peers.removeWhere(
+      (_, peer) => now.difference(peer.lastSeen) >= bitchatNearbyLifetime,
+    );
+    final changed = before != _peers.length;
+    _peerExpiryPending |= changed;
+    return changed;
+  }
+
+  /// Reports expiry once, including removals made by reads or invalid
+  /// announces before the carrier's existing maintenance tick.
+  bool takePeerExpiry() {
+    prunePeers();
+    final changed = _peerExpiryPending;
+    _peerExpiryPending = false;
+    return changed;
+  }
+
   BitchatPeer? peer(String peerIdHex) => _peers[peerIdHex];
 
   /// Peers another identity of this device has seen (it was just replaced),
   /// kept unconfirmed: their signing keys are pinned only by a handshake
   /// with this identity.
   void adoptPeers(Iterable<BitchatPeer> peers) {
-    for (final peer in peers) {
-      if (_peers.length >= _maxPeers) return;
-      if (peer.peerId == peerIdHex || _peers.containsKey(peer.peerId)) {
+    final ordered = peers.toList()
+      ..sort((a, b) => a.lastSeen.compareTo(b.lastSeen));
+    for (final peer in ordered) {
+      if (peer.peerId != peerIdHex) {
+        _rememberSigningKey(peer.peerId, peer.signingKey, refresh: false);
+      }
+    }
+    // Retain the most recently heard people when going hidden in a crowd.
+    for (final peer in ordered.reversed) {
+      if (listeningOnly &&
+          _now().difference(peer.lastSeen) >= bitchatNearbyLifetime) {
         continue;
       }
+      if (_peers.length >= _maxPeers) return;
+      if (peer.peerId == peerIdHex || _peers.containsKey(peer.peerId)) continue;
+      final pin = _signingPins[peer.peerId];
+      if (pin != null && !_equal(pin, peer.signingKey)) continue;
       _peers[peer.peerId] = BitchatPeer(
         peerId: peer.peerId,
         nickname: peer.nickname,
@@ -237,6 +297,36 @@ class BitchatDirect {
         lastSeen: peer.lastSeen,
       );
     }
+  }
+
+  /// Carries discovery and its bounded signing-key pins across a switch,
+  /// including peers that have left the nearby list. No sessions are kept.
+  void adoptDiscovery(BitchatDirect? previous) {
+    if (previous == null) return;
+    for (final entry in previous._signingPins.entries) {
+      _rememberSigningKey(entry.key, entry.value, refresh: false);
+    }
+    adoptPeers(previous.peers);
+  }
+
+  void _rememberSigningKey(String id, Uint8List key, {bool refresh = true}) {
+    final pinned = _signingPins[id];
+    if (pinned != null) {
+      if (refresh) {
+        _signingPins.remove(id);
+        _signingPins[id] = pinned;
+      }
+      return;
+    }
+    if (_signingPins.length >= _maxSigningPins) {
+      // A working session's pin stays, as its peer does in the row cache.
+      final oldest = _signingPins.keys
+          .where((peer) => !hasSession(peer))
+          .firstOrNull;
+      if (oldest == null) return;
+      _signingPins.remove(oldest);
+    }
+    _signingPins[id] = Uint8List.fromList(key);
   }
 
   /// Whether a working session with [peerIdHex] exists.
@@ -280,6 +370,7 @@ class BitchatDirect {
   /// A peer's announce: kept when its signature, id and age check out.
   /// False only when the signature fails: that copy is not passed on.
   Future<bool> handleAnnounce(BitchatPacket packet) async {
+    prunePeers();
     final payload = packet.expandedPayload();
     if (payload == null) return true;
     final announcement = BitchatAnnouncement.decode(payload);
@@ -292,14 +383,18 @@ class BitchatDirect {
     }
     final id = _hex(bitchatPeerId(announcement.noisePublicKey));
     if (id != _hex(packet.senderId) || id == peerIdHex) return true;
-    final age = _now().millisecondsSinceEpoch - packet.timestamp;
-    if (age.abs() > _announceMaxAge.inMilliseconds) return true;
-    final known = _peers[id];
+    final now = _now().millisecondsSinceEpoch;
+    final maxAge = _announceMaxAge.inMilliseconds;
+    // Compare bounds directly: subtraction/abs can wrap for a hostile uint64.
+    if (packet.timestamp < now - maxAge || packet.timestamp > now + maxAge) {
+      return true;
+    }
+    var known = _peers[id];
+    final pinned = _signingPins[id] ?? known?.signingKey;
     // The first signing key checked for an id stays, as bitchat keeps it:
     // someone re-announcing a peer's Noise key with their own signing key
     // cannot write in the mesh chat as that peer (or silence them).
-    if (known != null &&
-        !_equal(known.signingKey, announcement.signingPublicKey)) {
+    if (pinned != null && !_equal(pinned, announcement.signingPublicKey)) {
       return true;
     }
     final sameKey = known != null;
@@ -322,6 +417,17 @@ class BitchatDirect {
       ),
     );
     if (!valid) return false;
+    // Verification yields: a switch may have closed this listener, or a
+    // different announce may have pinned this id while it was checked.
+    if (_events.isClosed) return true;
+    prunePeers();
+    known = _peers[id];
+    final currentPin = _signingPins[id] ?? known?.signingKey;
+    if (currentPin != null &&
+        !_equal(currentPin, announcement.signingPublicKey)) {
+      return true;
+    }
+    _rememberSigningKey(id, announcement.signingPublicKey);
     if (known != null) {
       known
         ..nickname = announcement.nickname
@@ -413,8 +519,11 @@ class BitchatDirect {
     final peer = _peers[from];
     final signature = packet.signature;
     if (from == peerIdHex || peer == null || signature == null) return unread;
-    final age = _now().millisecondsSinceEpoch - packet.timestamp;
-    if (age.abs() > bitchatPublicMaxAge.inMilliseconds) return unread;
+    final now = _now().millisecondsSinceEpoch;
+    final maxAge = bitchatPublicMaxAge.inMilliseconds;
+    if (packet.timestamp < now - maxAge || packet.timestamp > now + maxAge) {
+      return unread;
+    }
     // Checked as signed: compressed, as carried.
     if (!_messageBudget.take()) return unread;
     final valid = await Ed25519().verify(
@@ -439,16 +548,22 @@ class BitchatDirect {
       text =
           '${String.fromCharCodes(text.runes.take(bitchatMaxReceivedChars))}…';
     }
+    final DateTime sentAt;
+    try {
+      sentAt = DateTime.fromMillisecondsSinceEpoch(
+        packet.timestamp,
+        isUtc: true,
+      );
+    } on ArgumentError {
+      return unread;
+    }
     return (
       BitchatPublicMessage(
         id: id,
         peerId: from,
         nickname: peer.nickname,
         text: text,
-        sentAt: DateTime.fromMillisecondsSinceEpoch(
-          packet.timestamp,
-          isUtc: true,
-        ),
+        sentAt: sentAt,
       ),
       false,
     );

@@ -30,6 +30,9 @@ RUN=${RUN:-all}
 WAIT=${WAIT:-20}
 # How long each device stays online after its own tests, for the others.
 LINGER=${LINGER:-600}
+# Every device writes its report by this many seconds after it starts, with
+# what it has, even if its run hangs (the report says deadlineReached).
+DEADLINE=${DEADLINE:-2700}
 PACKAGE=${PACKAGE:-dev.conest.conest.debug}
 win_user=${WINDOWS%@*}
 WINDOWS_DIR=${WINDOWS_DIR:-C:\\Users\\$win_user\\conest-lab\\conest-debug-windows-x64}
@@ -225,7 +228,7 @@ start_phone() { # serial ("" = adb's default), name, group title or "", invites�
     ANDROID_SERIAL=${serial:-${ANDROID_SERIAL:-}} adb_root "pm grant $PACKAGE android.permission.$permission" || true
   done
   "${adb[@]}" shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
-  local args="--debug-run=$RUN --debug-name=$name --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-idle=$IDLE --debug-serve=600 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args "$name")"
+  local args="--debug-run=$RUN --debug-name=$name --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-deadline=$DEADLINE --debug-idle=$IDLE --debug-serve=600 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args "$name")"
   if [ -n "$group" ]; then args="$args --debug-group=$group"; else args="$args --debug-expect-group=lab-all"; fi
   for invite in "$@"; do args="$args --debug-accept-invite=$invite"; done
   "${adb[@]}" shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
@@ -255,7 +258,7 @@ start_linux() { # group title or "", invites…
   for invite in "$@"; do args+=("--debug-accept-invite=$invite"); done
   "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
     "${args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-idle="$IDLE" --debug-serve=540 --debug-expect-contacts="$contacts_each" \
-    --debug-wait="$WAIT" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
+    --debug-wait="$WAIT" --debug-deadline="$DEADLINE" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
     --debug-exit >"$out/linux.log" 2>&1 &
   linux_pid=$!
   wait_for "the Linux invite" "test -s '$linux_report.invite'" 300
@@ -274,7 +277,7 @@ start_windows() { # group title or "", invites…
   for invite in "$@"; do extra="$extra \"--debug-accept-invite=$(cmd_escape "$invite")\""; done
   cat >"$out/start-windows.cmd" <<EOF
 @echo off
-"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $extra --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-idle=$IDLE --debug-serve=540 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
+"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $extra --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-deadline=$DEADLINE --debug-idle=$IDLE --debug-serve=540 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
 EOF
   sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
   # LAN tests need inbound connections to the lab exe (only it, and only

@@ -13440,6 +13440,44 @@ class _ContactProfileDialogState extends State<ContactProfileDialog> {
                   height: 1.5,
                 ),
               ),
+              if (currentContact.accountKeysDiffer) ...[
+                const SizedBox(height: 16),
+                Card(
+                  key: const ValueKey('contact-keys-differ'),
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          l10nOf(context).contactKeysDifferTitle,
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(l10nOf(context).contactKeysDifferBody),
+                        const SizedBox(height: 4),
+                        SelectableText(currentContact.safetyNumber),
+                        Align(
+                          alignment: AlignmentDirectional.centerEnd,
+                          child: TextButton(
+                            key: const ValueKey('contact-keys-differ-ack'),
+                            onPressed: () => unawaited(
+                              widget.controller.acknowledgeContactKeysDiffer(
+                                currentContact.deviceId,
+                              ),
+                            ),
+                            child: Text(
+                              l10nOf(context).contactKeysDifferConfirm,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               SelectableText(
                 'display ${currentContact.displayName}\naccount ${currentContact.accountId}\ndevice ${currentContact.deviceId}\nsafety ${currentContact.safetyNumber}\ntrusted ${currentContact.trustedAt.toLocal()}',

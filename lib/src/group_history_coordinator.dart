@@ -262,6 +262,10 @@ class GroupHistoryCoordinator {
     );
   }
 
+  /// Whether the owner's signed membership history for [id] is held.
+  Future<bool> hasSignedMembership(String id) =>
+      _write(id, () async => (await _replica(id)).membership.current != null);
+
   Future<GroupHistoryVisibility> historyVisibility(String id) async =>
       (await _replica(id)).membership.current?.historyVisibility ??
       GroupHistoryVisibility.allRetained;

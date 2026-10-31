@@ -87,7 +87,11 @@ case "$mode" in
 esac
 
 echo "=== gate ($mode) against $baseline"
-if python3 "$here/gate.py" check "$baseline" "${labels[@]}"; then
+budgets=()
+# Before a stable, the app's own stutter and latency must also stay within
+# fixed budgets (gate.py), whatever the last run did.
+[ "$mode" = full ] && budgets=(--budgets)
+if python3 "$here/gate.py" check "$baseline" "${budgets[@]}" "${labels[@]}"; then
   python3 "$here/gate.py" record "$baseline" "${labels[@]}"
   cp "$baseline" "$gate_dir/$mode-$(date -u +%Y%m%dT%H%M%SZ).json"
   echo "gate passed"

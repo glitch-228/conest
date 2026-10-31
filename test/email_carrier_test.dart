@@ -64,6 +64,49 @@ void main() {
 
   final frame = Uint8List.fromList(List<int>.generate(5000, (i) => i % 11));
 
+  test('mails leave one account one by one, slower after a refusal', () async {
+    // A chatmail relay answers "450 Too much mail" to an account that sends
+    // fast and later cuts its connections (device lab, email only).
+    final connects = <DateTime>[];
+    var refuse = false;
+    final bob = EmailCarrierChannel(
+      config: account('bob'),
+      connector: (host, port, {required bool tls}) async {
+        if (port == 465) {
+          connects.add(DateTime.now());
+          if (refuse) throw const SmtpException(450, 'Too much mail');
+        }
+        return server.connect(host, port, tls: tls);
+      },
+      onFrame: (_, _) {},
+      pollInterval: const Duration(milliseconds: 200),
+      sendSpacing: const Duration(milliseconds: 400),
+    );
+    channels.add(bob);
+    final alice = channel(account('alice'), []);
+    bob.start();
+    alice.start();
+    await Future.wait([
+      for (var i = 0; i < 4; i++) bob.sendFrame(alice.localAddress!, frame),
+    ]);
+    expect(connects, hasLength(4));
+    // Turns are scheduled from one clock: the last mail leaves three gaps
+    // after the first, whatever the jitter between two of them.
+    expect(
+      connects.last.difference(connects.first),
+      greaterThanOrEqualTo(const Duration(milliseconds: 3 * 400 - 300)),
+    );
+    refuse = true;
+    await expectLater(
+      bob.sendFrame(alice.localAddress!, frame),
+      throwsA(isA<SmtpException>()),
+    );
+    expect(bob.currentSendSpacing, const Duration(milliseconds: 800));
+    refuse = false;
+    await bob.sendFrame(alice.localAddress!, frame);
+    expect(bob.currentSendSpacing, lessThan(const Duration(milliseconds: 800)));
+  });
+
   test(
     'a connection that fails is closed at once, not after the wait',
     () async {

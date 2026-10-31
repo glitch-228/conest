@@ -190,8 +190,11 @@ class BitchatNode {
     final packet = BitchatPacket.decode(raw);
     if (packet == null) return;
     if (expectedType != null && packet.type != expectedType) return;
-    final skew = _now().millisecondsSinceEpoch - packet.timestamp;
-    if (skew.abs() > bitchatClockWindow.inMilliseconds) return;
+    final now = _now().millisecondsSinceEpoch;
+    final maxSkew = bitchatClockWindow.inMilliseconds;
+    if (packet.timestamp < now - maxSkew || packet.timestamp > now + maxSkew) {
+      return;
+    }
     final key = packet.dedupKey;
     if (_seen.contains(key)) return;
     if (packet.type == BitchatType.noiseEncrypted &&

@@ -2073,6 +2073,7 @@ class ContactRecord {
     this.groupCarrierAddressesAt,
     this.peerContentRefusals = ContentRefusals.none,
     this.peerContentRefusalsAt,
+    this.accountKeysDiffer = false,
   });
 
   final String accountId;
@@ -2133,6 +2134,11 @@ class ContactRecord {
   /// When the contact sent [peerContentRefusals]: an older exchange that
   /// arrives late does not bring back what it changed since.
   final DateTime? peerContentRefusalsAt;
+
+  /// Set when a device account link brought a record of this contact with
+  /// other keys than this device already trusted: this device kept its own
+  /// record, and the keys should be verified.
+  final bool accountKeysDiffer;
 
   /// When this device last added the contact again (after a removal, or
   /// a cancelled or declined request). Traffic created before it belongs
@@ -2278,6 +2284,7 @@ class ContactRecord {
     DateTime? groupCarrierAddressesAt,
     ContentRefusals? peerContentRefusals,
     DateTime? peerContentRefusalsAt,
+    bool? accountKeysDiffer,
   }) {
     return ContactRecord(
       accountId: accountId,
@@ -2350,6 +2357,7 @@ class ContactRecord {
       peerContentRefusals: peerContentRefusals ?? this.peerContentRefusals,
       peerContentRefusalsAt:
           peerContentRefusalsAt ?? this.peerContentRefusalsAt,
+      accountKeysDiffer: accountKeysDiffer ?? this.accountKeysDiffer,
     );
   }
 
@@ -2490,6 +2498,7 @@ class ContactRecord {
         'peerContentRefusalsAt': peerContentRefusalsAt!
             .toUtc()
             .toIso8601String(),
+      if (accountKeysDiffer) 'accountKeysDiffer': true,
     };
   }
 
@@ -2629,6 +2638,7 @@ class ContactRecord {
       peerContentRefusalsAt: DateTime.tryParse(
         json['peerContentRefusalsAt'] as String? ?? '',
       )?.toUtc(),
+      accountKeysDiffer: json['accountKeysDiffer'] == true,
     );
   }
 }
@@ -5364,6 +5374,7 @@ class VaultSnapshot {
     this.networkChats = const <String, Map<String, dynamic>>{},
     this.hiddenChatNetworks = const <String>[],
     this.networkHistory = const <Object?>[],
+    this.linkArchives = const <Map<String, dynamic>>[],
     this.reportedLinks = const <String, Object?>{},
     this.keepFileMetadata = false,
     this.randomFileNames = false,
@@ -5488,6 +5499,11 @@ class VaultSnapshot {
   /// What each network let through (network_history.dart), as JSON.
   final List<Object?> networkHistory;
 
+  /// What a device kept when it joined an account and replaced its own
+  /// chats (see link_archive.dart): inside the vault, so it is encrypted
+  /// and no cleanup touches it.
+  final List<Map<String, dynamic>> linkArchives;
+
   /// Links other devices reported (reporter → device → [status, at]).
   final Map<String, Object?> reportedLinks;
 
@@ -5601,6 +5617,7 @@ class VaultSnapshot {
     Map<String, Map<String, dynamic>>? networkChats,
     List<String>? hiddenChatNetworks,
     List<Object?>? networkHistory,
+    List<Map<String, dynamic>>? linkArchives,
     Map<String, Object?>? reportedLinks,
     bool? keepFileMetadata,
     bool? randomFileNames,
@@ -5668,6 +5685,7 @@ class VaultSnapshot {
       networkChats: networkChats ?? this.networkChats,
       hiddenChatNetworks: hiddenChatNetworks ?? this.hiddenChatNetworks,
       networkHistory: networkHistory ?? this.networkHistory,
+      linkArchives: linkArchives ?? this.linkArchives,
       reportedLinks: reportedLinks ?? this.reportedLinks,
       keepFileMetadata: keepFileMetadata ?? this.keepFileMetadata,
       randomFileNames: randomFileNames ?? this.randomFileNames,
@@ -5759,6 +5777,7 @@ class VaultSnapshot {
       if (hiddenChatNetworks.isNotEmpty)
         'hiddenChatNetworks': hiddenChatNetworks,
       if (networkHistory.isNotEmpty) 'networkHistory': networkHistory,
+      if (linkArchives.isNotEmpty) 'linkArchives': linkArchives,
       if (reportedLinks.isNotEmpty) 'reportedLinks': reportedLinks,
       if (keepFileMetadata) 'keepFileMetadata': true,
       if (randomFileNames) 'randomFileNames': true,
@@ -5830,6 +5849,10 @@ class VaultSnapshot {
             entry.key: chats,
       },
       networkHistory: json['networkHistory'] as List<dynamic>? ?? const [],
+      linkArchives: [
+        for (final item in json['linkArchives'] as List<dynamic>? ?? const [])
+          if (item is Map<String, dynamic>) item,
+      ],
       reportedLinks: json['reportedLinks'] as Map<String, dynamic>? ?? const {},
       hiddenChatNetworks: [
         for (final network

@@ -56,10 +56,13 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/scheduler.dart';
+
 import 'group_call/group_call_service.dart';
 import 'group_file_download.dart';
 import 'messenger_controller.dart';
 import 'models.dart';
+import 'performance_samples.dart';
 
 class DebugRunRequest {
   const DebugRunRequest({
@@ -92,7 +95,14 @@ class DebugRunRequest {
     this.callLength = const Duration(minutes: 1),
     this.linkNew = false,
     this.linkFrom,
+    this.deadline,
   });
+
+  /// The most a run may take: when it has not finished by then, the report
+  /// is written with what it has (marked `deadlineReached`), so the lab
+  /// never waits for a device that hangs. A run that finishes later still
+  /// replaces it.
+  final Duration? deadline;
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', 'contacts',
   /// 'burst', 'calls', 'none' (only set up), or 'serve' (set up, then run
@@ -271,6 +281,12 @@ class DebugRunRequest {
           title,
         _ => null,
       },
+      deadline: switch (int.tryParse(value('debug-deadline') ?? '')) {
+        final seconds? when seconds >= 60 && seconds <= 6 * 3600 => Duration(
+          seconds: seconds,
+        ),
+        _ => null,
+      },
       linkNew: args.contains('--debug-link-new'),
       linkFrom: switch (value('debug-link-from')) {
         final text? when text.isNotEmpty && text.length <= 4096 => text,
@@ -352,6 +368,43 @@ Future<String> runDebugRequest(
   final startedAt = DateTime.now().toUtc();
   final path = request.reportPath ?? await defaultReportPath();
   final steps = <Map<String, Object?>>[];
+  // Frame timings while the run lasts: the release gate's stutter check.
+  final frames = FrameStats();
+  TimingsCallback? onTimings = frames.addAll;
+  try {
+    SchedulerBinding.instance.addTimingsCallback(onTimings);
+  } catch (_) {
+    onTimings = null; // No Flutter binding (a plain Dart run).
+  }
+  // A run that hangs (a transport that never comes up, a send that never
+  // ends) still leaves a report by its deadline.
+  Future<void> Function()? writeDeadlineReport;
+  Timer? deadlineTimer;
+  final limit = request.deadline;
+  if (limit != null) {
+    deadlineTimer = Timer(limit, () {
+      controller.recordError(
+        'test',
+        'Lab deadline reached after ${limit.inMinutes} min; writing what '
+            'there is.',
+      );
+      unawaited(
+        (writeDeadlineReport?.call() ??
+                _writeWhole(
+                  path,
+                  const JsonEncoder.withIndent('  ').convert({
+                    'kind': request.what,
+                    'deadlineReached': true,
+                    'build': controller.debugBuildId,
+                    'deviceId': controller.identity?.deviceId,
+                    'steps': steps,
+                    'errorHistory': controller.exportErrorHistory(),
+                  }),
+                ))
+            .catchError((Object _) {}),
+      );
+    });
+  }
   Future<void> step(String name, Future<Object?> Function() work) async {
     try {
       final result = await work();
@@ -837,8 +890,10 @@ Future<String> runDebugRequest(
     required List<Map<String, Object?>> timings,
     String? phase,
     DateTime? idleFrom,
+    bool deadlineReached = false,
   }) => {
     'kind': what,
+    if (deadlineReached) 'deadlineReached': true,
     'phase': ?phase,
     'build': controller.debugBuildId,
     'deviceId': controller.identity?.deviceId,
@@ -867,12 +922,32 @@ Future<String> runDebugRequest(
     'watchedRelay': controller.watchedRelay?.label,
     'carriers': {'start': carriersAtStart, 'end': _carrierReport(controller)},
     'chats': _chatReport(controller, since: phase == null ? null : from.at),
+    // Frames drawn and how long the app took with incoming messages, for
+    // the release gate (the app's own stutter and latency, not the network).
+    'performance': {
+      'frames': frames.toJson(),
+      'handling': controller.envelopeHandling.toJson(),
+    },
     'errorHistory': controller.exportErrorHistory(),
   };
 
   final contacts = <Map<String, Object?>>[];
   final timings = <Map<String, Object?>>[];
   List<Map<String, Object?>>? carriersAtStart;
+  writeDeadlineReport = () => _writeWhole(
+    path,
+    const JsonEncoder.withIndent('  ').convert(
+      reportFrom(
+        (at: startedAt, steps: 0, calls: 0, events: 0),
+        what: request.what,
+        only: request.onlyTransport,
+        carriersAtStart: carriersAtStart ?? _carrierReport(controller),
+        contacts: contacts,
+        timings: timings,
+        deadlineReached: true,
+      ),
+    ),
+  );
   if (request.what == 'serve') {
     // Every transport as set up: what a phase on all of them goes back to.
     final setUp = controller.identity?.connectivity;
@@ -972,6 +1047,7 @@ Future<String> runDebugRequest(
       timings,
     );
   }
+  deadlineTimer?.cancel();
   ticker.cancel();
   observe();
   // Without this run's own 250 ms ticker, which would cost what is measured.
@@ -987,6 +1063,9 @@ Future<String> runDebugRequest(
     idleFrom: request.idle > Duration.zero ? idleFrom : null,
   );
   await _writeWhole(path, const JsonEncoder.withIndent('  ').convert(report));
+  if (onTimings != null) {
+    SchedulerBinding.instance.removeTimingsCallback(onTimings);
+  }
   controller.recordError(
     'test',
     'Automatic ${request.what} run written to $path',
@@ -1502,6 +1581,11 @@ Future<void> _burst(
     await out.close();
     for (final contact in _contacts(controller)) {
       await step('burst file ${contact.alias} $size', () async {
+        // Over what the routes in use carry (50 MB over a relay): not a
+        // failure of the app, nothing to send.
+        if (size > controller.effectiveMaxAttachmentSizeFor(contact)) {
+          return 'skipped: over the size the routes in use carry';
+        }
         await controller.sendAttachmentSource(
           contact: contact,
           source: StagedAttachment(
