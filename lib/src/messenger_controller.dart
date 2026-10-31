@@ -6772,6 +6772,8 @@ class MessengerController extends ChangeNotifier {
   DeltaChats? _deltaIndexedChats;
   Map<String, AttachmentDescriptor> _deltaDescriptorIndex = {};
   Map<String, Set<String>> _deltaIdsByCacheName = {};
+  Object? _deltaConestConversationsFrom, _deltaConestArchivesFrom;
+  Map<String, AttachmentDescriptor> _deltaConestDescriptors = {};
   DeltaChats? _deltaReferencedChats;
   Future<DeltaAttachmentCache>? _deltaFileCache;
   @visibleForTesting
@@ -15871,9 +15873,13 @@ class MessengerController extends ChangeNotifier {
     if (!await cache.exists()) await cache.create(recursive: true);
     final legacy = File(p.join(cache.path, attachmentStorageKey(attachmentId)));
     final descriptor = attachmentDescriptorFor(attachmentId);
+    final deltaOwned =
+        descriptor != null &&
+        identical(descriptor, _deltaAttachmentDescriptorFor(attachmentId)) &&
+        _conestDescriptorForDeltaCache(attachmentId) == null;
     final hash = descriptor?.fileHashBase64;
     if (hash == null || hash.isEmpty) return legacy;
-    if (attachmentId.startsWith('delta:')) {
+    if (deltaOwned) {
       await (await _openDeltaFileCache()).touch(
         'delta-${attachmentStorageKey('sha256:$hash')}',
         _now().toUtc(),
@@ -15882,10 +15888,10 @@ class MessengerController extends ChangeNotifier {
     final managed = File(
       p.join(
         cache.path,
-        '${attachmentId.startsWith('delta:') ? 'delta-' : ''}${attachmentStorageKey('sha256:$hash')}',
+        '${deltaOwned ? 'delta-' : ''}${attachmentStorageKey('sha256:$hash')}',
       ),
     );
-    if (attachmentId.startsWith('delta:') && !await managed.exists()) {
+    if (deltaOwned && !await managed.exists()) {
       final previous = File(
         p.join(cache.path, attachmentStorageKey('sha256:$hash')),
       );

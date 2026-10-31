@@ -81,7 +81,7 @@ case('download-wake', 'lib/src/email_carrier.dart',
      '_requestedDownloads.isNotEmpty ||', '', QUEUE,
      'Delta Download queued during an active fetch runs before IDLE')
 case('pruned-cache-references', 'lib/src/delta_attachments_controller.dart',
-     "!r.attachmentId.startsWith('delta:') ||\n            _deltaDescriptorIndex.containsKey(r.attachmentId)", 'true', CONTROLLER,
+     "if (!r.attachmentId.startsWith('delta:') ||\n            _deltaDescriptorIndex.containsKey(r.attachmentId) ||\n            _deltaConestDescriptors.containsKey(r.attachmentId))", 'if (true)\n', CONTROLLER,
      'Delta deleting a chat prunes its persisted cache references')
 case('access-updates-lru', 'lib/src/messenger_controller.dart',
      "'delta-${attachmentStorageKey('sha256:$hash')}',\n        _now().toUtc(),",
@@ -115,6 +115,17 @@ case('migration-storage-admission', 'lib/src/delta_attachments_controller.dart',
 case('uid-namespace-reset', 'lib/src/email_carrier.dart',
      'deferred: const [],', 'deferred: _config.deferred,', 'test/email_carrier_test.dart',
      'Delta UIDVALIDITY resets clear durable deferred mail before fetching')
+
+case('conest-prefix-routing', 'lib/src/messenger_controller.dart',
+     '    final deltaOwned =\n        descriptor != null &&\n        identical(descriptor, _deltaAttachmentDescriptorFor(attachmentId)) &&\n        _conestDescriptorForDeltaCache(attachmentId) == null;\n', "    final deltaOwned = attachmentId.startsWith('delta:');\n", CONTROLLER,
+     'Delta prefix on a Conest archive file does not change cache ownership or saved references')
+case('conest-prefix-references', 'lib/src/delta_attachments_controller.dart',
+     '_deltaConestDescriptors.containsKey(r.attachmentId)', 'false', CONTROLLER,
+     'Delta prefix on a Conest archive file does not change cache ownership or saved references')
+
+case('separate-cache-pins', 'lib/src/delta_attachments_controller.dart',
+     '_deltaDescriptorIndex.containsKey(r.attachmentId)', 'true', CONTROLLER,
+     'Delta prefix on a Conest archive file does not change cache ownership or saved references')
 
 
 def main():

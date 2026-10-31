@@ -531,6 +531,102 @@ void deltaContentControllerTests() {
       },
     );
 
+    test(
+      'Delta prefix on a Conest archive file does not change cache ownership or saved references',
+      () async {
+        bob.deltaAttachmentCacheLimitBytes = 4;
+        final bytes = Uint8List.fromList([1, 2, 3, 4]);
+        server.deliver(
+          bobMail,
+          await fixture(
+            id: 'shared-owner@example.org',
+            files: [DeltaFile(name: 'shared.bin', bytes: bytes)],
+          ),
+        );
+        await until(
+          () => bob.deltaChats.chats[aliceFp]!.messages.any(
+            (m) => m.attachments.isNotEmpty,
+          ),
+        );
+        final delta =
+            bob.deltaChats.chats[aliceFp]!.messages.last.attachments.single;
+        final foreign = AttachmentDescriptor.fromJson({
+          ...delta.toJson(),
+          'id': 'delta:foreign',
+        });
+        final deltaPath = (await bob.attachmentCachePathFor(delta.id))!;
+        final conestPath =
+            '${root.path}/bob/cache/${attachmentStorageKey('sha256:${foreign.fileHashBase64}')}';
+        await File(conestPath).writeAsBytes(bytes);
+        await bob.addLinkArchiveForTesting(
+          LinkArchive(
+            id: 'foreign-prefix',
+            createdAt: clock,
+            contacts: const [],
+            groups: const [],
+            conversations: [
+              ConversationRecord(
+                id: 'old-chat',
+                kind: ConversationKind.direct,
+                peerDeviceId: 'old-peer',
+                messages: [
+                  ChatMessage(
+                    id: 'old-message',
+                    conversationId: 'old-chat',
+                    senderDeviceId: 'old-peer',
+                    recipientDeviceId: bob.identity!.deviceId,
+                    body: '',
+                    outbound: false,
+                    state: DeliveryState.delivered,
+                    createdAt: clock,
+                    attachment: foreign,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        expect(await bob.attachmentCachePathFor(foreign.id), conestPath);
+        expect(await bob.attachmentCachePathFor(delta.id), deltaPath);
+        await bob.markAttachmentExplicitlySaved(foreign.id);
+        server.deliver(
+          bobMail,
+          await fixture(id: 'unrelated-save@example.org', text: 'text'),
+        );
+        await until(
+          () => bob.deltaChats.chats[aliceFp]!.messages.any(
+            (m) => m.id == 'unrelated-save@example.org',
+          ),
+        );
+        expect(
+          bobVault._snapshot.attachmentCacheReferences
+              .singleWhere((r) => r.attachmentId == foreign.id)
+              .explicitlySaved,
+          isTrue,
+        );
+        expect(await File(conestPath).readAsBytes(), bytes);
+        server.deliver(
+          bobMail,
+          await fixture(
+            id: 'new-owner@example.org',
+            files: [
+              DeltaFile(
+                name: 'new.bin',
+                bytes: Uint8List.fromList([5, 6, 7, 8]),
+              ),
+            ],
+          ),
+        );
+        await until(
+          () => bob.deltaChats.chats[aliceFp]!.messages.any(
+            (m) => m.id == 'new-owner@example.org',
+          ),
+        );
+        expect(bob.attachmentAvailableLocally(delta.id), isFalse);
+        expect(await File(conestPath).readAsBytes(), bytes);
+      },
+    );
+
     test('photo round trip direct and group, cache survives restart', () async {
       final photo = Uint8List.fromList(
         img.encodePng(img.Image(width: 4, height: 2)),

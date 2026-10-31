@@ -36,6 +36,24 @@ extension DeltaAttachmentsController on MessengerController {
     return _deltaDescriptorIndex[id];
   }
 
+  // Snapshot lists are immutable. Delta-only saves reuse this ownership index,
+  // including archives, without rescanning Conest history for each reference.
+  AttachmentDescriptor? _conestDescriptorForDeltaCache(String id) {
+    if (!identical(_deltaConestConversationsFrom, _snapshot.conversations) ||
+        !identical(_deltaConestArchivesFrom, _snapshot.linkArchives)) {
+      _deltaConestDescriptors = {
+        for (final conversation in _snapshot.conversations)
+          for (final message in conversation.messages)
+            ?message.attachment?.id: message.attachment!,
+        for (final message in _archivedMessages)
+          ?message.attachment?.id: message.attachment!,
+      };
+      _deltaConestConversationsFrom = _snapshot.conversations;
+      _deltaConestArchivesFrom = _snapshot.linkArchives;
+    }
+    return _deltaConestDescriptors[id];
+  }
+
   Future<DeltaAttachmentCache> _openDeltaFileCache() => _deltaFileCache ??=
       () async {
         final root = await _attachmentRoot();
@@ -96,7 +114,8 @@ extension DeltaAttachmentsController on MessengerController {
 
   Set<String> get _protectedDeltaCacheKeys => {
     for (final r in _snapshot.attachmentCacheReferences)
-      if (r.keepOffline || r.explicitlySaved)
+      if ((r.keepOffline || r.explicitlySaved) &&
+          _deltaDescriptorIndex.containsKey(r.attachmentId))
         'delta-${attachmentStorageKey('sha256:${r.fileHashBase64}')}',
   };
 
@@ -275,10 +294,12 @@ extension DeltaAttachmentsController on MessengerController {
     final chats = deltaChats;
     final old = _deltaReferencedChats;
     _deltaAttachmentDescriptorFor('');
+    _conestDescriptorForDeltaCache('');
     final references = {
       for (final r in _snapshot.attachmentCacheReferences)
         if (!r.attachmentId.startsWith('delta:') ||
-            _deltaDescriptorIndex.containsKey(r.attachmentId))
+            _deltaDescriptorIndex.containsKey(r.attachmentId) ||
+            _deltaConestDescriptors.containsKey(r.attachmentId))
           r.attachmentId: r,
     };
     for (final chat in chats.chats.values) {

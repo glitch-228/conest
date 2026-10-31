@@ -100,11 +100,6 @@
     "log": "/tmp/m24c-sabotage-download-wake.log"
   },
   {
-    "name": "pruned-cache-references",
-    "detected": true,
-    "log": "/tmp/m24c-sabotage-pruned-cache-references.log"
-  },
-  {
     "name": "access-updates-lru",
     "detected": true,
     "log": "/tmp/m24c-sabotage-access-updates-lru.log"
@@ -153,5 +148,25 @@
     "name": "uid-namespace-reset",
     "detected": true,
     "log": "/tmp/m24c-sabotage-uid-namespace-reset.log"
+  },
+  {
+    "name": "pruned-cache-references",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-pruned-cache-references.log"
+  },
+  {
+    "name": "conest-prefix-routing",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-conest-prefix-routing.log"
+  },
+  {
+    "name": "conest-prefix-references",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-conest-prefix-references.log"
+  },
+  {
+    "name": "separate-cache-pins",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-separate-cache-pins.log"
   }
 ]

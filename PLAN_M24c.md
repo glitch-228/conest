@@ -37,7 +37,37 @@ These items are about stalls and battery. Name any remaining hot path in the han
 
 ## Handoff
 
-(Fill in: what is done, tests, sabotage checks, CI run id, release-note lines, device checks.)
+Implemented on agent/m24c-delta-leftovers, source commit b73c80e; latest base c80f136 merged.
+
+Done:
+- UID-based deferred Delta downloads obey network cost and the storage preset, expose Download, survive restart and UID resets, and keep server mail until successful durable receipt. Bounded overflow does not block later mail; groups use the same authenticated-content policy.
+- MIME/OpenPGP and attachment hashes run in isolates; a 20 MiB encrypted-file regression checks the actual parser isolate.
+- One durable vault write per bounded fetch batch, reused immutable JSON rows, indexed descriptors, and pruned incremental cache references.
+- A 256 MiB / 4,096-file metadata-based LRU protects saved files and archive-owned legacy copies. Existing pinned legacy data remains readable if over the new cap; new admissions must fit.
+- Lazy bounded avatar restoration avoids startup decoding/hashing. This base stores avatar data inline, so encoded lengths and identity replace nonexistent file-stat checks; attachment-cache checks use size/mtime.
+- Parser/header/token limits tightened, with authored-control regression coverage preserved.
+
+Verification:
+- All 19 Delta controller tests passed. Targeted mail/protocol/content/parser/avatar/queue/cache tests passed.
+- All 34 sabotage checks failed as expected with individual guards removed, then source was restored. Evidence: review/M24c_sabotage.json; repeatable runner: tool/m24c_sabotage.py.
+- Analyzer: 28 baseline issues, no new issues.
+- Full local suite: queued under the shared flock; final result pending below.
+- Qualified CI run: 41237119393, https://github.com/glitch-228/conest/actions/runs/41237119393; final result pending below.
+- Independent security reviewer m24c_security_review: confirmed findings fixed with tests; final follow-up found no additional concrete findings. Review record: review/M24c.md. Maintainer review/merge approval remains separate.
+
+Performance handoff:
+- Remaining paths to profile before a stable release: the single up-to-42 MiB worker input transfer, bounded first-display avatar sanitization, and shared vault snapshot-map preparation. The sender-header worker receives an owned prefix capped at 512 KiB.
+- Encrypted mail up to 64 KiB has a control-read allowance; authenticated attachment policy is then checked before caching/deletion. Large public-key mails can be deferred before body fetch.
+
+Release-note drafts:
+- Delta Chat files follow download settings and wait for Download on metered connections.
+- Improved handling of large Delta Chat messages.
+- Delta Chat file caches now manage their storage limits.
+
+Device checks:
+- Android metered/Wi-Fi switching while mail arrives.
+- Frame timing for first avatar display and 20 MiB mail, added message latency, idle CPU and wakeups on Android/Linux/Windows.
+- No GUI automation, local builds or physical-device work performed, as required by PLAN_AGENTS.md.
 
 ## Progress log
 
@@ -56,4 +86,12 @@ These items are about stalls and battery. Name any remaining hot path in the han
 - Latest targeted results: 18 Delta controller tests passed; cache/queue/isolate regressions passed, including 20 MiB file processing. Analyzer reached base + one new test style issue, now fixed. No local builds or physical-device work.
 
 - Final independent follow-up reported no additional concrete findings in the reviewed fixes.
-- All 31 sabotage checks detected their individual regressions as test failures (not compile failures); all mutations restored. Runner: tool/m24c_sabotage.py; summary: review/M24c_sabotage.json. Covers the five required items plus parser bounds, token limits, file policy, mailbox progress/wakes/retries, cache ownership/migration/recency/reference pruning, and UID resets.
+- All 34 sabotage checks detected their individual regressions as test failures (not compile failures); all mutations restored. Runner: tool/m24c_sabotage.py; summary: review/M24c_sabotage.json. Covers the five required items plus parser bounds, token limits, file policy, mailbox progress/wakes/retries, cache ownership/migration/recency/reference pruning, and UID resets.
+
+- Analyzer: 28 existing issues, no new issues. Source and review fixes committed at b73c80e (merge c80f136 in 004e62d), pushed only agent/m24c-delta-leftovers. Qualified debug workflow run 41237119393 started: https://github.com/glitch-228/conest/actions/runs/41237119393. Local full suite started under ~/conest-lab/flutter-test.lock and is waiting for the machine's shared test slot; CI runs independently.
+
+- Final namespace review found that arbitrary Conest IDs beginning delta: could be mistaken for Delta ownership. Replaced prefix routing with resolved descriptor ownership and preserved Conest/archive references via a snapshot-identity ownership index. Added a shared-content regression with a Conest archive file named delta:foreign. Source update requires a fresh qualified CI run.
+
+- Ownership regression passed, with separate routing and reference-preservation sabotage checks; total 33 detected mutations, all restored. Independent narrow follow-up found no remaining concrete issue. Requeued the full suite after cancelling only this task's still-waiting lock process during mutation checks; no other session was interrupted.
+
+- Final ownership policy also avoids pinning a separate Delta copy through a saved Conest reference. Positive shared-content test passed; analyzer has 28 baseline issues. Total sabotage checks: 34, all detected and restored. Initial CI 41237119393 passed its full qualification job and real email/XMPP/Nostr/Reticulum/Meshtastic jobs; it is superseded by the final source revision for platform builds.
