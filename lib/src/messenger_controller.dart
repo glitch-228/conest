@@ -6415,7 +6415,10 @@ class MessengerController extends ChangeNotifier {
       config: config,
       connector: _bitchatConnector ?? openPlatformBitchatLinks,
       keyFor: _bitchatPairKeys,
-      onFrame: adapter.receiveFrame,
+      onFrame: (sender, frame) {
+        _noteMeshFrameFrom(sender);
+        adapter.receiveFrame(sender, frame);
+      },
       onStatusChanged: notifyListeners,
       onPublic: _onBitchatPublic,
       now: _now,
@@ -29221,6 +29224,30 @@ class MessengerController extends ChangeNotifier {
     TransportKind.deltaChat,
   };
 
+  /// When a contact's Bluetooth mesh frames were last heard, by device id
+  /// (bounded): the contact is nearby.
+  final Map<String, DateTime> _meshHeardAt = {};
+  static const Duration _meshNearbyFor = Duration(minutes: 5);
+
+  void _noteMeshFrameFrom(String address) {
+    for (final contact in _snapshot.contacts) {
+      if (contact.carrierAddress(TransportKind.bitchat) == address) {
+        _noteMeshHeard(contact.deviceId);
+      }
+    }
+  }
+
+  void _noteMeshHeard(String deviceId) {
+    _meshHeardAt.remove(deviceId);
+    _meshHeardAt[deviceId] = _now();
+    while (_meshHeardAt.length > 512) {
+      _meshHeardAt.remove(_meshHeardAt.keys.first);
+    }
+  }
+
+  @visibleForTesting
+  void noteMeshHeardForTesting(String deviceId) => _noteMeshHeard(deviceId);
+
   /// Radios with little airtime: a copy goes by radio only when nothing
   /// else has reached the contact lately, and only a small one.
   static const Set<TransportKind> _radioKinds = {
@@ -29317,9 +29344,18 @@ class MessengerController extends ChangeNotifier {
           !state.radioUsed &&
           (lastTwoWay == null ||
               _now().difference(lastTwoWay) > const Duration(minutes: 5));
+      // A copy over the Bluetooth mesh only where the contact can be: heard
+      // on it lately, or no other route has worked with them lately.
+      final meshHeard = _meshHeardAt[contact.deviceId];
+      final meshAllowed =
+          (meshHeard != null &&
+              _now().difference(meshHeard) < _meshNearbyFor) ||
+          lastTwoWay == null ||
+          _now().difference(lastTwoWay) > _meshNearbyFor;
       final allowed = <TransportKind>{
         for (final kind in TransportKind.values)
           if (!usedKinds.contains(kind) &&
+              (meshAllowed || kind != TransportKind.bitchat) &&
               !(state.storedOnCarrier && _storingCarriers.contains(kind)) &&
               (radiosAllowed || !_radioKinds.contains(kind)) &&
               // A spare copy by radio only while most of its airtime is free.

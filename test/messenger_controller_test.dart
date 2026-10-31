@@ -20621,6 +20621,117 @@ void main() {
       }, reason: 'the group receipt did not name two routes');
     });
 
+    group('Bluetooth mesh copies', () {
+      Future<
+        (
+          MessengerController,
+          MessengerController,
+          _KeepingAdapter,
+          _KeepingAdapter,
+        )
+      >
+      meshPair(DateTime Function() now) async {
+        final network = _InProcessIrohNetwork();
+        final relay = _FakeRelayClient();
+        final mesh = _KeepingAdapter(
+          kind: TransportKind.bitchat,
+          path: TransportPathKind.direct,
+        );
+        final mailbox = _KeepingAdapter();
+        Future<TransportRegistry?> withMesh(IdentityRecord identity) async {
+          final base = (await network.registry(identity))!;
+          return TransportRegistry([...base.adapters, mesh, mailbox]);
+        }
+
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          transportRegistryFactory: withMesh,
+          nowProvider: now,
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          transportRegistryFactory: network.registry,
+          nowProvider: now,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobId = bob.identity!.deviceId;
+        // A first exchange: Bob answers, so a route works with him lately.
+        await alice.sendMessage(contact: alice.contacts.single, body: 'warm');
+        await _waitForIroh(
+          () => alice
+              .messagesFor(bobId)
+              .any((m) => m.body == 'warm' && !m.state.awaitsRecipientAck),
+          reason: 'the first message was never confirmed',
+        );
+        return (alice, bob, mesh, mailbox);
+      }
+
+      Future<String> sendAndWaitForCopies(
+        MessengerController alice,
+        String bobId,
+        String body,
+        _KeepingAdapter mailbox,
+      ) async {
+        await alice.sendMessage(contact: alice.contacts.single, body: body);
+        final id = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.body == body)
+            .id;
+        // The mailbox copy shows that the copies went out.
+        await _waitForIroh(
+          () => mailbox.stored.contains(id),
+          reason: 'no copy went out at all',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        return id;
+      }
+
+      test('a contact not heard on the mesh gets no mesh copy while another '
+          'route works', () async {
+        final now = DateTime.now().toUtc();
+        final (alice, bob, mesh, mailbox) = await meshPair(() => now);
+        final id = await sendAndWaitForCopies(
+          alice,
+          bob.identity!.deviceId,
+          'far away',
+          mailbox,
+        );
+        expect(mesh.stored, isNot(contains(id)));
+      });
+
+      test('a contact heard on the mesh lately gets a mesh copy', () async {
+        final now = DateTime.now().toUtc();
+        final (alice, bob, mesh, mailbox) = await meshPair(() => now);
+        alice.noteMeshHeardForTesting(bob.identity!.deviceId);
+        final id = await sendAndWaitForCopies(
+          alice,
+          bob.identity!.deviceId,
+          'next door',
+          mailbox,
+        );
+        expect(mesh.stored, contains(id));
+      });
+
+      test('when no other route has worked lately the mesh gets a copy '
+          'too', () async {
+        var now = DateTime.now().toUtc();
+        final (alice, bob, mesh, mailbox) = await meshPair(() => now);
+        now = now.add(const Duration(minutes: 10));
+        final id = await sendAndWaitForCopies(
+          alice,
+          bob.identity!.deviceId,
+          'silence',
+          mailbox,
+        );
+        expect(mesh.stored, contains(id));
+      });
+    });
+
     // A relay that stores a message has not delivered it. The message keeps
     // going to the other routes, in every energy mode.
     // Iroh plus a mailbox carrier that takes every message and keeps it
