@@ -308,7 +308,7 @@ class TelegramCarrierChannel
         return;
       }
       try {
-        await _sendOne(address, text);
+        await _sendOne(address, text, sender);
         done.complete();
       } on TelegramBotException catch (error) {
         done.completeError(
@@ -329,7 +329,7 @@ class TelegramCarrierChannel
     return done.future;
   }
 
-  Future<void> _sendOne(String address, String text) async {
+  Future<void> _sendOne(String address, String text, Object? sender) async {
     for (var attempt = 0; ; attempt++) {
       try {
         await api.call('sendMessage', {
@@ -346,6 +346,7 @@ class TelegramCarrierChannel
         // A short wait is retried here; a long one is left to the account's
         // limiter (it rests that long and the send is tried again later).
         if (error.rateLimited &&
+            !(sender is LimiterWaitProbe && sender.abandoned) &&
             attempt < maxRateRetries &&
             (error.retryAfter ?? 1) <= 30) {
           _resting++;
@@ -356,6 +357,8 @@ class TelegramCarrierChannel
           } finally {
             _resting--;
           }
+          // Given up on during the rest: no further call.
+          if (sender is LimiterWaitProbe && sender.abandoned) rethrow;
           continue;
         }
         if (error.code == 400 || error.code == 403) {

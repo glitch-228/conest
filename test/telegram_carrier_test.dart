@@ -164,6 +164,40 @@ void main() {
     expect(api.sendCalls, 1, reason: 'abandoned sends made no call');
   });
 
+  test('a send given up on while it rests makes no further call', () async {
+    final hub = FakeTelegramBots();
+    final bot = hub.addBot('alice_conest_bot');
+    hub.addBot('bob_conest_bot');
+    final api = _RateLimitOnceApi(hub.network.botApi(bot.token));
+    final restGate = Completer<void>();
+    final channel = TelegramCarrierChannel(
+      config: TelegramBotConfig(
+        token: bot.token,
+        username: bot.username,
+        botId: bot.id,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollTimeout: const Duration(milliseconds: 300),
+      retryDelay: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+      wait: (delay) =>
+          delay.inSeconds == 25 ? restGate.future : Future<void>.value(),
+    )..start();
+    addTearDown(channel.stop);
+    await until(() => channel.state == TelegramCarrierState.connected);
+    final probe = LimiterWaitProbe();
+    final outcome = runZoned(
+      () => channel.sendFrame('bob_conest_bot', Uint8List(4)),
+      zoneValues: {LimiterWaitProbe.zoneKey: probe},
+    ).then((_) => 'sent', onError: (_) => 'gave up');
+    await until(() => api.limited);
+    probe.abandoned = true;
+    restGate.complete();
+    expect(await outcome, 'gave up');
+    expect(api.sends, 1, reason: 'no retry after it was given up on');
+  });
+
   test('only frames from other bots in private chats are read', () async {
     final hub = FakeTelegramBots();
     final bobBot = hub.addBot('bob_conest_bot');
@@ -479,6 +513,7 @@ class _RateLimitOnceApi implements TelegramBotApi {
   _RateLimitOnceApi(this.inner);
   final TelegramBotApi inner;
   bool limited = false;
+  int sends = 0;
 
   @override
   Future<Object?> call(
@@ -486,6 +521,7 @@ class _RateLimitOnceApi implements TelegramBotApi {
     Map<String, Object?> parameters = const {},
     Duration timeout = const Duration(seconds: 30),
   ]) {
+    if (method == 'sendMessage') sends++;
     if (method == 'sendMessage' && !limited) {
       limited = true;
       throw const TelegramBotException(

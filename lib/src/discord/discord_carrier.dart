@@ -378,7 +378,7 @@ class DiscordCarrierChannel
         return;
       }
       try {
-        await _sendOne(target.channelId, target.botId, text);
+        await _sendOne(target.channelId, target.botId, text, sender);
         done.complete();
       } catch (error) {
         done.completeError(error);
@@ -390,7 +390,12 @@ class DiscordCarrierChannel
     return done.future;
   }
 
-  Future<void> _sendOne(String channelId, String botId, String text) async {
+  Future<void> _sendOne(
+    String channelId,
+    String botId,
+    String text,
+    Object? sender,
+  ) async {
     for (var attempt = 0; ; attempt++) {
       try {
         await api.call(
@@ -411,7 +416,10 @@ class DiscordCarrierChannel
         // Only the account-wide limit rests the whole account; one route's
         // bucket is waited out on that route (below).
         if (error.slowDownFor case final wait?) onRateLimited?.call(wait);
-        if (error.rateLimited && attempt < 3 && (error.retryAfter ?? 1) <= 30) {
+        if (error.rateLimited &&
+            !(sender is LimiterWaitProbe && sender.abandoned) &&
+            attempt < 3 &&
+            (error.retryAfter ?? 1) <= 30) {
           _resting++;
           try {
             await LimiterWaitProbe.hold(
@@ -424,6 +432,8 @@ class DiscordCarrierChannel
           } finally {
             _resting--;
           }
+          // Given up on during the rest: no further call.
+          if (sender is LimiterWaitProbe && sender.abandoned) rethrow;
           continue;
         }
         if (error.forbidden || error.code == 404) {

@@ -350,6 +350,47 @@ void main() {
     expect(posts, 1, reason: 'abandoned sends made no call');
   });
 
+  test('a send given up on while it rests makes no further call', () async {
+    final gate = Completer<void>();
+    var posts = 0;
+    final api = _PostApi(hub.network.api(bobBot.token, DiscordAuth.bot), () {
+      posts++;
+      if (posts == 1) {
+        throw const DiscordException(
+          '/channels/x/messages',
+          429,
+          'slow',
+          retryAfter: 25,
+        );
+      }
+    });
+    final bob = DiscordCarrierChannel(
+      config: DiscordBotConfig(
+        token: bobBot.token,
+        botId: bobBot.id,
+        username: 'b',
+        channelId: channel,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollInterval: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+      wait: (delay) =>
+          delay.inSeconds == 25 ? gate.future : Future<void>.delayed(delay),
+    )..start();
+    addTearDown(bob.stop);
+    final probe = LimiterWaitProbe();
+    final outcome = runZoned(
+      () => bob.sendFrame('${aliceBot.id}|$channel', Uint8List(3)),
+      zoneValues: {LimiterWaitProbe.zoneKey: probe},
+    ).then((_) => 'sent', onError: (_) => 'gave up');
+    await until(() => posts == 1);
+    probe.abandoned = true;
+    gate.complete();
+    expect(await outcome, 'gave up');
+    expect(posts, 1, reason: 'no retry after it was given up on');
+  });
+
   test('the slowdown stretches every look', () async {
     final waits = <Duration>[];
     final bob = DiscordCarrierChannel(
