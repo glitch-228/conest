@@ -24707,6 +24707,10 @@ void main() {
         final s = await offlineSender(accept: false);
         expect(s.relay.blobs.length, greaterThanOrEqualTo(4));
         expect(s.relay.blobSecrets.length, s.relay.blobs.length);
+        // The network is back, so the cancel can reach the sender.
+        s.relay.shouldFailStore = null;
+        s.alice.onConnectivityChanged(interfaceLabel: 'back');
+        s.bob.onConnectivityChanged(interfaceLabel: 'back');
         await s.alice.cancelTransfer(s.id);
         await _waitForIroh(
           () {
@@ -24727,6 +24731,18 @@ void main() {
       'the sender takes its blobs back once the file is complete',
       () async {
         final s = await offlineSender();
+        await _waitForIroh(
+          () {
+            unawaited(s.alice.pollNow());
+            return s.alice.attachmentAvailableLocally(s.id);
+          },
+          reason: 'the file did not arrive from blobs',
+          timeout: const Duration(seconds: 30),
+        );
+        // The network is back, so the receiver's completion reaches the sender.
+        s.relay.shouldFailStore = null;
+        s.alice.onConnectivityChanged(interfaceLabel: 'back');
+        s.bob.onConnectivityChanged(interfaceLabel: 'back');
         await _waitForIroh(
           () {
             unawaited(s.alice.pollNow());

@@ -23708,6 +23708,9 @@ class MessengerController extends ChangeNotifier {
   /// Blobs this device left on relays, by file, until they are taken back.
   final Map<String, LeftBlobs> _leftBlobs = <String, LeftBlobs>{};
 
+  /// The one timer per file that decides when to leave blobs.
+  final Map<String, Timer> _blobLeaveTimers = <String, Timer>{};
+
   void _scheduleBlobLeave(
     ContactRecord contact,
     _OutboundAttachmentState state,
@@ -23724,7 +23727,14 @@ class MessengerController extends ChangeNotifier {
     // One timer per file: it fires when the receiver has not started, or
     // when a started receiver has fetched no block for [blobSlowAfter]; in
     // between it sleeps until that moment could come.
-    void check() {
+    late final void Function() check;
+    void arm(Duration wait) {
+      _blobLeaveTimers[id]?.cancel();
+      _blobLeaveTimers[id] = Timer(wait, () => check());
+    }
+
+    check = () {
+      _blobLeaveTimers.remove(id);
       if (_disposed || !identical(_outboundAttachments[id], state)) return;
       if (_leftBlobs.containsKey(id) || _leavingBlobs.contains(id)) return;
       void leave(bool midTransfer) {
@@ -23755,13 +23765,10 @@ class MessengerController extends ChangeNotifier {
         leave(true);
         return;
       }
-      Timer(
-        idle >= blobSlowAfter ? blobSlowAfter : blobSlowAfter - idle,
-        check,
-      );
-    }
+      arm(idle >= blobSlowAfter ? blobSlowAfter : blobSlowAfter - idle);
+    };
 
-    Timer(blobLeaveDelay, check);
+    arm(blobLeaveDelay);
   }
 
   /// Whether the energy policy and the network allow uploading for others.
@@ -41286,6 +41293,10 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final timer in _blobLeaveTimers.values) {
+      timer.cancel();
+    }
+    _blobLeaveTimers.clear();
     for (final timer in _ratchetControlRetries.values) {
       timer.cancel();
     }
