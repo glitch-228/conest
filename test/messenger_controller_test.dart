@@ -535,8 +535,8 @@ class _FakeRelayClient extends RelayClient {
   final List<String> blobDeletes = [];
   final List<int> blobDeleteBatches = [];
 
-  /// Hashes the relay reports busy (and skips) the first time they are asked.
-  final Set<String> blobDeleteBusyOnce = {};
+  /// Hashes the relay reports busy (and skips) this many times they are asked.
+  final Map<String, int> blobDeleteBusyTimes = {};
   final Set<String> blobSecretsSeen = {};
   Uint8List Function(Uint8List bytes)? tamperBlobs;
   int blobGets = 0;
@@ -588,7 +588,9 @@ class _FakeRelayClient extends RelayClient {
     blobDeleteBatches.add(hashes.length);
     final busy = <String>{};
     for (final hash in hashes) {
-      if (blobDeleteBusyOnce.remove(hash)) {
+      final times = blobDeleteBusyTimes[hash] ?? 0;
+      if (times > 0) {
+        blobDeleteBusyTimes[hash] = times - 1;
         busy.add(hash);
         continue;
       }
@@ -24764,7 +24766,8 @@ void main() {
       addTearDown(() => MessengerController.blobSlowAfter = saved);
       final s = await offlineSender(accept: false, holdGets: true);
       final busy = s.relay.blobs.keys.first;
-      s.relay.blobDeleteBusyOnce.add(busy);
+      // Busy for each relay's first request (the file is on up to two).
+      s.relay.blobDeleteBusyTimes[busy] = 2;
       s.relay.shouldFailStore = null;
       s.alice.onConnectivityChanged(interfaceLabel: 'back');
       s.bob.onConnectivityChanged(interfaceLabel: 'back');
