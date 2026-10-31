@@ -24665,12 +24665,10 @@ void main() {
         reason: 'Bob did not learn what Alice can do',
         timeout: const Duration(seconds: 20),
       );
-      // One block of the receiver's asking gets through, then nothing more.
+      // The receiver's first request gets through, then none does.
       var served = 0;
       relay.shouldFailStore = (_, _, _, _, envelope) =>
-          (envelope.kind == 'attachment_chunk_request' ||
-              envelope.kind == 'attachment_chunk') &&
-          ++served > 1;
+          envelope.kind == 'attachment_chunk_request' && ++served > 1;
       final bytes = Uint8List(400 * 1024);
       for (var i = 0; i < bytes.length; i += 5) {
         bytes[i] = (i * 29 + (i >> 8)) & 0xff;
@@ -24704,7 +24702,7 @@ void main() {
             'alice: ${alice.recentDebugLog.reversed.take(8).join(' | ')}',
         timeout: const Duration(seconds: 25),
       );
-      expect(served, greaterThan(1), reason: 'the sender had started');
+      expect(served, greaterThan(1), reason: 'the receiver had started');
       expect(relay.blobGets, greaterThan(0));
       expect(
         await File((await alice.attachmentCachePathFor(id!))!).readAsBytes(),

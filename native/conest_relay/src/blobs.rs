@@ -971,7 +971,7 @@ mod tests {
         let data = blob(500, 9);
         let hash = upload(&state, &token, &data).unwrap();
         let dir = state.blob_dir().unwrap();
-        assert!(dir.join(format!("{hash}.blob")).exists());
+        assert!(blob_path(&dir, &hash, &[1_u8; 32]).exists());
         // The time to live never goes past the relay's.
         let expires: u64 = state
             .database
@@ -1003,7 +1003,7 @@ mod tests {
             .unwrap();
         state.sweep_blobs(&dir, now_millis());
         assert!(get(&state, &hash, 0, 10).is_err());
-        assert!(!dir.join(format!("{hash}.blob")).exists());
+        assert!(!blob_path(&dir, &hash, &[1_u8; 32]).exists());
         assert!(put(&state, &token, &other_hash, &other[300..], 900, 300).is_err());
         let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
@@ -1043,7 +1043,7 @@ mod tests {
         assert!(
             state
                 .blob_get(
-                    &json!({"hash": hash, "offset": 0, "len": 800}),
+                    &json!({"hash": hash, "offset": 0, "len": 800, "secret": SECRET}),
                     "203.0.113.9"
                 )
                 .is_ok()
