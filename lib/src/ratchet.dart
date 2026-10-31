@@ -416,6 +416,16 @@ class RatchetSessions {
         return (await _readPeer(peerDeviceId))?.sessions.isNotEmpty ?? false;
       });
 
+  /// Whether anything is known about this peer's ratchet: a session or its
+  /// identity from an answer. A message that cannot open yet before this is
+  /// early, not a broken session.
+  Future<bool> knowsPeer(String peerDeviceId) =>
+      _withPeer(peerDeviceId, () async {
+        final state = await _readPeer(peerDeviceId);
+        return state != null &&
+            (state.sessions.isNotEmpty || state.peerIdentityKey != null);
+      });
+
   /// When a ratcheted message from this peer first decrypted, if ever.
   Future<DateTime?> confirmedAt(String peerDeviceId) =>
       _withPeer(peerDeviceId, () async {

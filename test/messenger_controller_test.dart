@@ -30803,6 +30803,9 @@ void main() {
           const Duration(milliseconds: 40),
         );
       }
+      for (final controller in [alice, bob]) {
+        controller.freshHelloDelay = const Duration(milliseconds: 30);
+      }
       bool isAnswer(RelayEnvelope envelope) =>
           envelope.kind == 'ratchet_bundle' &&
           envelope.senderDeviceId == starter.identity!.deviceId;
@@ -30811,8 +30814,16 @@ void main() {
           : Duration.zero;
       final order = <String>[];
       DateTime? firstAnswerAt;
+      var offererBundles = 0;
       relay.shouldFailStore = (_, _, _, recipient, envelope) {
+        if (recipient == starter.identity!.deviceId &&
+            envelope.kind == 'ratchet_bundle') {
+          offererBundles++;
+        }
         if (recipient != offerer.identity!.deviceId) return false;
+        // Other early traffic from the starter would also fail to decrypt
+        // here (and rightly offer a reset); only the hello is under test.
+        if (envelope.kind == 'route_update') return true;
         final fails =
             isAnswer(envelope) &&
             DateTime.now().difference(firstAnswerAt ??= DateTime.now()) <
@@ -30840,6 +30851,9 @@ void main() {
       // The hello that went first was dropped at the peer; a fresh one
       // follows the answer.
       expect(order.lastIndexOf('hello'), greaterThan(order.indexOf('answer')));
+      // The early hello is no failure: the offerer opens the session from
+      // the fresh one without sending a reset after its offer.
+      expect(offererBundles, 1);
     });
 
     test('ratchet peers switch to forward-secret envelopes', () async {

@@ -423,12 +423,12 @@ class DiscordCarrierChannel
           _resting++;
           try {
             await LimiterWaitProbe.hold(
-            _wait(
-              Duration(
-                milliseconds: (min(error.retryAfter ?? 1, 30) * 1000).ceil(),
+              _wait(
+                Duration(
+                  milliseconds: (min(error.retryAfter ?? 1, 30) * 1000).ceil(),
+                ),
               ),
-            ),
-          );
+            );
           } finally {
             _resting--;
           }

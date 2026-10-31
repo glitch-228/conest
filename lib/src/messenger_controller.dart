@@ -21162,7 +21162,15 @@ class MessengerController extends ChangeNotifier {
           // Decrypting it opens the inbound session; nothing else to do.
           final peer = _ratchetPeer(envelope.senderDeviceId);
           if (peer != null) {
-            await _crypto.decryptMessage(contact: peer, envelope: envelope);
+            // A hello that beat the answer cannot open before the peer's
+            // identity is known: that is no broken session, so no reset
+            // (one more round of session churn).
+            final known = await _ratchet?.knowsPeer(ratchetPeerId(peer));
+            await _crypto.decryptMessage(
+              contact: peer,
+              envelope: envelope,
+              reportFailure: known ?? true,
+            );
           }
           _markSeen(envelope.messageId);
           continue;
@@ -34344,6 +34352,11 @@ class MessengerController extends ChangeNotifier {
     Duration(minutes: 5),
   ];
 
+  /// How long the fresh hello after a late answer waits, so it does not
+  /// overtake the answer on a faster route.
+  @visibleForTesting
+  Duration freshHelloDelay = const Duration(seconds: 3);
+
   /// Delivers a session-setup envelope over every allowed route, resting
   /// ones included. With [retry], a delivery that failed on all of them is
   /// tried again a few times: an answer or hello nobody retries leaves the
@@ -34383,12 +34396,20 @@ class MessengerController extends ChangeNotifier {
         _ratchetControlRetries.remove(retryKey);
         // An answer that got through late: a hello sent before it reached
         // the peer ahead of it and was dropped there (no session yet), so a
-        // fresh one follows now.
+        // fresh one follows. "Delivered" may only mean a relay took the
+        // answer while the hello can use a faster route, so it waits a
+        // moment first (and goes out over every route as hellos do).
         final helloKey = retryKey.replaceFirst('|bundle|answer', '|hello');
-        if (helloKey != retryKey &&
-            !_disposed &&
-            _ratchetControlGeneration.containsKey(helloKey)) {
-          unawaited(_sendRatchetHello(peer));
+        if (helloKey != retryKey && !_disposed) {
+          final freshKey = '$helloKey|fresh';
+          _ratchetControlRetries.remove(freshKey)?.cancel();
+          _ratchetControlRetries[freshKey] = Timer(freshHelloDelay, () {
+            _ratchetControlRetries.remove(freshKey);
+            if (_disposed) return;
+            final current = _ratchetPeer(peer.deviceId);
+            if (current == null || !current.canSendOutbound) return;
+            unawaited(_sendRatchetHello(current));
+          });
         }
       }
     } catch (error) {
@@ -34473,8 +34494,8 @@ class MessengerController extends ChangeNotifier {
   /// Sends a fresh session hello to [peer] (a new envelope each time, so it
   /// never counts as a copy of one the peer already handled or dropped).
   Future<void> _sendRatchetHello(ContactRecord peer) async {
-    final me = _requireIdentity();
     try {
+      final me = _requireIdentity();
       final hello = await _crypto.encryptPayloadEnvelope(
         kind: 'ratchet_hello',
         messageId: _randomId('rhello'),
