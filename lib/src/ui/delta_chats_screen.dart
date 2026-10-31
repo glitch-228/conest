@@ -699,6 +699,18 @@ class _DeltaChatScreenState extends State<_DeltaChatScreen> {
                                     '${message.pending!.name}, ${(message.pending!.size / (1024 * 1024)).toStringAsFixed(1)} MB, '
                                     '${message.pendingExpired(DateTime.now()) ? 'not received' : 'downloading…'}',
                                   ),
+                                if (controller.deferredDeltaMailFor(message) !=
+                                    null)
+                                  TextButton.icon(
+                                    icon: const Icon(Icons.download_outlined),
+                                    label: Text(
+                                      l10nOf(context).uiDownloadA479C9,
+                                    ),
+                                    onPressed: () => _act(
+                                      () =>
+                                          controller.downloadDeltaMail(message),
+                                    ),
+                                  ),
                                 for (final attachment in message.attachments)
                                   buildDeltaAttachment(
                                     context,

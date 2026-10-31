@@ -335,3 +335,41 @@ Uint8List _stripJpegApps(Uint8List bytes) {
   clean.add(Uint8List.sublistView(bytes, segment));
   return clean.takeBytes();
 }
+
+/// Shared expansion allowance for lazily restored legacy avatars.
+class DeltaAvatarBudget {
+  DeltaAvatarBudget(this.remaining);
+  int remaining;
+}
+
+/// Persisted avatars are checked only if displayed. An unchanged avatar keeps
+/// its encoded representation across copies and saves; no decode or hash is
+/// needed at startup. Delta vaults store avatars inline, without file paths.
+class DeltaStoredAvatar {
+  DeltaStoredAvatar(this._encoded, this._budget);
+  final String _encoded;
+  final DeltaAvatarBudget _budget;
+  bool _loaded = false;
+  Uint8List? _bytes;
+  String? _clean;
+  int get encodedSize => (_clean ?? _encoded).length;
+  String get encoded => _clean ?? _encoded;
+  Uint8List? get bytes {
+    if (!_loaded) {
+      _loaded = true;
+      final clean = deltaAvatar('base64:$_encoded');
+      if (clean != null) {
+        final encoded = base64.encode(clean);
+        final extra = encoded.length - _encoded.length;
+        if (extra <= _budget.remaining) {
+          _budget.remaining -= extra > 0 ? extra : 0;
+          _bytes = clean;
+          _clean = encoded;
+        }
+      }
+    }
+    return _bytes;
+  }
+
+  bool get loaded => _loaded;
+}

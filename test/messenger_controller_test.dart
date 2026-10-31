@@ -39,6 +39,7 @@ import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/email_carrier.dart'
     show EmailCarrierState, defaultChatmailDomains;
 import 'package:conest/src/ui/email_carrier_panel.dart';
+import 'package:conest/src/ui/delta_chats_screen.dart' show openDeltaChat;
 import 'package:conest/src/ui/group_call_screen.dart';
 import 'package:conest/src/ui/nostr_carrier_panel.dart';
 import 'package:conest/src/account/account_model.dart';

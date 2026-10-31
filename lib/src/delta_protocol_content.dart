@@ -197,7 +197,7 @@ extension DeltaProtocolContent on DeltaProtocol {
     DeltaChat Function() create,
   ) async {
     if (!chats.chats.containsKey(chatKey) &&
-        chats.chats.length >= DeltaChats.maxChats) {
+        chats.realChatCount >= DeltaChats.maxChats) {
       return DeltaStep(chats, retry: read.files.isNotEmpty || read.postMessageId != null);
     }
     final chat = chats.chats[chatKey] ?? create();

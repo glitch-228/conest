@@ -36,6 +36,7 @@ class FakeMailServer {
 
   /// UIDs whose bodies were downloaded.
   final List<int> fetched = [];
+  final List<int> headersFetched = [];
   final List<int> fetchedSizes = [];
   Future<void> Function(FakeMail mail)? beforeBodyFetch;
 
@@ -390,7 +391,8 @@ class FakeMailServer {
           final index = box().indexWhere((mail) => mail.uid == uid);
           if (index >= 0) {
             final mail = box()[index];
-            if (!upper.contains('RFC822.SIZE')) {
+            if (!upper.contains('RFC822.SIZE') &&
+                !upper.contains('HEADER.FIELDS')) {
               fetched.add(uid);
               fetchedSizes.add(mail.raw.length);
             }
@@ -398,6 +400,18 @@ class FakeMailServer {
               reply(
                 '* ${index + 1} FETCH (UID $uid RFC822.SIZE ${reportedSizes[uid] ?? mail.raw.length})',
               );
+            } else if (upper.contains('HEADER.FIELDS')) {
+              headersFetched.add(uid);
+              final text = latin1.decode(mail.raw);
+              final end = text.indexOf('\r\n\r\n');
+              final header = latin1.encode(
+                end < 0 ? text : text.substring(0, end + 4),
+              );
+              reply(
+                '* ${index + 1} FETCH (UID $uid BODY[HEADER.FIELDS (FROM MESSAGE-ID DATE CHAT-VERSION)] {${header.length}}',
+              );
+              send(header);
+              reply(')');
             } else {
               await beforeBodyFetch?.call(mail);
               send(

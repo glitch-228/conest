@@ -18,8 +18,71 @@ extension DeltaAttachmentsController on MessengerController {
     }
   }
 
-  AttachmentDescriptor? _deltaAttachmentDescriptorFor(String id) =>
-      _deltaAttachments.where((a) => a.id == id).firstOrNull;
+  AttachmentDescriptor? _deltaAttachmentDescriptorFor(String id) {
+    final chats = deltaChats;
+    if (!identical(chats, _deltaIndexedChats)) {
+      _deltaDescriptorIndex = {for (final a in _deltaAttachments) a.id: a};
+      _deltaIdsByCacheName = {};
+      for (final a in _deltaDescriptorIndex.values) {
+        _deltaIdsByCacheName
+            .putIfAbsent(
+              'delta-${attachmentStorageKey('sha256:${a.fileHashBase64}')}',
+              () => <String>{},
+            )
+            .add(a.id);
+      }
+      _deltaIndexedChats = chats;
+    }
+    return _deltaDescriptorIndex[id];
+  }
+
+  Future<DeltaAttachmentCache> _openDeltaFileCache() =>
+      _deltaFileCache ??= () async {
+        final root = await _attachmentRoot();
+        final directory = Directory(p.join(root.path, 'cache'));
+        await directory.create(recursive: true);
+        _deltaAttachmentDescriptorFor(''); // refresh the content index once
+        final shared = {
+          for (final conversation in _snapshot.conversations)
+            for (final message in conversation.messages)
+              if (message.attachment != null)
+                attachmentStorageKey(
+                  'sha256:${message.attachment!.fileHashBase64}',
+                ),
+        };
+        // Upgrade the old shared names once, preserving copies used by Conest.
+        for (final name in _deltaIdsByCacheName.keys) {
+          final oldName = name.substring('delta-'.length);
+          final old = File(p.join(directory.path, oldName));
+          final target = File(p.join(directory.path, name));
+          if (!await target.exists() && await old.exists()) {
+            if (shared.contains(oldName)) {
+              await old.copy(target.path);
+            } else {
+              await old.rename(target.path);
+            }
+          }
+        }
+        final cache = DeltaAttachmentCache(
+          directory,
+          onEvicted: (name) {
+            _deltaAttachmentDescriptorFor('');
+            for (final id in _deltaIdsByCacheName[name] ?? const <String>{}) {
+              _locallyAvailableAttachments.remove(id);
+              _assembledAttachments.remove(id);
+            }
+          },
+        );
+        await cache.load(_deltaIdsByCacheName.keys);
+        await cache.reserve('', 0, _protectedDeltaCacheKeys);
+        return cache;
+      }();
+
+  Set<String> get _protectedDeltaCacheKeys => {
+    for (final r in _snapshot.attachmentCacheReferences)
+      if (r.keepOffline || r.explicitlySaved)
+        'delta-${attachmentStorageKey('sha256:${r.fileHashBase64}')}',
+  };
 
   Future<AttachmentDescriptor> _saveDeltaAttachment(
     DeltaFile file,
@@ -31,13 +94,16 @@ extension DeltaAttachmentsController on MessengerController {
       throw StateError('File is too large.');
     }
     final id = 'delta:${attachmentStorageKey('$chatKey/$messageId/$index')}';
-    final hash = base64Encode(dart_crypto.sha256.convert(file.bytes).bytes);
+    final hash = await deltaFileHash(file.bytes);
     final root = await _attachmentRoot();
     final directory = Directory(p.join(root.path, 'cache'));
     await directory.create(recursive: true);
     final cache = File(
-      p.join(directory.path, attachmentStorageKey('sha256:$hash')),
+      p.join(directory.path, 'delta-${attachmentStorageKey('sha256:$hash')}'),
     );
+    final lru = await _openDeltaFileCache();
+    final cacheName = p.basename(cache.path);
+    await lru.reserve(cacheName, file.bytes.length, _protectedDeltaCacheKeys);
     if (!await cache.exists()) {
       final capacity = await _storageCapacityProvider(root.path);
       if (!_canAllocateStorage(capacity, file.bytes.length)) {
@@ -55,6 +121,7 @@ extension DeltaAttachmentsController on MessengerController {
         await MessengerController._deleteQuietly(temporary);
       }
     }
+    await lru.record(cacheName, file.bytes.length, _now().toUtc());
     _locallyAvailableAttachments.add(id);
     return AttachmentDescriptor(
       id: id,
@@ -189,13 +256,40 @@ extension DeltaAttachmentsController on MessengerController {
       _deltaRequired((p, c) => p.deleteMessage(c, key, id));
 
   void _recordDeltaCacheReferences() {
-    for (final a in _deltaAttachments) {
-      _recordAttachmentCacheReference(a.id);
+    final chats = deltaChats;
+    final old = _deltaReferencedChats;
+    final references = {
+      for (final r in _snapshot.attachmentCacheReferences) r.attachmentId: r,
+    };
+    for (final chat in chats.chats.values) {
+      if (identical(chat, old?.chats[chat.key])) continue;
+      for (final message in chat.messages) {
+        for (final a in message.attachments) {
+          references.putIfAbsent(
+            a.id,
+            () => AttachmentCacheReference(
+              attachmentId: a.id,
+              fileHashBase64: a.fileHashBase64,
+              lastAccessedAt: _now().toUtc(),
+            ),
+          );
+        }
+      }
     }
+    _snapshot = _snapshot.copyWith(
+      attachmentCacheReferences: references.values.toList(),
+    );
+    _deltaReferencedChats = chats;
   }
 
   void _addDeltaCacheKeys(Map<String, Set<String>> keys) {
     for (final a in _deltaAttachments) {
+      keys
+          .putIfAbsent(
+            'delta-${attachmentStorageKey('sha256:${a.fileHashBase64}')}',
+            () => <String>{},
+          )
+          .add(a.id);
       keys.putIfAbsent(attachmentStorageKey(a.id), () => <String>{}).add(a.id);
       keys
           .putIfAbsent(

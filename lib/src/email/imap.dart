@@ -143,6 +143,20 @@ class ImapClient {
     return null;
   }
 
+  /// Bounded outer routing hints only; no message body or seen flag.
+  Future<Uint8List?> headers(int uid) async {
+    final responses = await _command(
+      'UID FETCH $uid (BODY.PEEK[HEADER.FIELDS (From Message-ID Date Chat-Version)])',
+      maxLiteral: 16 * 1024,
+    );
+    for (final response in responses) {
+      if (_uidOf(response.text) == uid && response.literals.isNotEmpty) {
+        return response.literals.first;
+      }
+    }
+    return null;
+  }
+
   /// Deletes message [uid] for good. Without UIDPLUS it is only flagged: a
   /// plain EXPUNGE would also remove mail other clients flagged.
   Future<void> delete(int uid) async {

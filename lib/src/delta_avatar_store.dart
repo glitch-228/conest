@@ -2,8 +2,6 @@ part of 'delta_chats.dart';
 
 typedef _AvatarSlot = ({String key, bool peer, int cost});
 
-int _avatarCost(Uint8List bytes) => ((bytes.length + 2) ~/ 3) * 4;
-
 /// Only the current bounded snapshot retains image data. Dropping an image
 /// keeps its signed timestamp, so an older mail cannot restore it by replay.
 DeltaChats _boundedDeltaAvatars(
@@ -17,14 +15,14 @@ DeltaChats _boundedDeltaAvatars(
     final value = peerRows?[peer.fingerprint]?['avatar'];
     final cost = restoring
         ? (value is String ? value.length : 0)
-        : (peer.avatar == null ? 0 : _avatarCost(peer.avatar!));
+        : peer.avatarEncodedSize;
     if (cost > 0) slots.add((key: peer.fingerprint, peer: true, cost: cost));
   }
   for (final chat in store.chats.values) {
     final value = chatRows?[chat.key]?['avatar'];
     final cost = restoring
         ? (value is String ? value.length : 0)
-        : (chat.avatar == null ? 0 : _avatarCost(chat.avatar!));
+        : chat.avatarEncodedSize;
     if (cost > 0) slots.add((key: chat.key, peer: false, cost: cost));
   }
   if (!restoring &&
@@ -62,46 +60,38 @@ DeltaChats _boundedDeltaAvatars(
     final kind = (a.peer ? 0 : 1).compareTo(b.peer ? 0 : 1);
     return kind != 0 ? kind : a.key.compareTo(b.key);
   });
+  final budget = DeltaAvatarBudget(DeltaChats.maxAvatarEncodedBytes);
   var bytes = 0;
   var count = 0;
   final peers = {...store.peers};
   final chats = {...store.chats};
   for (final slot in slots) {
-    Uint8List? image;
+    var keep = false;
+    DeltaStoredAvatar? stored;
     if (slot.cost <= DeltaLimits.avatarEncodedBytes &&
         count < DeltaChats.maxAvatars &&
         slot.cost <= DeltaChats.maxAvatarEncodedBytes - bytes) {
-      // Charge before decoding on restore. Even invalid images spend the
-      // shared count/byte budget; a legacy vault cannot trigger 2,000 decodes.
       count++;
       bytes += slot.cost;
+      keep = true;
       if (restoring) {
         final row = slot.peer ? peerRows[slot.key] : chatRows?[slot.key];
-        image = deltaAvatar('base64:${row!['avatar']}');
-        if (image != null) {
-          final extra = max(0, _avatarCost(image) - slot.cost);
-          if (extra > DeltaChats.maxAvatarEncodedBytes - bytes) {
-            image = null;
-          } else {
-            bytes += extra;
-          }
-        }
-      } else {
-        image = slot.peer ? peers[slot.key]!.avatar : chats[slot.key]!.avatar;
+        stored = DeltaStoredAvatar(row!['avatar'] as String, budget);
       }
     }
     if (slot.peer) {
       peers[slot.key] = peers[slot.key]!.copyWith(
-        avatar: image,
-        clearAvatar: image == null,
+        storedAvatar: stored,
+        clearAvatar: !keep,
       );
     } else {
       chats[slot.key] = chats[slot.key]!.copyWith(
-        avatar: image,
-        clearAvatar: image == null,
+        storedAvatar: stored,
+        clearAvatar: !keep,
       );
     }
   }
+  budget.remaining = DeltaChats.maxAvatarEncodedBytes - bytes;
   return DeltaChats(
     peers: peers,
     chats: chats,

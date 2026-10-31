@@ -2,6 +2,7 @@ part of 'messenger_controller_test.dart';
 
 class _DeltaPersistenceVault extends _MemoryVaultStore {
   bool failDeltaSaves = false;
+  int deltaSaves = 0;
   Completer<void>? blockedWrite;
   Completer<void>? writeStarted;
   @override
@@ -27,6 +28,11 @@ class _DeltaPersistenceVault extends _MemoryVaultStore {
         )) {
       throw const FileSystemException('simulated Delta vault save failure');
     }
+    if (!identical(
+      snapshot.networkChats['deltaChat'],
+      _snapshot.networkChats['deltaChat'],
+    ))
+      deltaSaves++;
     await super.save(snapshot);
   }
 }
@@ -140,6 +146,130 @@ void deltaContentControllerTests() {
       bob.dispose();
       await server.close();
       await root.delete(recursive: true);
+    });
+
+    test('Delta fetch batch of twenty mails writes the vault once', () async {
+      final mails = <String>[];
+      for (var i = 0; i < 20; i++) {
+        mails.add(await fixture(id: 'batch-$i@example.org', text: 'batch $i'));
+      }
+      await bob.flushPendingChanges();
+      final vault = bobVault as _DeltaPersistenceVault;
+      final before = vault.deltaSaves;
+      for (final mail in mails) {
+        server.deliver(bobMail, mail);
+      }
+      await until(
+        () =>
+            bob.deltaChats.chats[aliceFp]!.messages
+                .where((m) => m.id.startsWith('batch-'))
+                .length ==
+            20,
+      );
+      await until(() => (server.mailboxes[bobMail] ?? []).isEmpty);
+      expect(vault.deltaSaves - before, 1);
+      final saved = DeltaChats.fromJson(
+        vault._snapshot.networkChats['deltaChat'],
+      );
+      expect(
+        saved.chats[aliceFp]!.messages.where((m) => m.id.startsWith('batch-')),
+        hasLength(20),
+      );
+    });
+
+    testWidgets(
+      'Delta metered file waits behind Download and retains its UID across restart',
+      (tester) async {
+        late DeltaChat placeholder;
+        late FakeMail target;
+        final bytes = Uint8List(200000)..[0] = 19;
+        await tester.runAsync(() async {
+          bob.onConnectivityChanged(interfaceLabel: 'mobile');
+          server.deliver(
+            bobMail,
+            await fixture(
+              id: 'deferred@example.org',
+              files: [DeltaFile(name: 'file.bin', bytes: bytes)],
+            ),
+          );
+          target = server.mailboxes[bobMail]!.last;
+          await until(
+            () => bob.emailCarrierConfig!.deferred.any(
+              (m) => m.uid == target.uid,
+            ),
+          );
+          await bob.flushPendingChanges();
+          expect(server.fetched, isNot(contains(target.uid)));
+          expect(target.deleted, isFalse);
+          bob.dispose();
+          bob = await _createController(
+            relayClient: _FakeRelayClient(),
+            displayName: 'Bob',
+            vaultStore: bobVault,
+            createIdentity: false,
+            mailConnector: server.connect,
+            attachmentRootProvider: () async => Directory('${root.path}/bob'),
+          );
+          await until(() => bob.deltaFingerprint != null);
+          placeholder = bob.deltaChats.chats.values.firstWhere(
+            (c) => c.key.startsWith('deferred:'),
+          );
+        });
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: TextButton(
+                  onPressed: () => openDeltaChat(context, bob, placeholder.key),
+                  child: const Text('Open deferred'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('Open deferred'));
+        await tester.pumpAndSettle();
+        expect(find.text('Download'), findsOneWidget);
+        await tester.runAsync(() async {
+          await tester.tap(find.text('Download'));
+          await until(() => target.deleted);
+        });
+        await tester.pumpAndSettle();
+        final file =
+            bob.deltaChats.chats[aliceFp]!.messages.last.attachments.single;
+        expect(
+          await tester.runAsync(
+            () async => File(
+              (await bob.attachmentCachePathFor(file.id))!,
+            ).readAsBytes(),
+          ),
+          bytes,
+        );
+        expect(server.fetched.where((uid) => uid == target.uid), hasLength(1));
+        expect(bob.emailCarrierConfig!.deferred, isEmpty);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    test('Delta storage preset defers files on an unmetered network', () async {
+      await bob.updateGlobalConnectivity(
+        bob.identity!.connectivity.copyWith(
+          autoDownloadPreset: AutoDownloadPreset.low,
+        ),
+      );
+      server.deliver(
+        bobMail,
+        await fixture(
+          id: 'preset@example.org',
+          files: [DeltaFile(name: 'large.bin', bytes: Uint8List(700000))],
+        ),
+      );
+      final mail = server.mailboxes[bobMail]!.last;
+      await until(
+        () => bob.emailCarrierConfig!.deferred.any((m) => m.uid == mail.uid),
+      );
+      expect(server.fetched, isNot(contains(mail.uid)));
+      expect(mail.deleted, isFalse);
     });
 
     test('photo round trip direct and group, cache survives restart', () async {

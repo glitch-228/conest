@@ -5,6 +5,7 @@ library;
 
 import 'dart:convert';
 import 'dart:math';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import '../attachment_safety.dart';
@@ -30,6 +31,8 @@ class AutocryptHeader {
   /// Null when [value] is not a usable header: no address or key, or an
   /// attribute it does not know without the `_` that makes it optional.
   static AutocryptHeader? parse(String value) {
+    if (value.length > ((maxKeyBytes + 2) ~/ 3) * 4 + 1024) return null;
+    final seen = <String>{};
     String? addr;
     String? keydata;
     var mutual = false;
@@ -38,6 +41,7 @@ class AutocryptHeader {
       if (equals <= 0) continue;
       final name = attribute.substring(0, equals).trim().toLowerCase();
       final content = attribute.substring(equals + 1).trim();
+      if (!seen.add(name)) return null;
       switch (name) {
         case 'addr':
           addr = parseMailAddress(content);
@@ -98,6 +102,7 @@ class DeltaIncoming {
     required this.reactionText,
     required this.files,
     required this.postMessage,
+    required this.parserIsolate,
   });
 
   /// The sender's address (lower case).
@@ -153,6 +158,9 @@ class DeltaIncoming {
 
   /// Unprotected hint only. Author and signed ID authorize completion.
   final bool postMessage;
+
+  /// Identifies the isolate which performed MIME and OpenPGP processing.
+  final int parserIsolate;
   String? get postMessageId => deltaMessageId(header('chat-post-message-id'));
   DeltaPendingFile? get pending =>
       DeltaPendingFile.parse(header('chat-post-message-metadata'));
@@ -196,6 +204,44 @@ abstract final class DeltaMail {
   /// An encrypted, signed chat message from [from] to [to] (encrypted to
   /// [key]'s owner too): the RFC 5322 text, CRLF line endings.
   static Future<String> build({
+    required PgpSecretKey key,
+    required String from,
+    String? fromName,
+    required List<DeltaRecipient> to,
+    required String text,
+    required String messageId,
+    required DateTime date,
+    List<DeltaRecipient> gossip = const [],
+    List<(String, String)> extraHeaders = const [],
+    String? inReplyTo,
+    bool requestReadReceipt = false,
+    String? subject,
+    Random? random,
+    List<DeltaFile> files = const [],
+    bool reaction = false,
+    bool postMessage = false,
+  }) => Isolate.run(
+    () => _build(
+      key: key,
+      from: from,
+      fromName: fromName,
+      to: to,
+      text: text,
+      messageId: messageId,
+      date: date,
+      gossip: gossip,
+      extraHeaders: extraHeaders,
+      inReplyTo: inReplyTo,
+      requestReadReceipt: requestReadReceipt,
+      subject: subject,
+      random: random,
+      files: files,
+      reaction: reaction,
+      postMessage: postMessage,
+    ),
+  );
+
+  static Future<String> _build({
     required PgpSecretKey key,
     required String from,
     String? fromName,
@@ -388,6 +434,32 @@ abstract final class DeltaMail {
     required String messageId,
     required DateTime date,
     Random? random,
+  }) => Isolate.run(
+    () => _buildSecureJoinV3(
+      key: key,
+      from: from,
+      to: to,
+      step: step,
+      auth: auth,
+      password: password,
+      attachKey: attachKey,
+      messageId: messageId,
+      date: date,
+      random: random,
+    ),
+  );
+
+  static Future<String> _buildSecureJoinV3({
+    required PgpSecretKey key,
+    required String from,
+    required String to,
+    required String step,
+    required String auth,
+    required String password,
+    required bool attachKey,
+    required String messageId,
+    required DateTime date,
+    Random? random,
   }) async {
     final source = random ?? Random.secure();
     final inner = [
@@ -433,6 +505,28 @@ abstract final class DeltaMail {
   /// A read receipt (MDN, RFC 8098) for [original], encrypted like a chat
   /// message.
   static Future<String> buildReadReceipt({
+    required PgpSecretKey key,
+    required String from,
+    required DeltaRecipient to,
+    required String original,
+    List<String> additional = const [],
+    required String messageId,
+    required DateTime date,
+    Random? random,
+  }) => Isolate.run(
+    () => _buildReadReceipt(
+      key: key,
+      from: from,
+      to: to,
+      original: original,
+      additional: additional,
+      messageId: messageId,
+      date: date,
+      random: random,
+    ),
+  );
+
+  static Future<String> _buildReadReceipt({
     required PgpSecretKey key,
     required String from,
     required DeltaRecipient to,
@@ -508,7 +602,12 @@ abstract final class DeltaMail {
     DateTime? now,
   }) async {
     try {
-      return await _read(raw, key, knownKeys, passwords, now);
+      if (raw.length > DeltaLimits.fileMailBytes) return null;
+      final from = await _senderInWorker(raw);
+      final keys = from == null
+          ? <PgpPublicKey>[]
+          : await knownKeys?.call(from) ?? <PgpPublicKey>[];
+      return await _readInWorker((raw, key, keys, passwords, now));
     } on RangeError {
       return null; // damaged beyond what the parsers check
     } on ArgumentError {
@@ -532,6 +631,7 @@ abstract final class DeltaMail {
     } on FormatException {
       return null;
     }
+    if (!_unambiguousDeltaHeaders(outer.headers)) return null;
     final outerFrom = parseMailAddress(outer.headers['from']);
     if (outerFrom == null) return null;
 
@@ -572,6 +672,15 @@ abstract final class DeltaMail {
       } on FormatException {
         return null;
       }
+      if (!_unambiguousDeltaHeaders(content.headers) ||
+          (password == null &&
+              const [
+                'from',
+                'to',
+                'message-id',
+                'chat-version',
+              ].any((name) => content.headers.raw(name).length != 1)))
+        return null;
       encrypted = true;
       // Protected headers replace the outer ones, and only routing fields
       // come from outside: an outer Secure-Join or group header around
@@ -732,6 +841,7 @@ abstract final class DeltaMail {
     final messageId = _bareMessageId(headers['message-id']);
     if (messageId == null) return null;
     return DeltaIncoming._(
+      parserIsolate: Isolate.current.hashCode,
       from: from,
       fromName: _displayName(headers['from']),
       to: to,
@@ -807,14 +917,7 @@ abstract final class DeltaMail {
   }
 
   static String? _bareMessageId(String? value) {
-    if (value == null) return null;
-    final match = RegExp(r'<([^<>\s]+)>').firstMatch(value);
-    final id = (match?.group(1) ?? value).trim();
-    return id.isEmpty ||
-            id.length > 250 ||
-            id.contains(RegExp(r'[<>\s\x00-\x1f\x7f]'))
-        ? null
-        : id;
+    return deltaMessageId(value);
   }
 
   static String? _displayName(String? from) {
@@ -872,4 +975,54 @@ DateTime? parseRfc5322Date(String? value) {
     );
   }
   return time;
+}
+
+// Top-level boundaries prevent a caller's callback/controller from being
+// captured in an isolate message. Keys contain only checked bytes.
+Future<String?> _senderInWorker(Uint8List raw) => Isolate.run(() {
+  final limit = min(raw.length, 512 * 1024 + 4);
+  for (var i = 0; i < limit - 1; i++) {
+    final lf = raw[i] == 10 && raw[i + 1] == 10;
+    final crlf =
+        i + 3 < limit &&
+        raw[i] == 13 &&
+        raw[i + 1] == 10 &&
+        raw[i + 2] == 13 &&
+        raw[i + 3] == 10;
+    if (lf || crlf) {
+      return parseMailAddress(
+        MimeHeaders.parse(
+          latin1.decode(Uint8List.sublistView(raw, 0, i)),
+        )['from'],
+      );
+    }
+  }
+  return null;
+});
+
+Future<DeltaIncoming?> _readInWorker(
+  (Uint8List, PgpSecretKey, List<PgpPublicKey>, List<String>, DateTime?) job,
+) => Isolate.run(
+  () => DeltaMail._read(job.$1, job.$2, (_) async => job.$3, job.$4, job.$5),
+);
+
+// Repeated identity/control headers have no consistent interpretation across
+// clients. Reject ambiguity before learning keys or acting on signed controls.
+bool _unambiguousDeltaHeaders(MimeHeaders headers) {
+  final seen = <String>{};
+  for (final (name, _) in headers.fields) {
+    final key = name.toLowerCase();
+    if (key == 'from' ||
+        key == 'to' ||
+        key == 'message-id' ||
+        key == 'content-type' ||
+        key == 'autocrypt' ||
+        key == 'in-reply-to' ||
+        key == 'secure-join' ||
+        key.startsWith('chat-') ||
+        key.startsWith('secure-join-')) {
+      if (!seen.add(key)) return false;
+    }
+  }
+  return true;
 }

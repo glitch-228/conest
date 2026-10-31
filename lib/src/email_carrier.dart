@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'carrier.dart';
 import 'email/carrier_mail.dart';
 import 'email/imap.dart';
+import 'email/delta_download.dart';
 import 'email/mail_socket.dart';
 import 'email/smtp.dart';
 import 'network_errors.dart';
@@ -212,6 +213,7 @@ class EmailCarrierConfig {
     this.chatmail = false,
     this.uidValidity,
     this.lastUid = 0,
+    this.deferred = const [],
     this.serverPicked = true,
     this.movedAt,
   });
@@ -258,6 +260,7 @@ class EmailCarrierConfig {
   /// Where reading resumes: the folder's UIDVALIDITY and the last UID read.
   final int? uidValidity;
   final int lastUid;
+  final List<DeferredDeltaMail> deferred;
 
   /// A chatmail server this app picked (one the user named is never left
   /// for another). True for accounts from before this was kept.
@@ -271,21 +274,25 @@ class EmailCarrierConfig {
     return Uint8List.fromList(List.generate(32, (_) => source.nextInt(256)));
   }
 
-  EmailCarrierConfig copyWith({int? uidValidity, int? lastUid}) =>
-      EmailCarrierConfig(
-        mail: mail,
-        password: password,
-        imapHost: imapHost,
-        imapPort: imapPort,
-        smtpHost: smtpHost,
-        smtpPort: smtpPort,
-        mailboxKey: mailboxKey,
-        chatmail: chatmail,
-        uidValidity: uidValidity ?? this.uidValidity,
-        lastUid: lastUid ?? this.lastUid,
-        serverPicked: serverPicked,
-        movedAt: movedAt,
-      );
+  EmailCarrierConfig copyWith({
+    int? uidValidity,
+    int? lastUid,
+    List<DeferredDeltaMail>? deferred,
+  }) => EmailCarrierConfig(
+    mail: mail,
+    password: password,
+    imapHost: imapHost,
+    imapPort: imapPort,
+    smtpHost: smtpHost,
+    smtpPort: smtpPort,
+    mailboxKey: mailboxKey,
+    chatmail: chatmail,
+    uidValidity: uidValidity ?? this.uidValidity,
+    lastUid: lastUid ?? this.lastUid,
+    deferred: deferred ?? this.deferred,
+    serverPicked: serverPicked,
+    movedAt: movedAt,
+  );
 
   Map<String, Object?> toJson() => {
     'mail': mail,
@@ -298,6 +305,8 @@ class EmailCarrierConfig {
     if (chatmail) 'chatmail': true,
     if (uidValidity != null) 'uidValidity': uidValidity,
     if (lastUid > 0) 'lastUid': lastUid,
+    if (deferred.isNotEmpty)
+      'deferred': [for (final mail in deferred) mail.toJson()],
     if (!serverPicked) 'serverPicked': false,
     if (movedAt case final at?) 'movedAt': at.toUtc().toIso8601String(),
   };
@@ -339,6 +348,12 @@ class EmailCarrierConfig {
       chatmail: json['chatmail'] == true,
       uidValidity: json['uidValidity'] as int?,
       lastUid: json['lastUid'] as int? ?? 0,
+      deferred: [
+        for (final item
+            in (json['deferred'] is List ? json['deferred'] as List : const [])
+                .take(DeferredDeltaMail.maxCount))
+          ?DeferredDeltaMail.fromJson(item),
+      ],
       serverPicked: json['serverPicked'] != false,
       movedAt: DateTime.tryParse(json['movedAt'] as String? ?? '')?.toUtc(),
     );
@@ -367,6 +382,8 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     this.onStalls,
     this.onStatusChanged,
     this.onOtherMail,
+    this.onOtherMailBatch,
+    this.deferOtherMail,
     this.onOtherMailGaveUp,
     this.otherMailMaxBytes,
     MailConnector? connector,
@@ -424,6 +441,30 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// Mail that is not carrier mail (Delta Chat's, say): true when it was
   /// handled and may be deleted. Without it such mail is left alone.
   final Future<bool> Function(Uint8List raw)? onOtherMail;
+
+  /// Saves bodies and the cursor together before any server deletion.
+  final Future<List<bool>> Function(
+    List<FetchedDeltaMail> mails,
+    EmailCarrierConfig cursor,
+  )?
+  onOtherMailBatch;
+  final bool Function(int size)? deferOtherMail;
+  final Map<int, Completer<void>> _requestedDownloads = {};
+
+  Future<void> downloadDeferred(int validity, int uid) {
+    if (!_started ||
+        validity != _config.uidValidity ||
+        !_config.deferred.any((m) => m.uid == uid)) {
+      return Future.error(StateError('This mail is no longer available.'));
+    }
+    final old = _requestedDownloads[uid];
+    if (old != null) return old.future;
+    final done = Completer<void>();
+    _requestedDownloads[uid] = done;
+    _wake?.complete();
+    _wake = null;
+    return done.future;
+  }
 
   /// A message [onOtherMail] could not save after [maxOtherMailAttempts]
   /// tries: left on the server, and skipped.
@@ -535,6 +576,11 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
     _generation++;
     _wake?.complete();
     _wake = null;
+    for (final done in _requestedDownloads.values) {
+      if (!done.isCompleted)
+        done.completeError(StateError('Email is stopped.'));
+    }
+    _requestedDownloads.clear();
     _setState(EmailCarrierState.stopped);
   }
 
@@ -608,7 +654,11 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           final start = _config.uidValidity == null
               ? (next == null ? 0 : next - 1)
               : 0;
-          _config = _config.copyWith(uidValidity: validity, lastUid: start);
+          _config = _config.copyWith(
+            uidValidity: validity,
+            lastUid: start,
+            deferred: const [],
+          );
           onCursor?.call(validity, start);
         }
         _lastError = null;
@@ -700,6 +750,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
 
   Future<bool> _readNew(ImapClient client, int generation) async {
     bool current() => _started && generation == _generation;
+    if (onOtherMailBatch != null) return _readNewBatch(client, generation);
     final uids = await client.uidsAfter(_config.lastUid);
     for (final uid in uids) {
       if (!current()) return false;
@@ -756,6 +807,105 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
       if (!current()) return false;
       _config = _config.copyWith(lastUid: uid);
       onCursor?.call(_config.uidValidity!, uid);
+    }
+    return false;
+  }
+
+  // Bounded bodies, at most twenty mails / 48 MiB per durable batch.
+  Future<bool> _readNewBatch(ImapClient client, int generation) async {
+    bool current() => _started && generation == _generation;
+    final requested = _requestedDownloads.keys.toSet();
+    final uids = {
+      ...requested,
+      ...await client.uidsAfter(_config.lastUid),
+    }.toList()..sort();
+    for (var offset = 0; offset < uids.length;) {
+      var cursor = _config;
+      final external = <FetchedDeltaMail>[];
+      final handled = <int>[];
+      final completed = <int>[];
+      var bytes = 0;
+      var count = 0;
+      while (offset < uids.length && count < 20) {
+        if (!current()) return false;
+        final uid = uids[offset];
+        final manual = requested.contains(uid);
+        final size = await client.size(uid);
+        final maxBytes = (otherMailMaxBytes?.call() ?? maxCarrierMailBytes)
+            .clamp(maxCarrierMailBytes, 42 * 1024 * 1024);
+        if (size != null && size >= 0 && size <= maxBytes) {
+          if (bytes > 0 && bytes + size > 48 * 1024 * 1024) break;
+          if (!manual && (deferOtherMail?.call(size) ?? false)) {
+            if (cursor.deferred.length >= DeferredDeltaMail.maxCount) break;
+            final header = await client.headers(uid);
+            if (header != null) {
+              final entry = DeferredDeltaMail.fromHeaders(uid, size, header);
+              cursor = cursor.copyWith(deferred: [...cursor.deferred, entry]);
+            }
+          } else {
+            final raw = await client.fetch(uid, maxBytes: maxBytes);
+            if (!current()) return false;
+            if (raw != null) {
+              bytes += raw.length;
+              final mail = CarrierMail.read(raw, _config.mailboxKey);
+              if (mail != null) {
+                onFrame(mail.from, mail.frame);
+                handled.add(uid);
+              } else {
+                external.add(FetchedDeltaMail(uid, raw));
+              }
+            }
+            cursor = cursor.copyWith(
+              deferred: [
+                for (final m in cursor.deferred)
+                  if (m.uid != uid) m,
+              ],
+            );
+          }
+        } else if (manual) {
+          cursor = cursor.copyWith(
+            deferred: [
+              for (final m in cursor.deferred)
+                if (m.uid != uid) m,
+            ],
+          );
+        }
+        if (!manual && uid > cursor.lastUid)
+          cursor = cursor.copyWith(lastUid: uid);
+        if (manual) completed.add(uid);
+        offset++;
+        count++;
+      }
+      if (count == 0) return false; // bounded deferred list is full
+      try {
+        final consumed = await onOtherMailBatch!(external, cursor);
+        if (consumed.length != external.length)
+          throw const OtherMailRetryException();
+        for (var i = 0; i < consumed.length; i++) {
+          if (consumed[i]) handled.add(external[i].uid);
+        }
+      } on OtherMailRetryException {
+        for (final uid in completed) {
+          _requestedDownloads
+              .remove(uid)
+              ?.completeError(
+                StateError('Could not save this mail. Try again.'),
+              );
+        }
+        return true;
+      }
+      if (!current()) return false;
+      _config = cursor;
+      for (final uid in handled) {
+        try {
+          await client.delete(uid);
+        } on ImapException {
+          /* read-only mailbox */
+        }
+      }
+      for (final uid in completed) {
+        _requestedDownloads.remove(uid)?.complete();
+      }
     }
     return false;
   }

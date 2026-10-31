@@ -41,6 +41,8 @@ import 'delta_chats.dart';
 import 'delta_protocol.dart';
 import 'email/pgp.dart';
 import 'email/delta_content.dart';
+import 'email/delta_download.dart';
+import 'email/delta_cache.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
@@ -146,6 +148,7 @@ import 'transfer/route_striper.dart';
 import 'content_routing.dart';
 
 part 'delta_attachments_controller.dart';
+part 'delta_downloads_controller.dart';
 part 'group_call/group_call_controller.dart';
 part 'voice_settings_controller.dart';
 
@@ -6748,6 +6751,11 @@ class MessengerController extends ChangeNotifier {
   Future<DeltaProtocol?>? _deltaStarting;
   Future<void> _deltaQueue = Future.value();
   (Object?, DeltaChats)? _deltaChatsCache;
+  DeltaChats? _deltaIndexedChats;
+  Map<String, AttachmentDescriptor> _deltaDescriptorIndex = {};
+  Map<String, Set<String>> _deltaIdsByCacheName = {};
+  DeltaChats? _deltaReferencedChats;
+  Future<DeltaAttachmentCache>? _deltaFileCache;
 
   DeltaChats get deltaChats {
     final json = _snapshot.networkChats['deltaChat'];
@@ -6849,6 +6857,7 @@ class MessengerController extends ChangeNotifier {
     Future<DeltaStep> Function(DeltaProtocol protocol, DeltaChats chats)
     change, {
     bool retryMailOnSaveFailure = false,
+    EmailCarrierConfig? mailCursor,
   }) {
     final result = _deltaQueue.then((_) async {
       final DeltaProtocol? protocol;
@@ -6864,7 +6873,10 @@ class MessengerController extends ChangeNotifier {
       final step = await change(protocol, deltaChats);
       try {
         await _saveDeltaChats(
-          step.chats,
+          mailCursor == null
+              ? step.chats
+              : _withDeferredDeltaMails(step.chats, mailCursor),
+          mailCursor: mailCursor,
           tokens: protocol.tokens == tokens ? null : protocol.tokens,
         );
       } catch (_) {
@@ -6913,7 +6925,13 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  Future<void> _saveDeltaChats(DeltaChats chats, {DeltaTokens? tokens}) async {
+  Future<void> _saveDeltaChats(
+    DeltaChats chats, {
+    DeltaTokens? tokens,
+    EmailCarrierConfig? mailCursor,
+  }) async {
+    final previousCursor = emailCarrierConfig;
+    if (mailCursor != null) _setDeltaMailCursor(mailCursor);
     final json = chats.toJson();
     final config = _deltaConfig;
     _snapshot = _snapshot.copyWith(
@@ -6927,7 +6945,13 @@ class MessengerController extends ChangeNotifier {
     );
     _deltaChatsCache = (json, chats);
     _recordDeltaCacheReferences();
-    await _saveSnapshotSilently(notify: true);
+    try {
+      await _saveSnapshotSilently(notify: true);
+    } catch (_) {
+      if (mailCursor != null && previousCursor != null)
+        _setDeltaMailCursor(previousCursor);
+      rethrow;
+    }
   }
 
   Future<DeltaStep> _deltaRequired(
@@ -8764,6 +8788,8 @@ class MessengerController extends ChangeNotifier {
       onStalls: () => unawaited(_moveFrozenChatmailAccount()),
       readTimeout: emailReadTimeout,
       onOtherMail: _onOtherMail,
+      onOtherMailBatch: _onDeltaMailBatch,
+      deferOtherMail: _deferDeltaMail,
       onOtherMailGaveUp: (_) {
         recordError(
           'delta',
@@ -9891,6 +9917,7 @@ class MessengerController extends ChangeNotifier {
       await _saveSnapshotSilently(notify: false);
     }
     final validAttachmentIds = <String>{
+      for (final a in _deltaAttachments) a.id,
       for (final conversation in _snapshot.conversations)
         for (final message in conversation.messages)
           if (message.attachment != null) message.attachment!.id,
@@ -15769,8 +15796,17 @@ class MessengerController extends ChangeNotifier {
     final descriptor = attachmentDescriptorFor(attachmentId);
     final hash = descriptor?.fileHashBase64;
     if (hash == null || hash.isEmpty) return legacy;
+    if (attachmentId.startsWith('delta:')) {
+      await (await _openDeltaFileCache()).touch(
+        attachmentStorageKey('sha256:$hash'),
+        _now().toUtc(),
+      );
+    }
     final managed = File(
-      p.join(cache.path, attachmentStorageKey('sha256:$hash')),
+      p.join(
+        cache.path,
+        '${attachmentId.startsWith('delta:') ? 'delta-' : ''}${attachmentStorageKey('sha256:$hash')}',
+      ),
     );
     if (!await managed.exists() && await legacy.exists()) {
       try {
@@ -15913,6 +15949,7 @@ class MessengerController extends ChangeNotifier {
       : const Duration(days: 90);
 
   Future<void> _evictManagedCacheIfNeeded(Directory root) async {
+    if (_deltaAttachments.isNotEmpty) await _openDeltaFileCache();
     final cache = Directory(p.join(root.path, 'cache'));
     final groupsCache = Directory(p.join(root.path, 'groups'));
     if (!await cache.exists() && !await groupsCache.exists()) return;
@@ -15941,6 +15978,7 @@ class MessengerController extends ChangeNotifier {
     if (await cache.exists()) {
       await for (final entity in cache.list(followLinks: false)) {
         if (entity is! File) continue;
+        if (p.basename(entity.path).startsWith('delta-')) continue;
         final stat = await entity.stat();
         total += stat.size;
         final matching = <AttachmentCacheReference>[];

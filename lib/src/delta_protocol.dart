@@ -90,6 +90,7 @@ class DeltaInvite {
 
   /// Reads `OPENPGP4FPR:` codes and `https://i.delta.chat/#` links.
   static DeltaInvite? parse(String text) {
+    if (text.length > 8192) return null;
     var value = text.trim();
     const link = 'https://i.delta.chat/#';
     const linkNoSlash = 'https://i.delta.chat#';
@@ -211,18 +212,25 @@ class DeltaTokens {
     if (json is! Map<String, dynamic>) return null;
     final invitenumber = json['invitenumber'];
     final auth = json['auth'];
-    if (invitenumber is! String || auth is! String) return null;
+    if (invitenumber is! String ||
+        auth is! String ||
+        !DeltaInvite._validToken(invitenumber) ||
+        !DeltaInvite._validToken(auth))
+      return null;
     final groups = json['groups'];
     return DeltaTokens(
       invitenumber: invitenumber,
       auth: auth,
       groups: {
         if (groups is Map<String, dynamic>)
-          for (final MapEntry(:key, :value) in groups.entries)
-            if (value is List &&
+          for (final MapEntry(:key, :value) in groups.entries.take(maxGroups))
+            if (DeltaInvite._validToken(key) &&
+                value is List &&
                 value.length == 2 &&
                 value[0] is String &&
-                value[1] is String)
+                value[1] is String &&
+                DeltaInvite._validToken(value[0]) &&
+                DeltaInvite._validToken(value[1]))
               key: (value[0] as String, value[1] as String),
       },
     );
@@ -538,7 +546,7 @@ class DeltaProtocol {
         existing == null || existing.members.contains(sender);
     final control = _receiveControl(chats, read, signer, chatKey);
     if (control != null) return control;
-    if (existing == null && chats.chats.length >= DeltaChats.maxChats) {
+    if (existing == null && chats.realChatCount >= DeltaChats.maxChats) {
       return DeltaStep(
         chats,
         retry: read.files.isNotEmpty || read.postMessageId != null,
@@ -585,7 +593,7 @@ class DeltaProtocol {
         : null;
     final hasAvatar = avatar != null || read.header('chat-group-avatar') == '0';
     var next = chats;
-    var members = merged.members;
+    var members = [...merged.members];
     var left = existing?.left ?? false;
     final selfAdded = merged.memberAdded[fingerprint];
     final selfRemoved = merged.memberRemoved[fingerprint];
@@ -1251,7 +1259,7 @@ class DeltaProtocol {
     String name,
     List<String> members,
   ) async {
-    if (chats.chats.length >= DeltaChats.maxChats) {
+    if (chats.realChatCount >= DeltaChats.maxChats) {
       throw StateError('Chat limit reached. Delete an old chat first.');
     }
     if (members.length > DeltaLimits.members - 1) {

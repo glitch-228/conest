@@ -66,7 +66,10 @@ class MimeHeaders {
       flush();
       final colon = line.indexOf(':');
       if (colon <= 0) continue;
-      name = line.substring(0, colon).trim();
+      name = line.substring(0, colon);
+      if (!RegExp(r'^[!-9;-~]+$').hasMatch(name!)) {
+        throw const FormatException('Invalid MIME header name.');
+      }
       value.write(line.substring(colon + 1));
     }
     flush();
@@ -222,6 +225,14 @@ class MimeEntity {
     );
     final mimeType = type.isEmpty ? 'text/plain' : type;
     final boundary = parameters['boundary'];
+    if (mimeType.startsWith('multipart/') &&
+        (depth >= maxDepth ||
+            boundary == null ||
+            boundary.isEmpty ||
+            boundary.length > 70 ||
+            RegExp(r'[\x00-\x1f\x7f]').hasMatch(boundary))) {
+      throw const FormatException('Invalid MIME multipart boundary or depth.');
+    }
     if (mimeType.startsWith('multipart/') &&
         boundary != null &&
         boundary.isNotEmpty &&
