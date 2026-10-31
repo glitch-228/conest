@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'limits/network_limiter.dart';
 import 'transport.dart';
 import 'transport_models.dart';
 
@@ -335,6 +336,14 @@ abstract interface class AcknowledgingCarrierChannel implements CarrierChannel {
   Stream<({int frameId, bool ok})> get frameAcks;
 }
 
+/// A channel that sends a frame as something larger than its bytes (a radio
+/// that carries text, so the frame is encoded): its airtime is counted on
+/// the encoded size.
+abstract interface class AirtimeSizedCarrierChannel implements CarrierChannel {
+  /// The bytes sent on air for a frame of [frameLength] bytes.
+  int airBytes(int frameLength);
+}
+
 /// One envelope going out frame by frame on a channel that confirms frames.
 class _RadioEnvelope {
   _RadioEnvelope(this.envelopeId, this.deviceId);
@@ -345,6 +354,10 @@ class _RadioEnvelope {
   /// Frames sent and not yet confirmed.
   final Set<int> waiting = {};
   bool tracked = false;
+
+  /// A frame the network gave no id to confirm it by: the envelope cannot
+  /// be reported as delivered.
+  bool unconfirmable = false;
   bool allSent = false;
   bool refused = false;
   bool reported = false;
@@ -353,7 +366,7 @@ class _RadioEnvelope {
 /// What [CarrierTransportAdapter.cancel] takes: one envelope to one device
 /// (a group message goes to each member separately).
 String carrierSendId(String deviceId, String envelopeId) =>
-    '$deviceId|$envelopeId';
+    transportOperationId(deviceId, envelopeId);
 
 /// The other device's radio confirmed every frame of envelope [envelopeId]
 /// for [deviceId].
@@ -401,7 +414,7 @@ class CarrierStatus {
 /// Store-and-forward route over a carrier network: envelopes are sealed,
 /// split into binary frames and sent through a [CarrierChannel]; frames the
 /// channel receives come in through [receiveFrame].
-class CarrierTransportAdapter implements TransportAdapter {
+class CarrierTransportAdapter implements TransportAdapter, RateLimited {
   CarrierTransportAdapter({
     required this.kind,
     required CarrierSealer sealer,
@@ -431,6 +444,16 @@ class CarrierTransportAdapter implements TransportAdapter {
 
   /// Pause between frames of one envelope, for networks that rate-limit.
   final Duration frameSpacing;
+
+  /// The account's turn-taking on this network (see [NetworkBudgets]): every
+  /// frame passes it, whichever chat, group or own device sends it. Set by
+  /// the controller; null where the network names no limit.
+  @override
+  NetworkLimiter? limiter;
+
+  /// True where the channel takes the limiter's turns itself (one mail is
+  /// one turn): the adapter then only reports the limiter to the dispatcher.
+  bool channelPacesFrames = false;
   final CarrierSealer _sealer;
   final bool Function(String address) _isValidAddress;
   final DateTime Function() _now;
@@ -617,6 +640,37 @@ class CarrierTransportAdapter implements TransportAdapter {
     // Registered before the first frame: confirmations of early frames
     // can come while later ones are still going out.
     final pending = _RadioEnvelope(envelope.id, peer.deviceId);
+    // A burst that cannot get its turns in time is refused before the first
+    // frame goes out, so no half-sent envelope is left behind.
+    final turns = channelPacesFrames ? null : limiter;
+    // The registry gives up on this attempt after [sendAttemptTimeout]: the
+    // limiter's waits end before that, so a send is never cut off (and
+    // marked failed) while it only waits for its turn.
+    final attemptWatch = Stopwatch()..start();
+    Duration timeLeft() {
+      final left = sendAttemptTimeout - attemptWatch.elapsed - _attemptMargin;
+      return left.isNegative ? Duration.zero : left;
+    }
+
+    if (turns != null) {
+      final wait = turns.projectedWaitFor(
+        frames.length,
+        cost: turns.budget.costInBytes
+            ? frames.fold<int>(0, (total, frame) => total + airBytes(frame))
+            : 1,
+      );
+      if (wait > _admissionWait(turns, timeLeft())) {
+        throw LimiterRefused(LimiterRefusal.wouldWait, retryIn: wait);
+      }
+    }
+    // Stops a frame that waited for its turn after the send was cancelled.
+    Future<T> Function() guarded<T>(Future<T> Function() send) => () {
+      if (_cancelled[sendId] case final cancelledAt?
+          when !cancelledAt.isBefore(startedAt)) {
+        throw TransportSendCancelled('${kind.label}: no longer needed.');
+      }
+      return send();
+    };
     for (var index = 0; index < frames.length; index++) {
       if (index > 0 && frameSpacing > Duration.zero) {
         await Future<void>.delayed(frameSpacing);
@@ -632,23 +686,49 @@ class CarrierTransportAdapter implements TransportAdapter {
         throw TransportSendCancelled('${kind.label}: no longer needed.');
       }
       if (channel is AcknowledgingCarrierChannel) {
-        final id = await channel.sendTrackedFrame(address, frames[index]);
-        pending.tracked = true;
-        pending.waiting.add(id);
-        _unconfirmedFrames.remove(id);
-        _unconfirmedFrames[id] = pending;
-        while (_unconfirmedFrames.length > _maxUnconfirmedFrames) {
-          _unconfirmedFrames.remove(_unconfirmedFrames.keys.first);
+        final id = await _paced(
+          guarded(() => channel.sendTrackedFrame(address, frames[index])),
+          cost: airBytes(frames[index]),
+          started: index > 0,
+          timeLeft: timeLeft(),
+        );
+        if (id == 0) {
+          // No ack code (a radio that does not confirm this kind of
+          // message): not tracked, and the envelope is never "delivered".
+          pending.unconfirmable = true;
+        } else {
+          pending.tracked = true;
+          pending.waiting.add(id);
+          _unconfirmedFrames.remove(id);
+          _unconfirmedFrames[id] = pending;
+          while (_unconfirmedFrames.length > _maxUnconfirmedFrames) {
+            _unconfirmedFrames.remove(_unconfirmedFrames.keys.first);
+          }
+          // Its confirmation beat the send's own return.
+          final early = _takeEarlyAck(id);
+          if (early != null) _onFrameAck((frameId: id, ok: early));
         }
       } else if (inboxSender != null) {
-        await (channel as InboxCarrierChannel).sendInboxFrame(
-          address,
-          frames[index],
-          inboxSender,
-          inboxKey!,
+        await _paced(
+          cost: airBytes(frames[index]),
+          started: index > 0,
+          timeLeft: timeLeft(),
+          guarded(
+            () => (channel as InboxCarrierChannel).sendInboxFrame(
+              address,
+              frames[index],
+              inboxSender,
+              inboxKey!,
+            ),
+          ),
         );
       } else {
-        await channel.sendFrame(address, frames[index]);
+        await _paced(
+          guarded(() => channel.sendFrame(address, frames[index])),
+          cost: airBytes(frames[index]),
+          started: index > 0,
+          timeLeft: timeLeft(),
+        );
       }
     }
     pending.allSent = true;
@@ -674,6 +754,50 @@ class CarrierTransportAdapter implements TransportAdapter {
     detail: '${kind.label} carries messages, not file streams.',
   );
 
+  /// One frame, when the account's limiter lets it go; a server's
+  /// "slow down" in the error is obeyed by the limiter.
+  Future<T> _paced<T>(
+    Future<T> Function() send, {
+    int cost = 1,
+    bool started = false,
+    required Duration timeLeft,
+  }) {
+    final turns = channelPacesFrames ? null : limiter;
+    if (turns == null) return send();
+    // An envelope that has begun is finished, not dropped half-way, but not
+    // past the attempt's end.
+    final wait = started ? const Duration(minutes: 10) : turns.budget.maxWait;
+    return turns.run(
+      send,
+      cost: turns.budget.costInBytes ? cost : 1,
+      maxWait: wait < timeLeft ? wait : timeLeft,
+    );
+  }
+
+  static const Duration _attemptMargin = Duration(seconds: 2);
+
+  /// The longest an envelope may be held back before its first frame: the
+  /// budget's wait, and for an airtime budget the time the largest sealed
+  /// envelope needs (a long message on a radio waits for its minutes
+  /// instead of being refused), never past the attempt.
+  Duration _admissionWait(NetworkLimiter turns, Duration timeLeft) {
+    var allowed = turns.budget.maxWait;
+    final quota = turns.budget.quota;
+    if (turns.budget.costInBytes && quota != null && quota > 0) {
+      // Counted in bytes on air of the largest framed envelope (the
+      // channel may encode frames, as MeshCore's base64 does).
+      final count = framing.frameCount(framing.maxSealedBytes);
+      final lastChunk =
+          framing.maxSealedBytes - (count - 1) * framing.chunkBytes;
+      final air =
+          (count - 1) *
+              _airLength(framing.chunkBytes + carrierBinaryFrameHeaderBytes) +
+          _airLength(lastChunk + carrierBinaryFrameHeaderBytes);
+      allowed += turns.budget.window * ((air - 1) ~/ quota);
+    }
+    return allowed < timeLeft ? allowed : timeLeft;
+  }
+
   @override
   Future<void> cancel(String operationId) async {
     _cancelled.remove(operationId);
@@ -683,9 +807,41 @@ class CarrierTransportAdapter implements TransportAdapter {
     }
   }
 
+  /// The bytes on air for [frame] (the channel may encode it).
+  int airBytes(Uint8List frame) => _airLength(frame.length);
+
+  int _airLength(int frameLength) {
+    final channel = _channel;
+    return channel is AirtimeSizedCarrierChannel
+        ? channel.airBytes(frameLength)
+        : frameLength;
+  }
+
+  /// Confirmations that came before their frame was registered (bounded,
+  /// and forgotten after [earlyAckLife]).
+  final Map<int, (bool, DateTime)> _earlyFrameAcks = {};
+  static const Duration earlyAckLife = Duration(seconds: 30);
+
+  bool? _takeEarlyAck(int id) {
+    final entry = _earlyFrameAcks.remove(id);
+    if (entry == null) return null;
+    return _now().difference(entry.$2) > earlyAckLife ? null : entry.$1;
+  }
+
   void _onFrameAck(({int frameId, bool ok}) ack) {
     final entry = _unconfirmedFrames.remove(ack.frameId);
-    if (entry == null) return;
+    if (entry == null) {
+      final now = _now();
+      _earlyFrameAcks.removeWhere(
+        (_, early) => now.difference(early.$2) > earlyAckLife,
+      );
+      _earlyFrameAcks.remove(ack.frameId);
+      _earlyFrameAcks[ack.frameId] = (ack.ok, now);
+      while (_earlyFrameAcks.length > 32) {
+        _earlyFrameAcks.remove(_earlyFrameAcks.keys.first);
+      }
+      return;
+    }
     if (!ack.ok) {
       entry.refused = true;
       return;
@@ -697,6 +853,7 @@ class CarrierTransportAdapter implements TransportAdapter {
   void _maybeReceipt(_RadioEnvelope entry) {
     // Untracked: a channel that does not confirm frames.
     if (!entry.tracked ||
+        entry.unconfirmable ||
         !entry.allSent ||
         entry.refused ||
         entry.reported ||

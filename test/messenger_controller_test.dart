@@ -52,6 +52,7 @@ import 'package:conest/src/ui/connections_screen.dart';
 import 'package:conest/src/ui/error_history_screen.dart';
 import 'package:conest/src/ui/user_mode_screen.dart';
 import 'package:conest/src/ui/link_cleaning.dart';
+import 'package:conest/src/limits/network_limiter.dart';
 import 'package:conest/src/links/link_cleaner.dart';
 import 'package:conest/src/links/link_preview.dart';
 import 'package:conest/src/group_file_crypto.dart';
@@ -679,6 +680,10 @@ class _FakeRelayClient extends RelayClient {
     RelayEnvelope envelope,
   )?
   shouldFailStore;
+
+  /// How long a store takes before it answers (a route that is slow to
+  /// fail).
+  Duration Function(RelayEnvelope envelope)? storeDelayFor;
   final List<String> storeAttempts = <String>[];
 
   /// An error to throw for stores to [host] (a network's own error).
@@ -909,6 +914,10 @@ class _FakeRelayClient extends RelayClient {
     // jitter + route-timeline gating before any of the static checks fire.
     if (!_simClock.isRunning) _simClock.start();
     await _maybeApplyLatency();
+    if (storeDelayFor?.call(envelope) case final delay?
+        when delay > Duration.zero) {
+      await Future<void>.delayed(delay);
+    }
     if (_shouldFailDueToRouteTimeline(host, protocol)) {
       throw StateError(
         'Simulated outage (route timeline) for ${_key(host, port, protocol)}',
@@ -27161,11 +27170,11 @@ void main() {
       );
       expect(
         saver.heartbeatIntervalForTesting(),
-        mains.heartbeatIntervalForTesting() * 4,
+        mains.heartbeatIntervalForTesting() * 8,
       );
       final mainsPoll = mains.pollIntervalForTesting;
       if (mainsPoll != null) {
-        expect(saver.pollIntervalForTesting, mainsPoll * 4);
+        expect(saver.pollIntervalForTesting, mainsPoll * 8);
       }
       // In the foreground nothing slows down.
       saver.setAppForegroundState(true);
@@ -27507,6 +27516,29 @@ void main() {
   });
 
   group('Energy policy', () {
+    test(
+      'the Connectivity setting sets the budget the controller uses',
+      () async {
+        final controller = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Eco',
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.limited),
+        );
+        addTearDown(controller.dispose);
+        expect(controller.energyBudgetForTesting.pollFactor, 2);
+        await controller.setEnergyBudget(EnergyBudgetSetting.eco);
+        expect(controller.energyBudgetForTesting.maxExtraCopies, 0);
+        expect(controller.energyBudgetForTesting.hedgedBlocks, isFalse);
+        expect(controller.energyBudgetForTesting.pollFactor, greaterThan(2));
+        await controller.setEnergyBudget(EnergyBudgetSetting.fast);
+        expect(controller.energyBudgetForTesting.pollFactor, 1);
+        expect(
+          controller.identity!.connectivity.energyBudget,
+          EnergyBudgetSetting.fast,
+        );
+      },
+    );
+
     test('mains power and unmetered networks send on every route', () {
       const plugged = PowerState(hasBattery: true, charging: true);
       const desktop = PowerState(hasBattery: false);
@@ -28334,6 +28366,16 @@ void main() {
       );
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
+      // The real airtime budget (450 bytes a minute) would hold this
+      // real-time test for minutes: give the radios a fast one.
+      for (final controller in [alice, bob]) {
+        controller.limiterBudgetForTesting = (_, budget) => LimiterBudget(
+          name: budget.name,
+          costInBytes: true,
+          quota: 1000000,
+          window: const Duration(seconds: 1),
+        );
+      }
       await _pairControllers(alice, bob);
       await alice.enableMeshtasticCarrier(
         link: MeshtasticLink.serial,
@@ -28616,6 +28658,15 @@ void main() {
       );
       addTearDown(alice.dispose);
       addTearDown(bob.dispose);
+      // The real airtime budget would hold this real-time test for minutes.
+      for (final controller in [alice, bob]) {
+        controller.limiterBudgetForTesting = (_, budget) => LimiterBudget(
+          name: budget.name,
+          costInBytes: true,
+          quota: 1000000,
+          window: const Duration(seconds: 1),
+        );
+      }
       await _pairControllers(alice, bob);
       await alice.enableMeshCoreCarrier(
         link: MeshCoreLink.serial,
@@ -30723,6 +30774,73 @@ void main() {
         );
       },
     );
+
+    test('a hello that beat a slow answer is followed by a fresh one after '
+        'it', () async {
+      final relay = _FakeRelayClient();
+      final clock = DateTime.utc(2026, 10, 29, 16);
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        ratchetEngine: FakeRatchetEngine(),
+        nowProvider: () => clock,
+        keepErrorHistory: true,
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      final offerer =
+          alice.identity!.deviceId.compareTo(bob.identity!.deviceId) < 0
+          ? alice
+          : bob;
+      final starter = identical(offerer, alice) ? bob : alice;
+      // The real shape: five slots. The answer's tries are slow to fail, so
+      // the hello's timers would run out long before the answer's.
+      for (final controller in [alice, bob]) {
+        controller.ratchetControlRetryDelays = List.filled(
+          5,
+          const Duration(milliseconds: 40),
+        );
+      }
+      bool isAnswer(RelayEnvelope envelope) =>
+          envelope.kind == 'ratchet_bundle' &&
+          envelope.senderDeviceId == starter.identity!.deviceId;
+      relay.storeDelayFor = (envelope) => isAnswer(envelope)
+          ? const Duration(milliseconds: 150)
+          : Duration.zero;
+      final order = <String>[];
+      DateTime? firstAnswerAt;
+      relay.shouldFailStore = (_, _, _, recipient, envelope) {
+        if (recipient != offerer.identity!.deviceId) return false;
+        final fails =
+            isAnswer(envelope) &&
+            DateTime.now().difference(firstAnswerAt ??= DateTime.now()) <
+                const Duration(milliseconds: 6000);
+        if (envelope.kind == 'ratchet_hello') order.add('hello');
+        if (isAnswer(envelope)) {
+          order.add(fails ? 'answer-fail' : 'answer');
+        }
+        return fails;
+      };
+      await _pairControllers(alice, bob);
+      final offererId = offerer.identity!.deviceId;
+      final starterId = starter.identity!.deviceId;
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (DateTime.now().isBefore(deadline) &&
+          !(await offerer.hasRatchetSessionForTesting(starterId) &&
+              await starter.hasRatchetSessionForTesting(offererId))) {
+        await settle([alice, bob], rounds: 1);
+      }
+      expect(await offerer.hasRatchetSessionForTesting(starterId), isTrue);
+      expect(await starter.hasRatchetSessionForTesting(offererId), isTrue);
+      // The hello was kept for the answer, and went only after it.
+      expect(order, contains('answer'));
+      expect(order, contains('hello'));
+      // The hello that went first was dropped at the peer; a fresh one
+      // follows the answer.
+      expect(order.lastIndexOf('hello'), greaterThan(order.indexOf('answer')));
+    });
 
     test('ratchet peers switch to forward-secret envelopes', () async {
       final relay = _FakeRelayClient();

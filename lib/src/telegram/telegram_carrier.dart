@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../carrier.dart';
+import '../limits/network_limiter.dart';
 import '../transport_models.dart';
 import 'telegram_bot_api.dart';
 
@@ -110,6 +111,7 @@ class TelegramCarrierChannel
     this.retryDelay = const Duration(seconds: 5),
     this.sendSpacing = const Duration(milliseconds: 1100),
     this.maxRateRetries = 3,
+    this.onRateLimited,
     Future<void> Function(Duration delay)? wait,
   }) : _wait = wait ?? Future<void>.delayed;
 
@@ -124,6 +126,10 @@ class TelegramCarrierChannel
   /// Telegram allows about one message a second into one chat.
   final Duration sendSpacing;
   final int maxRateRetries;
+
+  /// Told of every wait Telegram asks for (FLOOD_WAIT), so the account's
+  /// limiter rests that long for every chat, not just this send.
+  final void Function(Duration wait)? onRateLimited;
   final Future<void> Function(Duration delay) _wait;
 
   static final int _maxFrameChars =
@@ -135,6 +141,9 @@ class TelegramCarrierChannel
   bool _running = false;
   int _offset = 0;
   Future<void> _sendQueue = Future.value();
+
+  /// Sends resting for a server's named wait (inside the send slot).
+  int _resting = 0;
   int _queued = 0;
   final Random _random = Random.secure();
 
@@ -219,9 +228,12 @@ class TelegramCarrierChannel
         }
         failures++;
         _set(TelegramCarrierState.failed, _scrub(error));
+        if (error.rateLimited) {
+          onRateLimited?.call(Duration(seconds: error.retryAfter ?? 0));
+        }
         await _wait(
           error.retryAfter != null
-              ? Duration(seconds: min(error.retryAfter!, 120))
+              ? Duration(seconds: min(error.retryAfter!, 3600))
               : _backoff(failures),
         );
       } catch (error) {
@@ -282,9 +294,21 @@ class TelegramCarrierChannel
     _queued++;
     final text = base64.encode(frame);
     final done = Completer<void>();
+    // Waiting for the send slot is not the route hanging.
+    // Only a send ahead of it resting for a server's named wait excuses
+    // this one; a send ahead stuck in a network call does not.
+    final leaveQueue = LimiterWaitProbe.enter(whileTrue: () => _resting > 0);
+    final sender = Zone.current[LimiterWaitProbe.zoneKey];
     _sendQueue = _sendQueue.then((_) async {
+      leaveQueue();
+      if (sender is LimiterWaitProbe && sender.abandoned) {
+        // The registry gave this send up while it queued: no network call.
+        done.completeError(StateError('Telegram: no longer needed.'));
+        _queued--;
+        return;
+      }
       try {
-        await _sendOne(address, text);
+        await _sendOne(address, text, sender);
         done.complete();
       } on TelegramBotException catch (error) {
         done.completeError(
@@ -305,7 +329,7 @@ class TelegramCarrierChannel
     return done.future;
   }
 
-  Future<void> _sendOne(String address, String text) async {
+  Future<void> _sendOne(String address, String text, Object? sender) async {
     for (var attempt = 0; ; attempt++) {
       try {
         await api.call('sendMessage', {
@@ -316,8 +340,25 @@ class TelegramCarrierChannel
         });
         return;
       } on TelegramBotException catch (error) {
-        if (error.rateLimited && attempt < maxRateRetries) {
-          await _wait(Duration(seconds: min(error.retryAfter ?? 1, 30)));
+        if (error.rateLimited) {
+          onRateLimited?.call(Duration(seconds: error.retryAfter ?? 0));
+        }
+        // A short wait is retried here; a long one is left to the account's
+        // limiter (it rests that long and the send is tried again later).
+        if (error.rateLimited &&
+            !(sender is LimiterWaitProbe && sender.abandoned) &&
+            attempt < maxRateRetries &&
+            (error.retryAfter ?? 1) <= 30) {
+          _resting++;
+          try {
+            await LimiterWaitProbe.hold(
+              _wait(Duration(seconds: min(error.retryAfter ?? 1, 30))),
+            );
+          } finally {
+            _resting--;
+          }
+          // Given up on during the rest: no further call.
+          if (sender is LimiterWaitProbe && sender.abandoned) rethrow;
           continue;
         }
         if (error.code == 400 || error.code == 403) {

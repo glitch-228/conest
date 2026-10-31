@@ -6666,4 +6666,25 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get bitchatStartChatFailed => 'تعذّر بدء هذه الدردشة. حاول مرة أخرى.';
+
+  @override
+  String get energyBudgetTitle => 'استهلاك الطاقة';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'مقدار البطارية التي قد تستهلكها الاتصالات. وضع التوفير يبقي الحد الأدنى عند فصل الشاحن.';
+
+  @override
+  String get energyBudgetBalanced => 'متوازن';
+
+  @override
+  String get energyBudgetEco => 'توفير: المزيد أثناء الشحن فقط';
+
+  @override
+  String get energyBudgetFast => 'سريع';
+
+  @override
+  String airtimeBudgetUsed(int percent) {
+    return 'زمن البث المستخدم في آخر دقيقة: $percent%';
+  }
 }

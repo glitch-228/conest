@@ -1739,5 +1739,11 @@
     }
   },
   "bitchatMessageReachabilityWarning": "سيصبح هذا الجهاز مرئيًا لمستخدمي bitchat القريبين، وسيتمكنون من مراسلتك.",
-  "bitchatStartChatFailed": "تعذّر بدء هذه الدردشة. حاول مرة أخرى."
+  "bitchatStartChatFailed": "تعذّر بدء هذه الدردشة. حاول مرة أخرى.",
+  "energyBudgetTitle": "استهلاك الطاقة",
+  "energyBudgetSubtitle": "مقدار البطارية التي قد تستهلكها الاتصالات. وضع التوفير يبقي الحد الأدنى عند فصل الشاحن.",
+  "energyBudgetBalanced": "متوازن",
+  "energyBudgetEco": "توفير: المزيد أثناء الشحن فقط",
+  "energyBudgetFast": "سريع",
+  "airtimeBudgetUsed": "زمن البث المستخدم في آخر دقيقة: {percent}%"
 }

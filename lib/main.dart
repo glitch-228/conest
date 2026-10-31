@@ -1,5 +1,6 @@
 import 'src/ui/bubble_selection_area.dart';
 import 'src/ui/circumvention_settings.dart';
+import 'src/ui/energy_budget_setting_tile.dart';
 import 'src/ui/horizontal_chip_row.dart';
 import 'src/ui/relay_access_dialog.dart';
 import 'src/ui/localized_labels.dart';
@@ -16131,6 +16132,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               subtitle: Text(
                                 l10nOf(context).uiLetsMembersOfYourGroups9912A5,
                               ),
+                            ),
+                            EnergyBudgetSettingTile(
+                              controller: widget.controller,
+                              busy: _busy,
                             ),
                             // Censorship circumvention (M38), Advanced mode.
                             if (widget.controller.userMode.showsNetworkDetail)

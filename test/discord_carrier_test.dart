@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:conest/src/carrier.dart';
 import 'package:conest/src/discord/discord_api.dart';
+import 'package:conest/src/limits/network_limiter.dart';
 import 'package:conest/src/telegram/telegram_carrier.dart';
 import 'package:conest/src/transport_models.dart';
 import 'package:conest/src/discord/discord_carrier.dart';
@@ -26,6 +28,7 @@ class _Side {
       pollInterval: const Duration(milliseconds: 10),
       retryDelay: const Duration(milliseconds: 10),
       sendSpacing: Duration.zero,
+      onRateLimited: rested.add,
       wait: (delay) async {
         waits.add(delay);
         await Future<void>.delayed(
@@ -42,6 +45,9 @@ class _Side {
   late final DiscordCarrierChannel channel;
   final received = <(String, Uint8List)>[];
   final waits = <Duration>[];
+
+  /// Waits Discord named, as told to the account's limiter.
+  final rested = <Duration>[];
 }
 
 Future<void> until(bool Function() done) async {
@@ -253,6 +259,138 @@ void main() {
     await until(() => looks > before);
   });
 
+  test('sends held in the channel queue or its rate-limit rest are waiting, '
+      'not a hung route', () async {
+    final gate = Completer<void>();
+    var limited = false;
+    final api = _PostApi(hub.network.api(bobBot.token, DiscordAuth.bot), () {
+      if (limited) return;
+      limited = true;
+      throw const DiscordException(
+        '/channels/x/messages',
+        429,
+        'slow',
+        retryAfter: 25,
+      );
+    });
+    final bob = DiscordCarrierChannel(
+      config: DiscordBotConfig(
+        token: bobBot.token,
+        botId: bobBot.id,
+        username: 'b',
+        channelId: channel,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollInterval: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+      wait: (delay) =>
+          delay.inSeconds == 25 ? gate.future : Future<void>.delayed(delay),
+    )..start();
+    addTearDown(bob.stop);
+    final probes = [for (var i = 0; i < 3; i++) LimiterWaitProbe()];
+    final sends = [
+      for (final probe in probes)
+        runZoned(
+          () => bob.sendFrame('${aliceBot.id}|$channel', Uint8List(3)),
+          zoneValues: {LimiterWaitProbe.zoneKey: probe},
+        ),
+    ];
+    await until(() => limited);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(probes.map((probe) => probe.isWaiting), [true, true, true]);
+    gate.complete();
+    await Future.wait(sends);
+    for (final probe in probes) {
+      expect(probe.waiting, 0);
+    }
+  });
+
+  test('a blackholed route does not excuse the sends queued behind its stuck '
+      'call, and abandoned sends make no call', () async {
+    final gate = Completer<void>();
+    var posts = 0;
+    final api = _PostApi(hub.network.api(bobBot.token, DiscordAuth.bot), () {
+      posts++;
+    }, hang: gate.future);
+    final bob = DiscordCarrierChannel(
+      config: DiscordBotConfig(
+        token: bobBot.token,
+        botId: bobBot.id,
+        username: 'b',
+        channelId: channel,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollInterval: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+    )..start();
+    addTearDown(bob.stop);
+    final probes = [for (var i = 0; i < 4; i++) LimiterWaitProbe()];
+    final outcomes = [
+      for (final probe in probes)
+        runZoned(
+          () => bob.sendFrame('${aliceBot.id}|$channel', Uint8List(3)),
+          zoneValues: {LimiterWaitProbe.zoneKey: probe},
+        ).then((_) => 'sent', onError: (_) => 'x'),
+    ];
+    await until(() => posts == 1);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(probes.skip(1).map((probe) => probe.excusesTimeout), [
+      false,
+      false,
+      false,
+    ]);
+    for (final probe in probes) {
+      probe.abandoned = true;
+    }
+    gate.complete();
+    await Future.wait(outcomes);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(posts, 1, reason: 'abandoned sends made no call');
+  });
+
+  test('a send given up on while it rests makes no further call', () async {
+    final gate = Completer<void>();
+    var posts = 0;
+    final api = _PostApi(hub.network.api(bobBot.token, DiscordAuth.bot), () {
+      posts++;
+      if (posts == 1) {
+        throw const DiscordException(
+          '/channels/x/messages',
+          429,
+          'slow',
+          retryAfter: 25,
+        );
+      }
+    });
+    final bob = DiscordCarrierChannel(
+      config: DiscordBotConfig(
+        token: bobBot.token,
+        botId: bobBot.id,
+        username: 'b',
+        channelId: channel,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollInterval: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+      wait: (delay) =>
+          delay.inSeconds == 25 ? gate.future : Future<void>.delayed(delay),
+    )..start();
+    addTearDown(bob.stop);
+    final probe = LimiterWaitProbe();
+    final outcome = runZoned(
+      () => bob.sendFrame('${aliceBot.id}|$channel', Uint8List(3)),
+      zoneValues: {LimiterWaitProbe.zoneKey: probe},
+    ).then((_) => 'sent', onError: (_) => 'gave up');
+    await until(() => posts == 1);
+    probe.abandoned = true;
+    gate.complete();
+    expect(await outcome, 'gave up');
+    expect(posts, 1, reason: 'no retry after it was given up on');
+  });
+
   test('the slowdown stretches every look', () async {
     final waits = <Duration>[];
     final bob = DiscordCarrierChannel(
@@ -278,21 +416,51 @@ void main() {
     expect(waits.every((w) => w <= const Duration(milliseconds: 160)), isTrue);
   });
 
-  test('a rate limit waits the time Discord names, then sends', () async {
-    final alice = _Side(hub, aliceBot, channel);
-    final bob = _Side(hub, bobBot, channel);
-    alice.channel.start();
-    bob.channel.start();
-    addTearDown(alice.channel.stop);
-    addTearDown(bob.channel.stop);
-    await until(() => bob.channel.state == DiscordCarrierState.connected);
-    aliceBot.failNextPost.add(
-      const DiscordException('/x', 429, 'rate limited', retryAfter: 2.5),
-    );
-    await alice.channel.sendFrame(bob.config.address, Uint8List(3));
-    expect(alice.waits, contains(const Duration(milliseconds: 2500)));
-    await until(() => bob.received.isNotEmpty);
-  });
+  test(
+    'a global rate limit waits the time Discord names, then sends',
+    () async {
+      final alice = _Side(hub, aliceBot, channel);
+      final bob = _Side(hub, bobBot, channel);
+      alice.channel.start();
+      bob.channel.start();
+      addTearDown(alice.channel.stop);
+      addTearDown(bob.channel.stop);
+      await until(() => bob.channel.state == DiscordCarrierState.connected);
+      aliceBot.failNextPost.add(
+        const DiscordException(
+          '/x',
+          429,
+          'rate limited',
+          retryAfter: 2.5,
+          global: true,
+        ),
+      );
+      await alice.channel.sendFrame(bob.config.address, Uint8List(3));
+      expect(alice.waits, contains(const Duration(milliseconds: 2500)));
+      expect(alice.rested, [const Duration(milliseconds: 2500)]);
+      await until(() => bob.received.isNotEmpty);
+    },
+  );
+
+  test(
+    'one route rate limit is waited out without resting the account',
+    () async {
+      final alice = _Side(hub, aliceBot, channel);
+      final bob = _Side(hub, bobBot, channel);
+      alice.channel.start();
+      bob.channel.start();
+      addTearDown(alice.channel.stop);
+      addTearDown(bob.channel.stop);
+      await until(() => bob.channel.state == DiscordCarrierState.connected);
+      aliceBot.failNextPost.add(
+        const DiscordException('/x', 429, 'rate limited', retryAfter: 2.5),
+      );
+      await alice.channel.sendFrame(bob.config.address, Uint8List(3));
+      expect(alice.waits, contains(const Duration(milliseconds: 2500)));
+      expect(alice.rested, isEmpty, reason: 'only a global limit rests it');
+      await until(() => bob.received.isNotEmpty);
+    },
+  );
 
   test('a refusal says what the bot needs', () async {
     final alice = _Side(hub, aliceBot, channel);
@@ -417,7 +585,16 @@ void main() {
       } on DiscordException catch (error) {
         expect(error.rateLimited, isTrue);
         expect(error.retryAfter, 1.5);
+        expect(error.global, isFalse, reason: 'a route bucket');
         expect(error.toString(), isNot(contains('TOKEN123')));
+      }
+      body = {'message': 'slow', 'retry_after': 1.5, 'global': true};
+      try {
+        await api('TOKEN123', DiscordAuth.bot).call('POST', '/x', body: {});
+        fail('should throw');
+      } on DiscordException catch (error) {
+        expect(error.global, isTrue);
+        expect(error.slowDownFor, const Duration(milliseconds: 1500));
       }
     });
   });
@@ -444,6 +621,37 @@ class _CountingApi implements DiscordApi {
     Duration timeout = const Duration(seconds: 30),
   }) {
     if (method == 'GET' && path.endsWith('/messages')) onPoll();
+    return inner.call(method, path, query: query, body: body, timeout: timeout);
+  }
+
+  @override
+  void close() => inner.close();
+}
+
+/// Throws from [onPost] before each message post goes through.
+class _PostApi implements DiscordApi {
+  _PostApi(this.inner, this.onPost, {this.hang});
+  final DiscordApi inner;
+  final void Function() onPost;
+
+  /// When set, a post waits for it, then fails (a route that answers
+  /// nothing).
+  final Future<void>? hang;
+
+  @override
+  Future<Object?> call(
+    String method,
+    String path, {
+    Map<String, String>? query,
+    Object? body,
+    Duration timeout = const Duration(seconds: 30),
+  }) {
+    if (method == 'POST' && path.endsWith('/messages')) {
+      onPost();
+      if (hang case final gate?) {
+        return gate.then((_) => throw DiscordException(path, 0, "x"));
+      }
+    }
     return inner.call(method, path, query: query, body: body, timeout: timeout);
   }
 

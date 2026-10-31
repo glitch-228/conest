@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'carrier.dart';
+import 'limits/radio_airtime.dart';
 import 'meshtastic/protobuf.dart';
 import 'meshtastic/radio.dart';
 import 'radio/android_radio_link.dart';
@@ -448,7 +449,7 @@ CarrierTransportAdapter createMeshtasticCarrierAdapter({
   sealer: sealer,
   framing: meshtasticFraming,
   frameSpacing: const Duration(seconds: 3),
-  sendAttemptTimeout: const Duration(minutes: 3),
+  sendAttemptTimeout: RadioAirtime.sendAttemptTimeout,
   isValidAddress: isValidMeshtasticAddress,
   now: now,
 );

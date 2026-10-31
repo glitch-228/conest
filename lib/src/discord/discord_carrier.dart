@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../carrier.dart';
+import '../limits/network_limiter.dart';
 import '../transport_models.dart';
 import 'discord_api.dart';
 
@@ -149,12 +150,17 @@ class DiscordCarrierChannel
     this.slowdown,
     this.retryDelay = const Duration(seconds: 5),
     this.sendSpacing = const Duration(milliseconds: 700),
+    this.onRateLimited,
     Future<void> Function(Duration delay)? wait,
   }) : _wait = wait ?? Future<void>.delayed;
 
   final DiscordBotConfig config;
   final DiscordApi api;
   final void Function(String sender, Uint8List frame) onFrame;
+
+  /// Told of every wait Discord asks for (a 429's `retry_after`), so the
+  /// account's limiter rests that long for every chat.
+  final void Function(Duration wait)? onRateLimited;
   final void Function()? onStatusChanged;
   final void Function(String line)? log;
 
@@ -181,6 +187,9 @@ class DiscordCarrierChannel
   bool _running = false;
   String? _after;
   Future<void> _sendQueue = Future.value();
+
+  /// Sends resting for a server's named wait (inside the send slot).
+  int _resting = 0;
   int _queued = 0;
   final Random _random = Random.secure();
 
@@ -261,10 +270,13 @@ class DiscordCarrierChannel
         }
         failures++;
         _set(DiscordCarrierState.failed, error.toString());
+        // Only the account-wide limit rests the whole account; one route's
+        // bucket is waited out on that route (below).
+        if (error.slowDownFor case final wait?) onRateLimited?.call(wait);
         await _wait(
           error.retryAfter != null
               ? Duration(
-                  milliseconds: (min(error.retryAfter!, 120) * 1000).ceil(),
+                  milliseconds: (min(error.retryAfter!, 3600) * 1000).ceil(),
                 )
               : _backoff(failures),
         );
@@ -352,9 +364,21 @@ class DiscordCarrierChannel
     if (wake != null && !wake.isCompleted) wake.complete();
     final text = '<@${target.botId}> ${base64.encode(frame)}';
     final done = Completer<void>();
+    // Waiting for the send slot is not the route hanging.
+    // Only a send ahead of it resting for a server's named wait excuses
+    // this one; a send ahead stuck in a network call does not.
+    final leaveQueue = LimiterWaitProbe.enter(whileTrue: () => _resting > 0);
+    final sender = Zone.current[LimiterWaitProbe.zoneKey];
     _sendQueue = _sendQueue.then((_) async {
+      leaveQueue();
+      if (sender is LimiterWaitProbe && sender.abandoned) {
+        // The registry gave this send up while it queued: no network call.
+        done.completeError(StateError('Discord: no longer needed.'));
+        _queued--;
+        return;
+      }
       try {
-        await _sendOne(target.channelId, target.botId, text);
+        await _sendOne(target.channelId, target.botId, text, sender);
         done.complete();
       } catch (error) {
         done.completeError(error);
@@ -366,7 +390,12 @@ class DiscordCarrierChannel
     return done.future;
   }
 
-  Future<void> _sendOne(String channelId, String botId, String text) async {
+  Future<void> _sendOne(
+    String channelId,
+    String botId,
+    String text,
+    Object? sender,
+  ) async {
     for (var attempt = 0; ; attempt++) {
       try {
         await api.call(
@@ -384,12 +413,27 @@ class DiscordCarrierChannel
         );
         return;
       } on DiscordException catch (error) {
-        if (error.rateLimited && attempt < 3) {
-          await _wait(
-            Duration(
-              milliseconds: (min(error.retryAfter ?? 1, 30) * 1000).ceil(),
+        // Only the account-wide limit rests the whole account; one route's
+        // bucket is waited out on that route (below).
+        if (error.slowDownFor case final wait?) onRateLimited?.call(wait);
+        if (error.rateLimited &&
+            !(sender is LimiterWaitProbe && sender.abandoned) &&
+            attempt < 3 &&
+            (error.retryAfter ?? 1) <= 30) {
+          _resting++;
+          try {
+            await LimiterWaitProbe.hold(
+            _wait(
+              Duration(
+                milliseconds: (min(error.retryAfter ?? 1, 30) * 1000).ceil(),
+              ),
             ),
           );
+          } finally {
+            _resting--;
+          }
+          // Given up on during the rest: no further call.
+          if (sender is LimiterWaitProbe && sender.abandoned) rethrow;
           continue;
         }
         if (error.forbidden || error.code == 404) {

@@ -6541,4 +6541,25 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get bitchatStartChatFailed => 'Could not start this chat. Try again.';
+
+  @override
+  String get energyBudgetTitle => 'Power use';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'How much battery connections may use. Eco keeps the minimum while unplugged.';
+
+  @override
+  String get energyBudgetBalanced => 'Balanced';
+
+  @override
+  String get energyBudgetEco => 'Eco: more only while charging';
+
+  @override
+  String get energyBudgetFast => 'Fast';
+
+  @override
+  String airtimeBudgetUsed(int percent) {
+    return 'Airtime used in the last minute: $percent%';
+  }
 }

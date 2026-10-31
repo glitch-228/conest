@@ -46,6 +46,9 @@ import 'email/delta_content.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
+import 'limits/network_budgets.dart';
+import 'limits/network_limiter.dart';
+import 'limits/radio_airtime.dart';
 import 'circumvention/circumvention.dart';
 import 'circumvention/lan_beacon_codec.dart';
 import 'attachment_safety.dart';
@@ -700,6 +703,10 @@ class MessengerController extends ChangeNotifier {
                     ? PlatformBridgePowerSource(_platformBridge)
                     : null,
               ));
+    // Always the user's current choice, whatever read it.
+    _energyPolicy.settingSource = () =>
+        _snapshot.identity?.connectivity.energyBudget ??
+        EnergyBudgetSetting.balanced;
     voiceMessageService = VoiceMessageService(
       platformBridge: _platformBridge,
       applicationSupportDirectory: _dataRootProvider,
@@ -1063,6 +1070,7 @@ class MessengerController extends ChangeNotifier {
     // A key released while the window was elsewhere never reaches us.
     if (!focused) unawaited(releasePushToTalk());
   }
+
   DateTime? _appBackgroundedAtUtc;
   NetworkCostClass _networkCostClass = NetworkCostClass.unmetered;
   String? _statusMessage;
@@ -2275,14 +2283,26 @@ class MessengerController extends ChangeNotifier {
 
   /// How much slower background upkeep (polls, heartbeats) runs on this
   /// power: as is on mains or an unmetered network, half as often on
-  /// battery, a quarter as often in battery saver. Nothing the user waits
+  /// battery, an eighth as often in battery saver. Nothing the user waits
   /// for (an open chat, a transfer) slows down.
-  int get _backgroundEnergyFactor =>
-      switch (_energyPolicy.modeFor(_networkCostClass)) {
-        EnergyMode.unconstrained => 1,
-        EnergyMode.limited => 2,
-        EnergyMode.saver => 4,
-      };
+  int get _backgroundEnergyFactor => _currentEnergyBudget.pollFactor;
+
+  /// What the device may spend now: the user's Connectivity choice (balanced,
+  /// eco, fast) with the power state (M25).
+  EnergyBudget get _currentEnergyBudget {
+    return _energyPolicy.budgetFor(_networkCostClass);
+  }
+
+  @visibleForTesting
+  EnergyBudget get energyBudgetForTesting => _currentEnergyBudget;
+
+  /// Chooses how much power connections may use.
+  Future<void> setEnergyBudget(EnergyBudgetSetting setting) async {
+    final me = _requireIdentity();
+    await updateGlobalConnectivity(
+      me.connectivity.copyWith(energyBudget: setting),
+    );
+  }
 
   /// When a transfer last moved through a relay that has to be polled, per
   /// contact; the fast transfer poll runs only for a while after that.
@@ -4301,6 +4321,15 @@ class MessengerController extends ChangeNotifier {
 
   /// How this device's link to [deviceId] fares now.
   LinkStatus linkStatusFor(String deviceId) {
+    final status = _reachabilityLinkStatus(deviceId);
+    // Nothing heard either way, but every send lately failed.
+    return status == LinkStatus.unknown &&
+            (_transportRegistry?.failingToReach(deviceId) ?? false)
+        ? LinkStatus.failing
+        : status;
+  }
+
+  LinkStatus _reachabilityLinkStatus(String deviceId) {
     final record = _reachability.recordByDeviceId(deviceId);
     if (record == null) return LinkStatus.unknown;
     final now = _now().toUtc();
@@ -5887,6 +5916,8 @@ class MessengerController extends ChangeNotifier {
     final channel = TelegramCarrierChannel(
       config: config,
       api: _telegramNetwork.botApi(config.token),
+      onRateLimited: (wait) =>
+          _noteServerSlowDown(TransportKind.telegram, wait),
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
       log: (line) => appendDebugLog(line),
@@ -5949,6 +5980,7 @@ class MessengerController extends ChangeNotifier {
     final channel = DiscordCarrierChannel(
       config: config,
       api: _discordNetwork.api(config.token, DiscordAuth.bot),
+      onRateLimited: (wait) => _noteServerSlowDown(TransportKind.discord, wait),
       pollInterval: _discordNetwork.pollInterval,
       slowdown: () =>
           (_appInForeground ? 1 : 3) *
@@ -8776,6 +8808,7 @@ class MessengerController extends ChangeNotifier {
         createEmailCarrierAdapter(sealer: carrierSealer, now: _now);
     final channel = EmailCarrierChannel(
       config: config,
+      limiter: _limiterFor(TransportKind.deltaChat),
       connector: _mailConnector,
       now: _now,
       log: (line) => appendDebugLog('Email: $line'),
@@ -9119,11 +9152,60 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// One limiter per network account, shared by every chat, group and own
+  /// device that sends through it (M25). The key is the network until
+  /// several accounts per network exist (M45).
+  late final LimiterBook _limiters = LimiterBook();
+
+  NetworkLimiter? _limiterFor(TransportKind kind) {
+    final budget = NetworkBudgets.forKind(
+      kind,
+      chatmail: emailCarrierConfig?.chatmail ?? false,
+      // Reticulum over TCP is no radio: no airtime budget.
+      radio: reticulumCarrierConfig?.isRadio ?? true,
+    );
+    if (budget == null) return null;
+    return _limiters.forAccount(
+      kind.name,
+      _limiterBudgetForTesting?.call(kind, budget) ?? budget,
+    );
+  }
+
+  /// Lets a test give a network a faster budget than its real one, so a
+  /// test that runs in real time does not wait for real airtime.
+  LimiterBudget Function(TransportKind kind, LimiterBudget budget)?
+  _limiterBudgetForTesting;
+
+  @visibleForTesting
+  set limiterBudgetForTesting(
+    LimiterBudget Function(TransportKind kind, LimiterBudget budget)? value,
+  ) => _limiterBudgetForTesting = value;
+
+  /// How much of a radio's airtime budget is used (0 to 1), null when the
+  /// radio has no carrier running. Shown on the radio's page.
+  double? radioAirtimeUsed(TransportKind kind) =>
+      _limiters.peek(kind.name)?.usedShare;
+
+  @visibleForTesting
+  NetworkLimiter? limiterForTesting(TransportKind kind) =>
+      _limiters.peek(kind.name);
+
+  @visibleForTesting
+  void noteServerSlowDownForTesting(TransportKind kind, Duration wait) =>
+      _noteServerSlowDown(kind, wait);
+
+  /// A server named a wait (FLOOD_WAIT, `retry_after`): the account rests
+  /// that long, for every chat sending through it.
+  void _noteServerSlowDown(TransportKind kind, Duration wait) =>
+      _limiters.peek(kind.name)?.pushedBack(retryAfter: wait);
+
   /// Joins a carrier to the transport registry, creating a carrier-only
   /// registry if native transports are unavailable.
   Future<void> _attachCarrier(TransportKind kind) async {
     final carrier = _carrierTransports[kind];
     if (carrier == null) return;
+    carrier.limiter ??= _limiterFor(kind);
+    carrier.channelPacesFrames = kind == TransportKind.deltaChat;
     if (_snapshot.identity == null || !_carrierAllowed(kind)) {
       await _detachCarrier(kind);
       return;
@@ -9162,6 +9244,7 @@ class MessengerController extends ChangeNotifier {
       await _detachMatrixTransport();
       return;
     }
+    matrix.limiter ??= _limiterFor(TransportKind.matrix);
     if (matrix.session == null) {
       matrix.attach(session, since: _snapshot.matrixSyncToken);
     }
@@ -22363,6 +22446,11 @@ class MessengerController extends ChangeNotifier {
         !striper.isLate(_BlockRoute.lanBinary);
   }
 
+  double? _measuredBytesPerSecond(String peerDeviceId, TransportKind kind) {
+    final stats = _transportRegistry?.statsFor(peerDeviceId, kind);
+    return stats != null && stats.hasThroughput ? stats.bytesPerSecond : null;
+  }
+
   RouteStriper<_BlockRoute> _blockStriperFor(String peerDeviceId) {
     final striper = _blockStripers.remove(peerDeviceId);
     // The most recently used peers stay (at most 64).
@@ -22373,9 +22461,15 @@ class MessengerController extends ChangeNotifier {
         striper ??
         RouteStriper<_BlockRoute>(
           now: _now,
-          priorBytesPerSecond: const {
-            _BlockRoute.lanBinary: 8 * 1024 * 1024,
-            _BlockRoute.iroh: 1024 * 1024,
+          // What the peer's transports have been measured to move (the
+          // registry's path stats), else a guess for each.
+          priorBytesPerSecond: {
+            _BlockRoute.lanBinary:
+                _measuredBytesPerSecond(peerDeviceId, TransportKind.lan) ??
+                8 * 1024 * 1024,
+            _BlockRoute.iroh:
+                _measuredBytesPerSecond(peerDeviceId, TransportKind.iroh) ??
+                1024 * 1024,
           },
         );
   }
@@ -22427,7 +22521,9 @@ class MessengerController extends ChangeNotifier {
       striper.noteLate(route);
       // One rule for the budget, whichever of the two is unmeasured.
       final probe = probing || striper.unmeasured(backup);
-      if (!stillActive() || !striper.mayHedge(bytes, probing: probe)) {
+      if (!stillActive() ||
+          !_currentEnergyBudget.hedgedBlocks ||
+          !striper.mayHedge(bytes, probing: probe)) {
         if (await primary) return true;
         continue;
       }
@@ -29094,7 +29190,7 @@ class MessengerController extends ChangeNotifier {
               fanout.interval,
               _transportRegistry
                   ?.statsFor(contact.deviceId, first.transportKind)
-                  ?.latencyMs,
+                  ?.rttMs,
             ),
           )
         : fanout;
@@ -29156,7 +29252,10 @@ class MessengerController extends ChangeNotifier {
         for (final kind in TransportKind.values)
           if (!usedKinds.contains(kind) &&
               !(state.storedOnCarrier && _storingCarriers.contains(kind)) &&
-              (radiosAllowed || !_radioKinds.contains(kind)))
+              (radiosAllowed || !_radioKinds.contains(kind)) &&
+              // A spare copy by radio only while most of its airtime is free.
+              (!_radioKinds.contains(kind) ||
+                  RadioAirtime.allowsExtraCopy(_limiters.peek(kind.name))))
             kind,
       };
       final _DeliveryRoute route;
@@ -33420,8 +33519,9 @@ class MessengerController extends ChangeNotifier {
       if (leftAvailable != rightAvailable) {
         return leftAvailable ? -1 : 1;
       }
-      final latencyCompare = (leftHealth?.latency?.inMicroseconds ?? 1 << 62)
-          .compareTo(rightHealth?.latency?.inMicroseconds ?? 1 << 62);
+      final latencyCompare = _routeHealthTracker
+          .rankMicrosFor(left)
+          .compareTo(_routeHealthTracker.rankMicrosFor(right));
       if (latencyCompare != 0) {
         return latencyCompare;
       }
@@ -34281,6 +34381,15 @@ class MessengerController extends ChangeNotifier {
       );
       if (attempt > 0 && _ratchetControlGeneration[retryKey] == generation) {
         _ratchetControlRetries.remove(retryKey);
+        // An answer that got through late: a hello sent before it reached
+        // the peer ahead of it and was dropped there (no session yet), so a
+        // fresh one follows now.
+        final helloKey = retryKey.replaceFirst('|bundle|answer', '|hello');
+        if (helloKey != retryKey &&
+            !_disposed &&
+            _ratchetControlGeneration.containsKey(helloKey)) {
+          unawaited(_sendRatchetHello(peer));
+        }
       }
     } catch (error) {
       final delays = ratchetControlRetryDelays;
@@ -34353,6 +34462,17 @@ class MessengerController extends ChangeNotifier {
     await sessions.startSession(id, bundle);
     _newPeerSession(peer.deviceId);
     await _sendRatchetBundle(peer, reason: 'answer');
+    await _sendRatchetHello(peer);
+    // The peer had no usable session: anything recently sent on the old one
+    // may be undecryptable there, so send it again on the new session.
+    _bulkKeyAnnouncedAt.removeWhere((key, _) => key.startsWith('$id|'));
+    _resendRecentControls(peer);
+    _resendWaitingMessages(peer);
+  }
+
+  /// Sends a fresh session hello to [peer] (a new envelope each time, so it
+  /// never counts as a copy of one the peer already handled or dropped).
+  Future<void> _sendRatchetHello(ContactRecord peer) async {
     final me = _requireIdentity();
     try {
       final hello = await _crypto.encryptPayloadEnvelope(
@@ -34376,11 +34496,6 @@ class MessengerController extends ChangeNotifier {
       // Real traffic on the new session also opens it at the peer.
       appendDebugLog('Ratchet hello to ${peer.alias} not sent: $error');
     }
-    // The peer had no usable session: anything recently sent on the old one
-    // may be undecryptable there, so send it again on the new session.
-    _bulkKeyAnnouncedAt.removeWhere((key, _) => key.startsWith('$id|'));
-    _resendRecentControls(peer);
-    _resendWaitingMessages(peer);
   }
 
   final Map<String, DateTime> _waitingResentAt = {};
@@ -41393,6 +41508,7 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _ratchetControlRetries.clear();
+    _limiters.close();
     _matrixClient?.dispose();
     _linkPreviews?.dispose();
     for (final subscription in _carrierReceiptSubscriptions.values) {

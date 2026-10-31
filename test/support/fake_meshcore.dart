@@ -136,7 +136,7 @@ class FakeMeshCoreRadio implements ByteLink {
               frame.sublist(13),
             );
             // A plain message is acknowledged over the air.
-            if (delivered && frame[1] == MeshCoreCode.textPlain) {
+            if (delivered && (frame[1] == MeshCoreCode.textPlain || acksData)) {
               scheduleMicrotask(
                 () => _reply([
                   MeshCoreCode.pushSendConfirmed,
@@ -198,6 +198,9 @@ class FakeMeshCoreRadio implements ByteLink {
   }
 
   int _acks = 0;
+
+  /// Whether messages sent as command data are acknowledged too.
+  bool acksData = false;
 
   /// Channel messages this radio sent, as (channel, text).
   final List<(int, String)> channelSent = [];
