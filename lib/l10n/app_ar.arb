@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "لم تُسلّم (تعذّرت قراءتها على راديو الطرف الآخر)",
   "uiSenderNotVerified2BB0FA": "المرسِل غير متحقق منه",
   "uiYouAreHidden56DCC1": "أنت مخفي",
-  "uiYouReadTheMeshChatAEACC5": "يمكنك قراءة محادثة الشبكة، لكن مستخدمي bitchat لا يرونك ولا يكتبون إليك. فعّل «إمكانية التواصل عبر bitchat» في الإعدادات ← الاتصال للكتابة.",
+  "uiYouReadTheMeshChatAEACC5": "يمكنك رؤية الأشخاص القريبين وقراءة دردشة الشبكة وأنت مخفي. اختر «رسالة» لتصبح مرئيًا وتراسل شخصًا.",
   "uiEveryoneNearbyOverBluetooth7B8D63": "كل من بالقرب عبر Bluetooth",
   "uiNoBitchatUsersNearbyYetD30471": "لا يوجد مستخدمو bitchat قريبون بعد",
   "uiPhonesInBluetoothRangeThatDCCC0D": "تظهر هنا الأجهزة التي تعلن عن نفسها ضمن نطاق Bluetooth.",
@@ -1728,5 +1728,16 @@
   "linkArchiveSavedWithFiles": "تم الحفظ في {path} مع {count} ملفات.",
   "contactKeysDifferTitle": "المفاتيح مختلفة: تحقق",
   "contactKeysDifferBody": "عرف هذا الجهاز جهة الاتصال هذه بمفاتيح غير التي في حسابك. قارن رقم الأمان معها عبر قناة أخرى.",
-  "contactKeysDifferConfirm": "قارنتها"
+  "contactKeysDifferConfirm": "قارنتها",
+  "bitchatLastHeard": "آخر إشارة في {time}",
+  "@bitchatLastHeard": {
+    "description": "When a verified bitchat announce was last received from a nearby person.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "bitchatMessageReachabilityWarning": "سيصبح هذا الجهاز مرئيًا لمستخدمي bitchat القريبين، وسيتمكنون من مراسلتك.",
+  "bitchatStartChatFailed": "تعذّر بدء هذه الدردشة. حاول مرة أخرى."
 }

@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "未送达（对方无线电无法读取）",
   "uiSenderNotVerified2BB0FA": "发件人未验证",
   "uiYouAreHidden56DCC1": "您已隐藏",
-  "uiYouReadTheMeshChatAEACC5": "您可阅读网状网络聊天，但 bitchat 用户看不到您，也无法联系您。请在“设置 → 连接”开启“允许 bitchat 用户联系”以发送消息。",
+  "uiYouReadTheMeshChatAEACC5": "保持隐藏时，你可以看到附近的人并阅读网状聊天。选择“消息”即可让附近的人看到你并给对方发消息。",
   "uiEveryoneNearbyOverBluetooth7B8D63": "通过蓝牙连接的附近所有人",
   "uiNoBitchatUsersNearbyYetD30471": "附近暂无 bitchat 用户",
   "uiPhonesInBluetoothRangeThatDCCC0D": "蓝牙范围内广播自身的设备会显示在此处。",
@@ -1728,5 +1728,16 @@
   "linkArchiveSavedWithFiles": "已保存到 {path}，含 {count} 个文件。",
   "contactKeysDifferTitle": "密钥不同：请验证",
   "contactKeysDifferBody": "此设备所知的该联系人密钥与你的账户不同。请通过其他渠道与对方核对安全码。",
-  "contactKeysDifferConfirm": "我已核对"
+  "contactKeysDifferConfirm": "我已核对",
+  "bitchatLastHeard": "上次收到信号：{time}",
+  "@bitchatLastHeard": {
+    "description": "When a verified bitchat announce was last received from a nearby person.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "bitchatMessageReachabilityWarning": "附近的 bitchat 用户将能看到这台设备，并可以给你发消息。",
+  "bitchatStartChatFailed": "无法开始此聊天，请重试。"
 }

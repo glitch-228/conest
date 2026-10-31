@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "تحویل نشد (رادیوی او نتوانست بخواند)",
   "uiSenderNotVerified2BB0FA": "فرستنده تأیید نشده",
   "uiYouAreHidden56DCC1": "شما پنهان هستید",
-  "uiYouReadTheMeshChatAEACC5": "گفت‌وگوی مش را می‌خوانید، اما کاربران bitchat شما را نمی‌بینند و نمی‌توانند بنویسند. برای نوشتن، «دسترسی کاربران bitchat به شما» را در تنظیمات ← اتصال روشن کنید.",
+  "uiYouReadTheMeshChatAEACC5": "در حالت پنهان می‌توانید افراد نزدیک را ببینید و گفتگوی شبکه را بخوانید. برای نمایان شدن و پیام دادن، «پیام» را بزنید.",
   "uiEveryoneNearbyOverBluetooth7B8D63": "همهٔ نزدیکان از Bluetooth",
   "uiNoBitchatUsersNearbyYetD30471": "هنوز کاربر bitchat نزدیکی نیست",
   "uiPhonesInBluetoothRangeThatDCCC0D": "دستگاه‌هایی که در برد Bluetooth اعلام حضور کنند اینجا دیده می‌شوند.",
@@ -1728,5 +1728,16 @@
   "linkArchiveSavedWithFiles": "در {path} ذخیره شد، با {count} فایل.",
   "contactKeysDifferTitle": "کلیدها فرق دارند: بررسی کنید",
   "contactKeysDifferBody": "این دستگاه این مخاطب را با کلیدهایی غیر از کلیدهای حساب شما می‌شناخت. شماره امنیتی را از راه دیگری با او مقایسه کنید.",
-  "contactKeysDifferConfirm": "مقایسه کردم"
+  "contactKeysDifferConfirm": "مقایسه کردم",
+  "bitchatLastHeard": "آخرین سیگنال: {time}",
+  "@bitchatLastHeard": {
+    "description": "When a verified bitchat announce was last received from a nearby person.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "bitchatMessageReachabilityWarning": "این دستگاه برای کاربران نزدیک bitchat نمایان می‌شود و آن‌ها می‌توانند به شما پیام بدهند.",
+  "bitchatStartChatFailed": "شروع این گفتگو ممکن نشد. دوباره تلاش کنید."
 }

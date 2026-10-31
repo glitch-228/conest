@@ -421,6 +421,13 @@ class DefaultRelaysRefreshResult {
   final String? errorMessage;
 }
 
+/// No route the settings allow can carry this kind of content to a contact
+/// (only a carrier route for a file, say). Waiting does not help until the
+/// settings or the available routes change.
+class NoAllowedRouteException extends StateError {
+  NoAllowedRouteException(super.message);
+}
+
 class AttachmentSpoolException implements Exception {
   AttachmentSpoolException(
     this.message, {
@@ -4188,6 +4195,11 @@ class MessengerController extends ChangeNotifier {
   Future<Map<String, int>> groupHeadsForTesting(String groupId) => _groupHistory
       .authorHeads(groupId, _requireGroup(groupId).activeMemberDeviceIds);
 
+  /// Whether this device holds the owner's signed membership history.
+  @visibleForTesting
+  Future<bool> groupHasSignedMembershipForTesting(String groupId) =>
+      _groupHistory.hasSignedMembership(groupId);
+
   /// "Group history changed" notices this device sent (for tests).
   @visibleForTesting
   int groupNoticesSent = 0;
@@ -5098,6 +5110,8 @@ class MessengerController extends ChangeNotifier {
         registry.register(adapter);
       }
       _transportRegistry = registry..onOutcome = _noteTransportOutcome;
+      // Routes exist now: files that waited for one ask again.
+      _resumeInboundWithoutFileRoute();
       for (final adapter in registry.adapters.where(
         (adapter) => !adapter.kind.isCarrier,
       )) {
@@ -7796,12 +7810,13 @@ class MessengerController extends ChangeNotifier {
     ).convert(utf8.encode(label)).bytes;
     final direct = await BitchatDirect.create(
       nickname: bitchatNickname,
+      listeningOnly: !config.visible,
       noiseSeed: derive('conest.bitchat.identity.noise'),
       signingSeed: derive('conest.bitchat.identity.signing'),
       now: _now,
     );
     // Who is nearby stays known across the switch.
-    direct.adoptPeers(_bitchatDirect?.peers ?? const <BitchatPeer>[]);
+    direct.adoptDiscovery(_bitchatDirect);
     await _closeBitchatIdentity();
     if (_disposed || !identical(_bitchatChannel, channel)) {
       await direct.close();
@@ -11749,6 +11764,8 @@ class MessengerController extends ChangeNotifier {
       await _stopTransportRegistry();
     }
     await _applyGlobalConnectivityState();
+    // A route or a refusal changed: files that waited for a route ask again.
+    _resumeInboundWithoutFileRoute();
     _syncXmppChats();
     _syncTelegramClient();
     _syncDiscordClient();
@@ -11905,6 +11922,7 @@ class MessengerController extends ChangeNotifier {
             ],
     );
     await _persist('Routing preferences updated for ${contacts[index].alias}.');
+    _resumeInboundWithoutFileRoute(deviceId);
     if (global != null &&
         contacts[index].canSendOutbound &&
         (prefs.carryForContact != carryBefore ||
@@ -12384,6 +12402,11 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _groupHistoryTimers.clear();
+    for (final timer in _ratchetControlRetries.values) {
+      timer.cancel();
+    }
+    _ratchetControlRetries.clear();
+    _ratchetControlGeneration.clear();
     for (final timer in _groupAnnounceTimers.values) {
       timer.cancel();
     }
@@ -13551,6 +13574,9 @@ class MessengerController extends ChangeNotifier {
     if (index < 0) return;
     contacts[index] = contact;
     _snapshot = _snapshot.copyWith(contacts: contacts);
+    if (_anyInboundWithoutFileRoute) {
+      _resumeInboundWithoutFileRoute(contact.deviceId);
+    }
   }
 
   /// Saved messages: a chat with this device itself, kept here only (not
@@ -18366,8 +18392,15 @@ class MessengerController extends ChangeNotifier {
           irohFirst: true,
         );
         delivered = true;
-      } catch (_) {
+      } catch (error) {
         // A later authenticated profile exchange can retry failed updates.
+        // Said in the log: a pairing request that never arrives (device lab,
+        // contacts added back over LAN and Iroh) left no trace here.
+        appendDebugLog(
+          'contact_exchange to ${contact.alias} not delivered'
+          '${pairingResponse == null ? '' : ' ($pairingResponse)'}: '
+          '${_boundedLogValue('$error', 200)}',
+        );
       }
     }
     return delivered;
@@ -18592,10 +18625,22 @@ class MessengerController extends ChangeNotifier {
         continue;
       }
       final profiledGroup = _refreshGroupMemberProfiles(group);
+      // The signed membership history goes with every copy: a member that
+      // only ever gets a retry (the first copy lost on a slow relay) would
+      // otherwise never hold it and could not send to the group.
+      String? historyProof;
+      try {
+        historyProof = (await _groupHistory.prepareMembership(
+          profiledGroup,
+        ))?.encode();
+      } catch (error) {
+        appendDebugLog('Group membership history pending: $error');
+      }
       final payload = jsonEncode({
         'version': 1,
         'reason': entry.reason,
         'group': _groupForWire(profiledGroup),
+        'historyProof': ?historyProof,
       });
       final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'group_membership',
@@ -22128,6 +22173,79 @@ class MessengerController extends ChangeNotifier {
     return (path: file.path, error: null, reserveBlocked: false);
   }
 
+  bool _anyInboundWithoutFileRoute = false;
+
+  /// Whether any route the settings allow can carry file blocks to
+  /// [contact] (a carrier route such as Nostr does not).
+  bool _hasAllowedFileRoute(ContactRecord contact, int sizeBytes) {
+    final effective = _effectiveTransports(contact);
+    final policies = _contentPolicies(
+      contact,
+      contentClassOfEnvelope(
+        'attachment_chunk_request',
+        fileSizeBytes: sizeBytes,
+      ),
+    );
+    final hasLegacy = dedupePeerEndpoints(
+      _candidateRoutesForContact(contact),
+    ).any((route) => _legacyRouteAllowed(route, effective, policies));
+    return hasLegacy ||
+        (_transportRegistry != null &&
+            policies.values.any(
+              (policy) =>
+                  policy == TransportPolicy.automatic ||
+                  policy == TransportPolicy.preferred,
+            ));
+  }
+
+  /// No allowed route carries file blocks: stop asking (every ask failed at
+  /// once, hundreds of times in the device lab), say so in the file's
+  /// bubble, and ask again when the routes or settings change.
+  void _markInboundWithoutFileRoute(
+    _InboundAttachmentState state,
+    ContactRecord peer,
+  ) {
+    state.requestedInFlight.clear();
+    state.retryTimer?.cancel();
+    state.nextRetryAt = null;
+    _anyInboundWithoutFileRoute = true;
+    if (state.noFileRoute) return;
+    state.noFileRoute = true;
+    appendDebugLog(
+      'No route carries file blocks from ${peer.alias}: not asking until '
+      'one is available (${state.descriptor.id}).',
+    );
+    _setTransferSessionState(
+      state.descriptor.id,
+      TransferState.pending,
+      error:
+          'This file cannot arrive over the routes you have. It continues '
+          'when a route that carries files is available.',
+    );
+  }
+
+  /// Asks again for files that waited for a route, if one exists now.
+  void _resumeInboundWithoutFileRoute([String? peerDeviceId]) {
+    if (!_anyInboundWithoutFileRoute) return;
+    var any = false;
+    for (final state in _inboundAttachments.values.toList(growable: false)) {
+      if (!state.noFileRoute) continue;
+      any = true;
+      if (peerDeviceId != null && state.peerDeviceId != peerDeviceId) continue;
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer == null ||
+          !_hasAllowedFileRoute(peer, state.descriptor.sizeBytes)) {
+        continue;
+      }
+      state.noFileRoute = false;
+      _setTransferSessionState(state.descriptor.id, TransferState.reconnecting);
+      _startInboundRequestWindow(state, peer);
+      _scheduleAttachmentRetry(state.descriptor.id);
+    }
+    _anyInboundWithoutFileRoute =
+        any && _inboundAttachments.values.any((state) => state.noFileRoute);
+  }
+
   Future<bool> _sendAttachmentChunkRequest(
     ContactRecord peer,
     String attachmentId,
@@ -22212,6 +22330,10 @@ class MessengerController extends ChangeNotifier {
     } catch (error) {
       // Retry on next poll cycle; the receiver still has the inbound
       // state, so the request will be re-issued.
+      if (error is NoAllowedRouteException) {
+        _markInboundWithoutFileRoute(inbound, peer);
+        return false;
+      }
       appendDebugLog(
         'chunk_req route failed → ${peer.alias} idx=$index '
         'attachmentId=$attachmentId: $error',
@@ -23406,6 +23528,11 @@ class MessengerController extends ChangeNotifier {
         state.partialPath == null) {
       return;
     }
+    if (state.noFileRoute) {
+      final peer = _contactByDeviceId(state.peerDeviceId) ?? sender;
+      if (!_hasAllowedFileRoute(peer, state.descriptor.sizeBytes)) return;
+      state.noFileRoute = false;
+    }
     // Whatever left the caller's set without arriving is not asked of its
     // source any more (the other places that clear or trim the set need no
     // change).
@@ -23464,7 +23591,10 @@ class MessengerController extends ChangeNotifier {
         state.descriptor.id,
         index,
       );
-      if (!sent) {
+      if (!sent && state.noFileRoute) {
+        // No route may carry this file now: asked again when one appears.
+        state.requestedInFlight.remove(index);
+      } else if (!sent) {
         state.sources.failed(index, source);
         state.requestedInFlight.remove(index);
         unawaited(
@@ -23966,6 +24096,8 @@ class MessengerController extends ChangeNotifier {
       }
       final peer = _contactByDeviceId(s.peerDeviceId);
       if (peer == null) return;
+      // Nothing to ask over: a route change asks again, not this timer.
+      if (s.noFileRoute) return;
       s.nextRetryAt = null;
       s.retryAttempts = min(s.retryAttempts + 1, 1 << 20);
       // Nothing came in time: the sources asked rest (the next round goes
@@ -25257,6 +25389,7 @@ class MessengerController extends ChangeNotifier {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
     }
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
+    _resumeInboundWithoutFileRoute(sender.deviceId);
     _noteOwnDeviceInTouch(sender);
     _applySiblingTouchReport(
       sender,
@@ -29521,6 +29654,10 @@ class MessengerController extends ChangeNotifier {
     Set<PeerRouteKind> skipLegacyKinds = const {},
     // For file blocks: the file's size, which picks its content class.
     int? fileSizeBytes,
+    // Session setup (bundles, hellos) tries every allowed route, also the
+    // ones resting after failures: a route that works one way must not
+    // keep the other side from learning this device's session keys.
+    bool ignoreRouteBackoff = false,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -29566,7 +29703,7 @@ class MessengerController extends ChangeNotifier {
               policy == TransportPolicy.preferred,
         );
     if (candidateRoutes.isEmpty && !canTryRegistry) {
-      throw StateError(
+      throw NoAllowedRouteException(
         'Connectivity is disabled for ${contact.alias} — no allowed routes.',
       );
     }
@@ -29787,6 +29924,7 @@ class MessengerController extends ChangeNotifier {
         await tryLegacy(rankedRoutes);
       }
     }
+    if (ignoreRouteBackoff) await tryLegacy(candidateRoutes);
     // Last, the routes no receipt confirmed lately: better than nothing.
     await tryLegacy(skippedSuspects, suspectsToo: true);
     if (suspects.isNotEmpty) await tryUnifiedTransports(suspectsToo: true);
@@ -32142,6 +32280,7 @@ class MessengerController extends ChangeNotifier {
     if (lanRoutes.isEmpty) {
       return;
     }
+    _resumeInboundWithoutFileRoute(deviceId);
     final index = _snapshot.contacts.indexWhere(
       (contact) => contact.deviceId == deviceId,
     );
@@ -33928,12 +34067,22 @@ class MessengerController extends ChangeNotifier {
       // Offers start at 10 s and back off to the full interval: a delivered
       // offer can still be dropped by a receiver that does not know this
       // device yet (for example group membership still in flight).
-      final attempts = _ratchetBundleAttempts[limitKey] ?? 0;
-      final wait = reason == 'offer'
+      // Quiet for a whole interval: the next one starts with short waits
+      // again. An answer does not reset them: anyone able to make this
+      // device send resets (a forged envelope) would get one every 30 s.
+      final lastSent = _ratchetBundleSentAt[limitKey];
+      final attempts =
+          lastSent == null || now.difference(lastSent) >= _ratchetBundleInterval
+          ? 0
+          : _ratchetBundleAttempts[limitKey] ?? 0;
+      // A reset starts at 30 s: its first copy can be lost on a route that
+      // works one way, and a peer left without the session's keys drops
+      // everything it is sent until the next one (device lab, LAN only).
+      final wait = reason == 'offer' || reason == 'reset'
           ? Duration(
               seconds: min(
                 _ratchetBundleInterval.inSeconds,
-                10 << min(attempts, 6),
+                (reason == 'offer' ? 10 : 30) << min(attempts, 6),
               ),
             )
           : _ratchetBundleInterval;
@@ -33968,15 +34117,108 @@ class MessengerController extends ChangeNotifier {
       if (_debugBuildId != null) {
         appendDebugLog('Ratchet: sending $reason bundle to ${peer.alias}');
       }
-      await _deliverToContact(
-        contact: peer,
-        recipientDeviceId: peer.deviceId,
-        envelope: envelope,
+      await _deliverRatchetControl(
+        peer,
+        envelope,
+        retryKey: '${ratchetPeerId(peer)}|bundle|$reason',
+        retry: reason == 'answer',
       );
     } catch (error) {
       // A later retry pass offers again after the interval.
       if (reason != 'answer') _ratchetBundleSentAt.remove(limitKey);
       appendDebugLog('Ratchet bundle to ${peer.alias} not sent: $error');
+    }
+  }
+
+  final Map<String, Timer> _ratchetControlRetries = {};
+  final Map<String, int> _ratchetControlGeneration = {};
+  static const int _ratchetControlRetryCap = 64;
+
+  /// Delays before a session answer or hello that found no route is sent
+  /// again (the last one repeats nothing: five tries, then the peer's next
+  /// reset or offer starts over).
+  @visibleForTesting
+  List<Duration> ratchetControlRetryDelays = const [
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+    Duration(seconds: 45),
+    Duration(minutes: 2),
+    Duration(minutes: 5),
+  ];
+
+  /// Delivers a session-setup envelope over every allowed route, resting
+  /// ones included. With [retry], a delivery that failed on all of them is
+  /// tried again a few times: an answer or hello nobody retries leaves the
+  /// other side with traffic it cannot decrypt (device lab, LAN only).
+  /// Throws the first failure so the caller still logs it.
+  Future<void> _deliverRatchetControl(
+    ContactRecord peer,
+    RelayEnvelope envelope, {
+    required String retryKey,
+    required bool retry,
+    int attempt = 0,
+    int? generation,
+  }) async {
+    // A newer copy of the same control (a new answer or hello) replaces the
+    // pending one, also when it goes out at the first try.
+    if (attempt == 0) {
+      _ratchetControlRetries.remove(retryKey)?.cancel();
+      generation = _ratchetControlGeneration[retryKey] =
+          (_ratchetControlGeneration[retryKey] ?? 0) + 1;
+      if (_ratchetControlGeneration.length > 4 * _ratchetControlRetryCap) {
+        _ratchetControlGeneration.removeWhere(
+          (key, _) =>
+              !_ratchetControlRetries.containsKey(key) && key != retryKey,
+        );
+      }
+    }
+    try {
+      await _deliverToContact(
+        contact: peer,
+        recipientDeviceId: peer.deviceId,
+        envelope: envelope,
+        // The first try goes out as any message does (the inbound loop
+        // awaits it); the retries, in timers, also use resting routes.
+        ignoreRouteBackoff: attempt > 0,
+      );
+      if (attempt > 0 && _ratchetControlGeneration[retryKey] == generation) {
+        _ratchetControlRetries.remove(retryKey);
+      }
+    } catch (error) {
+      final delays = ratchetControlRetryDelays;
+      if (retry &&
+          !_disposed &&
+          _ratchetControlGeneration[retryKey] == generation &&
+          attempt < delays.length &&
+          (_ratchetControlRetries.containsKey(retryKey) ||
+              _ratchetControlRetries.length < _ratchetControlRetryCap)) {
+        _ratchetControlRetries.remove(retryKey)?.cancel();
+        _ratchetControlRetries[retryKey] = Timer(delays[attempt], () {
+          if (_disposed || _ratchetControlGeneration[retryKey] != generation) {
+            return;
+          }
+          // The contact as it is now; gone, or no longer usable: no retry.
+          final current = _ratchetPeer(peer.deviceId);
+          if (current == null || !current.canSendOutbound) {
+            _ratchetControlRetries.remove(retryKey);
+            return;
+          }
+          unawaited(
+            _deliverRatchetControl(
+              current,
+              envelope,
+              retryKey: retryKey,
+              retry: true,
+              attempt: attempt + 1,
+              generation: generation,
+            ).catchError((Object _) {}),
+          );
+        });
+      } else if (attempt > 0 &&
+          _ratchetControlGeneration[retryKey] == generation) {
+        _ratchetControlRetries.remove(retryKey);
+      }
+      rethrow;
     }
   }
 
@@ -34026,10 +34268,11 @@ class MessengerController extends ChangeNotifier {
         plaintext: '{}',
         createdAt: _now().toUtc(),
       );
-      await _deliverToContact(
-        contact: peer,
-        recipientDeviceId: peer.deviceId,
-        envelope: hello,
+      await _deliverRatchetControl(
+        peer,
+        hello,
+        retryKey: '${ratchetPeerId(peer)}|hello',
+        retry: true,
       );
     } catch (error) {
       // Real traffic on the new session also opens it at the peer.
@@ -41043,6 +41286,10 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final timer in _ratchetControlRetries.values) {
+      timer.cancel();
+    }
+    _ratchetControlRetries.clear();
     _matrixClient?.dispose();
     _linkPreviews?.dispose();
     for (final subscription in _carrierReceiptSubscriptions.values) {
@@ -41632,6 +41879,10 @@ class _InboundAttachmentState {
   /// up to `MessengerController._inboundChunkWindow` requests outstanding
   /// so a slow path doesn't serialize on per-chunk RTT.
   final Set<int> requestedInFlight = <int>{};
+
+  /// No route the settings allow carries file blocks from this peer: the
+  /// receiver does not ask until the routes or the settings change.
+  bool noFileRoute = false;
 
   /// Debounce gate for `attachment_progress` envelopes the receiver sends
   /// back to the sender. We emit at most one per [_progressDebounce]

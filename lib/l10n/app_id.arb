@@ -1053,7 +1053,7 @@
   "uiNotDeliveredTheirRadioCould75D581": "tidak tersampaikan (radio mereka tidak dapat membacanya)",
   "uiSenderNotVerified2BB0FA": "pengirim belum diverifikasi",
   "uiYouAreHidden56DCC1": "Anda tersembunyi",
-  "uiYouReadTheMeshChatAEACC5": "Anda membaca obrolan mesh, tetapi pengguna bitchat tidak dapat melihat atau menulis kepada Anda. Aktifkan \"Dapat dihubungi pengguna bitchat\" di Pengaturan → Konektivitas untuk menulis.",
+  "uiYouReadTheMeshChatAEACC5": "Anda dapat melihat orang di sekitar dan membaca obrolan mesh saat tersembunyi. Pilih “Pesan” agar terlihat dan dapat mengirim pesan.",
   "uiEveryoneNearbyOverBluetooth7B8D63": "Semua orang sekitar lewat Bluetooth",
   "uiNoBitchatUsersNearbyYetD30471": "Belum ada pengguna bitchat sekitar",
   "uiPhonesInBluetoothRangeThatDCCC0D": "Perangkat dalam jangkauan Bluetooth yang mengumumkan diri muncul di sini.",
@@ -1728,5 +1728,16 @@
   "linkArchiveSavedWithFiles": "Disimpan di {path} dengan {count} file.",
   "contactKeysDifferTitle": "Kunci berbeda: verifikasi",
   "contactKeysDifferBody": "Perangkat ini mengenal kontak ini dengan kunci yang berbeda dari akun Anda. Bandingkan nomor keamanan dengan kontak lewat saluran lain.",
-  "contactKeysDifferConfirm": "Sudah saya bandingkan"
+  "contactKeysDifferConfirm": "Sudah saya bandingkan",
+  "bitchatLastHeard": "Terakhir terdengar {time}",
+  "@bitchatLastHeard": {
+    "description": "When a verified bitchat announce was last received from a nearby person.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "bitchatMessageReachabilityWarning": "Perangkat ini akan terlihat oleh pengguna bitchat di sekitar, dan mereka dapat mengirim pesan kepada Anda.",
+  "bitchatStartChatFailed": "Tidak dapat memulai obrolan ini. Coba lagi."
 }
