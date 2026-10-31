@@ -33727,6 +33727,15 @@ class MessengerController extends ChangeNotifier {
       }
     }
     try {
+      // A hello that gets through before its answer bundle cannot be read
+      // (the peer has no session yet) and is dropped, and nothing sends it
+      // again: it waits for the answer, which is retried.
+      if (retryKey.endsWith('|hello') &&
+          _ratchetControlRetries.containsKey(
+            '${retryKey.substring(0, retryKey.length - 5)}bundle|answer',
+          )) {
+        throw StateError('The session hello waits for its answer bundle.');
+      }
       await _deliverToContact(
         contact: peer,
         recipientDeviceId: peer.deviceId,

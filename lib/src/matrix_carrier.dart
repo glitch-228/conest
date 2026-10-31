@@ -368,7 +368,9 @@ class MatrixTransportAdapter implements TransportAdapter, RateLimited {
         }
         // Same transaction id: the homeserver treats it as a retry. The
         // limiter has the account rest that long; without one, wait here.
-        if (turns == null) await Future<void>.delayed(wait);
+        if (turns == null) {
+          await LimiterWaitProbe.hold(Future<void>.delayed(wait));
+        }
         await paced(send);
       }
     }

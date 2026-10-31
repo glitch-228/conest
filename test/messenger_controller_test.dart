@@ -29597,6 +29597,64 @@ void main() {
       },
     );
 
+    test('a hello is not sent while its answer bundle is still being '
+        'retried, so it never arrives first', () async {
+      final relay = _FakeRelayClient();
+      final clock = DateTime.utc(2026, 10, 29, 16);
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        ratchetEngine: FakeRatchetEngine(),
+        nowProvider: () => clock,
+        keepErrorHistory: true,
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      final offerer =
+          alice.identity!.deviceId.compareTo(bob.identity!.deviceId) < 0
+          ? alice
+          : bob;
+      final starter = identical(offerer, alice) ? bob : alice;
+      for (final controller in [alice, bob]) {
+        controller.ratchetControlRetryDelays = List.filled(
+          200,
+          const Duration(milliseconds: 20),
+        );
+      }
+      // The answer bundle is refused until released; the hello is never
+      // refused, so any hello that reaches the relay first is a leak.
+      var bundleBlocked = true;
+      var helloWhileBlocked = 0;
+      relay.shouldFailStore = (_, _, _, recipient, envelope) {
+        if (recipient != offerer.identity!.deviceId ||
+            envelope.senderDeviceId != starter.identity!.deviceId) {
+          return false;
+        }
+        if (envelope.kind == 'ratchet_hello' && bundleBlocked) {
+          helloWhileBlocked++;
+        }
+        return envelope.kind == 'ratchet_bundle' && bundleBlocked;
+      };
+      await _pairControllers(alice, bob);
+      await settle([alice, bob], rounds: 6);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await settle([alice, bob], rounds: 6);
+      expect(helloWhileBlocked, 0);
+      bundleBlocked = false;
+      final offererId = offerer.identity!.deviceId;
+      final starterId = starter.identity!.deviceId;
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (DateTime.now().isBefore(deadline) &&
+          !(await offerer.hasRatchetSessionForTesting(starterId) &&
+              await starter.hasRatchetSessionForTesting(offererId))) {
+        await settle([alice, bob], rounds: 1);
+      }
+      expect(await offerer.hasRatchetSessionForTesting(starterId), isTrue);
+      expect(await starter.hasRatchetSessionForTesting(offererId), isTrue);
+    });
+
     test('ratchet peers switch to forward-secret envelopes', () async {
       final relay = _FakeRelayClient();
       final alice = await ratchetController(relay, 'Alice');

@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../carrier.dart';
+import '../limits/network_limiter.dart';
 import '../transport_models.dart';
 import 'telegram_bot_api.dart';
 
@@ -290,7 +291,10 @@ class TelegramCarrierChannel
     _queued++;
     final text = base64.encode(frame);
     final done = Completer<void>();
+    // Waiting for the send slot is not the route hanging.
+    final leaveQueue = LimiterWaitProbe.enter();
     _sendQueue = _sendQueue.then((_) async {
+      leaveQueue();
       try {
         await _sendOne(address, text);
         done.complete();
@@ -332,7 +336,9 @@ class TelegramCarrierChannel
         if (error.rateLimited &&
             attempt < maxRateRetries &&
             (error.retryAfter ?? 1) <= 30) {
-          await _wait(Duration(seconds: min(error.retryAfter ?? 1, 30)));
+          await LimiterWaitProbe.hold(
+            _wait(Duration(seconds: min(error.retryAfter ?? 1, 30))),
+          );
           continue;
         }
         if (error.code == 400 || error.code == 403) {

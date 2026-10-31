@@ -432,7 +432,7 @@ class TransportRegistry {
           // Only this send still waiting for its turn behind the account's
           // limiter says nothing about the route; other chats queued there
           // do not excuse a network call that hung.
-          limiterHeld = waiting.isWaiting;
+          limiterHeld = waiting.excusesTimeout;
         }
         // The account's own limiter holding a send back says nothing about
         // the route: the next route goes, and this one is not marked failed.

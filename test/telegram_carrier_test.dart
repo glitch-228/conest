@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:conest/src/limits/network_limiter.dart';
 import 'package:conest/src/telegram/telegram_bot_api.dart';
 import 'package:conest/src/telegram/telegram_carrier.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -65,6 +67,50 @@ void main() {
     expect(bob.received.single.$2, frame);
     // A full frame fits a message.
     expect(alice.bot.sent.single.$2.length, lessThanOrEqualTo(4096));
+  });
+
+  test('sends held in the channel queue or its rate-limit rest are waiting, '
+      'not a hung route', () async {
+    final hub = FakeTelegramBots();
+    final bot = hub.addBot('alice_conest_bot');
+    hub.addBot('bob_conest_bot');
+    final inner = hub.network.botApi(bot.token);
+    final api = _RateLimitOnceApi(inner);
+    final restGate = Completer<void>();
+    final channel = TelegramCarrierChannel(
+      config: TelegramBotConfig(
+        token: bot.token,
+        username: bot.username,
+        botId: bot.id,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollTimeout: const Duration(milliseconds: 300),
+      retryDelay: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+      wait: (delay) =>
+          delay.inSeconds == 25 ? restGate.future : Future<void>.value(),
+    )..start();
+    addTearDown(channel.stop);
+    await until(() => channel.state == TelegramCarrierState.connected);
+    final probes = [for (var i = 0; i < 3; i++) LimiterWaitProbe()];
+    final sends = [
+      for (final probe in probes)
+        runZoned(
+          () => channel.sendFrame('bob_conest_bot', Uint8List(4)),
+          zoneValues: {LimiterWaitProbe.zoneKey: probe},
+        ),
+    ];
+    await until(() => api.limited);
+    // A is resting in the channel for the named 25 s; B and C wait for the
+    // channel's send slot. None of them is a hung route.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(probes.map((probe) => probe.isWaiting), [true, true, true]);
+    restGate.complete();
+    await Future.wait(sends);
+    for (final probe in probes) {
+      expect(probe.waiting, 0, reason: 'every wait ended');
+    }
   });
 
   test('only frames from other bots in private chats are read', () async {
@@ -375,4 +421,32 @@ class _ThrowingApi implements TelegramBotApi {
 
   @override
   void close() {}
+}
+
+/// Answers the first sendMessage with a 25 s flood wait.
+class _RateLimitOnceApi implements TelegramBotApi {
+  _RateLimitOnceApi(this.inner);
+  final TelegramBotApi inner;
+  bool limited = false;
+
+  @override
+  Future<Object?> call(
+    String method, [
+    Map<String, Object?> parameters = const {},
+    Duration timeout = const Duration(seconds: 30),
+  ]) {
+    if (method == 'sendMessage' && !limited) {
+      limited = true;
+      throw const TelegramBotException(
+        'sendMessage',
+        429,
+        'Too Many Requests',
+        retryAfter: 25,
+      );
+    }
+    return inner.call(method, parameters, timeout);
+  }
+
+  @override
+  void close() => inner.close();
 }

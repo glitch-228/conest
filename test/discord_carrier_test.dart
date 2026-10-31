@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:conest/src/carrier.dart';
 import 'package:conest/src/discord/discord_api.dart';
+import 'package:conest/src/limits/network_limiter.dart';
 import 'package:conest/src/telegram/telegram_carrier.dart';
 import 'package:conest/src/transport_models.dart';
 import 'package:conest/src/discord/discord_carrier.dart';
@@ -257,6 +259,53 @@ void main() {
     await until(() => looks > before);
   });
 
+  test('sends held in the channel queue or its rate-limit rest are waiting, '
+      'not a hung route', () async {
+    final gate = Completer<void>();
+    var limited = false;
+    final api = _PostApi(hub.network.api(bobBot.token, DiscordAuth.bot), () {
+      if (limited) return;
+      limited = true;
+      throw const DiscordException(
+        '/channels/x/messages',
+        429,
+        'slow',
+        retryAfter: 25,
+      );
+    });
+    final bob = DiscordCarrierChannel(
+      config: DiscordBotConfig(
+        token: bobBot.token,
+        botId: bobBot.id,
+        username: 'b',
+        channelId: channel,
+      ),
+      api: api,
+      onFrame: (_, _) {},
+      pollInterval: const Duration(milliseconds: 10),
+      sendSpacing: Duration.zero,
+      wait: (delay) =>
+          delay.inSeconds == 25 ? gate.future : Future<void>.delayed(delay),
+    )..start();
+    addTearDown(bob.stop);
+    final probes = [for (var i = 0; i < 3; i++) LimiterWaitProbe()];
+    final sends = [
+      for (final probe in probes)
+        runZoned(
+          () => bob.sendFrame('${aliceBot.id}|$channel', Uint8List(3)),
+          zoneValues: {LimiterWaitProbe.zoneKey: probe},
+        ),
+    ];
+    await until(() => limited);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(probes.map((probe) => probe.isWaiting), [true, true, true]);
+    gate.complete();
+    await Future.wait(sends);
+    for (final probe in probes) {
+      expect(probe.waiting, 0);
+    }
+  });
+
   test('the slowdown stretches every look', () async {
     final waits = <Duration>[];
     final bob = DiscordCarrierChannel(
@@ -487,6 +536,28 @@ class _CountingApi implements DiscordApi {
     Duration timeout = const Duration(seconds: 30),
   }) {
     if (method == 'GET' && path.endsWith('/messages')) onPoll();
+    return inner.call(method, path, query: query, body: body, timeout: timeout);
+  }
+
+  @override
+  void close() => inner.close();
+}
+
+/// Throws from [onPost] before each message post goes through.
+class _PostApi implements DiscordApi {
+  _PostApi(this.inner, this.onPost);
+  final DiscordApi inner;
+  final void Function() onPost;
+
+  @override
+  Future<Object?> call(
+    String method,
+    String path, {
+    Map<String, String>? query,
+    Object? body,
+    Duration timeout = const Duration(seconds: 30),
+  }) {
+    if (method == 'POST' && path.endsWith('/messages')) onPost();
     return inner.call(method, path, query: query, body: body, timeout: timeout);
   }
 

@@ -606,6 +606,47 @@ void main() {
       await others;
     });
 
+    test('a send that waited in the limiter, was let through and then hung '
+        'is a failure once the margin has passed', () async {
+      final clock = _Clock();
+      final hung = _Adapter(TransportKind.iroh, TransportPathKind.direct)
+        ..limiter = _limiter(clock, paced)
+        ..queueFirst = true
+        ..hang = true;
+      final limiter = hung.limiter!;
+      await limiter.acquire();
+      await limiter.acquire();
+      final registry = TransportRegistry([hung]);
+      final result = registry.deliverEnvelope(
+        peer: peer,
+        envelope: _envelope(),
+        policies: const {},
+        attemptTimeout: const Duration(seconds: 4),
+      );
+      final failed = expectLater(result, throwsA(isA<StateError>()));
+      // Its turn comes at once (the fake clock moves on), long before the
+      // attempt ends; the network call then hangs for good.
+      await clock.advance(const Duration(seconds: 2));
+      await failed;
+      expect(registry.statsFor('peer', TransportKind.iroh)!.failureStreak, 1);
+    });
+
+    test('a frame let through just before the attempt ends is not blamed '
+        'on the route', () async {
+      final probe = LimiterWaitProbe();
+      final release = runZoned(
+        LimiterWaitProbe.enter,
+        zoneValues: {LimiterWaitProbe.zoneKey: probe},
+      );
+      expect(probe.excusesTimeout, isTrue);
+      release();
+      expect(probe.isWaiting, isFalse);
+      // Just released: a timeout now still comes from the wait.
+      expect(probe.excusesTimeout, isTrue);
+      final late = LimiterWaitProbe();
+      expect(late.excusesTimeout, isFalse);
+    });
+
     test('an attempt that times out for its own sake is still a failure', () {
       final held = _Adapter(TransportKind.iroh, TransportPathKind.direct)
         ..hang = true;

@@ -165,7 +165,40 @@ abstract interface class RateLimited {
 class LimiterWaitProbe {
   static const Object zoneKey = #conestLimiterWaitProbe;
   int waiting = 0;
+  DateTime? _heldUntil;
+
   bool get isWaiting => waiting > 0;
+
+  /// Whether the send is waiting for its turn, or was let through so
+  /// recently that a timeout most likely came from the wait (a frame
+  /// released with only the attempt's margin left).
+  bool get excusesTimeout =>
+      isWaiting || (_heldUntil != null && monotonicNow().isBefore(_heldUntil!));
+
+  /// Marks the current zone's send as waiting; the returned function ends
+  /// the wait (once). [margin] is how long after the end a timeout is still
+  /// put down to the wait.
+  static void Function() enter({Duration margin = const Duration(seconds: 3)}) {
+    final probe = Zone.current[zoneKey];
+    if (probe is! LimiterWaitProbe) return () {};
+    probe.waiting++;
+    var open = true;
+    return () {
+      if (!open) return;
+      open = false;
+      probe.waiting--;
+      probe._heldUntil = monotonicNow().add(margin);
+    };
+  }
+
+  /// Holds the current zone's send as waiting while [wait] is pending.
+  static Future<T> hold<T>(
+    Future<T> wait, {
+    Duration margin = const Duration(seconds: 3),
+  }) {
+    final leave = enter(margin: margin);
+    return wait.whenComplete(leave);
+  }
 }
 
 class _Waiter {
@@ -354,11 +387,14 @@ class NetworkLimiter {
     _queue.add(waiter);
     _queuedCost += charged;
     _arm();
-    final probe = Zone.current[LimiterWaitProbe.zoneKey];
-    if (probe is! LimiterWaitProbe) return waiter.done.future;
-    // The send that asked is told it is waiting for its turn.
-    probe.waiting++;
-    return waiter.done.future.whenComplete(() => probe.waiting--);
+    // The send that asked is told it is waiting for its turn (radios get a
+    // longer margin: their frames wait behind a serial queue too).
+    return LimiterWaitProbe.hold(
+      waiter.done.future,
+      margin: budget.costInBytes
+          ? const Duration(seconds: 30)
+          : const Duration(seconds: 3),
+    );
   }
 
   /// [acquire], then [action]; a server's slow-down in its error is obeyed

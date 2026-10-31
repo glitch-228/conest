@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../carrier.dart';
+import '../limits/network_limiter.dart';
 import '../transport_models.dart';
 import 'discord_api.dart';
 
@@ -360,7 +361,10 @@ class DiscordCarrierChannel
     if (wake != null && !wake.isCompleted) wake.complete();
     final text = '<@${target.botId}> ${base64.encode(frame)}';
     final done = Completer<void>();
+    // Waiting for the send slot is not the route hanging.
+    final leaveQueue = LimiterWaitProbe.enter();
     _sendQueue = _sendQueue.then((_) async {
+      leaveQueue();
       try {
         await _sendOne(target.channelId, target.botId, text);
         done.complete();
@@ -396,9 +400,11 @@ class DiscordCarrierChannel
         // bucket is waited out on that route (below).
         if (error.slowDownFor case final wait?) onRateLimited?.call(wait);
         if (error.rateLimited && attempt < 3 && (error.retryAfter ?? 1) <= 30) {
-          await _wait(
-            Duration(
-              milliseconds: (min(error.retryAfter ?? 1, 30) * 1000).ceil(),
+          await LimiterWaitProbe.hold(
+            _wait(
+              Duration(
+                milliseconds: (min(error.retryAfter ?? 1, 30) * 1000).ceil(),
+              ),
             ),
           );
           continue;
