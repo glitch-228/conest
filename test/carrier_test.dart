@@ -8,6 +8,7 @@ import 'package:conest/src/limits/network_limiter.dart';
 import 'package:conest/src/limits/radio_airtime.dart';
 import 'package:conest/src/telegram/telegram_bot_api.dart';
 import 'package:conest/src/matrix_carrier.dart';
+import 'package:conest/src/meshcore_carrier.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -583,6 +584,48 @@ void main() {
         DateTime.now().difference(started),
         greaterThan(const Duration(milliseconds: 100)),
       );
+    });
+
+    test('a 4 KB envelope over a base64 radio is admitted', () async {
+      // A radio budget in miniature (a window is 60 ms): 450 bytes a window.
+      // The envelope's raw bytes fit nine windows; on air (base64) it needs
+      // thirteen.
+      final text = _AirtimeChannel('npub-me|wss://relay.one');
+      final radio = CarrierTransportAdapter(
+        kind: TransportKind.meshCore,
+        sealer: sealer,
+        framing: meshCoreFraming,
+        sendAttemptTimeout: RadioAirtime.sendAttemptTimeout,
+      )..attach(text);
+      radio.limiter = NetworkLimiter(
+        const LimiterBudget(
+          name: 'radio',
+          costInBytes: true,
+          quota: 450,
+          window: Duration(milliseconds: 60),
+          maxQueue: 64,
+          maxWait: Duration(milliseconds: 100),
+        ),
+      );
+      await radio.start();
+      const meshPeer = TransportPeer(
+        deviceId: 'dev-bob',
+        transportAddresses: {
+          TransportKind.meshCore: 'npub-bob|wss://relay.two',
+        },
+      );
+      final route = (await radio.discoverRoutes(meshPeer)).single;
+      await radio.sendEnvelope(
+        peer: meshPeer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'four-kb',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(4000),
+          createdAt: DateTime.utc(2026, 10, 30),
+        ),
+      );
+      expect(text.sent, isNotEmpty);
     });
 
     test('waiting for a turn never outlasts the attempt', () async {
@@ -1167,6 +1210,15 @@ class _FailingChannel implements CarrierChannel {
 
   @override
   Future<void> sendFrame(String address, Uint8List frame) async => throw error;
+}
+
+/// A channel that carries frames as base64 text, like MeshCore.
+class _AirtimeChannel extends _RecordingChannel
+    implements AirtimeSizedCarrierChannel {
+  _AirtimeChannel(super.localAddress);
+
+  @override
+  int airBytes(int frameLength) => (frameLength + 1 + 2) ~/ 3 * 4;
 }
 
 class _RecordingChannel implements CarrierChannel {

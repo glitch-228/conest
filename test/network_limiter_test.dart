@@ -542,6 +542,7 @@ void main() {
         final clock = _Clock();
         final held = _Adapter(TransportKind.iroh, TransportPathKind.direct)
           ..limiter = _limiter(clock, paced)
+          ..queueFirst = true
           ..hang = true;
         held.limiter!.pushedBack(retryAfter: const Duration(minutes: 5));
         final registry = TransportRegistry([held]);
@@ -563,6 +564,47 @@ void main() {
         ], reason: 'the abandoned send is told to stop');
       },
     );
+
+    test('a hung network call is a failure even with other sends queued, '
+        'and the next message skips that route', () async {
+      final clock = _Clock();
+      final hung = _Adapter(TransportKind.iroh, TransportPathKind.direct)
+        ..limiter = _limiter(clock, paced)
+        ..hang = true;
+      final limiter = hung.limiter!;
+      // Another chat's sends: the burst is spent and one waits for a turn.
+      await limiter.acquire();
+      await limiter.acquire();
+      final others = limiter.acquire().catchError((Object _) {});
+      expect(limiter.queueLength, 1);
+      final fallback = _Adapter(
+        TransportKind.matrix,
+        TransportPathKind.relayed,
+      );
+      final registry = TransportRegistry([hung, fallback]);
+      final first = await registry.deliverEnvelope(
+        peer: peer,
+        envelope: _envelope(),
+        policies: const {},
+        attemptTimeout: const Duration(milliseconds: 30),
+      );
+      expect(first.receipt.route.transport, TransportKind.matrix);
+      expect(registry.statsFor('peer', TransportKind.iroh)!.failureStreak, 1);
+      // The next message goes to the working route at once: the hung one is
+      // not tried first, so no timeout is waited out.
+      final watch = Stopwatch()..start();
+      final second = await registry.deliverEnvelope(
+        peer: peer,
+        envelope: _envelope(),
+        policies: const {},
+        attemptTimeout: const Duration(seconds: 20),
+      );
+      expect(second.receipt.route.transport, TransportKind.matrix);
+      expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+      expect(hung.cancelled, hasLength(1));
+      limiter.close();
+      await others;
+    });
 
     test('an attempt that times out for its own sake is still a failure', () {
       final held = _Adapter(TransportKind.iroh, TransportPathKind.direct)
@@ -683,6 +725,10 @@ class _Adapter implements TransportAdapter, RateLimited {
 
   /// The send never finishes (a send stuck waiting for its turn).
   bool hang = false;
+
+  /// The send first waits for its turn behind [limiter], as the carrier
+  /// adapters do.
+  bool queueFirst = false;
   final List<String> cancelled = [];
 
   @override
@@ -725,6 +771,7 @@ class _Adapter implements TransportAdapter, RateLimited {
     required TransportEnvelope envelope,
   }) async {
     if (refuse) throw const LimiterRefused(LimiterRefusal.wouldWait);
+    if (queueFirst) await limiter!.acquire(maxWait: const Duration(hours: 1));
     if (hang) await Completer<void>().future;
     sent++;
     return DeliveryReceipt(

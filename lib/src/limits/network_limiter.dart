@@ -20,6 +20,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 /// Which sends go first when the queue is full: [interactive] sends (a
 /// message someone is waiting for) displace [bulk] ones (file blocks, copies,
 /// sync), never the other way round.
@@ -156,6 +158,16 @@ abstract interface class RateLimited {
   NetworkLimiter? get limiter;
 }
 
+/// Tells the dispatcher whether one send is waiting for its turn behind a
+/// limiter. The dispatcher runs the send in a zone that carries the probe;
+/// [NetworkLimiter.acquire] raises [waiting] while the send is queued and
+/// lowers it when its turn comes (or it is refused).
+class LimiterWaitProbe {
+  static const Object zoneKey = #conestLimiterWaitProbe;
+  int waiting = 0;
+  bool get isWaiting => waiting > 0;
+}
+
 class _Waiter {
   _Waiter(this.cost, this.priority, this.deadline);
 
@@ -191,6 +203,7 @@ class NetworkLimiter {
 
   /// Whether this limiter measures on the clock that never jumps (the
   /// default), not on the wall clock.
+  @visibleForTesting
   bool get usesMonotonicClockForTesting => identical(_now, monotonicNow);
 
   final LimiterBudget budget;
@@ -341,7 +354,11 @@ class NetworkLimiter {
     _queue.add(waiter);
     _queuedCost += charged;
     _arm();
-    return waiter.done.future;
+    final probe = Zone.current[LimiterWaitProbe.zoneKey];
+    if (probe is! LimiterWaitProbe) return waiter.done.future;
+    // The send that asked is told it is waiting for its turn.
+    probe.waiting++;
+    return waiter.done.future.whenComplete(() => probe.waiting--);
   }
 
   /// [acquire], then [action]; a server's slow-down in its error is obeyed

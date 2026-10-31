@@ -373,10 +373,18 @@ class TransportRegistry {
         _ => null,
       };
       final queued = turns != null && turns.projectedWait > Duration.zero;
+      // Raised by the limiter while THIS send waits for its turn.
+      final waiting = LimiterWaitProbe();
       try {
-        final receipt = await adapter
-            .sendEnvelope(peer: peer, route: route, envelope: envelope)
-            .timeout(
+        final receipt =
+            await runZoned(
+              () => adapter.sendEnvelope(
+                peer: peer,
+                route: route,
+                envelope: envelope,
+              ),
+              zoneValues: {LimiterWaitProbe.zoneKey: waiting},
+            ).timeout(
               attemptTimeout ??
                   adapter.capabilities.sendAttemptTimeout ??
                   (route.transport == TransportKind.iroh
@@ -421,10 +429,10 @@ class TransportRegistry {
                 .cancel(transportOperationId(peer.deviceId, envelope.id))
                 .catchError((Object _) {}),
           );
-          // Waiting its turn behind the account's limiter (or a rest the
-          // server asked for) says nothing about the route either.
-          limiterHeld =
-              turns != null && (turns.queueLength > 0 || turns.isResting);
+          // Only this send still waiting for its turn behind the account's
+          // limiter says nothing about the route; other chats queued there
+          // do not excuse a network call that hung.
+          limiterHeld = waiting.isWaiting;
         }
         // The account's own limiter holding a send back says nothing about
         // the route: the next route goes, and this one is not marked failed.

@@ -784,7 +784,16 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
     var allowed = turns.budget.maxWait;
     final quota = turns.budget.quota;
     if (turns.budget.costInBytes && quota != null && quota > 0) {
-      allowed += turns.budget.window * ((framing.maxSealedBytes - 1) ~/ quota);
+      // Counted in bytes on air of the largest framed envelope (the
+      // channel may encode frames, as MeshCore's base64 does).
+      final count = framing.frameCount(framing.maxSealedBytes);
+      final lastChunk =
+          framing.maxSealedBytes - (count - 1) * framing.chunkBytes;
+      final air =
+          (count - 1) *
+              _airLength(framing.chunkBytes + carrierBinaryFrameHeaderBytes) +
+          _airLength(lastChunk + carrierBinaryFrameHeaderBytes);
+      allowed += turns.budget.window * ((air - 1) ~/ quota);
     }
     return allowed < timeLeft ? allowed : timeLeft;
   }
@@ -799,11 +808,13 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
   }
 
   /// The bytes on air for [frame] (the channel may encode it).
-  int airBytes(Uint8List frame) {
+  int airBytes(Uint8List frame) => _airLength(frame.length);
+
+  int _airLength(int frameLength) {
     final channel = _channel;
     return channel is AirtimeSizedCarrierChannel
-        ? channel.airBytes(frame.length)
-        : frame.length;
+        ? channel.airBytes(frameLength)
+        : frameLength;
   }
 
   /// Confirmations that came before their frame was registered (bounded,
