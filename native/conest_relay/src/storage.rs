@@ -175,7 +175,7 @@ impl RelayState {
         };
         state.load_owners()?;
         state.load_accounts()?;
-        state.blob_startup_cleanup();
+        state.blob_startup_cleanup()?;
         Ok(state)
     }
 

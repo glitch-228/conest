@@ -605,8 +605,9 @@ class RelayClient {
   }
 
   /// Takes back blobs this account uploaded (at most 64 at a time, and any
-  /// upload of them under way). True when the relay had one.
-  Future<bool> deleteBlobs({
+  /// upload of them under way). Returns the hashes the relay skipped because
+  /// an upload of them was being handled right then.
+  Future<Set<String>> deleteBlobs({
     required String host,
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
@@ -622,7 +623,8 @@ class RelayClient {
       request: {'action': 'blob_delete', 'hashes': hashes},
       expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
-    return result.body['deleted'] == true;
+    final busy = result.body['busy'];
+    return {if (busy is List) ...busy.whereType<String>()};
   }
 
   /// The blob named by [hash], [size] bytes (the caller checks them).

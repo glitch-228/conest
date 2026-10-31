@@ -84,10 +84,13 @@ blob-total-bytes = 1073741824     # the whole relay
 ```
 
 Blobs live in `blobs/` beside the database and count against your disk.
+Each relay needs its own blob directory: the relay writes a marker file
+(`.conest-relay-owner`) with its identity there and refuses to start if
+another relay's marker is already in it.
 
 Limits worth knowing:
 
-- `blob-serve-factor` (default 4): a blob stops being served once it has
+- `blob-serve-factor` (default 8, which leaves room for retries on slow links): a blob stops being served once it has
   been read this many times its size, so the relay is no public file host.
   0 turns the limit off.
 - `blob-get-bytes-per-minute` (default 32 MiB) limits what one address may

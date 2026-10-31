@@ -17792,6 +17792,7 @@ class MessengerController extends ChangeNotifier {
         : normalizedLabel.contains('mobile')
         ? NetworkCostClass.metered
         : NetworkCostClass.unmetered;
+    _wakeBlobWaiters();
     appendDebugLog(
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
@@ -23735,8 +23736,11 @@ class MessengerController extends ChangeNotifier {
 
     check = () {
       _blobLeaveTimers.remove(id);
+      _blobWaiters.remove(id);
       if (_disposed || !identical(_outboundAttachments[id], state)) return;
       if (_leftBlobs.containsKey(id) || _leavingBlobs.contains(id)) return;
+      // Nowhere to leave them: no polling for that.
+      if (_blobUploadRelays().isEmpty) return;
       void leave(bool midTransfer) {
         unawaited(
           _leaveBlobs(contact, state, midTransfer: midTransfer)
@@ -23751,16 +23755,28 @@ class MessengerController extends ChangeNotifier {
                     !_leftBlobs.containsKey(id) &&
                     identical(_outboundAttachments[id], state) &&
                     !_blobLeaveTimers.containsKey(id)) {
-                  arm(blobSlowAfter);
+                  // Backs off (the wait doubles), and gives up after a few.
+                  final attempts = (_blobAttempts[id] ?? 0) + 1;
+                  _blobAttempts[id] = attempts;
+                  if (attempts < 5) {
+                    arm(
+                      Duration(
+                        milliseconds: min(
+                          blobSlowAfter.inMilliseconds << (attempts - 1),
+                          const Duration(minutes: 10).inMilliseconds,
+                        ),
+                      ),
+                    );
+                  }
                 }
               }),
         );
       }
 
-      // Not now (metered, battery saver): look again later, so uploading
-      // starts when the network allows it.
-      if (!_blobUploadAllowed) {
-        arm(blobSlowAfter);
+      // Not now (metered, battery saver, paused): wait for the event that
+      // can change it, not for a timer.
+      if (state.paused || !_blobUploadAllowed) {
+        _blobWaiters[id] = () => check();
         return;
       }
       if (state.highestChunkSent < 0) {
@@ -23784,6 +23800,41 @@ class MessengerController extends ChangeNotifier {
 
     arm(blobLeaveDelay);
   }
+
+  /// The relays blobs can go to: configured, pinned, and registered.
+  Map<PeerEndpoint, String> _blobUploadRelays() {
+    final relays = <PeerEndpoint, String>{};
+    final me = identity;
+    if (me == null) return relays;
+    for (final relay in me.configuredRelays) {
+      final key = _pinnedIdentityKeyForRoute(relay);
+      if (key != null && _snapshot.relayTokens[key] != null) {
+        relays[relay] = key;
+      }
+      if (relays.length >= BlobAnnouncement.maxRelays) break;
+    }
+    return relays;
+  }
+
+  /// Files whose blobs wait for a condition (an unmetered network, no pause,
+  /// no battery saver) instead of a timer: woken by the event that can change
+  /// it (a connectivity change, a resume).
+  final Map<String, void Function()> _blobWaiters = <String, void Function()>{};
+
+  /// Failed attempts to leave blobs for a file (the wait doubles).
+  final Map<String, int> _blobAttempts = <String, int>{};
+
+  void _wakeBlobWaiters() {
+    if (_blobWaiters.isEmpty) return;
+    final waiting = _blobWaiters.values.toList();
+    _blobWaiters.clear();
+    for (final wake in waiting) {
+      wake();
+    }
+  }
+
+  @visibleForTesting
+  int get blobTimersArmedForTesting => _blobLeaveTimers.length;
 
   /// Whether the energy policy and the network allow uploading for others.
   bool get _blobUploadAllowed {
@@ -23810,14 +23861,7 @@ class MessengerController extends ChangeNotifier {
     var announced = false;
     try {
       final me = _requireIdentity();
-      final relays = <PeerEndpoint, String>{};
-      for (final relay in me.configuredRelays) {
-        final key = _pinnedIdentityKeyForRoute(relay);
-        if (key != null && _snapshot.relayTokens[key] != null) {
-          relays[relay] = key;
-        }
-        if (relays.length >= BlobAnnouncement.maxRelays) break;
-      }
+      final relays = _blobUploadRelays();
       if (relays.isEmpty) return;
       final leftNow = left = LeftBlobs(
         peerDeviceId: contact.deviceId,
@@ -23918,6 +23962,11 @@ class MessengerController extends ChangeNotifier {
   /// cancelled: its blobs are taken back from the relays (what is missed
   /// expires). [fromDeviceId] is the device that said so, when one did.
   void _dropLeftBlobs(String attachmentId, {String? fromDeviceId}) {
+    if (fromDeviceId == null) {
+      _blobLeaveTimers.remove(attachmentId)?.cancel();
+      _blobWaiters.remove(attachmentId);
+      _blobAttempts.remove(attachmentId);
+    }
     final left = _leftBlobs[attachmentId];
     if (left == null ||
         (fromDeviceId != null && left.peerDeviceId != fromDeviceId)) {
@@ -23927,10 +23976,16 @@ class MessengerController extends ChangeNotifier {
     unawaited(_deleteLeftBlobs(left));
   }
 
-  Future<void> _deleteLeftBlobs(LeftBlobs left) async {
+  Future<void> _deleteLeftBlobs(LeftBlobs left, {bool retry = true}) async {
     final todo = [
       for (final entry in left.uploads.entries) (entry.key, [...entry.value]),
     ];
+    // What the relays skipped because an upload was being handled: asked
+    // once more later (after that, the time to live takes it).
+    final skipped = LeftBlobs(
+      peerDeviceId: left.peerDeviceId,
+      relays: left.relays,
+    );
     for (final (routeKey, hashes) in todo) {
       final relay = left.relays[routeKey];
       if (relay == null) continue;
@@ -23938,13 +23993,16 @@ class MessengerController extends ChangeNotifier {
       for (var start = 0; start < hashes.length; start += 64) {
         if (_disposed) return;
         try {
-          await _relayClient.deleteBlobs(
+          final busy = await _relayClient.deleteBlobs(
             host: relay.endpoint.host,
             port: relay.endpoint.port,
             protocol: relay.endpoint.protocol,
             hashes: hashes.sublist(start, min(start + 64, hashes.length)),
             expectedIdentityPublicKeyBase64: relay.key,
           );
+          for (final hash in busy) {
+            skipped.note(routeKey, hash);
+          }
         } catch (error) {
           // The relay cannot be reached: the rest would fail the same; the
           // blobs expire by themselves.
@@ -23952,6 +24010,11 @@ class MessengerController extends ChangeNotifier {
           break;
         }
       }
+    }
+    if (retry && skipped.uploads.isNotEmpty && !_disposed) {
+      Timer(blobSlowAfter, () {
+        if (!_disposed) unawaited(_deleteLeftBlobs(skipped, retry: false));
+      });
     }
   }
 
@@ -24225,6 +24288,7 @@ class MessengerController extends ChangeNotifier {
     }
     if (outbound != null && outbound.peerDeviceId == sender.deviceId) {
       outbound.pausedByPeer = paused;
+      if (!paused) _wakeBlobWaiters();
     }
     if (inbound != null && inbound.peerDeviceId == sender.deviceId) {
       inbound.pausedByPeer = paused;
@@ -24287,6 +24351,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (outbound != null) outbound.pausedByMe = false;
+    _wakeBlobWaiters();
     if (inbound != null) {
       inbound.pausedByMe = false;
       if (!inbound.pausedByPeer) {
@@ -41323,6 +41388,7 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _blobLeaveTimers.clear();
+    _blobWaiters.clear();
     for (final timer in _ratchetControlRetries.values) {
       timer.cancel();
     }
@@ -42210,7 +42276,7 @@ class _ScoringRelayClient implements RelayClient {
   );
 
   @override
-  Future<bool> deleteBlobs({
+  Future<Set<String>> deleteBlobs({
     required String host,
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,

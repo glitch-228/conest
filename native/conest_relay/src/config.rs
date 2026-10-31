@@ -181,7 +181,7 @@ impl Default for ExtConfig {
             blob_account_bytes: 64 * 1024 * 1024,
             blob_total_bytes: 1024 * 1024 * 1024,
             blob_address_bytes: 128 * 1024 * 1024,
-            blob_serve_factor: 4,
+            blob_serve_factor: 8,
             blob_get_bytes_per_minute: 32 * 1024 * 1024,
             tls_bind: None,
             tls_cert: None,
@@ -712,7 +712,7 @@ pub(crate) fn usage() -> String {
            --blob-account-bytes N           blob bytes one account may hold\n\
            --blob-total-bytes N             blob bytes the relay holds\n\
            --blob-address-bytes N           blob bytes the accounts made from one address hold\n\
-           --blob-serve-factor N            a blob is served at most N times its size (default 4; 0: no limit)\n\
+           --blob-serve-factor N            a blob is served at most N times its size (default 8; 0: no limit)\n\
            --blob-get-bytes-per-minute N    blob bytes one address may fetch\n\
            --token-days N                   how long a token lasts (default 30)\n\
            --tls-bind ADDR --tls-cert PEM --tls-key PEM  TLS (e.g. on 443) with a\n\

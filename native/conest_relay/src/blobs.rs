@@ -53,6 +53,8 @@ const PARTIAL_IDLE_MILLIS: u64 = 10 * 60 * 1000;
 const SWEEP_EVERY_MILLIS: u64 = 60 * 1000;
 const MINUTE_MILLIS: u64 = 60 * 1000;
 const MIN_TTL_SECS: u64 = 60;
+/// The file in a blob directory that names the relay it belongs to.
+const OWNER_MARKER: &str = ".conest-relay-owner";
 
 pub(crate) fn init_tables(database: &Connection) -> Result<(), String> {
     // An older layout (before read secrets) cannot be kept: its blobs are
@@ -247,10 +249,35 @@ impl RelayState {
     /// Once at start: removes blob files that belong to no index row (a
     /// crash between the rename and the index, or an older layout). Only
     /// files named like ours (`<64 hex>...blob` or `...part`) are touched.
-    pub(crate) fn blob_startup_cleanup(&self) {
-        let Some(dir) = self.blob_dir() else { return };
+    ///
+    /// The directory belongs to one relay: a marker file with the relay's
+    /// identity is written into it, and a relay that finds another's marker
+    /// refuses to start (two relays sharing a directory would delete each
+    /// other's blobs).
+    pub(crate) fn blob_startup_cleanup(&self) -> Result<(), String> {
+        if self.config.ext.blob_max_bytes == 0 {
+            return Ok(());
+        }
+        let Some(dir) = self.blob_dir() else {
+            return Ok(());
+        };
+        fs::create_dir_all(&dir).map_err(|error| format!("blob storage: {error}"))?;
+        let marker = dir.join(OWNER_MARKER);
+        let mine = self.identity.public_key_b64.clone();
+        match fs::read_to_string(&marker) {
+            Ok(other) if other.trim() != mine => {
+                return Err(format!(
+                    "the blob directory {} belongs to another relay; give each relay its own --blob-dir",
+                    dir.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(_) => {
+                fs::write(&marker, &mine).map_err(|error| format!("blob storage: {error}"))?;
+            }
+        }
         let Ok(entries) = fs::read_dir(&dir) else {
-            return;
+            return Ok(());
         };
         let mut known = HashSet::new();
         {
@@ -284,6 +311,7 @@ impl RelayState {
                 let _ = fs::remove_file(path);
             }
         }
+        Ok(())
     }
 
     /// The registered account of a request's token, with the blob scope.
@@ -570,6 +598,7 @@ impl RelayState {
         let mut guards = Vec::new();
         let mut files = Vec::new();
         let mut removed = 0_usize;
+        let mut busy = Vec::new();
         {
             let database = self
                 .database
@@ -577,14 +606,19 @@ impl RelayState {
                 .expect("relay database lock should not poison");
             for hash in &hashes {
                 // An upload being handled right now finishes first.
-                let guard = BusyUpload::take(&self.blob_busy, busy_key(hash, &account))?;
+                let Ok(guard) = BusyUpload::take(&self.blob_busy, busy_key(hash, &account))
+                else {
+                    busy.push(hash.clone());
+                    continue;
+                };
                 guards.push(guard);
+                // An error here must not skip the unlinking below.
                 removed += database
                     .execute(
                         "DELETE FROM blobs WHERE hash = ?1 AND account = ?2",
                         params![hash, account],
                     )
-                    .map_err(|error| format!("deleting a blob: {error}"))?;
+                    .unwrap_or(0);
                 let _ = database.execute(
                     "DELETE FROM blob_parts WHERE hash = ?1 AND account = ?2",
                     params![hash, account],
@@ -597,7 +631,9 @@ impl RelayState {
             let _ = fs::remove_file(file);
         }
         drop(guards);
-        Ok(ok(json!({"deleted": removed > 0, "count": removed})))
+        Ok(ok(
+            json!({"deleted": removed > 0, "count": removed, "busy": busy}),
+        ))
     }
 
     /// `blob_get`: [len] bytes of the blob [hash] from [offset], to whoever
@@ -619,32 +655,36 @@ impl RelayState {
         self.sweep_blobs_if_due(&dir);
         let now = now_millis();
         let digest = secret_digest(request).unwrap_or_else(|_| vec![0_u8; 32]);
-        let found = {
+        // The cap check and the count are one step under one lock, so
+        // concurrent reads cannot overshoot the cap together.
+        let factor = self.config.ext.blob_serve_factor;
+        let (account, size, len) = {
             let database = self
                 .database
                 .lock()
                 .expect("relay database lock should not poison");
-            find_readable(&database, hash, &digest, now, self.config.ext.blob_serve_factor)?
+            let Some((account, size)) = find_readable(&database, hash, &digest, now, factor)?
+            else {
+                return Err("no such blob".to_owned());
+            };
+            if offset >= size {
+                return Err("the offset is past the end of the blob".to_owned());
+            }
+            let len = len.min((size - offset) as usize);
+            self.allow_blob_bytes(peer, len as u64)?;
+            let changed = database
+                .execute(
+                    "UPDATE blobs SET served = served + ?3
+                      WHERE hash = ?1 AND account = ?2
+                        AND (?4 = 0 OR served < size * ?4)",
+                    params![hash, account, len as u64, factor],
+                )
+                .map_err(|error| format!("reading blobs: {error}"))?;
+            if changed != 1 {
+                return Err("no such blob".to_owned());
+            }
+            (account, size, len)
         };
-        let Some((account, size)) = found else {
-            return Err("no such blob".to_owned());
-        };
-        if offset >= size {
-            return Err("the offset is past the end of the blob".to_owned());
-        }
-        let len = len.min((size - offset) as usize);
-        self.allow_blob_bytes(peer, len as u64)?;
-        // What has been served counts toward the blob's budget.
-        {
-            let database = self
-                .database
-                .lock()
-                .expect("relay database lock should not poison");
-            let _ = database.execute(
-                "UPDATE blobs SET served = served + ?3 WHERE hash = ?1 AND account = ?2",
-                params![hash, account, len as u64],
-            );
-        }
         // The read: unlocked.
         let mut data = vec![0_u8; len];
         let mut file = fs::File::open(blob_path(&dir, hash, &account))
@@ -1476,13 +1516,92 @@ mod tests {
         let busy = BusyUpload::take(&state.blob_busy, busy_key(&hashes[4], &[1_u8; 32])).unwrap();
         state.sweep_blobs(&dir, now_millis());
         assert_eq!(row_count(&state, "blobs"), 1, "busy: left alone");
-        assert!(state
+        // A busy hash is reported and skipped, never an error for the batch.
+        let answer = state
             .blob_delete(&json!({"token": token, "hash": hashes[4]}))
-            .is_err());
+            .unwrap();
+        assert_eq!(answer["busy"], json!([hashes[4]]));
+        assert_eq!(answer["deleted"], false);
         drop(busy);
         state.sweep_blobs(&dir, now_millis());
         assert_eq!(row_count(&state, "blobs"), 0);
         let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn a_busy_hash_does_not_stop_the_rest_of_a_batch_delete() {
+        let state = state_with("batch-busy", |_| {});
+        let token = token_for(&state, 1, SCOPE_MESSAGES | SCOPE_EXTENDED);
+        let hashes: Vec<String> = (0..3)
+            .map(|i| upload(&state, &token, &blob(300 + i, 20 + i as u8)).unwrap())
+            .collect();
+        let dir = state.blob_dir().unwrap();
+        let busy = BusyUpload::take(&state.blob_busy, busy_key(&hashes[1], &[1_u8; 32])).unwrap();
+        let answer = state
+            .blob_delete(&json!({"token": token, "hashes": hashes}))
+            .unwrap();
+        assert_eq!(answer["count"], 2);
+        assert_eq!(answer["busy"], json!([hashes[1]]));
+        // The others are gone, rows and files.
+        assert!(get(&state, &hashes[0], 0, 10).is_err());
+        assert!(get(&state, &hashes[2], 0, 10).is_err());
+        assert!(!blob_path(&dir, &hashes[0], &[1_u8; 32]).exists());
+        assert!(!blob_path(&dir, &hashes[2], &[1_u8; 32]).exists());
+        assert!(get(&state, &hashes[1], 0, 10).is_ok());
+        drop(busy);
+        // Asked again later, the busy one goes too.
+        let again = state
+            .blob_delete(&json!({"token": token, "hashes": [hashes[1]]}))
+            .unwrap();
+        assert_eq!(again["count"], 1);
+    }
+
+    #[test]
+    fn concurrent_reads_cannot_overshoot_the_serve_cap() {
+        let state = state_with("race", |config| {
+            config.ext.blob_serve_factor = 3;
+            config.ext.blob_get_bytes_per_minute = u64::MAX / 2;
+        });
+        let token = token_for(&state, 1, SCOPE_MESSAGES | SCOPE_EXTENDED);
+        let hash = upload(&state, &token, &blob(1000, 4)).unwrap();
+        let served = std::sync::atomic::AtomicU32::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..16 {
+                scope.spawn(|| {
+                    for _ in 0..4 {
+                        if get(&state, &hash, 0, 1000).is_ok() {
+                            served.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                });
+            }
+        });
+        assert_eq!(served.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn the_default_serve_factor_leaves_room_for_retries() {
+        assert_eq!(parity_config().ext.blob_serve_factor, 8);
+    }
+
+    #[test]
+    fn a_blob_directory_belongs_to_one_relay() {
+        let dir = temp_dir("owner");
+        let make = |seed: u8| {
+            let mut config = parity_config();
+            config.ext.blob_max_bytes = 4096;
+            config.ext.blob_dir = Some(dir.clone());
+            RelayState::try_new(
+                config,
+                crate::identity::RelayIdentity::from_seed_bytes([seed; 32]),
+            )
+        };
+        assert!(make(7).is_ok());
+        assert!(make(7).is_ok(), "the same relay restarts");
+        let error = make(8).err().expect("another relay is refused");
+        assert!(error.contains("another relay"), "{error}");
+        // Another relay's blobs were not touched.
+        assert!(dir.join(OWNER_MARKER).exists());
     }
 }
