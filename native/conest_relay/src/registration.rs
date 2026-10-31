@@ -251,7 +251,7 @@ fn verify(key: &[u8; 32], message: &[u8], signature: &str) -> bool {
 
 /// Compares two byte strings in time that does not depend on where they
 /// differ.
-fn same(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn same(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -441,6 +441,7 @@ impl RelayState {
                             params![account.to_vec(), now_millis(), quota],
                         )
                         .map_err(|error| format!("recording an account: {error}"))?;
+                    crate::blobs::note_account_group(&database, &account, &peer_group(source));
                 }
                 self.accounts
                     .lock()
@@ -1071,5 +1072,26 @@ mod tests {
         let (_, health) = client.next_json();
         assert_eq!(health["stats"]["v2"]["policy"]["registration"], "open");
         assert_eq!(health["stats"]["v2"]["policy"]["tier1"], "open");
+    }
+
+    #[test]
+    fn a_new_account_is_filed_under_the_address_it_registered_from() {
+        let state = state_with(|config| config.ext.registration = RegistrationPolicy::Open);
+        let hash = [9_u8; 32];
+        let account = SigningKey::from_bytes(&[5_u8; 32]);
+        state
+            .register(&register_request(&account, &hash, json!({})), &hash, "198.51.100.8")
+            .expect("registers");
+        let group: String = state
+            .database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT grp FROM blob_account_groups WHERE account = ?1",
+                params![account.verifying_key().to_bytes().to_vec()],
+                |row| row.get(0),
+            )
+            .expect("filed");
+        assert_eq!(group, peer_group("198.51.100.8"));
     }
 }

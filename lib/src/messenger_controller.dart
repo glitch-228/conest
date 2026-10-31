@@ -17461,6 +17461,7 @@ class MessengerController extends ChangeNotifier {
           );
         } else {
           unawaited(_sendAttachmentCancel(entry.contact, attachmentId));
+          _dropLeftBlobs(attachmentId);
           _clearOutboundAttempt(entry.contact.deviceId, entry.message.id);
           _outboundRetryTimers.remove(attachmentId)?.cancel();
           _outboundAttachments.remove(attachmentId);
@@ -17888,6 +17889,7 @@ class MessengerController extends ChangeNotifier {
     final contact = _contactByDeviceId(state.peerDeviceId);
     if (contact == null) return;
     unawaited(_sendAttachmentCancel(contact, attachmentId));
+    _dropLeftBlobs(attachmentId);
     _clearOutboundAttempt(contact.deviceId, state.messageId);
     _outboundRetryTimers.remove(attachmentId)?.cancel();
     _outboundAttachments.remove(attachmentId);
@@ -22393,6 +22395,7 @@ class MessengerController extends ChangeNotifier {
     } else if (_messageById(state.peerDeviceId, state.messageId) == null) {
       // Parent message was locally deleted; tear down outbound state and
       // notify the receiver.
+      _dropLeftBlobs(attachmentId);
       _outboundRetryTimers.remove(attachmentId)?.cancel();
       _outboundAttachments.remove(attachmentId);
       _clearActiveOutbound(state.peerDeviceId, attachmentId);
@@ -23565,7 +23568,15 @@ class MessengerController extends ChangeNotifier {
   @visibleForTesting
   static Duration blobLeaveDelay = const Duration(seconds: 20);
 
+  /// How long a started transfer may get no block from the receiver before
+  /// the blocks are also left on relays.
+  @visibleForTesting
+  static Duration blobSlowAfter = const Duration(seconds: 60);
+
   final Set<String> _leavingBlobs = <String>{};
+
+  /// Blobs this device left on relays, by file, until they are taken back.
+  final Map<String, LeftBlobs> _leftBlobs = <String, LeftBlobs>{};
 
   void _scheduleBlobLeave(
     ContactRecord contact,
@@ -23580,14 +23591,47 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final id = state.descriptor.id;
-    Timer(blobLeaveDelay, () {
+    // One timer per file: it fires when the receiver has not started, or
+    // when a started receiver has fetched no block for [blobSlowAfter]; in
+    // between it sleeps until that moment could come.
+    void check() {
       if (_disposed || !identical(_outboundAttachments[id], state)) return;
-      unawaited(
-        _leaveBlobs(contact, state).catchError((Object error) {
-          appendDebugLog('Could not leave blobs for $id: ${error.runtimeType}');
-        }),
+      if (_leftBlobs.containsKey(id) || _leavingBlobs.contains(id)) return;
+      void leave(bool midTransfer) {
+        unawaited(
+          _leaveBlobs(contact, state, midTransfer: midTransfer).catchError((
+            Object error,
+          ) {
+            appendDebugLog(
+              'Could not leave blobs for $id: ${error.runtimeType}',
+            );
+          }),
+        );
+      }
+
+      if (state.highestChunkSent < 0) {
+        leave(false);
+        return;
+      }
+      // Everything was served: nothing is left to leave.
+      if (state.highestChunkSent >= state.descriptor.effectiveChunkCount - 1) {
+        return;
+      }
+      final last = state.lastChunkAt ?? state.activatedAt;
+      final idle = last == null
+          ? blobSlowAfter
+          : DateTime.now().toUtc().difference(last);
+      if (idle >= blobSlowAfter && _blobUploadAllowed) {
+        leave(true);
+        return;
+      }
+      Timer(
+        idle >= blobSlowAfter ? blobSlowAfter : blobSlowAfter - idle,
+        check,
       );
-    });
+    }
+
+    Timer(blobLeaveDelay, check);
   }
 
   /// Whether the energy policy and the network allow uploading for others.
@@ -23599,17 +23643,20 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _leaveBlobs(
     ContactRecord contact,
-    _OutboundAttachmentState state,
-  ) async {
+    _OutboundAttachmentState state, {
+    bool midTransfer = false,
+  }) async {
     final descriptor = state.descriptor;
     final id = descriptor.id;
-    // The receiver started: nothing to leave.
-    if (state.highestChunkSent >= 0 ||
+    // The receiver started (unless it is only slow): nothing to leave.
+    if ((state.highestChunkSent >= 0 && !midTransfer) ||
         state.paused ||
         !_blobUploadAllowed ||
         !_leavingBlobs.add(id)) {
       return;
     }
+    LeftBlobs? left;
+    var announced = false;
     try {
       final me = _requireIdentity();
       final relays = <PeerEndpoint, String>{};
@@ -23621,6 +23668,21 @@ class MessengerController extends ChangeNotifier {
         if (relays.length >= BlobAnnouncement.maxRelays) break;
       }
       if (relays.isEmpty) return;
+      final leftNow = left = LeftBlobs(
+        peerDeviceId: contact.deviceId,
+        relays: {
+          for (final entry in relays.entries)
+            entry.key.routeKey: (endpoint: entry.key, key: entry.value),
+        },
+      );
+      _leftBlobs[id] = leftNow;
+      final readSecret = newReadSecret();
+      final startedAt = DateTime.now().toUtc();
+      // A receiver that was slow is back when it fetches a block after
+      // the upload began; one that had not started, when it starts.
+      bool receiverBack() => midTransfer
+          ? (state.lastChunkAt?.isAfter(startedAt) ?? false)
+          : state.highestChunkSent >= 0;
       bool active() =>
           identical(_outboundAttachments[id], state) &&
           !state.paused &&
@@ -23633,7 +23695,7 @@ class MessengerController extends ChangeNotifier {
         // energy state no longer allows it.
         if (!active() ||
             working.isEmpty ||
-            state.highestChunkSent >= 0 ||
+            receiverBack() ||
             !_blobUploadAllowed) {
           return;
         }
@@ -23644,12 +23706,14 @@ class MessengerController extends ChangeNotifier {
         plainHashes.add(block.hash);
         for (final relay in working.toList()) {
           try {
+            leftNow.note(relay.routeKey, name);
             final done = await _relayClient.putBlob(
               host: relay.host,
               port: relay.port,
               protocol: relay.protocol,
               hash: name,
               bytes: block.ciphertext,
+              secret: readSecret,
               expectedIdentityPublicKeyBase64: relays[relay],
             );
             if (!done) working.remove(relay);
@@ -23667,6 +23731,7 @@ class MessengerController extends ChangeNotifier {
         relays: [for (final relay in working) relay.routeKey],
         blobHashes: blobHashes,
         plainHashes: plainHashes,
+        readSecret: readSecret,
       );
       final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'attachment_blobs',
@@ -23683,8 +23748,55 @@ class MessengerController extends ChangeNotifier {
         recipientDeviceId: contact.deviceId,
         envelope: envelope,
       );
+      announced = true;
     } finally {
       _leavingBlobs.remove(id);
+      // Nobody was told about these blobs: take them back.
+      final unannounced = left;
+      if (!announced && unannounced != null) {
+        if (identical(_leftBlobs[id], unannounced)) _leftBlobs.remove(id);
+        unawaited(_deleteLeftBlobs(unannounced));
+      }
+    }
+  }
+
+  /// The file [attachmentId] is done another way, was declined or was
+  /// cancelled: its blobs are taken back from the relays (what is missed
+  /// expires). [fromDeviceId] is the device that said so, when one did.
+  void _dropLeftBlobs(String attachmentId, {String? fromDeviceId}) {
+    final left = _leftBlobs[attachmentId];
+    if (left == null ||
+        (fromDeviceId != null && left.peerDeviceId != fromDeviceId)) {
+      return;
+    }
+    _leftBlobs.remove(attachmentId);
+    unawaited(_deleteLeftBlobs(left));
+  }
+
+  Future<void> _deleteLeftBlobs(LeftBlobs left) async {
+    final todo = [
+      for (final entry in left.uploads.entries) (entry.key, [...entry.value]),
+    ];
+    for (final (routeKey, hashes) in todo) {
+      final relay = left.relays[routeKey];
+      if (relay == null) continue;
+      for (final hash in hashes) {
+        if (_disposed) return;
+        try {
+          await _relayClient.deleteBlob(
+            host: relay.endpoint.host,
+            port: relay.endpoint.port,
+            protocol: relay.endpoint.protocol,
+            hash: hash,
+            expectedIdentityPublicKeyBase64: relay.key,
+          );
+        } catch (error) {
+          // The relay cannot be reached: the rest would fail the same; the
+          // blobs expire by themselves.
+          appendDebugLog('Blob delete failed: ${error.runtimeType}');
+          break;
+        }
+      }
     }
   }
 
@@ -23763,6 +23875,7 @@ class MessengerController extends ChangeNotifier {
         protocol: relay.protocol,
         hash: blobs.blobHashes[index],
         size: size,
+        secret: blobs.readSecret,
         expectedIdentityPublicKeyBase64: key,
       );
       if (!identical(_inboundAttachments[state.descriptor.id], state)) return;
@@ -23803,13 +23916,26 @@ class MessengerController extends ChangeNotifier {
   }
 
   @visibleForTesting
-  Future<void> leaveBlobsForTesting(String attachmentId) async {
+  Future<void> leaveBlobsForTesting(
+    String attachmentId, {
+    bool midTransfer = false,
+  }) async {
     final state = _outboundAttachments[attachmentId];
     final contact = state == null
         ? null
         : _contactByDeviceId(state.peerDeviceId);
-    if (state != null && contact != null) await _leaveBlobs(contact, state);
+    if (state != null && contact != null) {
+      await _leaveBlobs(contact, state, midTransfer: midTransfer);
+    }
   }
+
+  @visibleForTesting
+  int leftBlobCountForTesting(String attachmentId) =>
+      _leftBlobs[attachmentId]?.uploads.values.fold<int>(
+        0,
+        (sum, hashes) => sum + hashes.length,
+      ) ??
+      0;
 
   void _scheduleAttachmentRetry(String attachmentId) {
     final state = _inboundAttachments[attachmentId];
@@ -24226,6 +24352,8 @@ class MessengerController extends ChangeNotifier {
     }
     final state = _outboundAttachments[attachmentId];
     if (state != null && state.peerDeviceId != sender.deviceId) return;
+    // The file is whole: the relays need not keep its blobs.
+    _dropLeftBlobs(attachmentId, fromDeviceId: sender.deviceId);
     if (state == null) {
       // Receiver completed an attachment whose state we already cleared
       // (cancel, delete, stall). Still advance the queue so a later
@@ -24338,6 +24466,8 @@ class MessengerController extends ChangeNotifier {
     final inboundState = _inboundAttachments.remove(attachmentId);
     inboundState?.retryTimer?.cancel();
     final outboundState = _outboundAttachments.remove(attachmentId);
+    // Declined or cancelled by the receiver: take the blobs back.
+    _dropLeftBlobs(attachmentId, fromDeviceId: sender.deviceId);
     if (inboundState != null) unawaited(inboundState.closeFile());
     if (outboundState != null) unawaited(outboundState.closeFile());
     _assembledAttachments.remove(attachmentId);
@@ -40519,6 +40649,7 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(conversations: conversations);
     _markConversationMutationForBatch();
     if (attachmentId != null) {
+      _dropLeftBlobs(attachmentId);
       _outboundRetryTimers.remove(attachmentId)?.cancel();
       _outboundAttachments.remove(attachmentId);
       final inbound = _inboundAttachments.remove(attachmentId);
@@ -41777,6 +41908,7 @@ class _ScoringRelayClient implements RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required List<String> hashes,
+    required String secret,
     Duration timeout = const Duration(seconds: 6),
     String? expectedIdentityPublicKeyBase64,
   }) => inner.hasBlobs(
@@ -41784,6 +41916,24 @@ class _ScoringRelayClient implements RelayClient {
     port: port,
     protocol: protocol,
     hashes: hashes,
+    secret: secret,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
+  @override
+  Future<bool> deleteBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    Duration timeout = const Duration(seconds: 6),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.deleteBlob(
+    host: host,
+    port: port,
+    protocol: protocol,
+    hash: hash,
     timeout: timeout,
     expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
   );
@@ -41795,6 +41945,7 @@ class _ScoringRelayClient implements RelayClient {
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String hash,
     required Uint8List bytes,
+    required String secret,
     Duration ttl = const Duration(hours: 24),
     Duration timeout = const Duration(seconds: 10),
     String? expectedIdentityPublicKeyBase64,
@@ -41804,6 +41955,7 @@ class _ScoringRelayClient implements RelayClient {
     protocol: protocol,
     hash: hash,
     bytes: bytes,
+    secret: secret,
     ttl: ttl,
     timeout: timeout,
     expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
@@ -41816,6 +41968,7 @@ class _ScoringRelayClient implements RelayClient {
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String hash,
     required int size,
+    required String secret,
     Duration timeout = const Duration(seconds: 10),
     String? expectedIdentityPublicKeyBase64,
   }) => inner.getBlob(
@@ -41824,6 +41977,7 @@ class _ScoringRelayClient implements RelayClient {
     protocol: protocol,
     hash: hash,
     size: size,
+    secret: secret,
     timeout: timeout,
     expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
   );

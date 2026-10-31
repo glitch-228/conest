@@ -66,6 +66,8 @@ pub(crate) struct RelayState {
     /// When blobs were last swept, and bytes fetched per address (blobs.rs).
     pub(crate) blob_sweep: Arc<std::sync::atomic::AtomicU64>,
     pub(crate) blob_served: Arc<Mutex<HashMap<String, (u64, u64)>>>,
+    /// Uploads being handled right now (blobs.rs).
+    pub(crate) blob_busy: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl RelayState {
@@ -169,6 +171,7 @@ impl RelayState {
             queue_reads: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             blob_sweep: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             blob_served: Arc::new(Mutex::new(HashMap::new())),
+            blob_busy: Arc::new(Mutex::new(std::collections::HashSet::new())),
         };
         state.load_owners()?;
         state.load_accounts()?;

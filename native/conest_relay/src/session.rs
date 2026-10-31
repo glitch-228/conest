@@ -521,7 +521,7 @@ impl Session {
                 .await
                 .unwrap_or_else(|error| error_json(error));
         }
-        if matches!(action.as_str(), "blob_put" | "blob_get" | "blob_has") {
+        if matches!(action.as_str(), "blob_put" | "blob_get" | "blob_has" | "blob_delete") {
             // Blobs only inside an encrypted session; file and SQLite
             // work, so off the async worker threads.
             if !self.state.allow_request(&self.peer) {
@@ -536,6 +536,7 @@ impl Session {
                 .blocking(move |state| match request["action"].as_str() {
                     Some("blob_put") => state.blob_put(&request),
                     Some("blob_get") => state.blob_get(&request, &peer),
+                    Some("blob_delete") => state.blob_delete(&request),
                     _ => state.blob_has(&request),
                 })
                 .await

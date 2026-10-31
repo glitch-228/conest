@@ -530,6 +530,8 @@ class _OwnerFakeRelayClient extends _FakeRelayClient {
 class _FakeRelayClient extends RelayClient {
   /// Blobs this relay holds, by name; [tamperBlobs] changes what is served.
   final Map<String, Uint8List> blobs = {};
+  final Map<String, String> blobSecrets = {};
+  final List<String> blobDeletes = [];
   Uint8List Function(Uint8List bytes)? tamperBlobs;
   int blobGets = 0;
 
@@ -552,13 +554,29 @@ class _FakeRelayClient extends RelayClient {
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String hash,
     required Uint8List bytes,
+    required String secret,
     Duration ttl = const Duration(hours: 24),
     Duration timeout = const Duration(seconds: 10),
     String? expectedIdentityPublicKeyBase64,
   }) async {
     if (blobHashOf(bytes) != hash) return false;
     blobs[hash] = bytes;
+    blobSecrets[hash] = secret;
     return true;
+  }
+
+  @override
+  Future<bool> deleteBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    Duration timeout = const Duration(seconds: 6),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    blobDeletes.add(hash);
+    blobSecrets.remove(hash);
+    return blobs.remove(hash) != null;
   }
 
   @override
@@ -568,12 +586,16 @@ class _FakeRelayClient extends RelayClient {
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String hash,
     required int size,
+    required String secret,
     Duration timeout = const Duration(seconds: 10),
     String? expectedIdentityPublicKeyBase64,
   }) async {
     blobGets++;
     final bytes = blobs[hash];
-    if (bytes == null || bytes.length != size) throw StateError('no blob');
+    // A wrong secret looks like no blob, as on a real relay.
+    if (bytes == null || bytes.length != size || blobSecrets[hash] != secret) {
+      throw StateError('no blob');
+    }
     final tamper = tamperBlobs;
     return tamper == null ? bytes : tamper(Uint8List.fromList(bytes));
   }
@@ -584,9 +606,10 @@ class _FakeRelayClient extends RelayClient {
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required List<String> hashes,
+    required String secret,
     Duration timeout = const Duration(seconds: 6),
     String? expectedIdentityPublicKeyBase64,
-  }) async => hashes.where(blobs.containsKey).toSet();
+  }) async => hashes.where((hash) => blobSecrets[hash] == secret).toSet();
 
   _FakeRelayClient({
     Set<String>? failingHosts,
@@ -24363,7 +24386,7 @@ void main() {
         Uint8List bytes,
       })
     >
-    offlineSender() async {
+    offlineSender({bool accept = true}) async {
       final saved = MessengerController.blobLeaveDelay;
       MessengerController.blobLeaveDelay = Duration.zero;
       addTearDown(() => MessengerController.blobLeaveDelay = saved);
@@ -24418,10 +24441,13 @@ void main() {
               .firstOrNull;
           unawaited(bob.pollNow());
           id = m?.attachment?.id;
-          if (id != null && alice.attachmentAwaitingAcceptance(id!)) {
+          if (accept && id != null && alice.attachmentAwaitingAcceptance(id!)) {
             unawaited(alice.acceptIncomingAttachment(id!));
           }
-          return id != null && relay.blobs.length >= 4;
+          return id != null &&
+              relay.blobs.length >= 4 &&
+              (accept ||
+                  (alice.blockSourcesForTesting(id!)?.sources.length ?? 0) > 1);
         },
         timeout: const Duration(seconds: 20),
         reason:
@@ -24448,6 +24474,10 @@ void main() {
         s.bytes,
       );
       expect(s.relay.blobGets, greaterThanOrEqualTo(4));
+      // One random read secret for the file, long enough to be unguessable.
+      final secrets = s.relay.blobSecrets.values.toSet();
+      expect(secrets, hasLength(1));
+      expect(secrets.single.length, greaterThanOrEqualTo(32));
       // The relay holds ciphertext, never the file.
       expect(
         s.relay.blobs.values.any((blob) => blob.length == 128 * 1024 + 16),
@@ -24554,6 +24584,134 @@ void main() {
       );
     }, timeout: const Timeout(Duration(seconds: 150)));
 
+    test(
+      'the sender takes its blobs back when the receiver declines',
+      () async {
+        final s = await offlineSender(accept: false);
+        expect(s.relay.blobs.length, greaterThanOrEqualTo(4));
+        expect(s.relay.blobSecrets.length, s.relay.blobs.length);
+        await s.alice.cancelTransfer(s.id);
+        await _waitForIroh(
+          () {
+            unawaited(s.alice.pollNow());
+            unawaited(s.bob.pollNow());
+            return s.relay.blobs.isEmpty;
+          },
+          reason: 'the blobs stayed on the relay: ${s.relay.blobs.length}',
+          timeout: const Duration(seconds: 30),
+        );
+        expect(s.relay.blobDeletes, isNotEmpty);
+        expect(s.bob.leftBlobCountForTesting(s.id), 0);
+      },
+      timeout: const Timeout(Duration(seconds: 90)),
+    );
+
+    test(
+      'the sender takes its blobs back once the file is complete',
+      () async {
+        final s = await offlineSender();
+        await _waitForIroh(
+          () {
+            unawaited(s.alice.pollNow());
+            unawaited(s.bob.pollNow());
+            return s.alice.attachmentAvailableLocally(s.id) &&
+                s.relay.blobs.isEmpty;
+          },
+          reason:
+              'the blobs stayed after completion: ${s.relay.blobs.length} '
+              '${s.bob.recentDebugLog.reversed.take(5).join(' | ')}',
+          timeout: const Duration(seconds: 40),
+        );
+        expect(s.bob.leftBlobCountForTesting(s.id), 0);
+      },
+      timeout: const Timeout(Duration(seconds: 90)),
+    );
+
+    test('a receiver that stops fetching mid-transfer gets the file from '
+        'blobs too', () async {
+      final savedDelay = MessengerController.blobLeaveDelay;
+      final savedSlow = MessengerController.blobSlowAfter;
+      MessengerController.blobLeaveDelay = const Duration(seconds: 4);
+      MessengerController.blobSlowAfter = const Duration(seconds: 1);
+      addTearDown(() {
+        MessengerController.blobLeaveDelay = savedDelay;
+        MessengerController.blobSlowAfter = savedSlow;
+      });
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      await _pairControllers(alice, bob);
+      for (final c in [alice, bob]) {
+        await c.registerWithRelay(c.identity!.configuredRelays.first);
+      }
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          unawaited(bob.pollNow());
+          return bob.contacts.single.featureCapabilities.contains(
+            ApplicationCapability.relayBlobAttachmentsV1,
+          );
+        },
+        reason: 'Bob did not learn what Alice can do',
+        timeout: const Duration(seconds: 20),
+      );
+      // One block of the receiver's asking gets through, then nothing more.
+      var served = 0;
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          (envelope.kind == 'attachment_chunk_request' ||
+              envelope.kind == 'attachment_chunk') &&
+          ++served > 1;
+      final bytes = Uint8List(400 * 1024);
+      for (var i = 0; i < bytes.length; i += 5) {
+        bytes[i] = (i * 29 + (i >> 8)) & 0xff;
+      }
+      await bob.sendAttachment(
+        contact: bob.contacts.single,
+        bytes: bytes,
+        fileName: 'slow.bin',
+      );
+      final bobId = bob.identity!.deviceId;
+      String? id;
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          unawaited(bob.pollNow());
+          id = alice
+              .messagesFor(bobId)
+              .where((m) => m.attachment?.fileName == 'slow.bin')
+              .firstOrNull
+              ?.attachment
+              ?.id;
+          if (id != null && alice.attachmentAwaitingAcceptance(id!)) {
+            unawaited(alice.acceptIncomingAttachment(id!));
+          }
+          return id != null && alice.attachmentAvailableLocally(id!);
+        },
+        reason:
+            'the slow receiver did not get the file: blobs=${relay.blobs.length} '
+            'gets=${relay.blobGets} served=$served '
+            'bob: ${bob.recentDebugLog.reversed.take(8).join(' | ')} '
+            'alice: ${alice.recentDebugLog.reversed.take(8).join(' | ')}',
+        timeout: const Duration(seconds: 25),
+      );
+      expect(served, greaterThan(1), reason: 'the sender had started');
+      expect(relay.blobGets, greaterThan(0));
+      expect(
+        await File((await alice.attachmentCachePathFor(id!))!).readAsBytes(),
+        bytes,
+      );
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
     test('on battery saver nothing is left on relays', () async {
       final saved = MessengerController.blobLeaveDelay;
       MessengerController.blobLeaveDelay = Duration.zero;
@@ -24654,6 +24812,7 @@ void main() {
         'relays': [alice.identity!.configuredRelays.first.routeKey],
         'blobs': [for (var i = 0; i < 4; i++) '$i' * 64],
         'plain': [for (var i = 0; i < 4; i++) base64Encode(Uint8List(32))],
+        'secret': newReadSecret(),
       };
       alice.handleBlobAnnouncementForTesting(
         carol.identity!.deviceId,
@@ -24676,8 +24835,13 @@ void main() {
         relays: const ['relay:tcp:relay.example:7667'],
         blobHashes: [for (var i = 0; i < 3; i++) 'a' * 63 + '$i'],
         plainHashes: [for (var i = 0; i < 3; i++) Uint8List(32)],
+        readSecret: newReadSecret(),
       );
       expect(BlobAnnouncement.parse(good.toJson(), blocks: 3), isNotNull);
+      expect(
+        BlobAnnouncement.parse(good.toJson(), blocks: 3)!.readSecret,
+        good.readSecret,
+      );
       expect(BlobAnnouncement.parse(good.toJson(), blocks: 4), isNull);
       for (final bad in [
         {...good.toJson(), 'relays': <String>[]},
@@ -24698,6 +24862,12 @@ void main() {
           'plain': ['AA==', 'AA==', 'AA=='],
         },
         {...good.toJson(), 'attachmentId': 'x' * 161},
+        // Without a read secret (or with a weak or odd one) nothing is taken.
+        {...good.toJson()}..remove('secret'),
+        {...good.toJson(), 'secret': 'short'},
+        {...good.toJson(), 'secret': 'x' * 129},
+        {...good.toJson(), 'secret': 'has a space inside it......'},
+        {...good.toJson(), 'secret': 12345678901234567},
       ]) {
         expect(BlobAnnouncement.parse(bad, blocks: 3), isNull);
       }

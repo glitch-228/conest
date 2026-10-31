@@ -144,7 +144,12 @@ class RelayClient {
   static final Map<String, SimpleKeyPair> _authKeys = {};
 
   /// Blob requests (M27): only ever inside an encrypted session.
-  static const Set<String> _blobActions = {'blob_put', 'blob_get', 'blob_has'};
+  static const Set<String> _blobActions = {
+    'blob_put',
+    'blob_get',
+    'blob_has',
+    'blob_delete',
+  };
 
   /// The most a blob part carries (the relay's limit).
   static const int blobPartBytes = 192 * 1024;
@@ -533,12 +538,13 @@ class RelayClient {
   }
 
   /// Which of [hashes] (lowercase hex SHA-256, at most 64) the relay holds
-  /// as blobs. Throws when the relay keeps none.
+  /// as blobs readable with [secret]. Throws when the relay keeps none.
   Future<Set<String>> hasBlobs({
     required String host,
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required List<String> hashes,
+    required String secret,
     Duration timeout = const Duration(seconds: 6),
     String? expectedIdentityPublicKeyBase64,
   }) async {
@@ -547,7 +553,12 @@ class RelayClient {
       port: port,
       protocol: protocol,
       timeout: timeout,
-      request: {'action': 'blob_has', 'hashes': hashes},
+      request: {
+        'action': 'blob_has',
+        'items': [
+          for (final hash in hashes) {'hash': hash, 'secret': secret},
+        ],
+      },
       expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
     final have = result.body['have'];
@@ -555,13 +566,15 @@ class RelayClient {
   }
 
   /// Uploads [bytes] as a blob named by [hash] (its SHA-256, lowercase
-  /// hex), in parts, for up to [ttl]. False when the relay refuses.
+  /// hex), in parts, for up to [ttl]; only whoever shows [secret] may read
+  /// it back. False when the relay refuses.
   Future<bool> putBlob({
     required String host,
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String hash,
     required Uint8List bytes,
+    required String secret,
     Duration ttl = const Duration(hours: 24),
     Duration timeout = const Duration(seconds: 10),
     String? expectedIdentityPublicKeyBase64,
@@ -580,6 +593,7 @@ class RelayClient {
           'total': bytes.length,
           'offset': offset,
           'ttl_secs': ttl.inSeconds,
+          'secret': secret,
           'data': base64Encode(bytes.sublist(offset, end)),
         },
         expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
@@ -590,6 +604,27 @@ class RelayClient {
     return false;
   }
 
+  /// Takes back a blob this account uploaded (and any upload of it under
+  /// way). True when the relay had it.
+  Future<bool> deleteBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    Duration timeout = const Duration(seconds: 6),
+    String? expectedIdentityPublicKeyBase64,
+  }) async {
+    final result = await _sendRequest(
+      host: host,
+      port: port,
+      protocol: protocol,
+      timeout: timeout,
+      request: {'action': 'blob_delete', 'hash': hash},
+      expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+    );
+    return result.body['deleted'] == true;
+  }
+
   /// The blob named by [hash], [size] bytes (the caller checks them).
   Future<Uint8List> getBlob({
     required String host,
@@ -597,6 +632,7 @@ class RelayClient {
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
     required String hash,
     required int size,
+    required String secret,
     Duration timeout = const Duration(seconds: 10),
     String? expectedIdentityPublicKeyBase64,
   }) async {
@@ -615,6 +651,7 @@ class RelayClient {
           'hash': hash,
           'offset': out.length,
           'len': min(blobPartBytes, size - out.length),
+          'secret': secret,
         },
         expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
       );
@@ -1396,7 +1433,8 @@ class RelayClient {
     final outgoing =
         (request['action'] == 'store' ||
                 request['action'] == 'health' ||
-                request['action'] == 'blob_put') &&
+                request['action'] == 'blob_put' ||
+                request['action'] == 'blob_delete') &&
             token != null
         ? {...request, 'token': token}
         : request;
