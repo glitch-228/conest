@@ -2279,7 +2279,7 @@ class MessengerController extends ChangeNotifier {
 
   /// How much slower background upkeep (polls, heartbeats) runs on this
   /// power: as is on mains or an unmetered network, half as often on
-  /// battery, a quarter as often in battery saver. Nothing the user waits
+  /// battery, an eighth as often in battery saver. Nothing the user waits
   /// for (an open chat, a transfer) slows down.
   int get _backgroundEnergyFactor => _currentEnergyBudget.pollFactor;
 

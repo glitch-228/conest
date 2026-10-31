@@ -31,17 +31,24 @@ class EnergyBudgetSettingTile extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       title: Text(l10n.energyBudgetTitle),
       subtitle: Text(l10n.energyBudgetSubtitle),
-      trailing: DropdownButton<EnergyBudgetSetting>(
-        value: identity.connectivity.energyBudget,
-        onChanged: busy
-            ? null
-            : (value) {
-                if (value != null) controller.setEnergyBudget(value);
-              },
-        items: [
-          for (final setting in EnergyBudgetSetting.values)
-            DropdownMenuItem(value: setting, child: Text(label(setting))),
-        ],
+      trailing: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 150),
+        child: DropdownButton<EnergyBudgetSetting>(
+          isExpanded: true,
+          value: identity.connectivity.energyBudget,
+          onChanged: busy
+              ? null
+              : (value) {
+                  if (value != null) controller.setEnergyBudget(value);
+                },
+          items: [
+            for (final setting in EnergyBudgetSetting.values)
+              DropdownMenuItem(
+                value: setting,
+                child: Text(label(setting), overflow: TextOverflow.ellipsis),
+              ),
+          ],
+        ),
       ),
     );
   }

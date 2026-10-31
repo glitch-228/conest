@@ -25990,11 +25990,11 @@ void main() {
       );
       expect(
         saver.heartbeatIntervalForTesting(),
-        mains.heartbeatIntervalForTesting() * 4,
+        mains.heartbeatIntervalForTesting() * 8,
       );
       final mainsPoll = mains.pollIntervalForTesting;
       if (mainsPoll != null) {
-        expect(saver.pollIntervalForTesting, mainsPoll * 4);
+        expect(saver.pollIntervalForTesting, mainsPoll * 8);
       }
       // In the foreground nothing slows down.
       saver.setAppForegroundState(true);
