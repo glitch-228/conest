@@ -6456,10 +6456,10 @@ abstract class AppLocalizations {
   /// **'You are hidden'**
   String get uiYouAreHidden56DCC1;
 
-  /// App-owned interface/status text in lib/src/ui/bitchat_chats_screen.dart:48. English: You read the mesh chat, but bitchat users cannot see you or write to you. Turn on "Reachable by bitchat users" in Settings → Connectivity to write.
+  /// Hidden bitchat screen: discover nearby people and choose Message to become visible.
   ///
   /// In en, this message translates to:
-  /// **'You read the mesh chat, but bitchat users cannot see you or write to you. Turn on \"Reachable by bitchat users\" in Settings → Connectivity to write.'**
+  /// **'You can see people nearby and read the mesh chat while hidden. Choose “Message” to become visible and write to someone.'**
   String get uiYouReadTheMeshChatAEACC5;
 
   /// App-owned interface/status text in lib/src/ui/bitchat_chats_screen.dart:59. English: Everyone nearby, over Bluetooth
@@ -10544,6 +10544,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'I compared them'**
   String get contactKeysDifferConfirm;
+
+  /// When a verified bitchat announce was last received from a nearby person.
+  ///
+  /// In en, this message translates to:
+  /// **'Last heard {time}'**
+  String bitchatLastHeard(String time);
+
+  /// Visibility warning before making a hidden device reachable to message someone. No nickname is promised before the identity is created.
+  ///
+  /// In en, this message translates to:
+  /// **'This device will become visible to bitchat users nearby, and they can write to you.'**
+  String get bitchatMessageReachabilityWarning;
+
+  /// Starting a bitchat chat failed while enabling reachability.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not start this chat. Try again.'**
+  String get bitchatStartChatFailed;
 
   /// Settings, Connectivity: title of the power use choice.
   ///

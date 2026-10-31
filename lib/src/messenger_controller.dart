@@ -7838,12 +7838,13 @@ class MessengerController extends ChangeNotifier {
     ).convert(utf8.encode(label)).bytes;
     final direct = await BitchatDirect.create(
       nickname: bitchatNickname,
+      listeningOnly: !config.visible,
       noiseSeed: derive('conest.bitchat.identity.noise'),
       signingSeed: derive('conest.bitchat.identity.signing'),
       now: _now,
     );
     // Who is nearby stays known across the switch.
-    direct.adoptPeers(_bitchatDirect?.peers ?? const <BitchatPeer>[]);
+    direct.adoptDiscovery(_bitchatDirect);
     await _closeBitchatIdentity();
     if (_disposed || !identical(_bitchatChannel, channel)) {
       await direct.close();

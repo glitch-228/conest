@@ -3815,7 +3815,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get uiYouReadTheMeshChatAEACC5 =>
-      '您可阅读网状网络聊天，但 bitchat 用户看不到您，也无法联系您。请在“设置 → 连接”开启“允许 bitchat 用户联系”以发送消息。';
+      '保持隐藏时，你可以看到附近的人并阅读网状聊天。选择“消息”即可让附近的人看到你并给对方发消息。';
 
   @override
   String get uiEveryoneNearbyOverBluetooth7B8D63 => '通过蓝牙连接的附近所有人';
@@ -6246,6 +6246,18 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get contactKeysDifferConfirm => '我已核对';
+
+  @override
+  String bitchatLastHeard(String time) {
+    return '上次收到信号：$time';
+  }
+
+  @override
+  String get bitchatMessageReachabilityWarning =>
+      '附近的 bitchat 用户将能看到这台设备，并可以给你发消息。';
+
+  @override
+  String get bitchatStartChatFailed => '无法开始此聊天，请重试。';
 
   @override
   String get energyBudgetTitle => '耗电';

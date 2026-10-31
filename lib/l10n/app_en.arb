@@ -5825,9 +5825,9 @@
   "@uiYouAreHidden56DCC1": {
     "description": "App-owned interface/status text in lib/src/ui/bitchat_chats_screen.dart:46. English: You are hidden"
   },
-  "uiYouReadTheMeshChatAEACC5": "You read the mesh chat, but bitchat users cannot see you or write to you. Turn on \"Reachable by bitchat users\" in Settings → Connectivity to write.",
+  "uiYouReadTheMeshChatAEACC5": "You can see people nearby and read the mesh chat while hidden. Choose “Message” to become visible and write to someone.",
   "@uiYouReadTheMeshChatAEACC5": {
-    "description": "App-owned interface/status text in lib/src/ui/bitchat_chats_screen.dart:48. English: You read the mesh chat, but bitchat users cannot see you or write to you. Turn on \"Reachable by bitchat users\" in Settings → Connectivity to write."
+    "description": "Hidden bitchat screen: discover nearby people and choose Message to become visible."
   },
   "uiEveryoneNearbyOverBluetooth7B8D63": "Everyone nearby, over Bluetooth",
   "@uiEveryoneNearbyOverBluetooth7B8D63": {
@@ -9607,6 +9607,23 @@
   "contactKeysDifferConfirm": "I compared them",
   "@contactKeysDifferConfirm": {
     "description": "Button: the user compared the safety numbers."
+  },
+  "bitchatLastHeard": "Last heard {time}",
+  "@bitchatLastHeard": {
+    "description": "When a verified bitchat announce was last received from a nearby person.",
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "bitchatMessageReachabilityWarning": "This device will become visible to bitchat users nearby, and they can write to you.",
+  "@bitchatMessageReachabilityWarning": {
+    "description": "Visibility warning before making a hidden device reachable to message someone. No nickname is promised before the identity is created."
+  },
+  "bitchatStartChatFailed": "Could not start this chat. Try again.",
+  "@bitchatStartChatFailed": {
+    "description": "Starting a bitchat chat failed while enabling reachability."
   },
   "energyBudgetTitle": "Power use",
   "@energyBudgetTitle": {
