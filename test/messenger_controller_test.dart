@@ -1671,6 +1671,77 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
   Future<void> close() => _inbound.close();
 }
 
+/// A mailbox carrier for tests: takes every envelope, delivers none.
+class _KeepingAdapter implements TransportAdapter {
+  _KeepingAdapter({
+    this.kind = TransportKind.xmpp,
+    this.path = TransportPathKind.storeForward,
+  });
+
+  final stored = <String>[];
+
+  @override
+  final TransportKind kind;
+  final TransportPathKind path;
+
+  @override
+  TransportCapabilities get capabilities => const TransportCapabilities(
+    requiresPeerOnline: false,
+    supportsStoreForward: true,
+    duplex: false,
+    requiresUserAction: false,
+    supportsAttachmentStreaming: false,
+    reportsPath: false,
+  );
+
+  @override
+  Future<void> start() async {}
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Stream<RouteCandidate> get pathChanges => const Stream.empty();
+
+  @override
+  Stream<TransportInboundEnvelope> get inboundEnvelopes => const Stream.empty();
+
+  @override
+  Future<List<RouteCandidate>> discoverRoutes(TransportPeer peer) async => [
+    RouteCandidate(
+      transport: kind,
+      path: path,
+      routeId: '${kind.name}:${peer.deviceId}',
+      label: 'Keeper',
+      trust: TransportTrustState.verifiedContact,
+    ),
+  ];
+
+  @override
+  Future<DeliveryReceipt> sendEnvelope({
+    required TransportPeer peer,
+    required RouteCandidate route,
+    required TransportEnvelope envelope,
+  }) async {
+    stored.add(envelope.id);
+    return DeliveryReceipt(
+      state: DeliveryReceiptState.acceptedByTransport,
+      route: route,
+      at: DateTime.now().toUtc(),
+    );
+  }
+
+  @override
+  Future<DeliveryReceipt> sendAttachmentRange({
+    required TransportPeer peer,
+    required RouteCandidate route,
+    required AttachmentRange range,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<void> cancel(String operationId) async {}
+}
+
 Future<void> _waitForIroh(
   bool Function() ready, {
   String reason = 'Iroh delivery did not finish',
@@ -20549,6 +20620,182 @@ void main() {
         return families(traces).length >= 2;
       }, reason: 'the group receipt did not name two routes');
     });
+
+    // A relay that stores a message has not delivered it. The message keeps
+    // going to the other routes, in every energy mode.
+    // Iroh plus a mailbox carrier that takes every message and keeps it
+    // from the contact (a server that stores, the contact never fetches).
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        _InProcessIrohNetwork,
+        _KeepingAdapter,
+        _KeepingAdapter,
+        _KeepingAdapter,
+      )
+    >
+    storeOnlyPair(EnergyMode mode, DateTime Function() now) async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      // The LAN and the relay are not ways to Bob here.
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.kind == 'direct_message';
+      final keeper = _KeepingAdapter();
+      // A second route, behind the first, that takes the message and
+      // loses it (a firewall dropping what arrives).
+      final swallower = _KeepingAdapter(
+        kind: TransportKind.tor,
+        path: TransportPathKind.manual,
+      );
+      final swallower2 = _KeepingAdapter(
+        kind: TransportKind.telegram,
+        path: TransportPathKind.manual,
+      );
+      Future<TransportRegistry?> withKeeper(IdentityRecord identity) async {
+        final base = (await network.registry(identity))!;
+        return TransportRegistry([
+          ...base.adapters,
+          keeper,
+          swallower,
+          swallower2,
+        ]);
+      }
+
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: withKeeper,
+        nowProvider: now,
+        energyPolicy: EnergyPolicy.fixed(
+          mode,
+          escalateInterval: const Duration(milliseconds: 100),
+        ),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      return (alice, bob, network, keeper, swallower, swallower2);
+    }
+
+    for (final (label, mode) in [
+      ('battery saver', EnergyMode.saver),
+      ('on battery', EnergyMode.limited),
+      ('on mains power', EnergyMode.unconstrained),
+    ]) {
+      test('a message stored on a relay still goes on to a route that was '
+          'failing ($label)', () async {
+        var now = DateTime.now().toUtc();
+        final (alice, bob, network, _, _, _) = await storeOnlyPair(
+          mode,
+          () => now,
+        );
+        final aliceId = alice.identity!.deviceId;
+        final bobId = bob.identity!.deviceId;
+        // Straight to Bob fails for now; the relay takes the message and
+        // keeps it from him.
+        network.blockedPairs.add((
+          alice.identity!.irohEndpointId!,
+          bob.identity!.irohEndpointId!,
+        ));
+        await alice.sendMessage(contact: alice.contacts.single, body: 'kept');
+        ChatMessage sent() =>
+            alice.messagesFor(bobId).singleWhere((m) => m.body == 'kept');
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await bob.pollNow();
+        expect(
+          bob.messagesFor(aliceId).where((m) => m.body == 'kept'),
+          isEmpty,
+        );
+        // Stored on a relay is not delivered: no tick.
+        expect(sent().state.awaitsRecipientAck, isTrue);
+
+        // The direct route works again. The next try must find it, though
+        // it just failed and the relay would take the message again.
+        network.blockedPairs.clear();
+        // Each pass goes on to a route not tried yet.
+        for (var pass = 0; pass < 3; pass++) {
+          now = now.add(const Duration(seconds: 20));
+          await alice.retryUnacknowledgedMessagesNow();
+          await bob.pollNow();
+          if (bob.messagesFor(aliceId).any((m) => m.body == 'kept')) break;
+        }
+        await _waitForIroh(() {
+          unawaited(bob.pollNow());
+          return bob.messagesFor(aliceId).any((m) => m.body == 'kept');
+        }, reason: 'the message stayed on the relay that held it');
+        await _waitForIroh(
+          () => {
+            DeliveryState.delivered,
+            DeliveryState.read,
+          }.contains(sent().state),
+          reason: 'no receipt came back',
+        );
+      });
+    }
+
+    for (final (label, mode) in [
+      ('on battery', EnergyMode.limited),
+      ('on mains power', EnergyMode.unconstrained),
+    ]) {
+      test('every route took the message and none delivered it: the routes '
+          'are tried over later ($label)', () async {
+        var now = DateTime.now().toUtc();
+        final (alice, bob, network, keeper, swallower, swallower2) =
+            await storeOnlyPair(mode, () => now);
+        final bobId = bob.identity!.deviceId;
+        // Straight to Bob nothing works; the mailbox keeps the message and
+        // the other route takes it and loses it.
+        network.blockedPairs.add((
+          alice.identity!.irohEndpointId!,
+          bob.identity!.irohEndpointId!,
+        ));
+        await alice.sendMessage(
+          contact: alice.contacts.single,
+          body: 'swallowed',
+        );
+        final id = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.body == 'swallowed')
+            .id;
+        int triesOnLosingRoute() => [
+          swallower.stored.where((e) => e == id).length,
+          swallower2.stored.where((e) => e == id).length,
+        ].reduce(min);
+        await _waitForIroh(
+          () => triesOnLosingRoute() >= 1,
+          reason: 'the first pass never used the second route',
+        );
+        // Passes follow with backoff; after a while the routes that only
+        // took it are tried over (the mailbox that holds it is not).
+        final keptBefore = keeper.stored.where((e) => e == id).length;
+        for (var pass = 0; pass < 4; pass++) {
+          now = now.add(const Duration(minutes: 5));
+          await alice.retryUnacknowledgedMessagesNow();
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        }
+        expect(
+          triesOnLosingRoute(),
+          greaterThanOrEqualTo(2),
+          reason: 'a route that took the message was never tried again',
+        );
+        expect(
+          alice
+              .messagesFor(bobId)
+              .singleWhere((m) => m.id == id)
+              .state
+              .awaitsRecipientAck,
+          isTrue,
+        );
+        expect(keptBefore, greaterThanOrEqualTo(1));
+      });
+    }
   });
 
   group('Linking a device that already has data', () {

@@ -28547,6 +28547,41 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// A retry of [envelope]: the routes that already stored it come last
+  /// (a relay holding a message has not delivered it), so each pass reaches
+  /// another route. With only those left, true: it is held there, and only
+  /// stored again after [_storeRefresh].
+  Future<_DeliveryRoute?> _deliverRetry({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required bool background,
+  }) async {
+    final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
+    final stored = _storedOn[key];
+    if (stored != null && stored.isNotEmpty) {
+      try {
+        return await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+          background: background,
+          excludeRouteKeys: stored.keys.toSet(),
+        );
+      } on TransportSendCancelled {
+        rethrow;
+      } catch (_) {
+        final oldest = stored.values.reduce((a, b) => a.isBefore(b) ? a : b);
+        if (_now().difference(oldest) < _storeRefresh) return null;
+      }
+    }
+    return _deliverToContact(
+      contact: contact,
+      recipientDeviceId: contact.deviceId,
+      envelope: envelope,
+      background: background,
+    );
+  }
+
   Future<bool> _tryDeliverExistingMessage({
     required ContactRecord contact,
     required ChatMessage message,
@@ -28576,12 +28611,13 @@ class MessengerController extends ChangeNotifier {
           _messageById(contact.deviceId, message.id) == null) {
         return true;
       }
-      final route = await _deliverToContact(
+      final route = await _deliverRetry(
         contact: contact,
-        recipientDeviceId: contact.deviceId,
         envelope: envelope,
         background: background,
       );
+      // Held on a relay already, no other route took it this time.
+      if (route == null) return true;
       // Handing it to a forwarder says nothing about reaching them.
       if (!route.forwarded) _reachability.noteAvailablePath(contact.deviceId);
       if (_locallyDeletedMessageIds.contains(message.id) ||
@@ -28651,12 +28687,13 @@ class MessengerController extends ChangeNotifier {
           message: message,
         ),
       );
-      final route = await _deliverToContact(
+      final route = await _deliverRetry(
         contact: contact,
-        recipientDeviceId: contact.deviceId,
         envelope: envelope,
         background: background,
       );
+      // Held on a relay already, no other route took it this time.
+      if (route == null) return true;
       _reachability.noteAvailablePath(contact.deviceId);
       if (route.endpoint?.kind == PeerRouteKind.lan) {
         await _rememberLanRoutesForGroupMember(
@@ -29056,10 +29093,32 @@ class MessengerController extends ChangeNotifier {
   static const Duration _routeAckTimeout = Duration(seconds: 8);
   static const Duration _unconfirmedRouteMemory = Duration(minutes: 10);
 
+  /// Routes that stored a message (a relay, a carrier's mailbox), by
+  /// [_outboundAttemptKey], then route key, since when. A store is no
+  /// delivery: the retry goes to the other routes first.
+  final LinkedHashMap<String, Map<String, DateTime>> _storedOn =
+      LinkedHashMap();
+  static const int _maxStoredOn = 2048;
+
+  /// A stored message is stored again after this long, in case the relay
+  /// dropped it.
+  static const Duration _storeRefresh = Duration(minutes: 30);
+
   void _noteHandedOff(String deviceId, String messageId, _DeliveryRoute route) {
     // A relay or a forwarding contact keeps it until they fetch it: no
     // receipt is due soon.
     if (route.forwarded || route.path == TransportPathKind.storeForward) {
+      if (!route.forwarded) {
+        final storeKey = _outboundAttemptKey(deviceId, messageId);
+        if (!_confirmedFamilies.containsKey(storeKey)) {
+          final stored = _storedOn.remove(storeKey) ?? <String, DateTime>{};
+          if (stored.length < 16) stored[route.routeKey] = _now();
+          _storedOn[storeKey] = stored;
+          while (_storedOn.length > _maxStoredOn) {
+            _storedOn.remove(_storedOn.keys.first);
+          }
+        }
+      }
       return;
     }
     final key = _outboundAttemptKey(deviceId, messageId);
@@ -29090,6 +29149,7 @@ class MessengerController extends ChangeNotifier {
     Set<MessageRoute>? arrivedBy,
   }) {
     final key = _outboundAttemptKey(deviceId, messageId);
+    _storedOn.remove(key);
     final copies = _copyRuns[key];
     if (copies != null && !copies.isCompleted) copies.complete();
     // Copies still going out frame by frame (radios) can stop.
@@ -29233,6 +29293,7 @@ class MessengerController extends ChangeNotifier {
     final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
     final state = _copyStates.remove(key) ?? _CopyState();
     _copyStates[key] = state;
+
     while (_copyStates.length > _maxCopyStates) {
       _copyStates.remove(_copyStates.keys.first);
     }
