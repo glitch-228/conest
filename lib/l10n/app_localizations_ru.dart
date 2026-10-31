@@ -5331,6 +5331,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get connectionsRouteFailing => 'сбои';
 
   @override
+  String get connectionsRouteUnreliable => 'ненадёжно в этой сети';
+
+  @override
   String connectionsAsOf(String when) {
     return 'на $when';
   }

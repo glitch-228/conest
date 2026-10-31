@@ -8279,6 +8279,12 @@ abstract class AppLocalizations {
   /// **'failing'**
   String get connectionsRouteFailing;
 
+  /// Connections screen: a route that works on this network some of the time but also fails like a block
+  ///
+  /// In en, this message translates to:
+  /// **'unreliable on this network'**
+  String get connectionsRouteUnreliable;
+
   /// Connections screen: how old another device's report about a link is
   ///
   /// In en, this message translates to:

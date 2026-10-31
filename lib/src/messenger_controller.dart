@@ -4752,15 +4752,19 @@ class MessengerController extends ChangeNotifier {
     PeerRouteKind.relay => 'relay:${route.host}:${route.port}',
   };
 
-  void _noteTransportOutcome(TransportKind kind, bool ok, Object? error) =>
-      _noteRouteOutcome(kind.name, ok, error?.toString());
+  void _noteTransportOutcome(
+    TransportKind kind,
+    bool ok,
+    Object? error,
+    String deviceId,
+  ) => _noteRouteOutcome(kind.name, ok, error?.toString(), peer: deviceId);
 
-  void _noteRouteOutcome(String route, bool ok, String? error) {
+  void _noteRouteOutcome(String route, bool ok, String? error, {String? peer}) {
     final now = _now();
     if (ok) {
       _networkHistory.worked(route, now);
     } else {
-      _networkHistory.failed(route, routeFailureKindOf(error), now);
+      _networkHistory.failed(route, routeFailureKindOf(error), now, peer: peer);
     }
     _networkHistoryChanged = true;
     _syncCircumvention();
@@ -4770,7 +4774,7 @@ class MessengerController extends ChangeNotifier {
   /// network seems to block (M38).
   void _syncCircumvention() => Circumvention.instance.update(
     preferences: _snapshot.identity?.connectivity.circumvention,
-    blockedHere: _networkHistory.blockedHere().isNotEmpty,
+    blockedHere: _networkHistory.blockedHere(now: _now()).isNotEmpty,
   );
 
   /// Whether private DNS or split TLS greetings are in use now.
@@ -30021,7 +30025,7 @@ class MessengerController extends ChangeNotifier {
     // Routes that took messages no receipt confirmed (a one-way link: a
     // firewall dropping what arrives, say) go last, after every other.
     // Routes this network blocks (as far as its history tells) go last too.
-    final blockedHere = _networkHistory.blockedHere();
+    final blockedHere = _networkHistory.blockedHere(now: _now());
     final suspects = {
       ..._suspectRoutes(contact.deviceId),
       for (final route in candidateRoutes)

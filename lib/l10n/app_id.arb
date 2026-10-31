@@ -1353,6 +1353,7 @@
   "connectionsRouteWorks": "berfungsi",
   "connectionsRouteBlocked": "diblokir di jaringan ini",
   "connectionsRouteFailing": "gagal",
+  "connectionsRouteUnreliable": "tidak andal di jaringan ini",
   "connectionsAsOf": "per {when}",
   "bluetoothMeshNeedsAttention": "Jaringan Bluetooth perlu diperiksa",
   "forwardSelectedTitle": "{count, plural, other{Teruskan {count} pesan}}",

@@ -5215,6 +5215,9 @@ class AppLocalizationsFa extends AppLocalizations {
   String get connectionsRouteFailing => 'خطا دارد';
 
   @override
+  String get connectionsRouteUnreliable => 'در این شبکه ناپایدار است';
+
+  @override
   String connectionsAsOf(String when) {
     return 'تا $when';
   }

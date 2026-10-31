@@ -5204,6 +5204,9 @@ class AppLocalizationsId extends AppLocalizations {
   String get connectionsRouteFailing => 'gagal';
 
   @override
+  String get connectionsRouteUnreliable => 'tidak andal di jaringan ini';
+
+  @override
   String connectionsAsOf(String when) {
     return 'per $when';
   }

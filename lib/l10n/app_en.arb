@@ -7893,6 +7893,10 @@
   "@connectionsRouteFailing": {
     "description": "Connections screen: a route that failed lately on this network"
   },
+  "connectionsRouteUnreliable": "unreliable on this network",
+  "@connectionsRouteUnreliable": {
+    "description": "Connections screen: a route that works on this network some of the time but also fails like a block"
+  },
   "connectionsAsOf": "as of {when}",
   "@connectionsAsOf": {
     "description": "Connections screen: how old another device's report about a link is",

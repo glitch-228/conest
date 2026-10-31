@@ -4987,6 +4987,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get connectionsRouteFailing => '失败';
 
   @override
+  String get connectionsRouteUnreliable => '在此网络上不稳定';
+
+  @override
   String connectionsAsOf(String when) {
     return '截至 $when';
   }

@@ -211,7 +211,8 @@ class TransportRegistry {
   final Map<TransportKind, TransportAdapter> _adapters;
 
   /// Told of every send's outcome (for the network history).
-  void Function(TransportKind kind, bool ok, Object? error)? onOutcome;
+  void Function(TransportKind kind, bool ok, Object? error, String deviceId)?
+  onOutcome;
   final DateTime Function() _now;
 
   /// Statistics by `deviceId|transport`, least recently used first. The one
@@ -470,7 +471,7 @@ class TransportRegistry {
     int? bytes,
     Duration? transferTook,
   }) {
-    onOutcome?.call(kind, true, null);
+    onOutcome?.call(kind, true, null, deviceId);
     _statsEntry(
       deviceId,
       kind,
@@ -478,7 +479,7 @@ class TransportRegistry {
   }
 
   void _recordFailure(String deviceId, TransportKind kind, [Object? error]) {
-    onOutcome?.call(kind, false, error);
+    onOutcome?.call(kind, false, error, deviceId);
     _statsEntry(deviceId, kind).recordFailure(_now());
   }
 

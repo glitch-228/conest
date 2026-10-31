@@ -1353,6 +1353,7 @@
   "connectionsRouteWorks": "可用",
   "connectionsRouteBlocked": "在此网络上被屏蔽",
   "connectionsRouteFailing": "失败",
+  "connectionsRouteUnreliable": "在此网络上不稳定",
   "connectionsAsOf": "截至 {when}",
   "bluetoothMeshNeedsAttention": "蓝牙网状网络需要处理",
   "forwardSelectedTitle": "{count, plural, other{转发 {count} 条消息}}",

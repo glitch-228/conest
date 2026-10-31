@@ -1353,6 +1353,7 @@
   "connectionsRouteWorks": "کار می‌کند",
   "connectionsRouteBlocked": "در این شبکه مسدود است",
   "connectionsRouteFailing": "خطا دارد",
+  "connectionsRouteUnreliable": "در این شبکه ناپایدار است",
   "connectionsAsOf": "تا {when}",
   "bluetoothMeshNeedsAttention": "شبکهٔ بلوتوث نیاز به بررسی دارد",
   "forwardSelectedTitle": "{count, plural, one{بازارسال {count} پیام} other{بازارسال {count} پیام}}",

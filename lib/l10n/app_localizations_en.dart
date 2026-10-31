@@ -5216,6 +5216,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get connectionsRouteFailing => 'failing';
 
   @override
+  String get connectionsRouteUnreliable => 'unreliable on this network';
+
+  @override
   String connectionsAsOf(String when) {
     return 'as of $when';
   }

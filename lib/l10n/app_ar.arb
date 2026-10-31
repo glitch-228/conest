@@ -1353,6 +1353,7 @@
   "connectionsRouteWorks": "يعمل",
   "connectionsRouteBlocked": "محجوب على هذه الشبكة",
   "connectionsRouteFailing": "يفشل",
+  "connectionsRouteUnreliable": "غير موثوق على هذه الشبكة",
   "connectionsAsOf": "حتى {when}",
   "bluetoothMeshNeedsAttention": "شبكة البلوتوث تحتاج إلى انتباه",
   "forwardSelectedTitle": "{count, plural, zero{إعادة توجيه {count} رسالة} one{إعادة توجيه رسالة واحدة} two{إعادة توجيه رسالتين} few{إعادة توجيه {count} رسائل} many{إعادة توجيه {count} رسالة} other{إعادة توجيه {count} رسالة}}",
