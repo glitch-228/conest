@@ -51,8 +51,8 @@ Verification:
 - All 19 Delta controller tests passed. Targeted mail/protocol/content/parser/avatar/queue/cache tests passed.
 - All 34 sabotage checks failed as expected with individual guards removed, then source was restored. Evidence: review/M24c_sabotage.json; repeatable runner: tool/m24c_sabotage.py.
 - Analyzer: 28 baseline issues, no new issues.
-- Full local suite: queued under the shared flock; final result pending below.
-- Qualified final CI run: 41238305679, https://github.com/glitch-228/conest/actions/runs/41238305679; final result pending below.
+- Full suite: runs in the dedicated GitHub qualification job; only the exact native-Iroh case documented in PLAN_AGENTS.md is excluded. The queued local waiter was cancelled without interrupting another session.
+- Qualified final CI run: 41238646520, https://github.com/glitch-228/conest/actions/runs/41238646520, workflow commit c1af85a and app source b7dff0e; final result pending below.
 - Independent security reviewer m24c_security_review: confirmed findings fixed with tests; final follow-up found no additional concrete findings. Review record: review/M24c.md. Maintainer review/merge approval remains separate.
 
 Performance handoff:
@@ -99,3 +99,9 @@ Device checks:
 - Final source b7dff0e pushed. Qualified run 41238305679 confirmed against that exact commit. Superseded run 41237119393 was cancelled after its qualification job passed; final run tests the ownership fix as well. The final full-suite waiter is active under the shared lock.
 
 - Shared machine full-suite queue remained occupied (one active full run and another waiter ahead). Added a dedicated full Flutter suite job to the qualified debug workflow, on its own GitHub runner. It excludes only the exact native-Iroh case explicitly exempted by PLAN_AGENTS.md; all other tests must pass. This completes full-suite verification without overlapping another agent's local suite. Local queued waiter will be cancelled; no other session is touched.
+
+- Workflow commit c1af85a adds the full Flutter suite on an isolated GitHub runner. Final run 41238646520 confirmed against that commit; run 41238305679 superseded and cancelled. No further app-source changes.
+
+- Final qualified run 41238646520: the Verify debug transfers/storage job passed. Its Delta step passed 181 mail/protocol/content/parser/avatar/cache/queue/PGP/email tests and 19 Delta controller tests on the final source. Real Matrix/Synapse and Tor checks also passed. Full-suite and platform build jobs remain in progress.
+
+- Full-suite CI 41238646520 completed with 2,060 passing tests, 24 environment-gated skips and one unrelated keyboard-fixture failure: push-to-talk sent KeyUp without a matching KeyDown, triggering HardwareKeyboard's regular-event assertion. The case passed in isolation locally, confirming event-mode/order sensitivity. Corrected the fixture to simulate the held physical key before attaching the release handler, preserving its release-after-call intent. A new full-suite run is required.

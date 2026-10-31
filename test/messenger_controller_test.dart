@@ -3385,6 +3385,8 @@ void main() {
       await alice.setPushToTalkHeld(true);
     });
     addTearDown(alice.dispose);
+    // Model the physical key held before the release handler is attached.
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyT);
     final keys = PushToTalkKeyHandler(alice)..attach();
     addTearDown(keys.detach);
     expect(alice.callUsesMicrophone, isFalse);
