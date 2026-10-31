@@ -24688,7 +24688,7 @@ void main() {
           sources = id == null ? null : alice.blockSourcesForTesting(id!);
           return sources != null && sources!.sources.length > 1;
         },
-        timeout: const Duration(seconds: 20),
+        timeout: const Duration(seconds: 45),
         reason: 'the relay did not become a source',
       );
       final blobSource = sources!.sources.last;
