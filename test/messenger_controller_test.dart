@@ -533,8 +533,13 @@ class _FakeRelayClient extends RelayClient {
   final Map<String, Uint8List> blobs = {};
   final Map<String, String> blobSecrets = {};
   final List<String> blobDeletes = [];
+  final List<int> blobDeleteBatches = [];
+  final Set<String> blobSecretsSeen = {};
   Uint8List Function(Uint8List bytes)? tamperBlobs;
   int blobGets = 0;
+
+  /// While true no blob can be read (the receiver is not there yet).
+  bool holdBlobGets = false;
 
   @override
   Future<String> register({
@@ -562,22 +567,29 @@ class _FakeRelayClient extends RelayClient {
   }) async {
     if (blobHashOf(bytes) != hash) return false;
     blobs[hash] = bytes;
-    blobSecrets[hash] = secret;
+    blobSecretsSeen.add(secret);
+    // As on a real relay, a blob held already keeps its secret.
+    blobSecrets.putIfAbsent(hash, () => secret);
     return true;
   }
 
   @override
-  Future<bool> deleteBlob({
+  Future<bool> deleteBlobs({
     required String host,
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
-    required String hash,
+    required List<String> hashes,
     Duration timeout = const Duration(seconds: 6),
     String? expectedIdentityPublicKeyBase64,
   }) async {
-    blobDeletes.add(hash);
-    blobSecrets.remove(hash);
-    return blobs.remove(hash) != null;
+    blobDeleteBatches.add(hashes.length);
+    var any = false;
+    for (final hash in hashes) {
+      blobDeletes.add(hash);
+      blobSecrets.remove(hash);
+      any = blobs.remove(hash) != null || any;
+    }
+    return any;
   }
 
   @override
@@ -592,6 +604,7 @@ class _FakeRelayClient extends RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) async {
     blobGets++;
+    if (holdBlobGets) throw StateError('no blob');
     final bytes = blobs[hash];
     // A wrong secret looks like no blob, as on a real relay.
     if (bytes == null || bytes.length != size || blobSecrets[hash] != secret) {
@@ -24503,11 +24516,11 @@ void main() {
         Uint8List bytes,
       })
     >
-    offlineSender({bool accept = true}) async {
+    offlineSender({bool accept = true, bool holdGets = false}) async {
       final saved = MessengerController.blobLeaveDelay;
       MessengerController.blobLeaveDelay = Duration.zero;
       addTearDown(() => MessengerController.blobLeaveDelay = saved);
-      final relay = _FakeRelayClient();
+      final relay = _FakeRelayClient()..holdBlobGets = holdGets;
       Future<MessengerController> make(String name) async {
         final controller = await _createController(
           relayClient: relay,
@@ -24722,6 +24735,16 @@ void main() {
           timeout: const Duration(seconds: 30),
         );
         expect(s.relay.blobDeletes, isNotEmpty);
+        // One request for the file's blocks, not one for each.
+        expect(
+          s.relay.blobDeleteBatches.length,
+          lessThan(s.relay.blobDeletes.length),
+        );
+        // One request for the file's blocks, not one for each.
+        expect(
+          s.relay.blobDeleteBatches.length,
+          lessThan(s.relay.blobDeletes.length),
+        );
         expect(s.bob.leftBlobCountForTesting(s.id), 0);
       },
       timeout: const Timeout(Duration(seconds: 90)),
@@ -24842,6 +24865,131 @@ void main() {
         bytes,
       );
     }, timeout: const Timeout(Duration(seconds: 120)));
+
+    test('a sender that restarts keeps the same read secret and the receiver '
+        'still gets the file from blobs alone', () async {
+      final s = await offlineSender(accept: false, holdGets: true);
+      final first = s.alice.blobReadSecretForTesting(s.id);
+      expect(first, isNotNull);
+      expect(s.relay.blobSecretsSeen, hasLength(1));
+      // The sender forgets what it left (a restart) and uploads again.
+      s.bob.forgetLeftBlobsForTesting();
+      await s.bob.leaveBlobsForTesting(s.id);
+      expect(
+        s.relay.blobSecretsSeen,
+        hasLength(1),
+        reason: 'the secret is derived from the file key, not drawn again',
+      );
+      await _waitForIroh(
+        () {
+          unawaited(s.alice.pollNow());
+          return s.alice.blobReadSecretForTesting(s.id) == first;
+        },
+        reason: 'the second announcement did not arrive',
+        timeout: const Duration(seconds: 20),
+      );
+      s.relay.holdBlobGets = false;
+      await _waitForIroh(
+        () {
+          unawaited(s.alice.pollNow());
+          return s.alice.attachmentAvailableLocally(s.id);
+        },
+        reason: 'the file did not arrive from blobs after the restart',
+        timeout: const Duration(seconds: 30),
+      );
+      expect(
+        await File((await s.alice.attachmentCachePathFor(s.id))!).readAsBytes(),
+        s.bytes,
+      );
+    }, timeout: const Timeout(Duration(seconds: 90)));
+
+    test(
+      'a later announcement from the sender replaces the earlier one',
+      () async {
+        final s = await offlineSender(accept: false);
+        final old = s.alice.blobReadSecretForTesting(s.id);
+        final fresh = newReadSecret();
+        expect(fresh, isNot(old));
+        s.alice.handleBlobAnnouncementForTesting(s.bob.identity!.deviceId, {
+          'attachmentId': s.id,
+          'relays': [s.alice.identity!.configuredRelays.first.routeKey],
+          'blobs': [for (var i = 0; i < 4; i++) '$i' * 64],
+          'plain': [for (var i = 0; i < 4; i++) base64Encode(Uint8List(32))],
+          'secret': fresh,
+        });
+        expect(s.alice.blobReadSecretForTesting(s.id), fresh);
+      },
+      timeout: const Timeout(Duration(seconds: 90)),
+    );
+
+    test('a file offered on a metered network gets its blobs once the network '
+        'is unmetered', () async {
+      final savedDelay = MessengerController.blobLeaveDelay;
+      final savedSlow = MessengerController.blobSlowAfter;
+      MessengerController.blobLeaveDelay = Duration.zero;
+      MessengerController.blobSlowAfter = const Duration(seconds: 1);
+      addTearDown(() {
+        MessengerController.blobLeaveDelay = savedDelay;
+        MessengerController.blobSlowAfter = savedSlow;
+      });
+      final relay = _FakeRelayClient();
+      Future<MessengerController> make(String name) async {
+        final controller = await _createController(
+          relayClient: relay,
+          displayName: name,
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+        );
+        addTearDown(controller.dispose);
+        return controller;
+      }
+
+      final alice = await make('Alice');
+      final bob = await make('Bob');
+      await _pairControllers(alice, bob);
+      for (final c in [alice, bob]) {
+        await c.registerWithRelay(c.identity!.configuredRelays.first);
+      }
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          unawaited(bob.pollNow());
+          return bob.contacts.single.featureCapabilities.contains(
+            ApplicationCapability.relayBlobAttachmentsV1,
+          );
+        },
+        reason: 'Bob did not learn what Alice can do',
+        timeout: const Duration(seconds: 20),
+      );
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.kind == 'attachment_chunk_request' ||
+          envelope.kind == 'attachment_chunk';
+      bob.onConnectivityChanged(interfaceLabel: 'mobile');
+      await bob.sendAttachment(
+        contact: bob.contacts.single,
+        bytes: Uint8List(300 * 1024),
+        fileName: 'metered.bin',
+      );
+      for (var i = 0; i < 30; i++) {
+        await alice.pollNow();
+        await bob.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      expect(
+        relay.blobs,
+        isEmpty,
+        reason: 'nothing is uploaded on mobile data',
+      );
+      bob.onConnectivityChanged(interfaceLabel: 'wifi');
+      await _waitForIroh(
+        () {
+          unawaited(alice.pollNow());
+          unawaited(bob.pollNow());
+          return relay.blobs.length >= 3;
+        },
+        reason: 'no blobs after the network became unmetered',
+        timeout: const Duration(seconds: 30),
+      );
+    }, timeout: const Timeout(Duration(seconds: 90)));
 
     test('on battery saver nothing is left on relays', () async {
       final saved = MessengerController.blobLeaveDelay;

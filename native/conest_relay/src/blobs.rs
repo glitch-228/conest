@@ -55,6 +55,28 @@ const MINUTE_MILLIS: u64 = 60 * 1000;
 const MIN_TTL_SECS: u64 = 60;
 
 pub(crate) fn init_tables(database: &Connection) -> Result<(), String> {
+    // An older layout (before read secrets) cannot be kept: its blobs are
+    // dropped (they are at most a day old anyway).
+    let columns = |table: &str| -> Vec<String> {
+        database
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let have = columns("blobs");
+    if !have.is_empty() && !have.iter().any(|name| name == "secret_hash") {
+        database
+            .execute_batch("DROP TABLE blobs; DROP TABLE IF EXISTS blob_parts;")
+            .map_err(|error| format!("migrating blob storage: {error}"))?;
+    } else if !have.is_empty() && !have.iter().any(|name| name == "served") {
+        database
+            .execute_batch("ALTER TABLE blobs ADD COLUMN served INTEGER NOT NULL DEFAULT 0;")
+            .map_err(|error| format!("migrating blob storage: {error}"))?;
+    }
     database
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS blobs (
@@ -64,9 +86,11 @@ pub(crate) fn init_tables(database: &Connection) -> Result<(), String> {
                created_millis INTEGER NOT NULL,
                expires_millis INTEGER NOT NULL,
                secret_hash BLOB NOT NULL,
+               served INTEGER NOT NULL DEFAULT 0,
                PRIMARY KEY (hash, account)
              );
              CREATE INDEX IF NOT EXISTS blobs_expiry ON blobs (expires_millis);
+             CREATE INDEX IF NOT EXISTS blobs_account ON blobs (account);
              CREATE TABLE IF NOT EXISTS blob_parts (
                hash TEXT NOT NULL,
                account BLOB NOT NULL,
@@ -77,6 +101,7 @@ pub(crate) fn init_tables(database: &Connection) -> Result<(), String> {
                secret_hash BLOB NOT NULL,
                PRIMARY KEY (hash, account)
              );
+             CREATE INDEX IF NOT EXISTS blob_parts_account ON blob_parts (account);
              CREATE TABLE IF NOT EXISTS blob_account_groups (
                account BLOB PRIMARY KEY,
                grp TEXT NOT NULL
@@ -160,40 +185,104 @@ impl RelayState {
         self.sweep_blobs(dir, now);
     }
 
-    /// Removes expired blobs and stalled uploads (files and index rows).
+    /// Removes expired blobs and stalled uploads (index rows under the lock,
+    /// files after it). An upload being handled right now is left alone.
     pub(crate) fn sweep_blobs(&self, dir: &std::path::Path, now: u64) {
-        let database = self
-            .database
-            .lock()
-            .expect("relay database lock should not poison");
-        let expired: Vec<(String, Vec<u8>)> = database
-            .prepare("SELECT hash, account FROM blobs WHERE expires_millis <= ?1")
-            .and_then(|mut statement| {
-                statement
-                    .query_map(params![now], |row| Ok((row.get(0)?, row.get(1)?)))?
-                    .collect()
-            })
-            .unwrap_or_default();
-        for (hash, account) in &expired {
-            let _ = fs::remove_file(blob_path(dir, hash, account));
+        let mut guards = Vec::new();
+        let mut files = Vec::new();
+        {
+            let database = self
+                .database
+                .lock()
+                .expect("relay database lock should not poison");
+            let expired: Vec<(String, Vec<u8>)> = database
+                .prepare("SELECT hash, account FROM blobs WHERE expires_millis <= ?1")
+                .and_then(|mut statement| {
+                    statement
+                        .query_map(params![now], |row| Ok((row.get(0)?, row.get(1)?)))?
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (hash, account) in expired {
+                let Ok(guard) = BusyUpload::take(&self.blob_busy, busy_key(&hash, &account))
+                else {
+                    continue;
+                };
+                guards.push(guard);
+                let _ = database.execute(
+                    "DELETE FROM blobs WHERE hash = ?1 AND account = ?2 AND expires_millis <= ?3",
+                    params![hash, account, now],
+                );
+                files.push(blob_path(dir, &hash, &account));
+            }
+            let stalled: Vec<(String, Vec<u8>)> = database
+                .prepare("SELECT hash, account FROM blob_parts WHERE touched_millis <= ?1")
+                .and_then(|mut statement| {
+                    statement
+                        .query_map(params![now.saturating_sub(PARTIAL_IDLE_MILLIS)], |row| {
+                            Ok((row.get(0)?, row.get(1)?))
+                        })?
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (hash, account) in stalled {
+                let Ok(guard) = BusyUpload::take(&self.blob_busy, busy_key(&hash, &account))
+                else {
+                    continue;
+                };
+                guards.push(guard);
+                let _ = database.execute(
+                    "DELETE FROM blob_parts WHERE hash = ?1 AND account = ?2",
+                    params![hash, account],
+                );
+                files.push(part_path(dir, &hash, &account));
+            }
         }
-        let _ = database.execute("DELETE FROM blobs WHERE expires_millis <= ?1", params![now]);
-        let stalled: Vec<(String, Vec<u8>)> = database
-            .prepare("SELECT hash, account FROM blob_parts WHERE touched_millis <= ?1")
-            .and_then(|mut statement| {
-                statement
-                    .query_map(params![now.saturating_sub(PARTIAL_IDLE_MILLIS)], |row| {
-                        Ok((row.get(0)?, row.get(1)?))
-                    })?
-                    .collect()
-            })
-            .unwrap_or_default();
-        for (hash, account) in &stalled {
-            let _ = fs::remove_file(part_path(dir, hash, account));
-            let _ = database.execute(
-                "DELETE FROM blob_parts WHERE hash = ?1 AND account = ?2",
-                params![hash, account],
-            );
+        for file in files {
+            let _ = fs::remove_file(file);
+        }
+        drop(guards);
+    }
+
+    /// Once at start: removes blob files that belong to no index row (a
+    /// crash between the rename and the index, or an older layout). Only
+    /// files named like ours (`<64 hex>...blob` or `...part`) are touched.
+    pub(crate) fn blob_startup_cleanup(&self) {
+        let Some(dir) = self.blob_dir() else { return };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return;
+        };
+        let mut known = HashSet::new();
+        {
+            let database = self
+                .database
+                .lock()
+                .expect("relay database lock should not poison");
+            for (table, path) in [
+                ("blobs", blob_path as fn(&std::path::Path, &str, &[u8]) -> PathBuf),
+                ("blob_parts", part_path),
+            ] {
+                let rows: Vec<(String, Vec<u8>)> = database
+                    .prepare(&format!("SELECT hash, account FROM {table}"))
+                    .and_then(|mut statement| {
+                        statement
+                            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for (hash, account) in rows {
+                    known.insert(path(&dir, &hash, &account));
+                }
+            }
+        }
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let ours = (name.ends_with(".blob") || name.ends_with(".part"))
+                && valid_hash(name.get(..64).unwrap_or(""));
+            if ours && !known.contains(&path) {
+                let _ = fs::remove_file(path);
+            }
         }
     }
 
@@ -213,7 +302,7 @@ impl RelayState {
     /// `blob_put`: one part of a blob. The first part (offset 0) carries the
     /// `secret` that later reads must show. File writes and hashing happen
     /// outside the database lock, which is only held for the index.
-    pub(crate) fn blob_put(&self, request: &Value) -> Result<Value, String> {
+    pub(crate) fn blob_put(&self, request: &Value, peer: &str) -> Result<Value, String> {
         let dir = self.blob_ready()?;
         let token = self.blob_token(request)?;
         let ext = &self.config.ext;
@@ -260,7 +349,7 @@ impl RelayState {
             self.allow_account_bytes(&token, total)?;
         }
         // One request at a time per upload (the file is written unlocked).
-        let _busy = BusyUpload::take(&self.blob_busy, format!("{hash}:{}", hex(&account)))?;
+        let _busy = BusyUpload::take(&self.blob_busy, busy_key(&hash, &account))?;
         let part = part_path(&dir, &hash, &account);
         let secret_hash: Vec<u8>;
         {
@@ -268,8 +357,7 @@ impl RelayState {
                 .database
                 .lock()
                 .expect("relay database lock should not poison");
-            // Held already by this account: nothing to upload (a new secret
-            // replaces the old one).
+            // Held already by this account: nothing to upload.
             let held: Option<u64> = database
                 .query_row(
                     "SELECT expires_millis FROM blobs
@@ -280,37 +368,33 @@ impl RelayState {
                 .optional()
                 .map_err(|error| format!("reading blobs: {error}"))?;
             if let Some(expires) = held {
-                if let Some(secret) = &secret {
-                    let _ = database.execute(
-                        "UPDATE blobs SET secret_hash = ?3 WHERE hash = ?1 AND account = ?2",
-                        params![hash, account, secret],
-                    );
-                }
+                // The secret it was stored with stays: a repeated upload
+                // (after a sender restart) must not lock the receiver out.
                 return Ok(ok(
                     json!({"have": true, "complete": true, "expires": expires}),
                 ));
             }
             if let Some(secret) = secret {
                 // A new upload: the budgets.
-                let stored_by = |condition: &str, parts: &str| -> Result<u64, String> {
-                    database
-                        .query_row(
-                            &format!(
-                                "SELECT (SELECT COALESCE(SUM(size), 0) FROM blobs WHERE {condition})
-                                      + (SELECT COALESCE(SUM(total), 0) FROM blob_parts WHERE {parts})"
-                            ),
-                            params![account],
-                            |row| row.get(0),
-                        )
-                        .map_err(|error| format!("reading blobs: {error}"))
-                };
-                if stored_by("account = ?1", "account = ?1")?.saturating_add(total)
-                    > ext.blob_account_bytes
-                {
+                // This upload's own earlier attempt (same hash) is not counted
+                // twice.
+                let own: u64 = database
+                    .query_row(
+                        "SELECT (SELECT COALESCE(SUM(size), 0) FROM blobs
+                                  WHERE account = ?1 AND hash != ?2)
+                              + (SELECT COALESCE(SUM(total), 0) FROM blob_parts
+                                  WHERE account = ?1 AND hash != ?2)",
+                        params![account, hash],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| format!("reading blobs: {error}"))?;
+                if own.saturating_add(total) > ext.blob_account_bytes {
                     return Err("account blob quota exceeded".to_owned());
                 }
-                // The address the account was created from: every account
-                // made there counts toward one budget.
+                // The address the account registered from (an account that
+                // registered before this existed is filed on its first
+                // upload): every account made there counts toward one budget.
+                note_account_group(&database, &account, &peer_group(peer));
                 let group: Option<String> = database
                     .query_row(
                         "SELECT grp FROM blob_account_groups WHERE account = ?1",
@@ -322,11 +406,13 @@ impl RelayState {
                 if let Some(group) = group {
                     let used: u64 = database
                         .query_row(
-                            "SELECT (SELECT COALESCE(SUM(size), 0) FROM blobs WHERE account IN
+                            "SELECT (SELECT COALESCE(SUM(size), 0) FROM blobs
+                                      WHERE NOT (hash = ?2 AND account = ?3) AND account IN
                                        (SELECT account FROM blob_account_groups WHERE grp = ?1))
-                                  + (SELECT COALESCE(SUM(total), 0) FROM blob_parts WHERE account IN
+                                  + (SELECT COALESCE(SUM(total), 0) FROM blob_parts
+                                      WHERE NOT (hash = ?2 AND account = ?3) AND account IN
                                        (SELECT account FROM blob_account_groups WHERE grp = ?1))",
-                            params![group],
+                            params![group, hash, account],
                             |row| row.get(0),
                         )
                         .map_err(|error| format!("reading blobs: {error}"))?;
@@ -336,9 +422,11 @@ impl RelayState {
                 }
                 let (all, all_parts): (u64, u64) = database
                     .query_row(
-                        "SELECT (SELECT COALESCE(SUM(size), 0) FROM blobs),
-                                (SELECT COALESCE(SUM(total), 0) FROM blob_parts)",
-                        [],
+                        "SELECT (SELECT COALESCE(SUM(size), 0) FROM blobs
+                                  WHERE NOT (hash = ?1 AND account = ?2)),
+                                (SELECT COALESCE(SUM(total), 0) FROM blob_parts
+                                  WHERE NOT (hash = ?1 AND account = ?2))",
+                        params![hash, account],
                         |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .map_err(|error| format!("reading blobs: {error}"))?;
@@ -458,33 +546,58 @@ impl RelayState {
         );
     }
 
-    /// `blob_delete`: the owner removes its blob (and any upload of it).
+    /// `blob_delete`: the owner removes its blobs (`hash`, or up to 64
+    /// `hashes`) and any upload of them.
     pub(crate) fn blob_delete(&self, request: &Value) -> Result<Value, String> {
         let dir = self.blob_ready()?;
         let token = self.blob_token(request)?;
-        let hash = request
-            .get("hash")
-            .and_then(Value::as_str)
-            .filter(|hash| valid_hash(hash))
-            .ok_or("the blob hash must be 64 lowercase hex digits")?;
+        let mut hashes: Vec<String> = Vec::new();
+        if let Some(hash) = request.get("hash").and_then(Value::as_str) {
+            hashes.push(hash.to_owned());
+        }
+        if let Some(list) = request.get("hashes").and_then(Value::as_array) {
+            for hash in list {
+                hashes.push(hash.as_str().unwrap_or("").to_owned());
+            }
+        }
+        if hashes.is_empty() || hashes.len() > MAX_HAS_HASHES {
+            return Err("blob_delete needs 1 to 64 hashes".to_owned());
+        }
+        if hashes.iter().any(|hash| !valid_hash(hash)) {
+            return Err("the blob hash must be 64 lowercase hex digits".to_owned());
+        }
         let account = token.account.to_vec();
-        let database = self
-            .database
-            .lock()
-            .expect("relay database lock should not poison");
-        let removed = database
-            .execute(
-                "DELETE FROM blobs WHERE hash = ?1 AND account = ?2",
-                params![hash, account],
-            )
-            .map_err(|error| format!("deleting a blob: {error}"))?;
-        let _ = database.execute(
-            "DELETE FROM blob_parts WHERE hash = ?1 AND account = ?2",
-            params![hash, account],
-        );
-        let _ = fs::remove_file(blob_path(&dir, hash, &account));
-        let _ = fs::remove_file(part_path(&dir, hash, &account));
-        Ok(ok(json!({"deleted": removed > 0})))
+        let mut guards = Vec::new();
+        let mut files = Vec::new();
+        let mut removed = 0_usize;
+        {
+            let database = self
+                .database
+                .lock()
+                .expect("relay database lock should not poison");
+            for hash in &hashes {
+                // An upload being handled right now finishes first.
+                let guard = BusyUpload::take(&self.blob_busy, busy_key(hash, &account))?;
+                guards.push(guard);
+                removed += database
+                    .execute(
+                        "DELETE FROM blobs WHERE hash = ?1 AND account = ?2",
+                        params![hash, account],
+                    )
+                    .map_err(|error| format!("deleting a blob: {error}"))?;
+                let _ = database.execute(
+                    "DELETE FROM blob_parts WHERE hash = ?1 AND account = ?2",
+                    params![hash, account],
+                );
+                files.push(blob_path(&dir, hash, &account));
+                files.push(part_path(&dir, hash, &account));
+            }
+        }
+        for file in files {
+            let _ = fs::remove_file(file);
+        }
+        drop(guards);
+        Ok(ok(json!({"deleted": removed > 0, "count": removed})))
     }
 
     /// `blob_get`: [len] bytes of the blob [hash] from [offset], to whoever
@@ -511,7 +624,7 @@ impl RelayState {
                 .database
                 .lock()
                 .expect("relay database lock should not poison");
-            find_readable(&database, hash, &digest, now)?
+            find_readable(&database, hash, &digest, now, self.config.ext.blob_serve_factor)?
         };
         let Some((account, size)) = found else {
             return Err("no such blob".to_owned());
@@ -521,6 +634,17 @@ impl RelayState {
         }
         let len = len.min((size - offset) as usize);
         self.allow_blob_bytes(peer, len as u64)?;
+        // What has been served counts toward the blob's budget.
+        {
+            let database = self
+                .database
+                .lock()
+                .expect("relay database lock should not poison");
+            let _ = database.execute(
+                "UPDATE blobs SET served = served + ?3 WHERE hash = ?1 AND account = ?2",
+                params![hash, account, len as u64],
+            );
+        }
         // The read: unlocked.
         let mut data = vec![0_u8; len];
         let mut file = fs::File::open(blob_path(&dir, hash, &account))
@@ -562,7 +686,7 @@ impl RelayState {
                 return Err("the blob hash must be 64 lowercase hex digits".to_owned());
             };
             let digest = secret_digest(item).unwrap_or_else(|_| vec![0_u8; 32]);
-            if find_readable(&database, hash, &digest, now)?.is_some() {
+            if find_readable(&database, hash, &digest, now, self.config.ext.blob_serve_factor)?.is_some() {
                 have.push(hash.to_owned());
             }
         }
@@ -595,6 +719,10 @@ impl RelayState {
     }
 }
 
+fn busy_key(hash: &str, account: &[u8]) -> String {
+    format!("{hash}:{}", hex(account))
+}
+
 fn account_tag(account: &[u8]) -> String {
     hex(&account[..account.len().min(16)])
 }
@@ -618,16 +746,19 @@ fn secret_digest(request: &Value) -> Result<Vec<u8>, String> {
 }
 
 /// The (account, size) of an unexpired blob [hash] whose stored secret
-/// hash equals [digest] (compared in constant time, over every holder).
+/// hash equals [digest] (compared in constant time, over every holder) and
+/// that has not been served more than [factor] times its size (0: no
+/// limit): a relay is no file host for the public.
 fn find_readable(
     database: &Connection,
     hash: &str,
     digest: &[u8],
     now: u64,
+    factor: u64,
 ) -> Result<Option<(Vec<u8>, u64)>, String> {
     let mut statement = database
         .prepare(
-            "SELECT account, size, secret_hash FROM blobs
+            "SELECT account, size, secret_hash, served FROM blobs
               WHERE hash = ?1 AND expires_millis > ?2",
         )
         .map_err(|error| format!("reading blobs: {error}"))?;
@@ -637,15 +768,18 @@ fn find_readable(
                 row.get::<_, Vec<u8>>(0)?,
                 row.get::<_, u64>(1)?,
                 row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, u64>(3)?,
             ))
         })
         .map_err(|error| format!("reading blobs: {error}"))?;
     let mut found = None;
     let mut any = false;
     for row in rows {
-        let (account, size, stored) = row.map_err(|error| format!("reading blobs: {error}"))?;
+        let (account, size, stored, served) =
+            row.map_err(|error| format!("reading blobs: {error}"))?;
         any = true;
-        if same(&stored, digest) && found.is_none() {
+        let spent = factor > 0 && served >= size.saturating_mul(factor);
+        if same(&stored, digest) && !spent && found.is_none() {
             found = Some((account, size));
         }
     }
@@ -769,6 +903,7 @@ mod tests {
         )
     }
 
+    const PEER: &str = "198.51.100.77";
     const SECRET: &str = "read-secret-0123456789abcdef";
 
     fn sha(data: &[u8]) -> String {
@@ -791,7 +926,7 @@ mod tests {
             "offset": offset,
             "data": BASE64_STANDARD.encode(data),
             "secret": SECRET,
-        }))
+        }), PEER)
     }
 
     fn has(state: &RelayState, hash: &str, secret: &str) -> Vec<String> {
@@ -1021,7 +1156,7 @@ mod tests {
                 "token": token, "hash": sha(&data), "total": 50, "offset": 0,
                 "data": BASE64_STANDARD.encode(&data), "ttl_secs": 10_000_000,
                 "secret": SECRET,
-            }))
+            }), PEER)
             .unwrap();
         let expires = answer["expires"].as_u64().unwrap();
         assert!(expires <= now_millis() + 3_600_000);
@@ -1057,9 +1192,19 @@ mod tests {
         let b = token_for(&state, 2, SCOPE_MESSAGES | SCOPE_EXTENDED);
         let data = blob(300, 8);
         let hash = upload(&state, &a, &data).unwrap();
-        let answer = put(&state, &a, &hash, &data, 300, 0).unwrap();
+        // Uploading it again with another secret (a sender that lost its
+        // state) changes nothing: the receiver's secret keeps working.
+        let answer = state
+            .blob_put(&json!({
+                "token": a, "hash": hash, "total": 300, "offset": 0,
+                "data": BASE64_STANDARD.encode(&data),
+                "secret": "a-different-secret-0123456789",
+            }), PEER)
+            .unwrap();
         assert_eq!(answer["have"], true);
         assert_eq!(answer["complete"], true);
+        assert_eq!(has(&state, &hash, SECRET), vec![hash.clone()]);
+        assert!(has(&state, &hash, "a-different-secret-0123456789").is_empty());
         // Another account is not told the blob exists: it uploads its own,
         // with its own secret.
         let answer = put(&state, &b, &hash, &data, 300, 0).unwrap();
@@ -1100,7 +1245,7 @@ mod tests {
             .blob_put(&json!({
                 "token": token, "hash": sha(&other), "total": 50, "offset": 0,
                 "data": BASE64_STANDARD.encode(&other),
-            }))
+            }), PEER)
             .unwrap_err();
         assert!(error.contains("secret"), "{error}");
     }
@@ -1205,5 +1350,139 @@ mod tests {
         let info = state.policy_info();
         assert_eq!(info["blobs"]["max_bytes"], 4 * 1024 * 1024);
         assert_eq!(info["blobs"]["max_ttl_secs"], 24 * 3600);
+    }
+
+    fn row_count(state: &RelayState, table: &str) -> i64 {
+        state
+            .database
+            .lock()
+            .unwrap()
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_blob_is_served_only_a_few_times_its_size() {
+        let state = state_with("served", |config| config.ext.blob_serve_factor = 2);
+        let token = token_for(&state, 1, SCOPE_MESSAGES | SCOPE_EXTENDED);
+        let data = blob(1000, 6);
+        let hash = upload(&state, &token, &data).unwrap();
+        assert!(get(&state, &hash, 0, 1000).is_ok());
+        assert!(get(&state, &hash, 0, 1000).is_ok(), "a retry or a second device");
+        // Spent: the same answer as for a blob that is not there.
+        let spent = get(&state, &hash, 0, 1000).unwrap_err();
+        assert_eq!(spent, get(&state, &sha(b"nothing"), 0, 10).unwrap_err());
+        assert!(has(&state, &hash, SECRET).is_empty());
+        // The owner may still delete it, and a factor of 0 means no limit.
+        let open = state_with("served-open", |config| config.ext.blob_serve_factor = 0);
+        let token = token_for(&open, 1, SCOPE_MESSAGES | SCOPE_EXTENDED);
+        let hash = upload(&open, &token, &data).unwrap();
+        for _ in 0..10 {
+            assert!(get(&open, &hash, 0, 1000).is_ok());
+        }
+    }
+
+    #[test]
+    fn an_old_layout_is_dropped_and_stray_files_are_removed_at_start() {
+        let old = Connection::open_in_memory().unwrap();
+        old.execute_batch(
+            "CREATE TABLE blobs (hash TEXT PRIMARY KEY, size INTEGER NOT NULL,
+               account BLOB NOT NULL, created_millis INTEGER NOT NULL,
+               expires_millis INTEGER NOT NULL);
+             INSERT INTO blobs VALUES ('aa', 1, x'01', 1, 1);",
+        )
+        .unwrap();
+        init_tables(&old).unwrap();
+        let columns: Vec<String> = old
+            .prepare("SELECT name FROM pragma_table_info('blobs')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(columns.contains(&"secret_hash".to_owned()));
+        assert!(columns.contains(&"served".to_owned()));
+        assert_eq!(
+            old.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        // Files: the indexed one stays, ours without a row go, others stay.
+        let state = state_with("startup", |_| {});
+        let token = token_for(&state, 1, SCOPE_MESSAGES | SCOPE_EXTENDED);
+        let hash = upload(&state, &token, &blob(300, 3)).unwrap();
+        let dir = state.blob_dir().unwrap();
+        let stray_old = dir.join(format!("{}.blob", sha(b"old layout")));
+        let stray_new = blob_path(&dir, &sha(b"crash"), &[9_u8; 32]);
+        let foreign = dir.join("notes.txt");
+        for file in [&stray_old, &stray_new, &foreign] {
+            fs::write(file, b"x").unwrap();
+        }
+        state.blob_startup_cleanup();
+        assert!(!stray_old.exists());
+        assert!(!stray_new.exists());
+        assert!(foreign.exists(), "files that are not ours are left alone");
+        assert!(get(&state, &hash, 0, 10).is_ok());
+    }
+
+    #[test]
+    fn an_account_without_a_group_is_filed_on_its_first_upload_and_a_restart_is_not_counted_twice() {
+        let state = state_with("late-group", |config| {
+            config.ext.blob_account_bytes = 10_000;
+            config.ext.blob_address_bytes = 2500;
+        });
+        let a = token_for(&state, 1, SCOPE_MESSAGES | SCOPE_EXTENDED);
+        let b = token_for(&state, 2, SCOPE_MESSAGES | SCOPE_EXTENDED);
+        assert_eq!(row_count(&state, "blob_account_groups"), 0);
+        let data = blob(2000, 1);
+        let hash = sha(&data);
+        // A first attempt stops half way; starting it again is no extra.
+        put(&state, &a, &hash, &data[..1000], 2000, 0).unwrap();
+        put(&state, &a, &hash, &data[..1000], 2000, 0).unwrap();
+        put(&state, &a, &hash, &data[1000..], 2000, 1000).unwrap();
+        assert_eq!(row_count(&state, "blob_account_groups"), 1);
+        // The address (all accounts without a record share the one they
+        // upload from) is nearly full.
+        let error = upload(&state, &b, &blob(1000, 2)).unwrap_err();
+        assert!(error.contains("address"), "{error}");
+        upload(&state, &b, &blob(400, 3)).expect("what is left");
+    }
+
+    #[test]
+    fn deleting_takes_many_hashes_and_the_sweeper_leaves_busy_uploads() {
+        let state = state_with("batch", |_| {});
+        let token = token_for(&state, 1, SCOPE_MESSAGES | SCOPE_EXTENDED);
+        let hashes: Vec<String> = (0..5)
+            .map(|i| upload(&state, &token, &blob(200 + i, i as u8)).unwrap())
+            .collect();
+        let answer = state
+            .blob_delete(&json!({"token": token, "hashes": hashes[..4]}))
+            .unwrap();
+        assert_eq!(answer["count"], 4);
+        assert_eq!(row_count(&state, "blobs"), 1);
+        let many: Vec<String> = (0..65).map(|i| sha(&[i])).collect();
+        assert!(state
+            .blob_delete(&json!({"token": token, "hashes": many}))
+            .is_err());
+        assert!(state.blob_delete(&json!({"token": token})).is_err());
+        // An upload being handled is not swept or deleted from under it.
+        let dir = state.blob_dir().unwrap();
+        state
+            .database
+            .lock()
+            .unwrap()
+            .execute("UPDATE blobs SET expires_millis = 1", [])
+            .unwrap();
+        let busy = BusyUpload::take(&state.blob_busy, busy_key(&hashes[4], &[1_u8; 32])).unwrap();
+        state.sweep_blobs(&dir, now_millis());
+        assert_eq!(row_count(&state, "blobs"), 1, "busy: left alone");
+        assert!(state
+            .blob_delete(&json!({"token": token, "hash": hashes[4]}))
+            .is_err());
+        drop(busy);
+        state.sweep_blobs(&dir, now_millis());
+        assert_eq!(row_count(&state, "blobs"), 0);
+        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 }

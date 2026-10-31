@@ -534,7 +534,7 @@ impl Session {
             return self
                 .state
                 .blocking(move |state| match request["action"].as_str() {
-                    Some("blob_put") => state.blob_put(&request),
+                    Some("blob_put") => state.blob_put(&request, &peer),
                     Some("blob_get") => state.blob_get(&request, &peer),
                     Some("blob_delete") => state.blob_delete(&request),
                     _ => state.blob_has(&request),

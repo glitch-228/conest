@@ -85,6 +85,20 @@ blob-total-bytes = 1073741824     # the whole relay
 
 Blobs live in `blobs/` beside the database and count against your disk.
 
+Limits worth knowing:
+
+- `blob-serve-factor` (default 4): a blob stops being served once it has
+  been read this many times its size, so the relay is no public file host.
+  0 turns the limit off.
+- `blob-get-bytes-per-minute` (default 32 MiB) limits what one address may
+  read.
+- "Address" in `blob-address-bytes` means the address an account registered
+  from (for accounts that registered earlier: the address of their first
+  upload). People behind CGNAT, a proxy or the hidden service on 443 share
+  one budget.
+- Upgrading from a nightly that had an older blob layout drops the blobs
+  held at the first start; files left behind are removed then too.
+
 ## Mailbox owners
 
 A device claims its mailbox the first time it uses a relay that keeps

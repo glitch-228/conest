@@ -604,13 +604,13 @@ class RelayClient {
     return false;
   }
 
-  /// Takes back a blob this account uploaded (and any upload of it under
-  /// way). True when the relay had it.
-  Future<bool> deleteBlob({
+  /// Takes back blobs this account uploaded (at most 64 at a time, and any
+  /// upload of them under way). True when the relay had one.
+  Future<bool> deleteBlobs({
     required String host,
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
-    required String hash,
+    required List<String> hashes,
     Duration timeout = const Duration(seconds: 6),
     String? expectedIdentityPublicKeyBase64,
   }) async {
@@ -619,7 +619,7 @@ class RelayClient {
       port: port,
       protocol: protocol,
       timeout: timeout,
-      request: {'action': 'blob_delete', 'hash': hash},
+      request: {'action': 'blob_delete', 'hashes': hashes},
       expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
     );
     return result.body['deleted'] == true;

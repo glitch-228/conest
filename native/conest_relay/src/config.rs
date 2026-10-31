@@ -132,6 +132,8 @@ pub(crate) struct ExtConfig {
     pub(crate) blob_account_bytes: u64,
     pub(crate) blob_total_bytes: u64,
     pub(crate) blob_address_bytes: u64,
+    /// A blob is served at most this many times its size (0: no limit).
+    pub(crate) blob_serve_factor: u64,
     pub(crate) blob_get_bytes_per_minute: u64,
     /// Where TLS (the outer layer) listens, e.g. 0.0.0.0:443 (off: none).
     pub(crate) tls_bind: Option<String>,
@@ -179,7 +181,8 @@ impl Default for ExtConfig {
             blob_account_bytes: 64 * 1024 * 1024,
             blob_total_bytes: 1024 * 1024 * 1024,
             blob_address_bytes: 128 * 1024 * 1024,
-            blob_get_bytes_per_minute: 64 * 1024 * 1024,
+            blob_serve_factor: 4,
+            blob_get_bytes_per_minute: 32 * 1024 * 1024,
             tls_bind: None,
             tls_cert: None,
             tls_key: None,
@@ -510,6 +513,9 @@ impl RelayConfig {
                 "--blob-address-bytes" => {
                     config.ext.blob_address_bytes = parse_next_u64(&mut args, &arg)?;
                 }
+                "--blob-serve-factor" => {
+                    config.ext.blob_serve_factor = parse_next_u64(&mut args, &arg)?;
+                }
                 "--blob-get-bytes-per-minute" => {
                     config.ext.blob_get_bytes_per_minute = parse_next_u64(&mut args, &arg)?;
                 }
@@ -706,6 +712,7 @@ pub(crate) fn usage() -> String {
            --blob-account-bytes N           blob bytes one account may hold\n\
            --blob-total-bytes N             blob bytes the relay holds\n\
            --blob-address-bytes N           blob bytes the accounts made from one address hold\n\
+           --blob-serve-factor N            a blob is served at most N times its size (default 4; 0: no limit)\n\
            --blob-get-bytes-per-minute N    blob bytes one address may fetch\n\
            --token-days N                   how long a token lasts (default 30)\n\
            --tls-bind ADDR --tls-cert PEM --tls-key PEM  TLS (e.g. on 443) with a\n\

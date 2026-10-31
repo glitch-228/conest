@@ -23739,16 +23739,30 @@ class MessengerController extends ChangeNotifier {
       if (_leftBlobs.containsKey(id) || _leavingBlobs.contains(id)) return;
       void leave(bool midTransfer) {
         unawaited(
-          _leaveBlobs(contact, state, midTransfer: midTransfer).catchError((
-            Object error,
-          ) {
-            appendDebugLog(
-              'Could not leave blobs for $id: ${error.runtimeType}',
-            );
-          }),
+          _leaveBlobs(contact, state, midTransfer: midTransfer)
+              .catchError((Object error) {
+                appendDebugLog(
+                  'Could not leave blobs for $id: ${error.runtimeType}',
+                );
+              })
+              .whenComplete(() {
+                // Nothing was left (stopped early or failed): try again.
+                if (!_disposed &&
+                    !_leftBlobs.containsKey(id) &&
+                    identical(_outboundAttachments[id], state) &&
+                    !_blobLeaveTimers.containsKey(id)) {
+                  arm(blobSlowAfter);
+                }
+              }),
         );
       }
 
+      // Not now (metered, battery saver): look again later, so uploading
+      // starts when the network allows it.
+      if (!_blobUploadAllowed) {
+        arm(blobSlowAfter);
+        return;
+      }
       if (state.highestChunkSent < 0) {
         leave(false);
         return;
@@ -23813,7 +23827,10 @@ class MessengerController extends ChangeNotifier {
         },
       );
       _leftBlobs[id] = leftNow;
-      final readSecret = newReadSecret();
+      final readSecret = deriveReadSecret(
+        base64Decode(descriptor.encryptionKeyBase64),
+        id,
+      );
       final startedAt = DateTime.now().toUtc();
       // A receiver that was slow is back when it fetches a block after
       // the upload began; one that had not started, when it starts.
@@ -23917,14 +23934,15 @@ class MessengerController extends ChangeNotifier {
     for (final (routeKey, hashes) in todo) {
       final relay = left.relays[routeKey];
       if (relay == null) continue;
-      for (final hash in hashes) {
+      // Up to 64 hashes in one request.
+      for (var start = 0; start < hashes.length; start += 64) {
         if (_disposed) return;
         try {
-          await _relayClient.deleteBlob(
+          await _relayClient.deleteBlobs(
             host: relay.endpoint.host,
             port: relay.endpoint.port,
             protocol: relay.endpoint.protocol,
-            hash: hash,
+            hashes: hashes.sublist(start, min(start + 64, hashes.length)),
             expectedIdentityPublicKeyBase64: relay.key,
           );
         } catch (error) {
@@ -23950,7 +23968,6 @@ class MessengerController extends ChangeNotifier {
     if (state == null ||
         me == null ||
         state.peerDeviceId != sender.deviceId ||
-        state.blobs != null ||
         state.fromOwnDevice ||
         state.descriptor.chunkSize != _attachmentChunkSize) {
       return;
@@ -23968,6 +23985,8 @@ class MessengerController extends ChangeNotifier {
           relay,
     ];
     if (relays.isEmpty) return;
+    // A later announcement from the sender (it uploaded again) replaces the
+    // earlier one: its relays and secret are the ones to use.
     state.blobs = announcement;
     for (final relay in relays) {
       state.blobRelays[relay.routeKey] = relay;
@@ -24065,6 +24084,13 @@ class MessengerController extends ChangeNotifier {
       await _leaveBlobs(contact, state, midTransfer: midTransfer);
     }
   }
+
+  @visibleForTesting
+  void forgetLeftBlobsForTesting() => _leftBlobs.clear();
+
+  @visibleForTesting
+  String? blobReadSecretForTesting(String attachmentId) =>
+      _inboundAttachments[attachmentId]?.blobs?.readSecret;
 
   @visibleForTesting
   int leftBlobCountForTesting(String attachmentId) =>
@@ -42184,18 +42210,18 @@ class _ScoringRelayClient implements RelayClient {
   );
 
   @override
-  Future<bool> deleteBlob({
+  Future<bool> deleteBlobs({
     required String host,
     required int port,
     PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
-    required String hash,
+    required List<String> hashes,
     Duration timeout = const Duration(seconds: 6),
     String? expectedIdentityPublicKeyBase64,
-  }) => inner.deleteBlob(
+  }) => inner.deleteBlobs(
     host: host,
     port: port,
     protocol: protocol,
-    hash: hash,
+    hashes: hashes,
     timeout: timeout,
     expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
   );

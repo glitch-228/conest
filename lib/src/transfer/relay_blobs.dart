@@ -109,6 +109,16 @@ bool isReadSecret(Object? text) =>
     text.length <= 128 &&
     RegExp(r'^[\x21-\x7e]+$').hasMatch(text);
 
+/// The read secret of one file: derived from its key, so a sender that
+/// restarts and uploads again keeps the secret the receiver was told.
+String deriveReadSecret(Uint8List fileKey, String attachmentId) {
+  final mac = crypto.Hmac(
+    crypto.sha256,
+    fileKey,
+  ).convert(utf8.encode('conest-blob-read-secret|$attachmentId'));
+  return base64Url.encode(mac.bytes).replaceAll('=', '');
+}
+
 /// A fresh random read secret (256 bits, URL-safe).
 String newReadSecret([Random? random]) {
   final source = random ?? Random.secure();
