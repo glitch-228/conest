@@ -30788,6 +30788,94 @@ void main() {
       await settle([alice, bob]);
     }
 
+    /// Alice and Bob in sessions that keep Olm's 40 skipped keys, and what
+    /// Bob wrote to Alice meanwhile (a message, then the receipt for one of
+    /// hers, 45 times) as a slow relay would hand it over in one go.
+    Future<(MessengerController, MessengerController, List<RelayEnvelope>)>
+    pileUp() async {
+      final relay = _FakeRelayClient();
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        ratchetEngine: FakeRatchetEngine(skippedKeyLimit: 40),
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      // Alice reads nothing until the test hands it over.
+      relay.fetchDelay = const Duration(hours: 1);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      relay.storedEnvelopes.clear();
+      for (var i = 0; i < 45; i++) {
+        await alice.sendMessage(contact: alice.contacts.single, body: 'a$i');
+      }
+      final fromAlice = <RelayEnvelope>[];
+      for (final envelope in relay.storedEnvelopes) {
+        if (envelope.kind == 'direct_message' &&
+            envelope.senderDeviceId == aliceId &&
+            !fromAlice.any((known) => known.messageId == envelope.messageId)) {
+          fromAlice.add(envelope);
+        }
+      }
+      expect(fromAlice, hasLength(45));
+      relay.storedEnvelopes.clear();
+      for (var i = 0; i < 45; i++) {
+        await bob.sendMessage(contact: bob.contacts.single, body: 'b$i');
+        await bob.processEnvelopesForTesting([fromAlice[i]]);
+      }
+      final fromBob = <RelayEnvelope>[];
+      for (final envelope in relay.storedEnvelopes) {
+        if (envelope.senderDeviceId == bobId &&
+            envelope.protocolVersion == 3 &&
+            (envelope.kind == 'direct_message' || envelope.kind == 'ack') &&
+            !fromBob.any((known) => known.messageId == envelope.messageId)) {
+          fromBob.add(envelope);
+        }
+      }
+      expect(fromBob.length, greaterThanOrEqualTo(90));
+      return (alice, bob, fromBob);
+    }
+
+    test('a hundred envelopes handed over at once are read in the order they '
+        'arrived, not sorted by kind', () async {
+      final (alice, bob, fromBob) = await pileUp();
+      await alice.processEnvelopesForTesting(fromBob);
+      final bobId = bob.identity!.deviceId;
+      expect(
+        alice.messagesFor(bobId).map((m) => m.body),
+        containsAll([for (var i = 0; i < 45; i++) 'b$i']),
+      );
+      expect(
+        alice
+            .messagesFor(bobId)
+            .where((m) => m.outbound && m.body.startsWith('a'))
+            .every((m) => m.state == DeliveryState.delivered),
+        isTrue,
+        reason: 'a receipt was lost',
+      );
+    });
+
+    test('an envelope no session can read stops holding its relay lease after '
+        'a few tries', () async {
+      final (alice, _, fromBob) = await pileUp();
+      // Handed over newest first: the oldest keys are gone for good.
+      for (final envelope in fromBob.reversed) {
+        await alice.processEnvelopesForTesting([envelope]);
+      }
+      final lost = fromBob.first;
+      await expectLater(
+        alice.processEnvelopesForTesting([lost], failOnProcessingError: true),
+        throwsStateError,
+        reason: 'the second try still fails the batch',
+      );
+      await alice.processEnvelopesForTesting([
+        lost,
+      ], failOnProcessingError: true);
+    });
+
     test('offers repeated while the hello is slow lose no messages', () async {
       // Over a slow route the offering side repeats its offer before the
       // hello that opens the session reaches it; each offer makes the other

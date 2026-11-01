@@ -21038,12 +21038,7 @@ class MessengerController extends ChangeNotifier {
   ) async {
     var processed = 0;
     var failed = 0;
-    final orderedEnvelopes = List<RelayEnvelope>.from(envelopes)
-      ..sort((left, right) {
-        final leftPriority = _processingPriority(left.kind);
-        final rightPriority = _processingPriority(right.kind);
-        return leftPriority.compareTo(rightPriority);
-      });
+    final orderedEnvelopes = _orderForProcessing(envelopes);
     for (final envelope in orderedEnvelopes) {
       if (!_isValidInboundEnvelope(envelope)) {
         appendDebugLog(
@@ -21442,7 +21437,14 @@ class MessengerController extends ChangeNotifier {
         _rememberMessageDigest(envelope);
         _markSeen(envelope.messageId);
       } catch (error) {
-        failed++;
+        // A copy no session can read does not become readable by being
+        // fetched again; the sender's session reset sends it afresh. Held,
+        // it kept its relay lease for good: fetched and failed every
+        // minute, and each time a reason to offer another session.
+        if (!(error is RatchetDecryptException &&
+            _giveUpOnUnreadable(envelope.messageId))) {
+          failed++;
+        }
         recordError(
           'receive',
           'Dropped ${_boundedLogValue(envelope.kind)} '
@@ -21468,6 +21470,64 @@ class MessengerController extends ChangeNotifier {
     }
     return _EnvelopeProcessingOutcome(processed: processed, failed: failed);
   }
+
+  /// How often each envelope no session could read was seen (bounded).
+  final Map<String, int> _unreadableSeen = {};
+  static const int _unreadableTries = 3;
+
+  /// Whether an envelope that could not be decrypted has been tried enough:
+  /// the batch it came in may then be acknowledged to the relay.
+  bool _giveUpOnUnreadable(String messageId) {
+    final seen = (_unreadableSeen.remove(messageId) ?? 0) + 1;
+    _unreadableSeen[messageId] = seen;
+    while (_unreadableSeen.length > 512) {
+      _unreadableSeen.remove(_unreadableSeen.keys.first);
+    }
+    return seen >= _unreadableTries;
+  }
+
+  /// Envelopes in the order they are processed: by kind (setup before
+  /// messages), but never far from the order they arrived in.
+  ///
+  /// A forward-secret session decrypts a message that arrives out of order
+  /// only while its key is among the last 40 skipped ones. Sorting a whole
+  /// batch by kind moved every receipt ahead of every message, and
+  /// [List.sort] is not stable beyond 32 entries: a batch of a hundred (what
+  /// piles up while a relay is slow) lost the keys of the messages it passed,
+  /// they could never be read, and both ends reset their sessions over and
+  /// over (device lab, relay only). Setup envelopes still go first; the rest
+  /// is ordered by kind in runs of [_processingRun] arrival-ordered
+  /// envelopes, so none passes more than that many others.
+  List<RelayEnvelope> _orderForProcessing(List<RelayEnvelope> envelopes) {
+    // The arrival position breaks ties: the sort alone is not stable.
+    int byKind((int, RelayEnvelope) left, (int, RelayEnvelope) right) {
+      final order = _processingPriority(
+        left.$2.kind,
+      ).compareTo(_processingPriority(right.$2.kind));
+      return order != 0 ? order : left.$1.compareTo(right.$1);
+    }
+
+    final setup = <(int, RelayEnvelope)>[];
+    final rest = <(int, RelayEnvelope)>[];
+    for (var i = 0; i < envelopes.length; i++) {
+      (_processingPriority(envelopes[i].kind) < 0 ? setup : rest).add((
+        i,
+        envelopes[i],
+      ));
+    }
+    setup.sort(byKind);
+    final ordered = [for (final entry in setup) entry.$2];
+    for (var start = 0; start < rest.length; start += _processingRun) {
+      final run = rest.sublist(start, min(start + _processingRun, rest.length))
+        ..sort(byKind);
+      ordered.addAll(run.map((entry) => entry.$2));
+    }
+    return ordered;
+  }
+
+  /// How far an envelope may be moved ahead of the ones that arrived before
+  /// it (a session keeps 40 skipped keys).
+  static const int _processingRun = 24;
 
   int _processingPriority(String kind) {
     switch (kind) {

@@ -7,9 +7,15 @@ import 'package:conest/src/ratchet.dart';
 /// until a reply arrives, one use per message index, one-time keys consumed
 /// once, and identity keys bound to the session.
 class FakeRatchetEngine implements RatchetEngine {
-  FakeRatchetEngine({Random? random}) : _random = random ?? Random();
+  FakeRatchetEngine({Random? random, this.skippedKeyLimit})
+    : _random = random ?? Random();
 
   final Random _random;
+
+  /// Like Olm, a message that arrives more than this many places behind the
+  /// newest one received can no longer be read (its key was dropped). Null:
+  /// no limit.
+  final int? skippedKeyLimit;
 
   String _key() => base64Encode(
     List<int>.generate(32, (_) => _random.nextInt(256)),
@@ -91,6 +97,12 @@ class FakeRatchetEngine implements RatchetEngine {
         if (message['id'] != session['id'] || seen.contains(message['n'])) {
           throw const RatchetEngineException('bad mac');
         }
+        final newest = (session['newest'] as int?) ?? -1;
+        final limit = skippedKeyLimit;
+        if (limit != null && (message['n'] as int) < newest - limit) {
+          throw const RatchetEngineException('the key was dropped');
+        }
+        session['newest'] = max(newest, message['n'] as int);
         session['seen'] = [...seen, message['n']];
         session['received'] = true;
         return {
@@ -124,6 +136,7 @@ class FakeRatchetEngine implements RatchetEngine {
           'next': 0,
           'received': true,
           'seen': [message['n']],
+          'newest': message['n'],
         };
         return {
           'account': _pack(account),
