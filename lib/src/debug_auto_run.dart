@@ -58,6 +58,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/scheduler.dart';
 
+import 'activity_counters.dart';
 import 'group_call/group_call_service.dart';
 import 'group_file_download.dart';
 import 'messenger_controller.dart';
@@ -881,6 +882,7 @@ Future<String> runDebugRequest(
 
   // What happened since [from]: the whole run, or one serve phase (whose
   // chats then hold only what was sent or arrived during it).
+  ActivitySnapshot? idleSnapshot;
   Map<String, Object?> reportFrom(
     ({DateTime at, int steps, int calls, int events}) from, {
     required String what,
@@ -927,6 +929,13 @@ Future<String> runDebugRequest(
     'performance': {
       'frames': frames.toJson(),
       'handling': controller.envelopeHandling.toJson(),
+    },
+    // Timers, wakeups, sockets, rebuilds and log lines: what the app does
+    // while idle (the whole run; the idle minutes alone under "idle").
+    'activity': {
+      ...ActivityCounters.instance.toJson(),
+      if (idleSnapshot != null)
+        'idle': ActivityCounters.instance.toJson(since: idleSnapshot),
     },
     'errorHistory': controller.exportErrorHistory(),
   };
@@ -1052,6 +1061,7 @@ Future<String> runDebugRequest(
   observe();
   // Without this run's own 250 ms ticker, which would cost what is measured.
   final idleFrom = DateTime.now().toUtc();
+  idleSnapshot = ActivityCounters.instance.snapshot();
   if (request.idle > Duration.zero) await Future<void>.delayed(request.idle);
   final report = reportFrom(
     (at: startedAt, steps: 0, calls: 0, events: 0),

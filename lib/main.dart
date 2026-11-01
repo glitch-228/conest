@@ -68,6 +68,7 @@ import 'src/ui/read_sweep.dart';
 import 'src/ui/forwarding.dart';
 import 'src/relay_link.dart';
 import 'src/ui/crash_notice.dart';
+import 'src/activity_counters.dart';
 import 'src/crash_catcher.dart';
 import 'src/native_crash_reports.dart';
 import 'src/ui/matrix_account_panel.dart';
@@ -273,7 +274,12 @@ class _BrokenPart extends StatelessWidget {
 Future<void> main(List<String> args) async {
   // Every error nothing else caught is written down (crash_catcher.dart).
   final crashes = CrashCatcher.instance;
-  await runZonedGuarded(() => _main(args, crashes), crashes.zoneError);
+  await runZonedGuarded(
+    () => _main(args, crashes),
+    crashes.zoneError,
+    // Counts the timers made (only while a debug run asks for it).
+    zoneSpecification: ActivityCounters.timerZone,
+  );
 }
 
 Future<void> _main(List<String> args, CrashCatcher crashes) async {
@@ -295,6 +301,12 @@ Future<void> _main(List<String> args, CrashCatcher crashes) async {
   final storageResolver = AppStorageResolver();
   var storageResolution = await storageResolver.resolve();
   _debugRequest = await _readDebugRequest(args);
+  if (_debugRequest != null) {
+    // A lab run: the report says what the app does while idle.
+    ActivityCounters.enabled = true;
+    ActivityCounters.instance.reset();
+    ActivityCounters.countSockets();
+  }
   _startHidden = args.contains(DesktopAutostart.hiddenFlag);
   if (_debugRequest?.setsUp == true) {
     // A lab device keeps its own data: beside the app on desktops (with its
@@ -3466,6 +3478,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ActivityCounters.instance.noteRebuild('chatList');
     final palette = widget.palette;
     final selectedContact = _selectedContact;
     final selectedGroup = _selectedGroup;
@@ -5101,6 +5114,7 @@ class _CourierHomeState extends State<_CourierHome> {
 
   @override
   Widget build(BuildContext context) {
+    ActivityCounters.instance.noteRebuild('chatList');
     final query = _search.text.trim().toLowerCase();
     ChatMessage? matchingMessage(List<ChatMessage> messages) {
       for (final message in messages.reversed) {
@@ -6082,6 +6096,7 @@ class _GarrisonHomeState extends State<_GarrisonHome> {
 
   @override
   Widget build(BuildContext context) {
+    ActivityCounters.instance.noteRebuild('chatList');
     final groups = controller.visibleGroups;
     final cellGroup = _activeCellGroup(groups);
     return Row(
@@ -10319,6 +10334,7 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
 
   @override
   Widget build(BuildContext context) {
+    ActivityCounters.instance.noteRebuild('chatView');
     final messages = controller.messagesForGroup(group.groupId);
     final callTimeline = groupCallChatTimeline(
       messages,
@@ -12307,6 +12323,7 @@ class _ChatPanelState extends State<_ChatPanel> {
 
   @override
   Widget build(BuildContext context) {
+    ActivityCounters.instance.noteRebuild('chatView');
     final messages = controller.messagesFor(contact.deviceId);
     _pruneMessageKeys(messages);
     if (controller.isAppForeground) {

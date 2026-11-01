@@ -33,6 +33,7 @@ import 'bitchat/direct.dart';
 import 'bitchat/gateway.dart';
 import 'bitchat/geo_relays.g.dart';
 import 'bitchat/mesh.dart' show randomBitchatBytes;
+import 'activity_counters.dart';
 import 'bitchat_carrier.dart';
 import 'bitchat_chats.dart';
 import 'bitchat_gateway_relays.dart';
@@ -10167,6 +10168,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> flushErrorHistory() async => _errorHistory?.flush();
 
   void appendDebugLog(String line) {
+    ActivityCounters.instance.noteLogLine();
     _appendDebugLine(line);
     _errorHistory?.add('log', line);
   }
@@ -20896,6 +20898,7 @@ class MessengerController extends ChangeNotifier {
       _scheduleDeferredNotificationFlush();
       return;
     }
+    ActivityCounters.instance.noteNotification();
     super.notifyListeners();
     _scheduleTransferForegroundSync();
   }
