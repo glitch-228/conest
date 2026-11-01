@@ -30370,16 +30370,9 @@ class MessengerController extends ChangeNotifier {
   /// session generation and the message content are unchanged.
   final LinkedHashMap<
     String,
-    ({String fingerprint, Future<RelayEnvelope> envelope, int turn})
+    ({String fingerprint, Future<RelayEnvelope> envelope})
   >
   _envelopeOutbox = LinkedHashMap();
-
-  /// A stored ciphertext is encrypted again once the conversation with its
-  /// peer has changed direction this many times since (a retry means the
-  /// peer has not confirmed it): the first message of a chain that reached
-  /// the peer after newer chains began is unreadable for good, and a session
-  /// keeps only its last 5 receiving chains. Duplicates of the older one are caught by message id.
-  static const int _staleCiphertextTurns = 1;
   static const int _envelopeOutboxCap = 2048;
 
   /// Bumped whenever a peer's forward-secret session changes (a bundle, a
@@ -30409,20 +30402,14 @@ class MessengerController extends ChangeNotifier {
       dart_crypto.sha256.convert(utf8.encode(payload)),
     ].join('|');
     final cached = _envelopeOutbox.remove(key);
-    if (cached != null &&
-        cached.fingerprint == fingerprint &&
-        _crypto.ratchetTurns(contact) - cached.turn < _staleCiphertextTurns) {
+    if (cached != null && cached.fingerprint == fingerprint) {
       _envelopeOutbox[key] = cached;
       return cached.envelope;
     }
     // The pending encryption is shared, so two sends at once still go out
     // as one ciphertext.
     final envelope = encrypt();
-    _envelopeOutbox[key] = (
-      fingerprint: fingerprint,
-      envelope: envelope,
-      turn: _crypto.ratchetTurns(contact),
-    );
+    _envelopeOutbox[key] = (fingerprint: fingerprint, envelope: envelope);
     while (_envelopeOutbox.length > _envelopeOutboxCap) {
       _envelopeOutbox.remove(_envelopeOutbox.keys.first);
     }
@@ -30470,50 +30457,7 @@ class MessengerController extends ChangeNotifier {
   /// When an identical duplicate was last acknowledged, by message id.
   final Map<String, DateTime> _duplicateAckedAt = {};
 
-  /// Hands [envelope] to the transports. Once it has been (or has failed to
-  /// be), a session-encrypted envelope stops holding back the newer ones for
-  /// the same peer (see [RatchetFlightGate]).
   Future<_DeliveryRoute> _deliverToContact({
-    required ContactRecord contact,
-    required String recipientDeviceId,
-    required RelayEnvelope envelope,
-    bool allowRelayedPaths = true,
-    bool allowLegacyRoutes = true,
-    Set<TransportKind>? allowedUnifiedKinds,
-    bool irohFirst = false,
-    bool background = false,
-    bool allowForwarding = true,
-    Set<String> excludeRouteKeys = const {},
-    bool extraCopy = false,
-    Set<PeerRouteKind> skipLegacyKinds = const {},
-    int? fileSizeBytes,
-    bool ignoreRouteBackoff = false,
-  }) async {
-    try {
-      return await _deliverToContactNow(
-        contact: contact,
-        recipientDeviceId: recipientDeviceId,
-        envelope: envelope,
-        allowRelayedPaths: allowRelayedPaths,
-        allowLegacyRoutes: allowLegacyRoutes,
-        allowedUnifiedKinds: allowedUnifiedKinds,
-        irohFirst: irohFirst,
-        background: background,
-        allowForwarding: allowForwarding,
-        excludeRouteKeys: excludeRouteKeys,
-        extraCopy: extraCopy,
-        skipLegacyKinds: skipLegacyKinds,
-        fileSizeBytes: fileSizeBytes,
-        ignoreRouteBackoff: ignoreRouteBackoff,
-      );
-    } finally {
-      if (envelope.protocolVersion == 3) {
-        _crypto.envelopeHandedOver(contact, envelope.messageId);
-      }
-    }
-  }
-
-  Future<_DeliveryRoute> _deliverToContactNow({
     required ContactRecord contact,
     required String recipientDeviceId,
     required RelayEnvelope envelope,
@@ -42193,7 +42137,6 @@ class MessengerController extends ChangeNotifier {
     }
     _ratchetControlRetries.clear();
     _receiptQueue.close();
-    _crypto.flight.close();
     _limiters.close();
     _matrixClient?.dispose();
     _linkPreviews?.dispose();

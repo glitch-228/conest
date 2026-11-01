@@ -16,13 +16,16 @@ class FakeRatchetEngine implements RatchetEngine {
   final Random _random;
 
   /// Like Olm, a message that arrives more than this many places behind the
-  /// newest one received can no longer be read (its key was dropped). Null:
-  /// no limit.
+  /// newest one of its chain can no longer be read (its key was dropped).
+  /// Null: no limit.
   final int? skippedKeyLimit;
 
-  /// Like Olm, only the last this many receiving chains are kept (every
-  /// change of direction of the sender starts one); a message of an older
-  /// chain can no longer be read. Null: no limit.
+  /// Like Olm, only the last this many receiving chains are kept. A side
+  /// opens a new sending chain only when it takes a message of a remote
+  /// chain newer than any it has seen (the DH ratchet), so a reply that
+  /// crosses a message in flight does not start one. A message of a chain
+  /// never seen that is older than the newest known is unreadable for good.
+  /// Null: no limit.
   final int? receivingChains;
 
   String _key() => base64Encode(
@@ -85,12 +88,21 @@ class FakeRatchetEngine implements RatchetEngine {
         final session = _unpack(request['session']);
         final index = session['next'] as int;
         session['next'] = index + 1;
+        // The DH ratchet: this side opens a new sending chain only after
+        // it has taken a message of a remote chain newer than any it knew.
+        var turn = (session['turn'] as int?) ?? 0;
         if (session['rx'] == true) {
-          session['turn'] = ((session['turn'] as int?) ?? 0) + 1;
+          turn++;
+          session['turn'] = turn;
           session['rx'] = false;
         }
+        final idx = Map<String, dynamic>.from((session['idx'] as Map?) ?? {});
+        final inChain = (idx['$turn'] as int?) ?? 0;
+        idx['$turn'] = inChain + 1;
+        session['idx'] = idx;
         final message = {
-          'c': (session['turn'] as int?) ?? 0,
+          'c': turn,
+          'i': inChain,
           'id': session['id'],
           'n': index,
           'from': session['me'],
@@ -111,27 +123,43 @@ class FakeRatchetEngine implements RatchetEngine {
           throw const RatchetEngineException('bad mac');
         }
         final chain = (message['c'] as int?) ?? 0;
+        final inChain = (message['i'] as int?) ?? (message['n'] as int);
         final chains = ((session['chains'] as List?) ?? const []).cast<int>();
+        final newestIn = Map<String, dynamic>.from(
+          (session['newestIn'] as Map?) ?? {},
+        );
         final chainLimit = receivingChains;
-        if (chainLimit != null &&
-            !chains.contains(chain) &&
-            chains.isNotEmpty &&
-            chain < chains.last) {
-          throw const RatchetEngineException('the chain was dropped');
-        }
+        var rmax = (session['rmax'] as int?) ?? -1;
         if (!chains.contains(chain)) {
-          final kept = [...chains, chain];
-          session['chains'] = chainLimit != null && kept.length > chainLimit
-              ? kept.sublist(kept.length - chainLimit)
-              : kept;
+          // A chain nobody has seen: the receiver takes the DH step only if
+          // it is newer than the newest it knows. An older one is gone for
+          // good (its ratchet key was never processed).
+          if (chainLimit != null && chain < rmax) {
+            throw const RatchetEngineException('the chain was dropped');
+          }
+          var kept = [...chains, chain];
+          if (chainLimit != null && kept.length > chainLimit) {
+            // Evicting a chain drops its skipped keys.
+            final evicted = kept.first;
+            kept = kept.sublist(kept.length - chainLimit);
+            newestIn.remove('$evicted');
+          }
+          session['chains'] = kept;
         }
-        session['rx'] = true;
-        final newest = (session['newest'] as int?) ?? -1;
         final limit = skippedKeyLimit;
-        if (limit != null && (message['n'] as int) < newest - limit) {
+        final newest = (newestIn['$chain'] as int?) ?? -1;
+        if (limit != null && inChain < newest - limit) {
           throw const RatchetEngineException('the key was dropped');
         }
-        session['newest'] = max(newest, message['n'] as int);
+        if (chain > rmax) {
+          // Newer than any chain seen: this side's next message starts a
+          // new sending chain.
+          rmax = chain;
+          session['rx'] = true;
+        }
+        session['rmax'] = rmax;
+        newestIn['$chain'] = max(newest, inChain);
+        session['newestIn'] = newestIn;
         session['seen'] = [...seen, message['n']];
         session['received'] = true;
         return {
@@ -165,9 +193,10 @@ class FakeRatchetEngine implements RatchetEngine {
           'next': 0,
           'received': true,
           'seen': [message['n']],
-          'newest': message['n'],
+          'newestIn': {'${(message['c'] as int?) ?? 0}': message['i'] ?? 0},
           'chains': [(message['c'] as int?) ?? 0],
-          'rx': true,
+          'rmax': (message['c'] as int?) ?? 0,
+          'rx': false,
         };
         return {
           'account': _pack(account),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:conest/src/nostr/event.dart';
@@ -21,6 +22,54 @@ void main() {
     for (final channel in channels) {
       await channel.stop();
     }
+  });
+
+  test('the strict fake relay: rate-limited above the limit, may discard, '
+      'may cut the connection', () async {
+    var now = DateTime.utc(2026, 11, 1, 12);
+    final relay = relays.relay('wss://limited.test')
+      ..eventsPerMinute = 3
+      ..disconnectAfterRefusals = 2
+      ..clock = () => now;
+    final socket = await relays.connect(Uri.parse('wss://limited.test'));
+    final answers = <List<dynamic>>[];
+    final done = Completer<void>();
+    socket.messages.listen(
+      (raw) => answers.add(jsonDecode(raw) as List<dynamic>),
+      onDone: done.complete,
+    );
+    NostrEvent event(int i) => NostrEvent.sign(
+      secretKey: Secp256k1.generateSecretKey(),
+      kind: 1,
+      tags: const [],
+      content: 'e$i',
+      createdAt: 1,
+    );
+    for (var i = 0; i < 5; i++) {
+      socket.send(jsonEncode(['EVENT', event(i).toJson()]));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(answers.where((a) => a[2] == true), hasLength(3));
+    expect(
+      answers.where((a) => '${a[3]}'.startsWith('rate-limited')),
+      hasLength(2),
+    );
+    expect(relay.refusals, 2);
+    await done.future.timeout(const Duration(seconds: 2));
+    // A minute later the limit has passed.
+    now = now.add(const Duration(minutes: 2));
+    final again = await relays.connect(Uri.parse('wss://limited.test'));
+    final more = <List<dynamic>>[];
+    again.messages.listen((raw) => more.add(jsonDecode(raw) as List<dynamic>));
+    again.send(jsonEncode(['EVENT', event(9).toJson()]));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(more.single[2], true);
+    relay.discard = true;
+    final storedBefore = relay.stored.length;
+    again.send(jsonEncode(['EVENT', event(10).toJson()]));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(more.last[2], true, reason: 'a discarding relay still says OK');
+    expect(relay.stored.length, storedBefore);
   });
 
   test('relays are probed a few at a time', () async {

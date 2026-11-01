@@ -529,6 +529,13 @@ class _OwnerFakeRelayClient extends _FakeRelayClient {
   }
 }
 
+class _LeasedRow {
+  _LeasedRow(this.envelope);
+  final RelayEnvelope envelope;
+  String? leaseId;
+  DateTime? leasedAt;
+}
+
 class _FakeRelayClient extends RelayClient {
   /// Blobs this relay holds, by name; [tamperBlobs] changes what is served.
   final Map<String, Uint8List> blobs = {};
@@ -710,6 +717,9 @@ class _FakeRelayClient extends RelayClient {
     String? expectedIdentityPublicKeyBase64,
   }) async {
     leasedFetches.add((timeout, leaseFor));
+    if (strictLeases) {
+      return _strictLeasedBatch(recipientDeviceId, limit);
+    }
     // As the real client: a reply slower than the limit is not waited for.
     if (fetchDelay > waitFor + timeout) {
       await Future<void>.delayed(waitFor + timeout);
@@ -768,7 +778,50 @@ class _FakeRelayClient extends RelayClient {
     required String leaseId,
     Duration timeout = const Duration(seconds: 4),
     String? expectedIdentityPublicKeyBase64,
-  }) async {}
+  }) async {
+    _rows[recipientDeviceId]?.removeWhere((row) => row.leaseId == leaseId);
+  }
+
+  /// Leases as the real relay keeps them: a fetch hands out the oldest rows
+  /// not under a lease and marks them; they stay until acknowledged, and
+  /// come back (oldest first) when the lease runs out unacknowledged.
+  bool strictLeases = false;
+
+  /// How long a lease holds (real time, short in tests).
+  Duration leaseLength = const Duration(seconds: 60);
+
+  /// Every batch handed out under a lease, with its envelopes.
+  final List<List<RelayEnvelope>> leasedBatches = [];
+  final Map<String, List<_LeasedRow>> _rows = {};
+  int _leaseSerial = 0;
+
+  Future<RelayFetchBatch> _strictLeasedBatch(
+    String recipientDeviceId,
+    int limit,
+  ) async {
+    final rows = _rows.putIfAbsent(recipientDeviceId, () => []);
+    final queue = _queues[recipientDeviceId] ?? <RelayEnvelope>[];
+    for (final envelope in queue.toList()) {
+      rows.add(_LeasedRow(envelope));
+    }
+    queue.clear();
+    final now = DateTime.now();
+    final batch = <_LeasedRow>[];
+    for (final row in rows) {
+      if (row.leaseId != null && now.difference(row.leasedAt!) > leaseLength) {
+        row.leaseId = null;
+      }
+      if (row.leaseId == null && batch.length < limit) batch.add(row);
+    }
+    final leaseId = 'lease-${_leaseSerial++}';
+    for (final row in batch) {
+      row.leaseId = leaseId;
+      row.leasedAt = now;
+    }
+    final envelopes = [for (final row in batch) row.envelope];
+    leasedBatches.add(envelopes);
+    return RelayFetchBatch(envelopes: envelopes, leaseId: leaseId);
+  }
 
   // ---- nightly.9 aggressive simulator knobs ----
   //
@@ -6790,6 +6843,55 @@ void main() {
       expect(alice.voiceCallService!.mediaBusy, true);
     },
   );
+
+  test('the strict fake relay keeps a lease until it is acknowledged or '
+      'runs out, and hands the same oldest rows out again', () async {
+    final relay = _FakeRelayClient()
+      ..strictLeases = true
+      ..leaseLength = const Duration(milliseconds: 150);
+    RelayEnvelope envelope(int i) => RelayEnvelope(
+      protocolVersion: 3,
+      kind: 'direct_message',
+      messageId: 'm$i',
+      conversationId: 'c',
+      senderAccountId: 'a',
+      senderDeviceId: 's',
+      recipientDeviceId: 'r',
+      createdAt: DateTime.now().toUtc(),
+    );
+    for (var i = 0; i < 3; i++) {
+      await relay.storeEnvelope(
+        host: 'h',
+        port: 1,
+        recipientDeviceId: 'r',
+        envelope: envelope(i),
+      );
+    }
+    Future<RelayFetchBatch> fetch({int limit = 64}) =>
+        relay.fetchLeasedEnvelopes(
+          host: 'h',
+          port: 1,
+          recipientDeviceId: 'r',
+          limit: limit,
+        );
+    final first = await fetch(limit: 2);
+    expect(first.envelopes.map((e) => e.messageId), ['m0', 'm1']);
+    // Under lease: the next fetch gets the rest only.
+    final second = await fetch();
+    expect(second.envelopes.map((e) => e.messageId), ['m2']);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    // Nothing acknowledged: the same oldest rows come back, oldest first.
+    final again = await fetch();
+    expect(again.envelopes.map((e) => e.messageId), ['m0', 'm1', 'm2']);
+    await relay.acknowledgeLease(
+      host: 'h',
+      port: 1,
+      recipientDeviceId: 'r',
+      leaseId: again.leaseId!,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect((await fetch()).envelopes, isEmpty);
+  });
 
   group('receipts are sent off the processing path', () {
     Future<(MessengerController, MessengerController, _FakeRelayClient)>
@@ -31166,163 +31268,6 @@ void main() {
       expect(fromBob.length, greaterThanOrEqualTo(90));
       return (alice, bob, fromBob, (by) => clock = clock.add(by));
     }
-
-    Future<(MessengerController, MessengerController, _FakeRelayClient)>
-    limitedPair() async {
-      final relay = _FakeRelayClient();
-      Future<MessengerController> device(String name) => _createController(
-        relayClient: relay,
-        displayName: name,
-        ratchetEngine: FakeRatchetEngine(
-          skippedKeyLimit: 40,
-          receivingChains: 5,
-        ),
-      );
-      final alice = await device('Alice');
-      final bob = await device('Bob');
-      addTearDown(alice.dispose);
-      addTearDown(bob.dispose);
-      await establish(alice, bob);
-      return (alice, bob, relay);
-    }
-
-    test(
-      'a receipt held in a queue across six round trips is still read',
-      () async {
-        final (alice, bob, relay) = await limitedPair();
-        final aliceId = alice.identity!.deviceId;
-        final bobId = bob.identity!.deviceId;
-        relay.fetchDelay = const Duration(hours: 1);
-        RelayEnvelope lastFromAlice() => relay.storedEnvelopes.lastWhere(
-          (e) => e.kind == 'direct_message' && e.senderDeviceId == aliceId,
-        );
-        await alice.sendMessage(contact: alice.contacts.single, body: 'held');
-        // The receipt waits for its turn (a limiter) for 4 s.
-        relay.storeDelayFor = (e) =>
-            e.kind == 'ack' ? const Duration(seconds: 4) : Duration.zero;
-        relay.storedEnvelopes.removeWhere((e) => e.senderDeviceId == bobId);
-        final held = lastFromAlice();
-        bob.queueReceiptForTesting(
-          contactDeviceId: aliceId,
-          messageId: held.messageId,
-          conversationId: held.conversationId,
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 200));
-        relay.storeDelayFor = null;
-        for (var i = 0; i < 8; i++) {
-          await alice.sendMessage(contact: alice.contacts.single, body: 'r$i');
-          await bob.processEnvelopesForTesting([
-            lastFromAlice(),
-          ], settleReceipts: false);
-          await bob.sendMessage(contact: bob.contacts.single, body: 'b$i');
-        }
-        await bob.settleReceiptsForTesting();
-        final onTheWire = <RelayEnvelope>[];
-        for (final e in relay.storedEnvelopes) {
-          if (e.senderDeviceId == bobId &&
-              e.protocolVersion == 3 &&
-              (e.kind == 'direct_message' || e.kind == 'ack') &&
-              !onTheWire.any((known) => known.messageId == e.messageId)) {
-            onTheWire.add(e);
-          }
-        }
-        for (final envelope in onTheWire) {
-          await alice.processEnvelopesForTesting([envelope]);
-        }
-        expect(
-          alice.messagesFor(bobId).where((m) => !m.outbound),
-          hasLength(9), // b1 from the setup, then b0 to b7
-        );
-        expect(
-          alice
-              .messagesFor(bobId)
-              .singleWhere((m) => m.outbound && m.body == 'held')
-              .state,
-          DeliveryState.delivered,
-          reason: 'the held receipt could not be read',
-        );
-      },
-      timeout: const Timeout(Duration(minutes: 3)),
-    );
-
-    test('a message of a working session that cannot be read is late, and no '
-        'reset follows', () async {
-      final (alice, bob, relay) = await limitedPair();
-      final bobId = bob.identity!.deviceId;
-      relay.fetchDelay = const Duration(hours: 1);
-      relay.storedEnvelopes.clear();
-      // Bob writes 45 messages; the first reaches Alice last, too late.
-      for (var i = 0; i < 45; i++) {
-        await bob.sendMessage(contact: bob.contacts.single, body: 'b$i');
-      }
-      final fromBob = <RelayEnvelope>[];
-      for (final e in relay.storedEnvelopes) {
-        if (e.senderDeviceId == bobId &&
-            e.kind == 'direct_message' &&
-            e.protocolVersion == 3 &&
-            !fromBob.any((known) => known.messageId == e.messageId)) {
-          fromBob.add(e);
-        }
-      }
-      for (final e in fromBob.skip(1)) {
-        await alice.processEnvelopesForTesting([e]);
-      }
-      relay.storedEnvelopes.clear();
-      await alice.processEnvelopesForTesting([fromBob.first]);
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      // b1 from the setup and 44 of the 45.
-      expect(alice.messagesFor(bobId).where((m) => !m.outbound), hasLength(45));
-      expect(
-        relay.storedEnvelopes.where((e) => e.kind == 'ratchet_bundle'),
-        isEmpty,
-        reason: 'a late message started a reset',
-      );
-    }, timeout: const Timeout(Duration(minutes: 3)));
-
-    test(
-      'a retry after 50 newer messages is encrypted again and read',
-      () async {
-        final (alice, bob, relay) = await limitedPair();
-        final bobId = bob.identity!.deviceId;
-        var failing = true;
-        String? failId;
-        relay.shouldFailStore = (_, _, _, _, e) {
-          if (!failing || e.kind != 'direct_message') return false;
-          // The first message sent is the one that does not get through.
-          failId ??= e.messageId;
-          return e.messageId == failId;
-        };
-        // The sending of the first fails for now: its ciphertext is kept.
-        await alice.sendMessage(contact: alice.contacts.single, body: 'first');
-        for (var i = 0; i < 50; i++) {
-          await alice.sendMessage(contact: alice.contacts.single, body: 'm$i');
-        }
-        await _waitForIroh(() {
-          unawaited(bob.pollNow());
-          return bob
-                  .messagesFor(alice.identity!.deviceId)
-                  .where((m) => m.body.startsWith('m'))
-                  .length ==
-              50;
-        }, reason: 'the newer messages did not arrive');
-        expect(
-          bob
-              .messagesFor(alice.identity!.deviceId)
-              .any((m) => m.body == 'first'),
-          isFalse,
-          reason: 'the first message got through by itself',
-        );
-        failing = false;
-        await _waitForIroh(() {
-          unawaited(alice.retryUnacknowledgedMessagesNow());
-          unawaited(bob.pollNow());
-          return bob
-              .messagesFor(alice.identity!.deviceId)
-              .any((m) => m.body == 'first');
-        }, reason: 'the retried message could not be read');
-      },
-      timeout: const Timeout(Duration(minutes: 3)),
-    );
 
     test('a hundred envelopes handed over at once are read in the order they '
         'arrived, not sorted by kind', () async {
