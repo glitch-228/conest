@@ -7,8 +7,11 @@ import 'package:conest/src/ratchet.dart';
 /// until a reply arrives, one use per message index, one-time keys consumed
 /// once, and identity keys bound to the session.
 class FakeRatchetEngine implements RatchetEngine {
-  FakeRatchetEngine({Random? random, this.skippedKeyLimit})
-    : _random = random ?? Random();
+  FakeRatchetEngine({
+    Random? random,
+    this.skippedKeyLimit,
+    this.receivingChains,
+  }) : _random = random ?? Random();
 
   final Random _random;
 
@@ -16,6 +19,11 @@ class FakeRatchetEngine implements RatchetEngine {
   /// newest one received can no longer be read (its key was dropped). Null:
   /// no limit.
   final int? skippedKeyLimit;
+
+  /// Like Olm, only the last this many receiving chains are kept (every
+  /// change of direction of the sender starts one); a message of an older
+  /// chain can no longer be read. Null: no limit.
+  final int? receivingChains;
 
   String _key() => base64Encode(
     List<int>.generate(32, (_) => _random.nextInt(256)),
@@ -77,7 +85,12 @@ class FakeRatchetEngine implements RatchetEngine {
         final session = _unpack(request['session']);
         final index = session['next'] as int;
         session['next'] = index + 1;
+        if (session['rx'] == true) {
+          session['turn'] = ((session['turn'] as int?) ?? 0) + 1;
+          session['rx'] = false;
+        }
         final message = {
+          'c': (session['turn'] as int?) ?? 0,
           'id': session['id'],
           'n': index,
           'from': session['me'],
@@ -97,6 +110,22 @@ class FakeRatchetEngine implements RatchetEngine {
         if (message['id'] != session['id'] || seen.contains(message['n'])) {
           throw const RatchetEngineException('bad mac');
         }
+        final chain = (message['c'] as int?) ?? 0;
+        final chains = ((session['chains'] as List?) ?? const []).cast<int>();
+        final chainLimit = receivingChains;
+        if (chainLimit != null &&
+            !chains.contains(chain) &&
+            chains.isNotEmpty &&
+            chain < chains.last) {
+          throw const RatchetEngineException('the chain was dropped');
+        }
+        if (!chains.contains(chain)) {
+          final kept = [...chains, chain];
+          session['chains'] = chainLimit != null && kept.length > chainLimit
+              ? kept.sublist(kept.length - chainLimit)
+              : kept;
+        }
+        session['rx'] = true;
         final newest = (session['newest'] as int?) ?? -1;
         final limit = skippedKeyLimit;
         if (limit != null && (message['n'] as int) < newest - limit) {
@@ -137,6 +166,8 @@ class FakeRatchetEngine implements RatchetEngine {
           'received': true,
           'seen': [message['n']],
           'newest': message['n'],
+          'chains': [(message['c'] as int?) ?? 0],
+          'rx': true,
         };
         return {
           'account': _pack(account),

@@ -338,6 +338,13 @@ class RatchetDecryptException implements Exception {
   String toString() => 'RatchetDecryptException: $message';
 }
 
+/// A message of a session that is working: it decrypted something newer a
+/// moment ago, so this one is late (its key was dropped), not the sign of a
+/// lost session. No reset is offered for it.
+class RatchetStaleMessageException extends RatchetDecryptException {
+  const RatchetStaleMessageException(super.message);
+}
+
 /// A session-opening (pre-key) message from a peer whose identity key is not
 /// known yet: it may become readable once the peer's bundle arrives.
 class RatchetUnknownPeerException extends RatchetDecryptException {
@@ -543,6 +550,7 @@ class RatchetSessions {
           confirmed: true,
         ),
       );
+      _lastDecryptedAtMs[peerDeviceId] = _nowMs();
       return base64Decode(result['plaintext'] as String);
     }
     final identity = peerIdentityKey ?? state?.peerIdentityKey;
@@ -555,6 +563,15 @@ class RatchetSessions {
       // bundle has come.
       if (message.opensSession) {
         throw const RatchetUnknownPeerException(
+          'No ratchet session can decrypt this message.',
+        );
+      }
+      final lastRead = _lastDecryptedAtMs[peerDeviceId];
+      final working =
+          lastRead != null &&
+          _nowMs() - lastRead < staleMessageWindow.inMilliseconds;
+      if (!message.opensSession && working) {
+        throw const RatchetStaleMessageException(
           'No ratchet session can decrypt this message.',
         );
       }
@@ -607,8 +624,16 @@ class RatchetSessions {
       '${_peerLabel(peerDeviceId)}; now ${_sessionList(next)}',
     );
     await _writePeer(peerDeviceId, next);
+    _lastDecryptedAtMs[peerDeviceId] = _nowMs();
     return plaintext;
   });
+
+  /// When something from each peer last decrypted (this run only).
+  final Map<String, int> _lastDecryptedAtMs = {};
+
+  /// A type 1 message no session reads is taken as late (not as a lost
+  /// session) while a session was used this recently.
+  static const Duration staleMessageWindow = Duration(seconds: 60);
 
   /// How long this device uses one bulk key before creating the next.
   static const Duration bulkKeyRotation = Duration(days: 1);

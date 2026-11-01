@@ -11,6 +11,7 @@ import 'models.dart';
 import 'native_ed25519.dart';
 import 'group_file_crypto.dart';
 import 'ratchet.dart';
+import 'ratchet_flight.dart';
 
 /// Envelope kinds that travel in forward-secret Olm sessions (protocol
 /// version 3) once a session with the recipient exists. Bootstrap, debug and
@@ -494,6 +495,22 @@ class CryptoService {
     );
   }
 
+  /// Orders session-encrypted envelopes per peer; see [RatchetFlightGate].
+  final RatchetFlightGate flight = RatchetFlightGate();
+
+  /// The envelope for [messageId] reached a transport (or was given up):
+  /// it no longer holds newer ones back.
+  void envelopeHandedOver(ContactRecord contact, String messageId) =>
+      flight.leave(ratchetPeerId(contact), messageId);
+
+  /// How many envelopes were encrypted for [contact] so far.
+  int encryptionSequence(ContactRecord contact) =>
+      flight.sequenceOf(ratchetPeerId(contact));
+
+  /// Changes of direction with [contact] so far (see [RatchetFlightGate]).
+  int ratchetTurns(ContactRecord contact) =>
+      flight.turnsOf(ratchetPeerId(contact));
+
   Future<RelayEnvelope> encryptPayloadEnvelope({
     required String kind,
     required String messageId,
@@ -523,15 +540,25 @@ class CryptoService {
         acknowledgedMessageId: acknowledgedMessageId,
       );
       // Olm has no associated data: bind the header inside the plaintext.
-      final message = await sessions.encrypt(
-        ratchetPeerId(contact),
-        utf8.encode(
-          jsonEncode({
-            'h': utf8.decode(header.authenticatedHeaderBytes()),
-            'p': plaintext,
-          }),
-        ),
-      );
+      // Encrypted only while no older envelope for this peer is far behind
+      // it on its way to a transport (see [RatchetFlightGate]).
+      final peerId = ratchetPeerId(contact);
+      await flight.enter(peerId, messageId);
+      final RatchetMessage message;
+      try {
+        message = await sessions.encrypt(
+          peerId,
+          utf8.encode(
+            jsonEncode({
+              'h': utf8.decode(header.authenticatedHeaderBytes()),
+              'p': plaintext,
+            }),
+          ),
+        );
+      } catch (_) {
+        flight.leave(peerId, messageId);
+        rethrow;
+      }
       return RelayEnvelope(
         protocolVersion: 3,
         kind: kind,
@@ -658,10 +685,16 @@ class CryptoService {
         ratchetPeerId(contact),
         RatchetMessage(type: type!, ciphertext: base64Decode(ciphertext)),
       );
-    } on RatchetDecryptException {
-      if (reportFailure) onRatchetFailure?.call(contact, downgrade: false);
+    } on RatchetDecryptException catch (error) {
+      // A message of a session that is working (it decrypted newer traffic
+      // a moment ago) that cannot be read is a stale one: the sender's
+      // retry encrypts it again; a reset would only break the session.
+      if (reportFailure && error is! RatchetStaleMessageException) {
+        onRatchetFailure?.call(contact, downgrade: false);
+      }
       rethrow;
     }
+    flight.noteReceived(ratchetPeerId(contact));
     final inner = jsonDecode(utf8.decode(clear));
     if (inner is! Map<String, dynamic> ||
         inner['h'] != header ||
