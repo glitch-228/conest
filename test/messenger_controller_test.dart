@@ -7179,6 +7179,55 @@ void main() {
       );
     });
 
+    test('copies by a new route while many receipts are on their way are named '
+        'afterwards, without timers', () async {
+      final (alice, bob, relay) = await pairOnRelay();
+      final messages = await sendBurst(alice, relay, 5);
+      bob.dropContactCapabilityForTesting(
+        alice.identity!.deviceId,
+        ApplicationCapability.batchedAcksV1,
+      );
+      relay.fetchDelay = const Duration(hours: 1);
+      relay.storeDelayFor = (e) =>
+          e.kind == 'ack' ? const Duration(seconds: 2) : Duration.zero;
+      await bob.processEnvelopesForTesting(
+        messages,
+        route: MessageRoute.emailCarrier,
+        settleReceipts: false,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await bob.processEnvelopesForTesting(
+        messages,
+        route: MessageRoute.nostrCarrier,
+        settleReceipts: false,
+      );
+      await bob.settleReceiptsForTesting();
+      // The one-shot timers of copies seen before their receipt was sent
+      // are done within seconds; nothing polls.
+      await Future<void>.delayed(const Duration(seconds: 1));
+      await bob.settleReceiptsForTesting();
+      final perMessage = <String, int>{};
+      for (final e in relay.storedEnvelopes.where((e) => e.kind == 'ack')) {
+        perMessage[e.acknowledgedMessageId!] =
+            (perMessage[e.acknowledgedMessageId!] ?? 0) + 1;
+      }
+      expect(perMessage.length, 5);
+      relay.fetchDelay = Duration.zero;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        final families = {
+          for (final m in alice.messagesFor(bob.identity!.deviceId))
+            if (m.outbound && m.body.startsWith('m'))
+              for (final t in m.routeTrace)
+                if (t.mark == MessageRouteMark.confirmed) t.route.family,
+        };
+        return families.contains(MessageRoute.emailCarrier) &&
+            families.contains(MessageRoute.nostrCarrier);
+      }, reason: 'the sender never heard of the new route');
+      await Future<void>.delayed(const Duration(seconds: 4));
+      expect(bob.routeReceiptTimersForTesting, 0, reason: "timers linger");
+    });
+
     test(
       'a receipt not sent before a crash is sent after the restart',
       () async {
@@ -31143,12 +31192,10 @@ void main() {
         await alice.processEnvelopesForTesting([envelope]);
       }
       final lost = fromBob.first;
-      Future<void> tryAgain() {
-        alice.noteRelayFetchForTesting();
-        return alice.processEnvelopesForTesting([
-          lost,
-        ], failOnProcessingError: true);
-      }
+      // Each leased batch (a poll, a long poll, a pushed batch) is a try,
+      // with no fetch call involved.
+      Future<void> tryAgain() =>
+          alice.processEnvelopesForTesting([lost], failOnProcessingError: true);
 
       await expectLater(tryAgain(), throwsStateError);
       await expectLater(
@@ -31199,6 +31246,26 @@ void main() {
         final moved = ordered.indexOf(pile[i]);
         expect((moved - i).abs(), lessThan(12));
       }
+    });
+
+    test('a pre-key message from an unknown peer is given up after a day and '
+        'many batches', () async {
+      var clock = DateTime.now().toUtc();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nowProvider: () => clock,
+      );
+      addTearDown(alice.dispose);
+      const unknown = RatchetUnknownPeerException('x');
+      var given = false;
+      for (var i = 0; i < 30 && !given; i++) {
+        alice.noteRelayFetchForTesting();
+        clock = clock.add(const Duration(hours: 2));
+        given = alice.giveUpOnUnreadableForTesting('stuck', unknown);
+        if (i < 11) expect(given, isFalse, reason: 'given up after ${i * 2} h');
+      }
+      expect(given, isTrue, reason: 'held for good');
     });
 
     test('an unknown peer\'s pre-key message is never given up; the same '
