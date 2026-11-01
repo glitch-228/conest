@@ -1,0 +1,88 @@
+{
+  "runId": 41241082262,
+  "attempt": 2,
+  "url": "https://github.com/glitch-228/conest/actions/runs/41241082262",
+  "headSha": "54f8a584cb0da51df8a35e084fe723f5bdcf7a4f",
+  "conclusion": "success",
+  "integrationBase": "c80f136",
+  "fullSuite": {
+    "passed": 2061,
+    "environmentGatedSkips": 24,
+    "excludedNativeCase": "native Iroh direct contact adding works without LAN or any relay"
+  },
+  "sabotageChecks": 34,
+  "analyzerBaseline": 28,
+  "jobs": [
+    {
+      "name": "Tor carrier over the real Tor network",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663132448"
+    },
+    {
+      "name": "Full Flutter test suite",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663133323"
+    },
+    {
+      "name": "Relay installer (shellcheck, and a real install without systemd)",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663133441"
+    },
+    {
+      "name": "Email carrier against a real mail server",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663133673"
+    },
+    {
+      "name": "Verify debug transfers and storage controls",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663133892"
+    },
+    {
+      "name": "Nostr carrier against real relays",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663154037"
+    },
+    {
+      "name": "Android debug battle-test APK",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663157305"
+    },
+    {
+      "name": "XMPP carrier against a real Prosody",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663159017"
+    },
+    {
+      "name": "Reticulum carrier against the Python reference (RNS)",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663159555"
+    },
+    {
+      "name": "Linux debug battle-test bundle",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663160078"
+    },
+    {
+      "name": "Check debug cadence",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663162339"
+    },
+    {
+      "name": "Matrix carrier and client against a real Synapse",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663163647"
+    },
+    {
+      "name": "Windows debug battle-test bundle",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663172518"
+    },
+    {
+      "name": "Meshtastic carrier against meshtasticd",
+      "conclusion": "success",
+      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663173733"
+    }
+  ],
+  "note": "Green qualification before integrating the newer M25 base."
+}

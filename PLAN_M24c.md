@@ -52,17 +52,18 @@ Verification:
 - All 34 sabotage checks failed as expected with individual guards removed, then source was restored. Evidence: review/M24c_sabotage.json; repeatable runner: tool/m24c_sabotage.py.
 - Analyzer: 28 baseline issues, no new issues.
 - Full suite: runs in the dedicated GitHub qualification job; only the exact native-Iroh case documented in PLAN_AGENTS.md is excluded. The queued local waiter was cancelled without interrupting another session.
-- Qualified final CI run: 41238646520, https://github.com/glitch-228/conest/actions/runs/41238646520, workflow commit c1af85a and app source b7dff0e; final result pending below.
+- Qualified final CI run: 41241082262, https://github.com/glitch-228/conest/actions/runs/41241082262, fixture/workflow commit 54f8a58 and app source b7dff0e; attempt 2 passed all jobs before M25 integration; final integration result follows below.
 - Independent security reviewer m24c_security_review: confirmed findings fixed with tests; final follow-up found no additional concrete findings. Review record: review/M24c.md. Maintainer review/merge approval remains separate.
 
 Performance handoff:
-- Remaining paths to profile before a stable release: the single up-to-42 MiB worker input transfer, bounded first-display avatar sanitization, and shared vault snapshot-map preparation. The sender-header worker receives an owned prefix capped at 512 KiB.
+- Remaining paths to profile before a stable release: the single up-to-42 MiB worker input transfer, bounded first-display avatar sanitization, shared vault snapshot-map preparation, first-use cached-key validation, and the existing minute expiry refresh in an open Delta chat. The sender-header worker receives an owned prefix capped at 512 KiB.
 - Encrypted mail up to 64 KiB has a control-read allowance; authenticated attachment policy is then checked before caching/deletion. Large public-key mails can be deferred before body fetch.
 
 Release-note drafts:
 - Delta Chat files follow download settings and wait for Download on metered connections.
 - Improved handling of large Delta Chat messages.
 - Delta Chat file caches now manage their storage limits.
+- Important: save Delta Chat files you need to keep before updating.
 
 Device checks:
 - Android metered/Wi-Fi switching while mail arrives.
@@ -105,3 +106,13 @@ Device checks:
 - Final qualified run 41238646520: the Verify debug transfers/storage job passed. Its Delta step passed 181 mail/protocol/content/parser/avatar/cache/queue/PGP/email tests and 19 Delta controller tests on the final source. Real Matrix/Synapse and Tor checks also passed. Full-suite and platform build jobs remain in progress.
 
 - Full-suite CI 41238646520 completed with 2,060 passing tests, 24 environment-gated skips and one unrelated keyboard-fixture failure: push-to-talk sent KeyUp without a matching KeyDown, triggering HardwareKeyboard's regular-event assertion. The case passed in isolation locally, confirming event-mode/order sensitivity. Corrected the fixture to simulate the held physical key before attaching the release handler, preserving its release-after-call intent. A new full-suite run is required.
+
+- Keyboard fixture correction 54f8a58 passed its focused local test; analyzer stays at 28 baseline issues. Final full qualification run 41241082262 started against that exact commit. App source remains b7dff0e.
+
+- Run 41241082262: Tor compiled and its obfs4 test passed, but onion-service frame delivery failed after four reachability retries. The same Tor code passed in run 41238646520. Treating this as external reachability and requesting a targeted Tor-job rerun; no Tor/application code changes or test weakening. Full suite and desktop builds continue.
+
+- GitHub rejected the targeted Tor rerun while the workflow was still active (`job ... cannot be rerun`). Will rerun failed jobs after the remaining jobs complete, preserving the successful qualifications.
+
+- Run 41241082262: the corrected full Flutter suite passed. The keyboard fixture failure is resolved. Targeted qualification and Android build passed; desktop builds and the Tor reachability retry are the remaining CI work.
+
+- 2026-11-01: Run 41241082262 attempt 2 is fully green: Tor retry passed; 14 jobs passed, including 2,061 full-suite tests and Android/Linux/Windows builds. Saved review/M24c_ci.json. A final fetch found origin/feature/matrix-client advanced to 6d23989 (M25). Integrating the new base as required, then repeating analyzer/tests/qualified CI on the merged source.
