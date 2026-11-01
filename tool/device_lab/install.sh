@@ -6,11 +6,12 @@
 #
 #   SSHPASS=… WINDOWS=user@host [ANDROID_SERIAL=…] [LAB=~/conest-lab] \
 #     tool/device_lab/install.sh RUN_ID
+# WINDOWS=none leaves the Windows PC out.
 set -euo pipefail
 
 run=${1:?the CI debug run id}
-: "${WINDOWS:?user@host of the Windows PC}"
-: "${SSHPASS:?the Windows password, in the environment only}"
+: "${WINDOWS:?user@host of the Windows PC, or none to leave Windows out}"
+[ "$WINDOWS" = none ] || : "${SSHPASS:?the Windows password, in the environment only}"
 LAB=${LAB:-$HOME/conest-lab}
 PACKAGE=${PACKAGE:-dev.conest.conest.debug}
 number=$(gh run view "$run" --json number --jq .number)
@@ -24,11 +25,13 @@ rm -rf "$LAB/linux" && mkdir -p "$LAB/linux"
 (cd "$LAB/linux" && unzip -q "$art"/linux/*.zip)
 echo "Linux: build $number"
 
+if [ "$WINDOWS" != none ]; then
 gh run download "$run" -n "conest-debug-windows-x64-$number" -D "$art/windows"
 win 'if exist conest-lab\conest-debug-windows-x64 rmdir /S /Q conest-lab\conest-debug-windows-x64' || true
 sshpass -e scp -q "$art/windows/conest-debug-windows-x64-$number.zip" "${WINDOWS}:conest-lab/"
 win "powershell -NoProfile -Command \"\$ProgressPreference='SilentlyContinue'; Expand-Archive -Force -Path \$env:USERPROFILE\\conest-lab\\conest-debug-windows-x64-$number.zip -DestinationPath \$env:USERPROFILE\\conest-lab; Remove-Item \$env:USERPROFILE\\conest-lab\\conest-debug-windows-x64-$number.zip\""
 echo "Windows: build $number"
+fi
 
 gh run download "$run" -n "conest-debug-android-arm64-$number" -D "$art/android"
 adb uninstall "$PACKAGE" >/dev/null 2>&1 || true

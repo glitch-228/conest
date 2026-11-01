@@ -22,8 +22,11 @@
 # (tool/device_lab/summarize.py).
 set -euo pipefail
 
-: "${WINDOWS:?user@host of the Windows PC}"
-: "${SSHPASS:?the Windows password, in the environment only}"
+: "${WINDOWS:?user@host of the Windows PC, or none to leave Windows out}"
+# WINDOWS=none: the run goes on the phone(s) and Linux only.
+WIN_ON=1
+[ "$WINDOWS" = none ] && WIN_ON=0
+[ "$WIN_ON" = 0 ] || : "${SSHPASS:?the Windows password, in the environment only}"
 : "${LINUX_BUNDLE:?the unpacked Linux debug bundle}"
 RELAY=${RELAY:-}
 RUN=${RUN:-all}
@@ -82,7 +85,10 @@ carrier_args() { # device name
   echo "${args[*]:-}"
 }
 
-win() { sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"; }
+win() {
+  [ "$WIN_ON" = 1 ] || return 0
+  sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"
+}
 
 # ANDROID2=SERIAL: a second phone (adb serial) joins as lab-android2: every
 # device then has three contacts, and phone-to-phone routes (the Bluetooth
@@ -90,6 +96,7 @@ win() { sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"; }
 ANDROID2=${ANDROID2:-}
 contacts_each=2
 [ -n "$ANDROID2" ] && contacts_each=3
+[ "$WIN_ON" = 0 ] && contacts_each=$((contacts_each - 1))
 
 # FRESH=1: every device starts from empty lab data (new identities, no
 # contacts), so pairing is tested again. Only the lab instances' data.
@@ -162,9 +169,11 @@ if [ -n "$tunnel_ports" ]; then
     [ -n "$ANDROID2" ] && adb -s "$ANDROID2" reverse "tcp:$port" "tcp:$port" >/dev/null
     forwards+=(-R "$port:localhost:$port")
   done
-  sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
-    -N "${forwards[@]}" "$WINDOWS" 2>/dev/null &
-  tunnel_pid=$!
+  if [ "$WIN_ON" = 1 ]; then
+    sshpass -e ssh -o StrictHostKeyChecking=accept-new -o ExitOnForwardFailure=yes \
+      -N "${forwards[@]}" "$WINDOWS" 2>/dev/null &
+    tunnel_pid=$!
+  fi
   trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; for port in $tunnel_ports; do adb reverse --remove "tcp:$port" 2>/dev/null; [ -n "$ANDROID2" ] && adb -s "$ANDROID2" reverse --remove "tcp:$port" 2>/dev/null; done; restore_phone' EXIT
 fi
 
@@ -301,7 +310,16 @@ PS1
 }
 
 [ "$ENERGY" = 1 ] && "$(dirname "$0")/energy.sh" start "$out"
-if [ "$ORDER" = reverse ]; then
+if [ "$ORDER" = reverse ] && [ "$WIN_ON" = 0 ]; then
+  start_linux ""
+  invites=("$invite_linux")
+  if [ -n "$ANDROID2" ]; then
+    start_android2 "" "${invites[@]}"
+    start_android lab-all "${invites[@]}" "$invite_android2"
+  else
+    start_android lab-all "${invites[@]}"
+  fi
+elif [ "$ORDER" = reverse ]; then
   start_windows ""
   start_linux "" "$invite_windows"
   invites=("$invite_windows" "$invite_linux")
@@ -325,8 +343,12 @@ else
     start_android2 "" "${invites[@]}"
     invites+=("$invite_android2")
   fi
-  start_linux "" "${invites[@]}"
-  start_windows lab-all "${invites[@]}" "$invite_linux"
+  if [ "$WIN_ON" = 1 ]; then
+    start_linux "" "${invites[@]}"
+    start_windows lab-all "${invites[@]}" "$invite_linux"
+  else
+    start_linux lab-all "${invites[@]}"
+  fi
 fi
 
 # --- Reports ------------------------------------------------------------------------
@@ -350,7 +372,7 @@ if [ -n "$linux_pid" ]; then
   wait "$linux_pid" || echo "Linux run ended with an error (see linux.log)."
 fi
 # A missing report must not cost the others (or the clean-up below).
-if wait_for "the Windows report" "win \"if exist \\\"$win_report\\\" (exit 0) else (exit 1)\"" 300; then
+if [ "$WIN_ON" = 1 ] && wait_for "the Windows report" "win \"if exist \\\"$win_report\\\" (exit 0) else (exit 1)\"" 300; then
   sshpass -e scp -q "$WINDOWS:conest-lab/conest-debug-windows-x64/lab-report.json" "$out/windows.json" ||
     win "type \"$win_report\"" >"$out/windows.json"
 fi

@@ -88,7 +88,11 @@ case "$action" in
       fi
     done
     [ -n "${LINUX_BUNDLE:-}" ] && { sample_linux & echo $! >"$out/.energy-linux.pid"; }
-    [ -n "${WINDOWS:-}" ] && [ -n "${SSHPASS:-}" ] && { sample_windows & echo $! >"$out/.energy-windows.pid"; }
+    # Windows only when it is in the run (WINDOWS=none leaves it out).
+    if [ -n "${WINDOWS:-}" ] && [ "${WINDOWS:-}" != none ] && [ -n "${SSHPASS:-}" ]; then
+      sample_windows &
+      echo $! >"$out/.energy-windows.pid"
+    fi
     ;;
   stop)
     rm -f "$out/.energy-on"
