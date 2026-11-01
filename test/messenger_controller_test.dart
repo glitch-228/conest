@@ -6912,6 +6912,57 @@ void main() {
     });
 
     test(
+      'a group member takes batched receipts for a burst of group messages',
+      () async {
+        final (alice, bob, relay) = await pairOnRelay();
+        final group = await alice.createGroup(
+          title: 'Burst',
+          members: alice.contacts,
+        );
+        await _waitForIroh(() {
+          unawaited(bob.pollNow());
+          return bob.groups.any((g) => g.groupId == group.groupId);
+        }, reason: 'Bob did not get the group');
+        relay.storedEnvelopes.clear();
+        for (var i = 0; i < 12; i++) {
+          await alice.sendGroupMessage(groupId: group.groupId, body: 'g$i');
+        }
+        final messages = <RelayEnvelope>[];
+        for (final envelope in relay.storedEnvelopes) {
+          if (envelope.kind == 'group_message' &&
+              envelope.recipientDeviceId == bob.identity!.deviceId &&
+              !messages.any((known) => known.messageId == envelope.messageId)) {
+            messages.add(envelope);
+          }
+        }
+        expect(messages, hasLength(12));
+        relay.storedEnvelopes.clear();
+        relay.storeDelayFor = (e) =>
+            e.kind == 'ack' ? const Duration(milliseconds: 600) : Duration.zero;
+        await bob.processEnvelopesForTesting(messages);
+        expect(
+          relay.storedEnvelopes
+              .where((e) => e.kind == 'ack')
+              .map((e) => e.messageId)
+              .toSet()
+              .length,
+          inInclusiveRange(1, 4),
+        );
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice
+              .messagesForGroup(group.groupId)
+              .where((m) => m.body.startsWith('g'))
+              .every(
+                (m) =>
+                    m.recipientStates[bob.identity!.deviceId] ==
+                    DeliveryState.delivered,
+              );
+        }, reason: 'the group messages were not confirmed');
+      },
+    );
+
+    test(
       'a receipt not sent before a crash is sent after the restart',
       () async {
         final vault = _MemoryVaultStore();
