@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
+import 'adaptive_poll.dart';
 import 'iroh_transport.dart';
 
 typedef _StartNative =
@@ -159,6 +160,9 @@ class FfiNativeIrohBridge
   int? _handle;
   Timer? _poller;
   bool _polling = false;
+
+  /// Polling is quick while traffic moves and slow when idle.
+  final AdaptivePoll _pollCadence = AdaptivePoll();
   final List<Isolate> _sendWorkerIsolates = <Isolate>[];
   final List<SendPort> _sendWorkerPorts = <SendPort>[];
   bool _mediaWorkerBusy = false;
@@ -208,10 +212,8 @@ class FfiNativeIrohBridge
       await Isolate.run(() => _closeNative(libraryPath, started.handle));
       rethrow;
     }
-    _poller = Timer.periodic(
-      const Duration(milliseconds: 40),
-      (_) => unawaited(_pollInbound()),
-    );
+    _pollCadence.noteActivity();
+    _scheduleNextPoll();
     return _statusFromJson(started.status);
   }
 
@@ -227,6 +229,8 @@ class FfiNativeIrohBridge
     if (_sendWorkerPorts.isEmpty) {
       throw StateError('Iroh send workers are not running.');
     }
+    // A send usually brings an answer: poll quickly for a while.
+    _pollCadence.noteActivity();
     final workerIndex = _nextSendWorker++ % _sendWorkerCount;
     final worker = _sendWorkerPorts[workerIndex];
     final addressHints = List<String>.of(directAddresses, growable: false);
@@ -275,6 +279,7 @@ class FfiNativeIrohBridge
   }) async {
     final handle = _handle;
     if (handle == null) throw StateError('Iroh bridge is not running.');
+    _pollCadence.noteActivity();
     if (bytes.isEmpty || bytes.length > 1200) {
       throw ArgumentError('Iroh media datagrams must be 1–1200 bytes.');
     }
@@ -353,6 +358,18 @@ class FfiNativeIrohBridge
     }
   }
 
+  void _scheduleNextPoll() {
+    _poller?.cancel();
+    if (_handle == null) {
+      _poller = null;
+      return;
+    }
+    _poller = Timer(_pollCadence.next, () async {
+      await _pollInbound();
+      _scheduleNextPoll();
+    });
+  }
+
   Future<void> _pollInbound() async {
     final handle = _handle;
     if (handle == null || _polling) return;
@@ -369,6 +386,7 @@ class FfiNativeIrohBridge
         if (_handle != handle) return;
         if (result[0] != true) throw StateError(result[1] as String);
         for (final entry in result[1] as List) {
+          _pollCadence.noteActivity();
           final value = entry as List;
           _inbound.add(
             IrohBridgeInbound(
@@ -380,6 +398,8 @@ class FfiNativeIrohBridge
             ),
           );
         }
+        // Call media only moves in a call, which starts with traffic.
+        if (!_pollCadence.isActive) return;
         final datagramReply = ReceivePort();
         try {
           _sendWorkerPorts.last.send(<Object?>[
@@ -394,6 +414,7 @@ class FfiNativeIrohBridge
             throw StateError(datagramResult[1] as String);
           }
           for (final entry in datagramResult[1] as List) {
+            _pollCadence.noteActivity();
             final value = entry as List;
             _datagrams.add(
               IrohBridgeDatagram(
