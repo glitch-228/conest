@@ -4968,6 +4968,7 @@ class HeldEnvelope {
     required this.conversationId,
     required this.envelopeJson,
     required this.receivedAt,
+    this.peerKey = '',
   });
 
   final String senderDeviceId;
@@ -4975,16 +4976,22 @@ class HeldEnvelope {
   final String envelopeJson;
   final DateTime receivedAt;
 
+  /// The sender's static key when the envelope was parked (parked
+  /// envelopes only): after a key change it is not read again.
+  final String peerKey;
+
   Map<String, dynamic> toJson() => {
     'senderDeviceId': senderDeviceId,
     'conversationId': conversationId,
     'envelopeJson': envelopeJson,
     'receivedAt': receivedAt.toIso8601String(),
+    if (peerKey.isNotEmpty) 'peerKey': peerKey,
   };
 
   factory HeldEnvelope.fromJson(Map<String, dynamic> json) => HeldEnvelope(
     senderDeviceId: json['senderDeviceId'] as String,
     conversationId: json['conversationId'] as String? ?? '',
+    peerKey: json['peerKey'] as String? ?? '',
     envelopeJson: json['envelopeJson'] as String,
     receivedAt:
         DateTime.tryParse(json['receivedAt'] as String? ?? '') ??
@@ -5367,6 +5374,7 @@ class VaultSnapshot {
     this.defaultRelaysLastFetchedAt,
     this.customRelaySources = const <CustomRelaySource>[],
     this.heldUnverifiedEnvelopes = const <HeldEnvelope>[],
+    this.parkedUnreadable = const <HeldEnvelope>[],
     this.pendingContactRequests = const <PendingContactRequest>[],
     this.contactRemovalTombstones = const <String, ContactRemovalTombstone>{},
     this.transferSessions = const <TransferSession>[],
@@ -5477,6 +5485,12 @@ class VaultSnapshot {
   /// reject.
   final List<HeldEnvelope> heldUnverifiedEnvelopes;
 
+  /// Envelopes no session could read yet (a pre-key message ahead of its
+  /// bundle), kept on the device with their relay lease acknowledged and
+  /// read again when the peer's bundle arrives. A separate list from the
+  /// quarantine above, bounded in bytes, dropped after a day.
+  final List<HeldEnvelope> parkedUnreadable;
+
   /// Bootstrap contact exchanges from unknown devices awaiting an explicit
   /// local approval decision.
   final List<PendingContactRequest> pendingContactRequests;
@@ -5580,6 +5594,7 @@ class VaultSnapshot {
       defaultRelaysLastFetchedAt: null,
       customRelaySources: const <CustomRelaySource>[],
       heldUnverifiedEnvelopes: const <HeldEnvelope>[],
+      parkedUnreadable: const <HeldEnvelope>[],
       pendingContactRequests: const <PendingContactRequest>[],
       transferSessions: const <TransferSession>[],
       attachmentCacheReferences: const <AttachmentCacheReference>[],
@@ -5610,6 +5625,7 @@ class VaultSnapshot {
     bool clearDefaultRelaysLastFetchedAt = false,
     List<CustomRelaySource>? customRelaySources,
     List<HeldEnvelope>? heldUnverifiedEnvelopes,
+    List<HeldEnvelope>? parkedUnreadable,
     List<PendingContactRequest>? pendingContactRequests,
     Map<String, ContactRemovalTombstone>? contactRemovalTombstones,
     List<TransferSession>? transferSessions,
@@ -5671,6 +5687,7 @@ class VaultSnapshot {
       customRelaySources: customRelaySources ?? this.customRelaySources,
       heldUnverifiedEnvelopes:
           heldUnverifiedEnvelopes ?? this.heldUnverifiedEnvelopes,
+      parkedUnreadable: parkedUnreadable ?? this.parkedUnreadable,
       pendingContactRequests:
           pendingContactRequests ?? this.pendingContactRequests,
       contactRemovalTombstones:
@@ -5750,6 +5767,10 @@ class VaultSnapshot {
       'heldUnverifiedEnvelopes': heldUnverifiedEnvelopes
           .map((entry) => entry.toJson())
           .toList(),
+      if (parkedUnreadable.isNotEmpty)
+        'parkedUnreadable': parkedUnreadable
+            .map((entry) => entry.toJson())
+            .toList(),
       'pendingContactRequests': pendingContactRequests
           .map((entry) => entry.toJson())
           .toList(),
@@ -5973,6 +5994,10 @@ class VaultSnapshot {
               .cast<Map<String, dynamic>>()
               .map(HeldEnvelope.fromJson)
               .toList(),
+      parkedUnreadable: (json['parkedUnreadable'] as List<dynamic>? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(HeldEnvelope.fromJson)
+          .toList(),
       pendingContactRequests:
           (json['pendingContactRequests'] as List<dynamic>? ?? const [])
               .cast<Map<String, dynamic>>()

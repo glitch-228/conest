@@ -345,6 +345,12 @@ class RatchetStaleMessageException extends RatchetDecryptException {
   const RatchetStaleMessageException(super.message);
 }
 
+/// A message from a peer this device holds no session with at all: it may
+/// become readable when a session is opened.
+class RatchetNoSessionException extends RatchetDecryptException {
+  const RatchetNoSessionException(super.message);
+}
+
 /// A session-opening (pre-key) message from a peer whose identity key is not
 /// known yet: it may become readable once the peer's bundle arrives.
 class RatchetUnknownPeerException extends RatchetDecryptException {
@@ -572,6 +578,11 @@ class RatchetSessions {
           _nowMs() - lastRead < staleMessageWindow.inMilliseconds;
       if (!message.opensSession && working) {
         throw const RatchetStaleMessageException(
+          'No ratchet session can decrypt this message.',
+        );
+      }
+      if (state == null || state.sessions.isEmpty) {
+        throw const RatchetNoSessionException(
           'No ratchet session can decrypt this message.',
         );
       }

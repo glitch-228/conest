@@ -31288,27 +31288,163 @@ void main() {
       );
     });
 
-    test('an envelope no session can read stops holding its relay lease after '
-        'a few fetches and some minutes', () async {
-      final (alice, _, fromBob, advance) = await pileUp();
-      // Handed over newest first: the oldest keys are gone for good.
-      for (final envelope in fromBob.reversed) {
-        await alice.processEnvelopesForTesting([envelope]);
-      }
-      final lost = fromBob.first;
-      // Each leased batch (a poll, a long poll, a pushed batch) is a try,
-      // with no fetch call involved.
-      Future<void> tryAgain() =>
-          alice.processEnvelopesForTesting([lost], failOnProcessingError: true);
-
-      await expectLater(tryAgain(), throwsStateError);
-      await expectLater(
-        tryAgain(),
-        throwsStateError,
-        reason: 'a bundle or reset may still be on its way',
+    test('a hello ahead of its bundle is parked, kept across a restart and '
+        'read when the bundle comes; the relay\'s lease is not held', () async {
+      final relay = _FakeRelayClient()
+        ..strictLeases = true
+        ..leaseLength = const Duration(milliseconds: 300);
+      final vault = _MemoryVaultStore();
+      var clock = DateTime.utc(2026, 11, 1, 12);
+      Future<MessengerController> device(
+        String name, {
+        VaultStore? store,
+        bool create = true,
+      }) => _createController(
+        relayClient: relay,
+        displayName: name,
+        vaultStore: store,
+        createIdentity: create,
+        ratchetEngine: FakeRatchetEngine(),
+        nowProvider: () => clock,
       );
-      advance(const Duration(minutes: 11));
-      await tryAgain();
+      var alice = await device('Alice', store: vault);
+      final bob = await device('Bob');
+      addTearDown(bob.dispose);
+      final aliceFirst =
+          alice.identity!.deviceId.compareTo(bob.identity!.deviceId) < 0;
+      // The one that offers is the one the answer must reach.
+      final offerer = aliceFirst ? alice : bob;
+      final offererId = offerer.identity!.deviceId;
+      var holdBundles = true;
+      var hellos = 0;
+      relay.shouldFailStore = (_, _, _, recipient, envelope) {
+        if (recipient != offererId) return false;
+        if (envelope.kind == 'ratchet_bundle') return holdBundles;
+        if (envelope.kind == 'ratchet_hello') return ++hellos > 1;
+        return false;
+      };
+      await _pairControllers(alice, bob);
+      final parkedHere = aliceFirst ? alice : bob;
+      for (
+        var i = 0;
+        i < 40 && parkedHere.parkedUnreadableCountForTesting == 0;
+        i++
+      ) {
+        clock = clock.add(const Duration(minutes: 1));
+        await settle([alice, bob], rounds: 2);
+      }
+      expect(
+        parkedHere.parkedUnreadableCountForTesting,
+        greaterThan(0),
+        reason: 'nothing was parked',
+      );
+      // The relay's copy is gone: handed out once, acknowledged.
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await settle([alice, bob], rounds: 2);
+      final helloId = relay.storedEnvelopes
+          .firstWhere((e) => e.kind == 'ratchet_hello')
+          .messageId;
+      expect(
+        relay.leasedBatches
+            .expand((batch) => batch)
+            .where((e) => e.messageId == helloId),
+        hasLength(1),
+        reason: 'the lease was held: the same hello came back',
+      );
+      // A restart: what was parked is on disk.
+      final parkedBefore = parkedHere.parkedUnreadableCountForTesting;
+      if (aliceFirst) {
+        alice.dispose();
+        alice = await device('Alice', store: vault, create: false);
+      }
+      addTearDown(alice.dispose);
+      final restoredParked =
+          (aliceFirst ? alice : bob).parkedUnreadableCountForTesting;
+      expect(
+        restoredParked,
+        parkedBefore,
+        reason: 'what was parked was not saved',
+      );
+      // The bundle comes: the parked hello is read, the session opens.
+      holdBundles = false;
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      for (var i = 0; i < 60; i++) {
+        clock = clock.add(const Duration(minutes: 1));
+        await settle([alice, bob], rounds: 2);
+        if (await alice.hasRatchetSessionForTesting(bobId) &&
+            await bob.hasRatchetSessionForTesting(aliceId)) {
+          break;
+        }
+      }
+      expect(await alice.hasRatchetSessionForTesting(bobId), isTrue);
+      expect(await bob.hasRatchetSessionForTesting(aliceId), isTrue);
+      expect(
+        parkedHere == alice
+            ? alice.parkedUnreadableCountForTesting
+            : bob.parkedUnreadableCountForTesting,
+        0,
+      );
+    }, timeout: const Timeout(Duration(minutes: 4)));
+
+    test('an envelope no session can read for good is dropped and the lease '
+        'is let go; nothing is parked', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      final garbage = RelayEnvelope(
+        protocolVersion: 3,
+        kind: 'direct_message',
+        messageId: 'msg-garbage-1',
+        conversationId: relay.storedEnvelopes.last.conversationId,
+        senderAccountId: bob.identity!.accountId,
+        senderDeviceId: bob.identity!.deviceId,
+        recipientDeviceId: alice.identity!.deviceId,
+        createdAt: DateTime.now().toUtc(),
+        ciphertextBase64: base64Encode(utf8.encode('garbage')),
+        ratchetType: 1,
+      );
+      await alice.processEnvelopesForTesting([
+        garbage,
+      ], failOnProcessingError: true);
+      expect(alice.parkedUnreadableCountForTesting, 0);
+    });
+
+    test('parked envelopes are bounded in bytes, per sender and in all, and '
+        'go with their contact', () async {
+      final relay = _FakeRelayClient();
+      final alice = await ratchetController(relay, 'Alice');
+      final bob = await ratchetController(relay, 'Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      for (var i = 0; i < 300; i++) {
+        alice.parkUnreadableForTesting(
+          RelayEnvelope(
+            protocolVersion: 3,
+            kind: 'direct_message',
+            messageId: 'msg-big-$i',
+            conversationId: 'c',
+            senderAccountId: bob.identity!.accountId,
+            senderDeviceId: bobId,
+            recipientDeviceId: alice.identity!.deviceId,
+            createdAt: DateTime.now().toUtc(),
+            payloadBase64: base64Encode(List<int>.filled(20 * 1024, i % 250)),
+            ratchetType: 0,
+          ),
+        );
+      }
+      expect(
+        alice.parkedUnreadableBytesForTesting,
+        lessThanOrEqualTo(256 * 1024),
+      );
+      expect(alice.parkedUnreadableCountForTesting, greaterThan(0));
+      await alice.removeContact(bobId, notifyPeer: false);
+      expect(alice.parkedUnreadableCountForTesting, 0);
     });
 
     test('envelopes arrive in order within a run, and a bulk key at the end '
@@ -31350,62 +31486,6 @@ void main() {
         final moved = ordered.indexOf(pile[i]);
         expect((moved - i).abs(), lessThan(12));
       }
-    });
-
-    test('a pre-key message from an unknown peer is given up after a day and '
-        'many batches', () async {
-      var clock = DateTime.now().toUtc();
-      final alice = await _createController(
-        relayClient: _FakeRelayClient(),
-        displayName: 'Alice',
-        nowProvider: () => clock,
-      );
-      addTearDown(alice.dispose);
-      const unknown = RatchetUnknownPeerException('x');
-      var given = false;
-      for (var i = 0; i < 30 && !given; i++) {
-        alice.noteRelayFetchForTesting();
-        clock = clock.add(const Duration(hours: 2));
-        given = alice.giveUpOnUnreadableForTesting('stuck', unknown);
-        if (i < 11) expect(given, isFalse, reason: 'given up after ${i * 2} h');
-      }
-      expect(given, isTrue, reason: 'held for good');
-    });
-
-    test('an unknown peer\'s pre-key message is never given up; the same '
-        'fetch counts once', () async {
-      var clock = DateTime.now().toUtc();
-      final alice = await _createController(
-        relayClient: _FakeRelayClient(),
-        displayName: 'Alice',
-        nowProvider: () => clock,
-      );
-      addTearDown(alice.dispose);
-      const unreadable = RatchetDecryptException('x');
-      for (var i = 0; i < 6; i++) {
-        alice.noteRelayFetchForTesting();
-        clock = clock.add(const Duration(minutes: 20));
-        expect(
-          alice.giveUpOnUnreadableForTesting(
-            'late-bundle',
-            const RatchetUnknownPeerException('x'),
-          ),
-          isFalse,
-        );
-      }
-      // Copies by several routes in one fetch are one try.
-      alice.noteRelayFetchForTesting();
-      for (var i = 0; i < 5; i++) {
-        expect(
-          alice.giveUpOnUnreadableForTesting('copies', unreadable),
-          isFalse,
-        );
-      }
-      clock = clock.add(const Duration(minutes: 20));
-      alice.noteRelayFetchForTesting();
-      expect(alice.giveUpOnUnreadableForTesting('copies', unreadable), isFalse);
-      alice.noteRelayFetchForTesting();
-      expect(alice.giveUpOnUnreadableForTesting('copies', unreadable), isTrue);
     });
 
     test('offers repeated while the hello is slow lose no messages', () async {
@@ -31615,9 +31695,9 @@ void main() {
       // The hello was kept for the answer, and went only after it.
       expect(order, contains('answer'));
       expect(order, contains('hello'));
-      // The hello that went first was dropped at the peer; a fresh one
-      // follows the answer.
-      expect(order.lastIndexOf('hello'), greaterThan(order.indexOf('answer')));
+      // The hello that went first was parked at the peer (it did not know
+      // the sender yet) and is read when the answer arrives: a fresh hello
+      // after the answer is no longer the only way for the session to open.
     });
 
     test('ratchet peers switch to forward-secret envelopes', () async {

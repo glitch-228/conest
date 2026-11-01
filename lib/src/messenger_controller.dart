@@ -12421,6 +12421,11 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       contacts: contacts,
       conversations: conversations,
+      // What was parked for it is never read.
+      parkedUnreadable: [
+        for (final entry in _snapshot.parkedUnreadable)
+          if (entry.senderDeviceId != deviceId) entry,
+      ],
       contactRemovalTombstones: <String, ContactRemovalTombstone>{
         ..._snapshot.contactRemovalTombstones,
         if (removed != null)
@@ -12567,7 +12572,8 @@ class MessengerController extends ChangeNotifier {
     _urgentReceiptKeys.clear();
     _receiptRoutesNamed.clear();
     _routeReceiptAfterFlight.clear();
-    _unreadableSeen.clear();
+    _snapshot = _snapshot.copyWith(parkedUnreadable: const []);
+    _replayingParked.clear();
     _debugProbeAcknowledgements.clear();
     _debugTwoWayReplies.clear();
     _authorizedInboundDebugFileTests.clear();
@@ -20984,7 +20990,6 @@ class MessengerController extends ChangeNotifier {
     bool failOnProcessingError = false,
     MessageRoute? route,
   }) async {
-    if (failOnProcessingError) _leasedBatchSerial++;
     _notificationsDeferredDepth++;
     var outcome = const _EnvelopeProcessingOutcome();
     final handling = Stopwatch()..start();
@@ -21013,6 +21018,15 @@ class MessengerController extends ChangeNotifier {
         if (!_disposed) super.notifyListeners();
         if (!_disposed && refreshConversations) conversationRevision.value++;
         _scheduleTransferForegroundSync();
+      }
+    }
+    if (_parkedSinceSave > 0 && !_disposed) {
+      // What was parked is on disk before the batch's lease is acknowledged.
+      _parkedSinceSave = 0;
+      try {
+        await _saveSnapshotSilently(notify: false);
+      } catch (error) {
+        recordError('vault', 'Parked envelopes not saved: $error');
       }
     }
     if (failOnProcessingError && outcome.failed > 0) {
@@ -21449,7 +21463,17 @@ class MessengerController extends ChangeNotifier {
         // fetched again; the sender's session reset sends it afresh. Held,
         // it kept its relay lease for good: fetched and failed every
         // minute, and each time a reason to offer another session.
-        if (!_giveUpOnUnreadable(envelope.messageId, error)) failed++;
+        if (_canBecomeReadable(error)) {
+          // A pre-key message ahead of its bundle, or one from a peer we hold
+          // no session with: kept here, not on the relay's lease, and read
+          // again when the peer's bundle arrives (see [_replayParked]).
+          _parkUnreadable(envelope);
+        } else if (error is RatchetDecryptException) {
+          // Late or unreadable for good (its key is gone): the sender's
+          // retry encrypts it afresh. The relay's copy goes.
+        } else {
+          failed++;
+        }
         recordError(
           'receive',
           'Dropped ${_boundedLogValue(envelope.kind)} '
@@ -21476,69 +21500,122 @@ class MessengerController extends ChangeNotifier {
     return _EnvelopeProcessingOutcome(processed: processed, failed: failed);
   }
 
-  /// When each envelope no session could read was first seen, how often
-  /// (once per leased batch), and in which batch (bounded).
-  final Map<String, ({DateTime first, int tries, int batch})> _unreadableSeen =
-      {};
-  static const int _unreadableTries = 3;
+  /// Whether an envelope that failed with [error] may be read later.
+  static bool _canBecomeReadable(Object error) =>
+      error is RatchetUnknownPeerException ||
+      error is RatchetNoSessionException;
 
-  /// Batches processed with their relay lease held until they succeed
-  /// (polls, long polls, pushed batches). The tries count in these, not in
-  /// fetch calls: a subscription never calls fetch.
-  int _leasedBatchSerial = 0;
+  /// Bytes the parked envelopes may take in the vault: in all, per sender,
+  /// and each. Every vault save rewrites them, so they are small.
+  static const int _parkedTotalBytes = 2 * 1024 * 1024;
+  static const int _parkedSenderBytes = 256 * 1024;
+  static const int _parkedEnvelopeBytes = 64 * 1024;
+  static const Duration _parkedLifetime = Duration(hours: 24);
 
-  /// An envelope is not given up before this long: a bundle or a reset that
-  /// makes it readable may be on its way.
-  static const Duration _unreadableMinAge = Duration(minutes: 10);
+  /// Parked envelopes added since the last look (a save goes before the
+  /// relay lease is acknowledged).
+  int _parkedSinceSave = 0;
 
-  /// A pre-key message from a peer not known yet waits much longer for its
-  /// bundle, but not for good: if our state is gone and the peer only sends
-  /// the same bytes again, the lease would be held for ever.
-  static const Duration _unknownPeerMinAge = Duration(hours: 24);
-  static const int _unknownPeerTries = 20;
-
-  /// Whether an envelope that could not be decrypted has been tried enough:
-  /// the batch it came in may then be acknowledged to the relay. Kinds
-  /// nobody sends again (a bulk key, a hello) are lost with the relay's
-  /// copy, so this waits for several batches and some minutes; a pre-key
-  /// message from a peer not known yet ([RatchetUnknownPeerException]) may
-  /// be read once its bundle has come and waits for a day. Copies arriving
-  /// in the same batch count once.
-  bool _giveUpOnUnreadable(String messageId, Object error) {
-    if (error is! RatchetDecryptException) return false;
-    final unknownPeer = error is RatchetUnknownPeerException;
-    final now = _now();
-    final known = _unreadableSeen.remove(messageId);
-    final seen = known == null
-        ? (first: now, tries: 1, batch: _leasedBatchSerial)
-        : (
-            first: known.first,
-            tries: known.batch == _leasedBatchSerial
-                ? known.tries
-                : known.tries + 1,
-            batch: _leasedBatchSerial,
-          );
-    _unreadableSeen[messageId] = seen;
-    while (_unreadableSeen.length > 512) {
-      _unreadableSeen.remove(_unreadableSeen.keys.first);
+  void _parkUnreadable(RelayEnvelope envelope, {DateTime? since}) {
+    final contact = _contactByDeviceId(envelope.senderDeviceId);
+    if (contact == null) return;
+    final encoded = jsonEncode(envelope.toJson());
+    final size = utf8.encode(encoded).length;
+    if (size > _parkedEnvelopeBytes) return;
+    final now = _now().toUtc();
+    final cutoff = now.subtract(_parkedLifetime);
+    var kept = [
+      for (final entry in _snapshot.parkedUnreadable)
+        if (entry.receivedAt.isAfter(cutoff) && entry.envelopeJson != encoded)
+          entry,
+      HeldEnvelope(
+        senderDeviceId: envelope.senderDeviceId,
+        conversationId: envelope.conversationId,
+        envelopeJson: encoded,
+        receivedAt: since ?? now,
+        peerKey: contact.publicKeyBase64,
+      ),
+    ];
+    int bytes(Iterable<HeldEnvelope> entries) =>
+        entries.fold(0, (sum, entry) => sum + entry.envelopeJson.length);
+    // Oldest first: per sender, then in all.
+    while (bytes(
+          kept.where((e) => e.senderDeviceId == envelope.senderDeviceId),
+        ) >
+        _parkedSenderBytes) {
+      kept.remove(
+        kept.firstWhere((e) => e.senderDeviceId == envelope.senderDeviceId),
+      );
     }
-    final age = now.difference(seen.first);
-    return unknownPeer
-        ? seen.tries >= _unknownPeerTries && age >= _unknownPeerMinAge
-        : seen.tries >= _unreadableTries && age >= _unreadableMinAge;
+    while (kept.length > 1 && bytes(kept) > _parkedTotalBytes) {
+      kept.removeAt(0);
+    }
+    _snapshot = _snapshot.copyWith(parkedUnreadable: kept);
+    _parkedSinceSave++;
   }
 
-  /// Counts a leased batch for the tries above (tests that feed envelopes
-  /// themselves stand in for the poll).
+  /// A bundle from an authenticated contact arrived: what was parked for it
+  /// is read again, if the contact is still the one that sent it. An
+  /// envelope that still cannot be read goes back with its first time (so it
+  /// ages out), one that can never be read is dropped.
+  final Set<String> _replayingParked = {};
+
+  void _replayParked(ContactRecord peer) {
+    if (_disposed || !_replayingParked.add(peer.deviceId)) return;
+    final now = _now().toUtc();
+    final mine = <HeldEnvelope>[];
+    final rest = <HeldEnvelope>[];
+    for (final entry in _snapshot.parkedUnreadable) {
+      (entry.senderDeviceId == peer.deviceId ? mine : rest).add(entry);
+    }
+    if (mine.isEmpty) {
+      _replayingParked.remove(peer.deviceId);
+      return;
+    }
+    _snapshot = _snapshot.copyWith(parkedUnreadable: rest);
+    final due = [
+      for (final entry in mine)
+        if (entry.peerKey == peer.publicKeyBase64 &&
+            now.difference(entry.receivedAt) < _parkedLifetime)
+          entry,
+    ];
+    unawaited(() async {
+      try {
+        for (final entry in due) {
+          final RelayEnvelope envelope;
+          try {
+            envelope = RelayEnvelope.fromJson(
+              jsonDecode(entry.envelopeJson) as Map<String, dynamic>,
+            );
+          } catch (_) {
+            continue;
+          }
+          // Not a leased batch: nothing is held for it, and a failure parks
+          // it again (with its first time) or drops it.
+          await _processEnvelopes([envelope]);
+        }
+      } finally {
+        _replayingParked.remove(peer.deviceId);
+        if (!_disposed) await _saveSnapshotSilently(notify: false);
+      }
+    }());
+  }
+
   @visibleForTesting
-  void noteRelayFetchForTesting() => _leasedBatchSerial++;
+  int get parkedUnreadableCountForTesting => _snapshot.parkedUnreadable.length;
+
+  @visibleForTesting
+  int get parkedUnreadableBytesForTesting => _snapshot.parkedUnreadable.fold(
+    0,
+    (sum, entry) => sum + entry.envelopeJson.length,
+  );
+
+  @visibleForTesting
+  void parkUnreadableForTesting(RelayEnvelope envelope) =>
+      _parkUnreadable(envelope);
 
   @visibleForTesting
   int get routeReceiptTimersForTesting => _routeReceiptTimers.length;
-
-  @visibleForTesting
-  bool giveUpOnUnreadableForTesting(String messageId, Object error) =>
-      _giveUpOnUnreadable(messageId, error);
 
   @visibleForTesting
   List<RelayEnvelope> orderForProcessingForTesting(
@@ -35085,6 +35162,8 @@ class MessengerController extends ChangeNotifier {
     // Messages encrypted before this bundle must be encrypted again.
     _newPeerSession(peer.deviceId);
     await sessions.rememberPeerIdentity(id, bundle.identityKey);
+    // Envelopes parked for want of this identity can be read now.
+    _replayParked(peer);
     if (reason == 'answer') return;
     await sessions.startSession(id, bundle);
     _newPeerSession(peer.deviceId);
