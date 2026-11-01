@@ -358,12 +358,16 @@ class FfiNativeIrohBridge
     }
   }
 
+  /// Keeps polling quick (a call is on: media may arrive any moment).
+  static bool holdActive = false;
+
   void _scheduleNextPoll() {
     _poller?.cancel();
     if (_handle == null) {
       _poller = null;
       return;
     }
+    if (holdActive) _pollCadence.noteActivity();
     _poller = Timer(_pollCadence.next, () async {
       await _pollInbound();
       _scheduleNextPoll();

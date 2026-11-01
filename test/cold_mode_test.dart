@@ -117,6 +117,68 @@ void main() {
     expect(cold.active, isFalse);
   });
 
+  test('a route in use (a call, a transfer) is not stopped when its stay '
+      'ends, and is once it is free', () async {
+    final cold = make();
+    var callOverIroh = true;
+    cold.inUseRecheck = const Duration(milliseconds: 60);
+    cold.inUse = (id) => id == 'iroh' && callOverIroh;
+    await cold.configure(active: true, wakeMinutes: 0);
+    await cold.wakeFor(['iroh', 'nostr']);
+    await settle(260); // The 150 ms stay is over.
+    expect(cold.upIds, contains('iroh'));
+    expect(cold.upIds, isNot(contains('nostr')));
+    callOverIroh = false;
+    await settle(150);
+    expect(cold.upIds, isNot(contains('iroh')));
+  });
+
+  test('replacing the handles during a stay neither loses the stay nor the '
+      'state: the route still stops and starts again', () async {
+    final cold = make();
+    await cold.configure(active: true, wakeMinutes: 0);
+    await cold.wakeFor(['nostr']);
+    // The controller syncs on every network change: new handle objects.
+    cold.setHandles([
+      handle('iroh'),
+      handle('nostr'),
+      handle('lan'),
+      handle('telegram', exempt: true),
+    ]);
+    expect(cold.upIds, contains('nostr'));
+    await settle(260);
+    expect(cold.upIds, {'telegram'});
+    log.clear();
+    await cold.wakeFor(['nostr']);
+    expect(log, ['start nostr']);
+    expect(cold.isCold('lan'), isTrue);
+    expect(cold.isCold('nostr'), isFalse);
+    expect(cold.isCold('telegram'), isFalse);
+  });
+
+  test('something awaiting a retry wakes cold mode between the checks, '
+      'also with checks only on request', () async {
+    final cold = make();
+    cold.retryEvery = const Duration(milliseconds: 100);
+    DateTime? due;
+    cold.retryDue = () => due;
+    await cold.configure(active: true, wakeMinutes: 0);
+    log.clear();
+    await settle(250);
+    expect(log, isEmpty);
+    // A message is waiting for its receipt.
+    due = DateTime.now().add(const Duration(milliseconds: 50));
+    cold.rearm();
+    await settle(300);
+    expect(log, containsAll(['start iroh', 'fetch']));
+    // Nothing waits any more: no further wakes.
+    due = null;
+    await settle(250);
+    log.clear();
+    await settle(300);
+    expect(log, isEmpty);
+  });
+
   test('wake minutes are normalized to the choices', () {
     expect(normalizeColdWakeMinutes(30), 30);
     expect(normalizeColdWakeMinutes(0), 0);

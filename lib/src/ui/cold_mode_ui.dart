@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../app_locales.dart';
 import '../cold_mode.dart';
+import '../transport_models.dart';
+import 'localized_labels.dart';
 import '../messenger_controller.dart';
 
 /// "Cold mode · checked 3 min ago" with a refresh action; nothing when cold
@@ -189,7 +191,7 @@ class ColdModeSettings extends StatelessWidget {
                 ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  title: Text(transport.id),
+                  title: Text(_routeName(context, transport.id)),
                   trailing: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 150),
                     child: DropdownButton<ColdTransportMode>(
@@ -230,4 +232,12 @@ class ColdModeSettings extends StatelessWidget {
       },
     );
   }
+}
+
+/// A route's name as people know it.
+String _routeName(BuildContext context, String id) {
+  for (final kind in TransportKind.values) {
+    if (kind.name == id) return transportKindLabel(context, kind);
+  }
+  return id;
 }

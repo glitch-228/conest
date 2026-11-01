@@ -181,6 +181,9 @@ class EnergyPolicy {
   final EnergyMode? _fixedMode;
   final bool _isPhone;
 
+  /// Told when the power source changed (plugged in or out).
+  void Function()? onPowerChanged;
+
   PowerState _power = PowerState.unknown;
   DateTime? _readAt;
   Future<void>? _reading;
@@ -195,7 +198,13 @@ class EnergyPolicy {
     }
     return _reading ??= () async {
       try {
+        final before = _power;
         _power = await _source.read().timeout(const Duration(seconds: 2));
+        // Plugged in or out: Automatic may change what it is.
+        if (before.charging != _power.charging ||
+            before.hasBattery != _power.hasBattery) {
+          onPowerChanged?.call();
+        }
       } catch (_) {
         // Keep the last reading.
       } finally {

@@ -52,11 +52,11 @@ class ColdHandle {
 
   /// The transport's name ("iroh", "nostr", "lan", …).
   final String id;
-  final Future<void> Function() start;
-  final Future<void> Function() stop;
+  Future<void> Function() start;
+  Future<void> Function() stop;
 
   /// A chat network that syncs by itself: never touched.
-  final bool exempt;
+  bool exempt;
 
   /// Whether it runs now.
   bool up = true;
@@ -97,6 +97,22 @@ class ColdMode {
   /// Told when a transport would not start or stop.
   void Function(String id, Object error)? onError;
 
+  /// Whether the transport [id] is in use right now (a call over it, a file
+  /// moving): it is not stopped while this says so.
+  bool Function(String id)? inUse;
+
+  /// How long to wait before looking again whether a transport in use is
+  /// free.
+  Duration inUseRecheck = const Duration(seconds: 10);
+
+  /// When something awaits an answer (a message, a receipt, a group
+  /// update) the earliest it should be tried again; null when nothing
+  /// does. Cold mode wakes for it between the timed checks.
+  DateTime? Function()? retryDue;
+
+  /// The least time between two wakes for retries.
+  Duration retryEvery = const Duration(minutes: 1);
+
   final Map<String, ColdHandle> _handles = {};
   final Map<String, Timer> _sleepTimers = {};
   final Map<String, DateTime> _sleepAt = {};
@@ -106,7 +122,8 @@ class ColdMode {
   bool _active = false;
   bool _disposed = false;
   DateTime? _lastCheckedAt;
-  DateTime? _nextCheckAt;
+  DateTime? _checkAt;
+  DateTime? _lastWakeAt;
 
   bool get active => _active;
 
@@ -127,7 +144,7 @@ class ColdMode {
   DateTime? get lastCheckedAt => _lastCheckedAt;
 
   /// When the timer looks next; null for manual only or when not cold.
-  DateTime? get nextCheckAt => _nextCheckAt;
+  DateTime? get nextCheckAt => _checkAt;
 
   /// Ids of the transports that run now.
   Set<String> get upIds => {
@@ -138,7 +155,9 @@ class ColdMode {
   /// Ids of the transports cold mode manages.
   Set<String> get handleIds => _handles.keys.toSet();
 
-  /// The set of things to manage. Handles seen before keep their state.
+  /// The set of things to manage. A handle seen before is kept as it is
+  /// (with its state and its timers) and only gets the new way to start and
+  /// stop.
   void setHandles(Iterable<ColdHandle> handles) {
     final next = {for (final handle in handles) handle.id: handle};
     for (final id in _handles.keys.toList()) {
@@ -151,16 +170,24 @@ class ColdMode {
     for (final handle in next.values) {
       final old = _handles[handle.id];
       if (old != null) {
-        handle.up = old.up;
-        // The one that stopped is stopped for good: the new handle takes
-        // over its state.
+        old
+          ..start = handle.start
+          ..stop = handle.stop
+          ..exempt = handle.exempt;
+        continue;
       }
       _handles[handle.id] = handle;
       // A transport that appeared while cold: it starts cold, too.
-      if (_active && old == null && handle.up) {
-        unawaited(_sleepNow(handle));
-      }
+      if (_active && handle.up) unawaited(_sleepNow(handle));
     }
+  }
+
+  /// Whether the transport [id] is stopped by cold mode now (and so must
+  /// not be started by anything else).
+  bool isCold(String id) {
+    if (!_active) return false;
+    final handle = _handles[id];
+    return handle != null && !handle.exempt && !handle.up;
   }
 
   /// Turns cold mode on or off, and sets how often it looks for news
@@ -180,7 +207,7 @@ class ColdMode {
         _active = false;
         _timer?.cancel();
         _timer = null;
-        _nextCheckAt = null;
+        _checkAt = null;
         for (final timer in _sleepTimers.values) {
           timer.cancel();
         }
@@ -198,7 +225,9 @@ class ColdMode {
     _active = true;
     if (entering) {
       _lastCheckedAt = _now();
+      _lastWakeAt = _now();
     }
+    _checkAt = interval == null ? null : _now().add(interval);
     await _applyModes();
     _armTimer();
     onChanged?.call();
@@ -226,17 +255,34 @@ class ColdMode {
     }
   }
 
+  /// Sets the one timer: the next timed check, or sooner the time a retry
+  /// is due (never closer than [retryEvery] to the last wake).
   void _armTimer() {
     _timer?.cancel();
     _timer = null;
-    _nextCheckAt = null;
-    final interval = _interval;
-    if (!_active || _disposed || interval == null) return;
-    _nextCheckAt = _now().add(interval);
-    _timer = Timer(interval, () {
+    if (!_active || _disposed) {
+      _checkAt = null;
+      return;
+    }
+    final now = _now();
+    var due = _checkAt;
+    final retry = retryDue?.call();
+    if (retry != null) {
+      final earliest = (_lastWakeAt ?? now).add(retryEvery);
+      final at = retry.isAfter(earliest) ? retry : earliest;
+      if (due == null || at.isBefore(due)) due = at;
+    }
+    if (due == null) return;
+    final wait = due.difference(now);
+    _timer = Timer(wait.isNegative ? Duration.zero : wait, () {
       _timer = null;
       unawaited(refresh().catchError((Object _) {}));
     });
+  }
+
+  /// Looks again when the next wake is due (something now awaits a retry).
+  void rearm() {
+    if (_active && !_disposed) _armTimer();
   }
 
   /// Wakes every cold transport, asks for news, and lets them go cold again
@@ -250,6 +296,7 @@ class ColdMode {
       onChanged?.call();
       return;
     }
+    _lastWakeAt = _now();
     for (final handle in _handles.values.toList()) {
       if (handle.exempt || modeOf(handle.id) != ColdTransportMode.cold) {
         continue;
@@ -260,6 +307,8 @@ class ColdMode {
       await fetch?.call();
     } finally {
       _lastCheckedAt = _now();
+      final interval = _interval;
+      _checkAt = interval == null ? null : _now().add(interval);
       _armTimer();
       onChanged?.call();
     }
@@ -288,17 +337,32 @@ class ColdMode {
     if (current == null || until.isAfter(current)) {
       _sleepAt[handle.id] = until;
       _sleepTimers.remove(handle.id)?.cancel();
-      _sleepTimers[handle.id] = Timer(hold, () {
-        _sleepTimers.remove(handle.id);
-        _sleepAt.remove(handle.id);
-        if (_active &&
-            !_disposed &&
-            modeOf(handle.id) == ColdTransportMode.cold) {
-          unawaited(_sleepNow(handle).catchError((Object _) {}));
-        }
-      });
+      _sleepTimers[handle.id] = Timer(hold, () => _sleepWhenFree(handle));
     }
     if (!handle.up) await _wakeNow(handle);
+  }
+
+  /// Stops [handle] when its stay is over, unless it is in use; then it
+  /// looks again a little later.
+  void _sleepWhenFree(ColdHandle handle) {
+    _sleepTimers.remove(handle.id);
+    _sleepAt.remove(handle.id);
+    if (!_active ||
+        _disposed ||
+        _handles[handle.id] != handle ||
+        modeOf(handle.id) != ColdTransportMode.cold) {
+      return;
+    }
+    if (inUse?.call(handle.id) ?? false) {
+      final until = _now().add(inUseRecheck);
+      _sleepAt[handle.id] = until;
+      _sleepTimers[handle.id] = Timer(
+        inUseRecheck,
+        () => _sleepWhenFree(handle),
+      );
+      return;
+    }
+    unawaited(_sleepNow(handle).catchError((Object _) {}));
   }
 
   Future<void> _wakeNow(ColdHandle handle) => _serial(handle.id, () async {

@@ -359,7 +359,7 @@ class NetworkHistory {
   /// way a block does): failures count against the network only when they
   /// are for at least this many different contacts, or not for a contact
   /// at all (the route's own infrastructure, such as Iroh's relay).
-  static const perPeerRoutes = {'iroh', 'tor'};
+  static const perPeerRoutes = {'iroh', 'tor', 'direct'};
   static const _blockingFailuresNeeded = 3;
   static const _peersNeeded = 2;
 
