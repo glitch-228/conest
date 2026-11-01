@@ -390,7 +390,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
            NetworkLimiter(
              NetworkBudgets.email(
                chatmail: config.chatmail,
-             ).copyWith(gap: sendSpacing).withoutQuota(),
+             ).copyWith(gap: sendSpacing, burst: 1).withoutQuota(),
            ),
        // Chatmail servers also listen on 443, for networks that block the
        // mail ports.

@@ -55,16 +55,22 @@ abstract final class NetworkBudgets {
   /// a minute per account (chatmail's `max_user_send_per_minute`) and cut
   /// the connection of an account that keeps pushing (device lab); ordinary
   /// providers allow some hundreds an hour (Gmail 500 a day, many hosts
-  /// 100 to 300 an hour).
+  /// 100 to 300 an hour). The limit is per minute (or hour), not per
+  /// second, so a burst goes out at once up to a fraction of it (twenty
+  /// mails, the messages of a normal burst and their receipts) and the
+  /// quota paces the rest: a first version that allowed one mail every
+  /// 1.2 s turned away most of a burst of messages and receipts.
   static LimiterBudget email({bool chatmail = false}) => LimiterBudget(
     name: chatmail ? 'Email (chatmail)' : 'Email',
-    gap: const Duration(milliseconds: 1200),
-    burst: 1,
+    gap: chatmail
+        ? const Duration(milliseconds: 500)
+        : const Duration(milliseconds: 1200),
+    burst: chatmail ? 20 : 10,
     maxGap: const Duration(seconds: 30),
     quota: chatmail ? 50 : 150,
     window: chatmail ? const Duration(minutes: 1) : const Duration(hours: 1),
     maxQueue: 64,
-    maxWait: const Duration(seconds: 30),
+    maxWait: const Duration(seconds: 45),
   );
 
   /// One Nostr relay: public relays drop the connection of a client that

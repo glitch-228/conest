@@ -276,6 +276,47 @@ void main() {
     expect(ordinary.window, const Duration(hours: 1));
   });
 
+  group('a conversation burst is paced, never refused', () {
+    // 40 sends in 10 s: twenty messages and a group's copies, or a burst of
+    // messages with their receipts. A budget may make them wait, but none
+    // may be turned away, and all must have had their turn soon after.
+    final budgets = <String, LimiterBudget>{
+      'Telegram': NetworkBudgets.telegram,
+      'Discord': NetworkBudgets.discord,
+      'Matrix': NetworkBudgets.matrix,
+      'email (chatmail)': NetworkBudgets.email(chatmail: true),
+      'email': NetworkBudgets.email(),
+      'Nostr relay': NetworkBudgets.nostrRelay,
+      'XMPP': NetworkBudgets.xmpp,
+      'Conest relay': NetworkBudgets.conestRelay,
+      'Tor and the like': NetworkBudgets.generic,
+    };
+    for (final MapEntry(key: name, value: budget) in budgets.entries) {
+      test('$name', () async {
+        final clock = _Clock();
+        final limiter = _limiter(clock, budget);
+        final turns = <int>[];
+        var refused = 0;
+        for (var i = 0; i < 40; i++) {
+          unawaited(
+            _note(clock, limiter, turns).onError<LimiterRefused>((_, _) {
+              refused++;
+            }),
+          );
+          await clock.advance(const Duration(milliseconds: 250));
+        }
+        await clock.advance(const Duration(minutes: 3));
+        expect(refused, 0, reason: '$refused of 40 sends refused');
+        expect(turns, hasLength(40));
+        expect(
+          turns.last,
+          lessThan(const Duration(seconds: 55).inMilliseconds),
+          reason: 'the last send waited too long',
+        );
+      });
+    }
+  });
+
   group('hostile servers and clocks', () {
     test('a rest does not hand out the whole burst when it ends', () async {
       final clock = _Clock();
