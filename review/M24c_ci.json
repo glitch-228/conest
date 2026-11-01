@@ -1,88 +1,146 @@
 {
-  "runId": 41241082262,
-  "attempt": 2,
-  "url": "https://github.com/glitch-228/conest/actions/runs/41241082262",
-  "headSha": "54f8a584cb0da51df8a35e084fe723f5bdcf7a4f",
-  "conclusion": "success",
-  "integrationBase": "c80f136",
-  "fullSuite": {
-    "passed": 2061,
-    "environmentGatedSkips": 24,
-    "excludedNativeCase": "native Iroh direct contact adding works without LAN or any relay"
+  "run": {
+    "conclusion": "success",
+    "created_at": "2026-11-01T07:17:04Z",
+    "head_sha": "0ecc102fe8f5a62b2178824da020f80924d38c3b",
+    "html_url": "https://github.com/glitch-228/conest/actions/runs/41284164393",
+    "id": 41284164393,
+    "run_attempt": 1,
+    "status": "completed",
+    "updated_at": "2026-11-01T09:02:18Z"
   },
-  "sabotageChecks": 34,
-  "analyzerBaseline": 28,
+  "integrated_base": "6d23989",
   "jobs": [
     {
-      "name": "Tor carrier over the real Tor network",
+      "completed_at": "2026-11-01T07:17:10Z",
       "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663132448"
-    },
-    {
-      "name": "Full Flutter test suite",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663133323"
-    },
-    {
-      "name": "Relay installer (shellcheck, and a real install without systemd)",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663133441"
-    },
-    {
-      "name": "Email carrier against a real mail server",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663133673"
-    },
-    {
-      "name": "Verify debug transfers and storage controls",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663133892"
-    },
-    {
-      "name": "Nostr carrier against real relays",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663154037"
-    },
-    {
-      "name": "Android debug battle-test APK",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663157305"
-    },
-    {
-      "name": "XMPP carrier against a real Prosody",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663159017"
-    },
-    {
-      "name": "Reticulum carrier against the Python reference (RNS)",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663159555"
-    },
-    {
-      "name": "Linux debug battle-test bundle",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663160078"
-    },
-    {
+      "id": 124781964887,
       "name": "Check debug cadence",
-      "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663162339"
+      "started_at": "2026-11-01T07:17:07Z",
+      "status": "completed"
     },
     {
-      "name": "Matrix carrier and client against a real Synapse",
+      "completed_at": "2026-11-01T07:17:27Z",
       "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663163647"
+      "id": 124781979018,
+      "name": "Relay installer (shellcheck, and a real install without systemd)",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
     },
     {
-      "name": "Windows debug battle-test bundle",
+      "completed_at": "2026-11-01T07:18:49Z",
       "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663172518"
-    },
-    {
+      "id": 124781979027,
       "name": "Meshtastic carrier against meshtasticd",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:47:00Z",
       "conclusion": "success",
-      "url": "https://github.com/glitch-228/conest/actions/runs/41241082262/job/124663173733"
+      "id": 124781979028,
+      "name": "Full Flutter test suite",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:34:37Z",
+      "conclusion": "success",
+      "id": 124781979034,
+      "name": "Tor carrier over the real Tor network",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:18:44Z",
+      "conclusion": "success",
+      "id": 124781979045,
+      "name": "Reticulum carrier against the Python reference (RNS)",
+      "started_at": "2026-11-01T07:17:11Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:18:42Z",
+      "conclusion": "success",
+      "id": 124781979052,
+      "name": "Nostr carrier against real relays",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:18:49Z",
+      "conclusion": "success",
+      "id": 124781979062,
+      "name": "Email carrier against a real mail server",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:18:56Z",
+      "conclusion": "success",
+      "id": 124781979074,
+      "name": "XMPP carrier against a real Prosody",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T09:02:17Z",
+      "conclusion": "success",
+      "id": 124781979080,
+      "name": "Linux debug battle-test bundle",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:33:02Z",
+      "conclusion": "success",
+      "id": 124781979082,
+      "name": "Matrix carrier and client against a real Synapse",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:49:50Z",
+      "conclusion": "success",
+      "id": 124781979094,
+      "name": "Windows debug battle-test bundle",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:34:23Z",
+      "conclusion": "success",
+      "id": 124781979112,
+      "name": "Android debug battle-test APK",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-01T07:30:13Z",
+      "conclusion": "success",
+      "id": 124781979201,
+      "name": "Verify debug transfers and storage controls",
+      "started_at": "2026-11-01T07:17:12Z",
+      "status": "completed"
     }
   ],
-  "note": "Green qualification before integrating the newer M25 base."
+  "verification": {
+    "full_flutter_suite": {
+      "passed": 2177,
+      "environment_gated_skips": 24,
+      "excluded_case": "native Iroh direct contact adding works without LAN or any relay",
+      "exclusion_basis": "PLAN_AGENTS.md"
+    },
+    "targeted_local_tests": 223,
+    "delta_controller_tests": 26,
+    "delta_ci_targeted_tests": 188,
+    "detected_sabotage_checks": 52,
+    "analyzer_existing_issues": 28,
+    "new_analyzer_issues": 0
+  },
+  "review": {
+    "reviewer": "m24c_security_review",
+    "result": "Confirmed findings fixed; final source follow-up found no remaining concrete defect.",
+    "merge_approval": "Maintainer review remains separate."
+  }
 }

@@ -37,35 +37,40 @@ These items are about stalls and battery. Name any remaining hot path in the han
 
 ## Handoff
 
-Implemented on agent/m24c-delta-leftovers, source commit b7dff0e; latest base c80f136 merged.
+Implemented on agent/m24c-delta-leftovers, source commit 0ecc102; integrated base 6d23989 in 7af2d20. Ready for maintainer review.
 
 Done:
+
 - UID-based deferred Delta downloads obey network cost and the storage preset, expose Download, survive restart and UID resets, and keep server mail until successful durable receipt. Bounded overflow does not block later mail; groups use the same authenticated-content policy.
 - MIME/OpenPGP and attachment hashes run in isolates; a 20 MiB encrypted-file regression checks the actual parser isolate.
 - One durable vault write per bounded fetch batch, reused immutable JSON rows, indexed descriptors, and pruned incremental cache references.
 - A 256 MiB / 4,096-file metadata-based LRU protects saved files and archive-owned legacy copies. Existing pinned legacy data remains readable if over the new cap; new admissions must fit.
 - Lazy bounded avatar restoration avoids startup decoding/hashing. This base stores avatar data inline, so encoded lengths and identity replace nonexistent file-stat checks; attachment-cache checks use size/mtime.
-- Parser/header/token limits tightened, with authored-control regression coverage preserved.
+- Parser/header/token limits tightened, with authored-control regression coverage preserved. M25 integration also retains protocol replies across email limits/restarts, isolates account quotas/cursors, and preserves progress after storage or recipient failures.
 
 Verification:
-- All 19 Delta controller tests passed. Targeted mail/protocol/content/parser/avatar/queue/cache tests passed.
-- All 34 sabotage checks failed as expected with individual guards removed, then source was restored. Evidence: review/M24c_sabotage.json; repeatable runner: tool/m24c_sabotage.py.
+
+- All 26 Delta controller tests and 223 targeted mail/protocol/content/parser/avatar/outbox/queue/cache/PGP/email/network-budget tests passed on the final integration source.
+- All 52 sabotage checks failed as expected with individual guards removed, then source was restored. Evidence: review/M24c_sabotage.json; repeatable runner: tool/m24c_sabotage.py.
 - Analyzer: 28 baseline issues, no new issues.
-- Full suite: runs in the dedicated GitHub qualification job; only the exact native-Iroh case documented in PLAN_AGENTS.md is excluded. The queued local waiter was cancelled without interrupting another session.
-- Qualified final CI run: 41241082262, https://github.com/glitch-228/conest/actions/runs/41241082262, fixture/workflow commit 54f8a58 and app source b7dff0e; attempt 2 passed all jobs before M25 integration; final integration result follows below.
+- Full suite on final source: 2,177 passed, 24 environment-gated skips. Only the exact native-Iroh case documented in PLAN_AGENTS.md is excluded. The suite ran on its own GitHub runner; no other local session was interrupted.
+- Qualified final CI run: 41284164393, https://github.com/glitch-228/conest/actions/runs/41284164393, source 0ecc102 including M25: all 14 jobs passed on attempt 1, including Android/Linux/Windows builds and every live carrier qualification. Evidence: review/M24c_ci.json.
 - Independent security reviewer m24c_security_review: confirmed findings fixed with tests; final follow-up found no additional concrete findings. Review record: review/M24c.md. Maintainer review/merge approval remains separate.
 
 Performance handoff:
+
 - Remaining paths to profile before a stable release: the single up-to-42 MiB worker input transfer, bounded first-display avatar sanitization, shared vault snapshot-map preparation, first-use cached-key validation, and the existing minute expiry refresh in an open Delta chat. The sender-header worker receives an owned prefix capped at 512 KiB.
 - Encrypted mail up to 64 KiB has a control-read allowance; authenticated attachment policy is then checked before caching/deletion. Large public-key mails can be deferred before body fetch.
 
 Release-note drafts:
+
 - Delta Chat files follow download settings and wait for Download on metered connections.
 - Improved handling of large Delta Chat messages.
 - Delta Chat file caches now manage their storage limits.
 - Important: save Delta Chat files you need to keep before updating.
 
 Device checks:
+
 - Android metered/Wi-Fi switching while mail arrives.
 - Frame timing for first avatar display and 20 MiB mail, added message latency, idle CPU and wakeups on Android/Linux/Windows.
 - No GUI automation, local builds or physical-device work performed, as required by PLAN_AGENTS.md.
@@ -124,3 +129,11 @@ Device checks:
 - All 52 sabotage checks detected their regressions and all mutations were restored. The new retry check initially survived because the fixture could clear the failure before SMTP attempted it; corrected it to wait for an observed refusal, then proved the retry-wake mutation fails. Updated mutation targets after formatting; no compiler failure counts as a detection. Evidence: review/M24c_sabotage.json. Final positive controller/targeted tests and analyzer are running.
 
 - Final reviewed integration source passed 223 targeted mail/protocol/content/parser/avatar/outbox/queue/cache/PGP/email/network-budget tests and all 26 Delta controller tests after all mutations were restored. Analyzer: 28 existing issues, no new issues. Logs: /tmp/m24c-integration-final-targeted.log, /tmp/m24c-integration-final-controller.log, /tmp/m24c-integration-final-analyze.log. All 52 sabotage detections are recorded. Pushing the reviewed integration for full qualified CI.
+
+- Reviewed integration commit 0ecc102 pushed only to agent/m24c-delta-leftovers. Final qualified CI run 41284164393 confirmed against that exact commit: https://github.com/glitch-228/conest/actions/runs/41284164393. It includes the full Flutter suite, real carrier qualifications, and Android/Linux/Windows builds. Waiting for completion before final handoff.
+
+- Final CI 41284164393: transfer/storage qualification passed, including 188 Delta mail/protocol/content/parser/avatar/outbox/queue/cache/PGP/email tests and all 26 Delta controller tests. Installer, live email/XMPP/Nostr/Reticulum/Meshtastic jobs passed. Full suite, Matrix/Tor and platform builds remain active. Saved /tmp/m24c-final-qualification.log.
+
+- Final CI 41284164393: full Flutter suite passed on 0ecc102 (2,177 passed, 24 environment-gated skips; log /tmp/m24c-final-full-suite.log). Tor, Matrix/Synapse and Android also passed. Only Linux/Windows builds remain.
+
+- Final qualified run 41284164393 completed successfully on 0ecc102, attempt 1: all 14 jobs passed, including full suite (2,177 passed, 24 gated skips), Android/Linux/Windows builds, Matrix/Synapse, Tor and every other live carrier/installer qualification. Final metadata and job conclusions saved in review/M24c_ci.json. Handoff and independent review record completed. Only these documentation/evidence files changed after qualification; no application source changed. No task blockers remain; device/profile checks are listed for the stable-release review.
