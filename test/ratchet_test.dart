@@ -33,6 +33,40 @@ void main() {
       expect(_fakeIndex(next), _fakeIndex(first) + 1);
     });
 
+    test('a pre-key message from a peer not known yet says so; one that '
+        'cannot be read otherwise does not', () async {
+      final engine = FakeRatchetEngine(random: Random(7));
+      final alice = _Device(engine);
+      final bob = _Device(engine);
+      await alice.sessions.startSession(
+        'bob',
+        await bob.sessions.createBundle(),
+      );
+      final first = await alice.sessions.encrypt('bob', utf8.encode('hi'));
+      await expectLater(
+        bob.sessions.decrypt('alice', first),
+        throwsA(isA<RatchetUnknownPeerException>()),
+      );
+      await bob.sessions.decrypt(
+        'alice',
+        first,
+        peerIdentityKey: await alice.sessions.identityKey(),
+      );
+      await expectLater(
+        bob.sessions.decrypt(
+          'alice',
+          RatchetMessage(type: 1, ciphertext: utf8.encode('garbage')),
+        ),
+        throwsA(
+          isA<RatchetDecryptException>().having(
+            (error) => error is RatchetUnknownPeerException,
+            'unknown peer',
+            false,
+          ),
+        ),
+      );
+    });
+
     test('a failed decrypt leaves stored state untouched', () async {
       final engine = FakeRatchetEngine(random: Random(7));
       final alice = _Device(engine);

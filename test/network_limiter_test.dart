@@ -292,7 +292,7 @@ void main() {
       'Tor and the like': NetworkBudgets.generic,
     };
     for (final MapEntry(key: name, value: budget) in budgets.entries) {
-      test('$name', () async {
+      test(name, () async {
         final clock = _Clock();
         final limiter = _limiter(clock, budget);
         final turns = <int>[];

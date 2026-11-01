@@ -9,6 +9,7 @@ import 'package:conest/src/email/delta_content.dart';
 import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/email/smtp.dart';
 import 'package:conest/src/email_carrier.dart';
+import 'package:conest/src/limits/network_limiter.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_mail_server.dart';
@@ -63,6 +64,49 @@ void main() {
   }
 
   final frame = Uint8List.fromList(List<int>.generate(5000, (i) => i % 11));
+
+  test(
+    'a mail waits for its turn as long as the budget says, not 30 s',
+    () async {
+      // The account's budget lets a send wait 45 s; a turn 40 s away is
+      // queued, not turned away.
+      final limiter = NetworkLimiter(
+        const LimiterBudget(
+          name: 'slow',
+          gap: Duration(seconds: 40),
+          burst: 1,
+          maxWait: Duration(seconds: 45),
+        ),
+      );
+      addTearDown(limiter.close);
+      final bob = EmailCarrierChannel(
+        config: account('bob'),
+        connector: server.connect,
+        onFrame: (_, _) {},
+        pollInterval: const Duration(milliseconds: 200),
+        limiter: limiter,
+      );
+      channels.add(bob);
+      final alice = channel(account('alice'), []);
+      bob.start();
+      alice.start();
+      await bob.sendFrame(alice.localAddress!, frame);
+      Object? refused;
+      var done = false;
+      unawaited(
+        bob
+            .sendFrame(alice.localAddress!, frame)
+            .then(
+              (_) => done = true,
+              onError: (Object error) => refused = error,
+            ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(refused, isNull, reason: 'refused: $refused');
+      expect(done, isFalse, reason: 'the second mail did not wait');
+      limiter.close();
+    },
+  );
 
   test('mails leave one account one by one, slower after a refusal', () async {
     // A chatmail relay answers "450 Too much mail" to an account that sends

@@ -6963,6 +6963,223 @@ void main() {
     );
 
     test(
+      'a copy by another route while the receipt is on its way gets its route '
+      'named afterwards',
+      () async {
+        final (alice, bob, relay) = await pairOnRelay();
+        final messages = await sendBurst(alice, relay, 1);
+        // Bob's own fetches would bring copies by the relay route.
+        relay.fetchDelay = const Duration(hours: 1);
+        relay.storeDelayFor = (e) =>
+            e.kind == 'ack' ? const Duration(seconds: 4) : Duration.zero;
+        await bob.processEnvelopesForTesting(
+          messages,
+          route: MessageRoute.emailCarrier,
+          settleReceipts: false,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        // The receipt, built with the one route, is still being sent.
+        await bob.processEnvelopesForTesting(
+          messages,
+          route: MessageRoute.nostrCarrier,
+          settleReceipts: false,
+        );
+        await _waitForIroh(
+          () =>
+              relay.storedEnvelopes
+                  .where((e) => e.kind == 'ack')
+                  .map((e) => e.messageId)
+                  .toSet()
+                  .length >=
+              2,
+          timeout: const Duration(seconds: 30),
+          reason: 'the new route was never named to the sender',
+        );
+      },
+    );
+
+    test('a contact whose sends fail costs one failed send, not one per '
+        'receipt', () async {
+      final (alice, bob, relay) = await pairOnRelay();
+      bob.dropContactCapabilityForTesting(
+        alice.identity!.deviceId,
+        ApplicationCapability.batchedAcksV1,
+      );
+      final messages = await sendBurst(alice, relay, 10);
+      var attempts = 0;
+      relay.shouldFailStore = (_, _, _, _, envelope) {
+        if (envelope.kind == 'ack') attempts++;
+        return envelope.kind == 'ack';
+      };
+      // What one failed receipt costs (every route it tries)...
+      await bob.processEnvelopesForTesting([messages.first]);
+      final one = attempts;
+      expect(one, greaterThan(0));
+      attempts = 0;
+      // ...is what nine more cost together: the contact is left to the
+      // retry loop after the first failure.
+      await bob.processEnvelopesForTesting(messages.skip(1).toList());
+      expect(
+        attempts,
+        lessThanOrEqualTo(one),
+        reason: 'every receipt tried the dead route ($attempts, one: $one)',
+      );
+      expect(
+        bob.pendingAckDeliveries.where((entry) => entry.attempts > 1),
+        hasLength(1),
+        reason: 'more than one receipt was tried',
+      );
+    });
+
+    test(
+      'a receipt queued for a contact that is then removed is not sent',
+      () async {
+        final (alice, bob, relay) = await pairOnRelay();
+        bob.dropContactCapabilityForTesting(
+          alice.identity!.deviceId,
+          ApplicationCapability.batchedAcksV1,
+        );
+        final messages = await sendBurst(alice, relay, 3);
+        relay.storeDelayFor = (e) =>
+            e.kind == 'ack' ? const Duration(seconds: 1) : Duration.zero;
+        await bob.processEnvelopesForTesting(messages, settleReceipts: false);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await bob.removeContact(alice.identity!.deviceId, notifyPeer: false);
+        await bob.settleReceiptsForTesting();
+        expect(
+          relay.storedEnvelopes
+              .where((e) => e.kind == 'ack')
+              .map((e) => e.messageId)
+              .toSet(),
+          hasLength(1),
+          reason: 'receipts went to a contact that was removed',
+        );
+      },
+    );
+
+    test('disposing stops the queue and saves nothing afterwards', () async {
+      final vault = _MemoryVaultStore();
+      final (alice, bob, relay) = await pairOnRelay(
+        bobVault: vault,
+        disposeBob: false,
+      );
+      bob.dropContactCapabilityForTesting(
+        alice.identity!.deviceId,
+        ApplicationCapability.batchedAcksV1,
+      );
+      final messages = await sendBurst(alice, relay, 3);
+      relay.storeDelayFor = (e) =>
+          e.kind == 'ack' ? const Duration(milliseconds: 700) : Duration.zero;
+      await bob.processEnvelopesForTesting(messages, settleReceipts: false);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      bob.dispose();
+      final saves = vault.saveCount;
+      await Future<void>.delayed(const Duration(seconds: 3));
+      expect(vault.saveCount, saves, reason: 'saved after dispose');
+      expect(
+        relay.storedEnvelopes
+            .where((e) => e.kind == 'ack')
+            .map((e) => e.messageId)
+            .toSet()
+            .length,
+        lessThanOrEqualTo(1),
+        reason: 'the queue went on after dispose',
+      );
+    });
+
+    test('ids a batched receipt adds are ignored unless they are messages '
+        'sent to that contact in that chat', () async {
+      final (alice, bob, relay) = await pairOnRelay();
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      final group = await alice.createGroup(
+        title: 'Other chat',
+        members: alice.contacts,
+      );
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'in a group');
+      final inGroup = alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((m) => m.body == 'in a group')
+          .id;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'from bob');
+      final incoming = bob.messagesFor(aliceId).single.id;
+      final sent = await sendBurst(alice, relay, 2);
+      relay.fetchDelay = const Duration(hours: 1);
+      final chat = sent.first.conversationId;
+      for (final id in [
+        sent.first.messageId,
+        inGroup,
+        incoming,
+        'ghost',
+        sent.last.messageId,
+      ]) {
+        bob.queueReceiptForTesting(
+          contactDeviceId: aliceId,
+          messageId: id,
+          conversationId: chat,
+          send: id == sent.last.messageId,
+        );
+      }
+      await bob.settleReceiptsForTesting();
+      final acks = <RelayEnvelope>[];
+      for (final e in relay.storedEnvelopes) {
+        if (e.kind == 'ack' &&
+            e.recipientDeviceId == aliceId &&
+            e.senderDeviceId == bobId &&
+            !acks.any((known) => known.messageId == e.messageId)) {
+          acks.add(e);
+        }
+      }
+      expect(acks, hasLength(1));
+      final before = alice.confirmedFamiliesForTesting;
+      await alice.processEnvelopesForTesting(acks);
+      expect(
+        alice.confirmedFamiliesForTesting - before,
+        2,
+        reason: 'ids that are not Alice\'s messages to Bob left marks',
+      );
+      expect(
+        alice.messagesFor(bobId).where((m) => m.outbound).map((m) => m.state),
+        everyElement(DeliveryState.delivered),
+      );
+    });
+
+    test('a receipt names at most 64 messages', () async {
+      final previous = MessengerController.receiptBatchLimit;
+      MessengerController.receiptBatchLimit = 100;
+      addTearDown(() => MessengerController.receiptBatchLimit = previous);
+      final (alice, bob, relay) = await pairOnRelay();
+      final aliceId = alice.identity!.deviceId;
+      final sent = await sendBurst(alice, relay, 80);
+      relay.fetchDelay = const Duration(hours: 1);
+      for (final envelope in sent) {
+        bob.queueReceiptForTesting(
+          contactDeviceId: aliceId,
+          messageId: envelope.messageId,
+          conversationId: envelope.conversationId,
+          send: envelope == sent.last,
+        );
+      }
+      await bob.settleReceiptsForTesting();
+      final acks = <RelayEnvelope>[];
+      for (final e in relay.storedEnvelopes) {
+        if (e.kind == 'ack' &&
+            e.recipientDeviceId == aliceId &&
+            !acks.any((known) => known.messageId == e.messageId)) {
+          acks.add(e);
+        }
+      }
+      expect(acks, hasLength(1));
+      await alice.processEnvelopesForTesting(acks);
+      expect(
+        alice
+            .messagesFor(bob.identity!.deviceId)
+            .where((m) => m.outbound && m.state == DeliveryState.delivered),
+        hasLength(64),
+      );
+    });
+
+    test(
       'a receipt not sent before a crash is sent after the restart',
       () async {
         final vault = _MemoryVaultStore();
@@ -30842,13 +31059,22 @@ void main() {
     /// Alice and Bob in sessions that keep Olm's 40 skipped keys, and what
     /// Bob wrote to Alice meanwhile (a message, then the receipt for one of
     /// hers, 45 times) as a slow relay would hand it over in one go.
-    Future<(MessengerController, MessengerController, List<RelayEnvelope>)>
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        List<RelayEnvelope>,
+        void Function(Duration),
+      )
+    >
     pileUp() async {
       final relay = _FakeRelayClient();
+      var clock = DateTime.now().toUtc();
       Future<MessengerController> device(String name) => _createController(
         relayClient: relay,
         displayName: name,
         ratchetEngine: FakeRatchetEngine(skippedKeyLimit: 40),
+        nowProvider: () => clock,
       );
       final alice = await device('Alice');
       final bob = await device('Bob');
@@ -30887,12 +31113,12 @@ void main() {
         }
       }
       expect(fromBob.length, greaterThanOrEqualTo(90));
-      return (alice, bob, fromBob);
+      return (alice, bob, fromBob, (by) => clock = clock.add(by));
     }
 
     test('a hundred envelopes handed over at once are read in the order they '
         'arrived, not sorted by kind', () async {
-      final (alice, bob, fromBob) = await pileUp();
+      final (alice, bob, fromBob, _) = await pileUp();
       await alice.processEnvelopesForTesting(fromBob);
       final bobId = bob.identity!.deviceId;
       expect(
@@ -30910,21 +31136,105 @@ void main() {
     });
 
     test('an envelope no session can read stops holding its relay lease after '
-        'a few tries', () async {
-      final (alice, _, fromBob) = await pileUp();
+        'a few fetches and some minutes', () async {
+      final (alice, _, fromBob, advance) = await pileUp();
       // Handed over newest first: the oldest keys are gone for good.
       for (final envelope in fromBob.reversed) {
         await alice.processEnvelopesForTesting([envelope]);
       }
       final lost = fromBob.first;
+      Future<void> tryAgain() {
+        alice.noteRelayFetchForTesting();
+        return alice.processEnvelopesForTesting([
+          lost,
+        ], failOnProcessingError: true);
+      }
+
+      await expectLater(tryAgain(), throwsStateError);
       await expectLater(
-        alice.processEnvelopesForTesting([lost], failOnProcessingError: true),
+        tryAgain(),
         throwsStateError,
-        reason: 'the second try still fails the batch',
+        reason: 'a bundle or reset may still be on its way',
       );
-      await alice.processEnvelopesForTesting([
-        lost,
-      ], failOnProcessingError: true);
+      advance(const Duration(minutes: 11));
+      await tryAgain();
+    });
+
+    test('envelopes arrive in order within a run, and a bulk key at the end '
+        'of a pile stays near it', () async {
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+      );
+      addTearDown(alice.dispose);
+      RelayEnvelope envelope(String kind, int i) => RelayEnvelope(
+        protocolVersion: 3,
+        kind: kind,
+        messageId: '$kind-$i',
+        conversationId: 'c',
+        senderAccountId: 'a',
+        senderDeviceId: 'd',
+        recipientDeviceId: 'r',
+        createdAt: DateTime.now().toUtc(),
+      );
+      final pile = [
+        for (var i = 0; i < 100; i++)
+          envelope(i == 90 ? 'ratchet_bulk_key' : 'direct_message', i),
+      ];
+      final ordered = alice.orderForProcessingForTesting(pile);
+      final at = ordered.indexWhere((e) => e.kind == 'ratchet_bulk_key');
+      expect(
+        at,
+        greaterThan(90 - 12),
+        reason: 'the bulk key passed ${90 - at} messages of its chain',
+      );
+      // Static-key setup still goes first.
+      final withSetup = alice.orderForProcessingForTesting([
+        ...pile,
+        envelope('ratchet_bundle', 100),
+      ]);
+      expect(withSetup.first.kind, 'ratchet_bundle');
+      // No message moves ahead of one that arrived more than a run before.
+      for (var i = 0; i < pile.length; i++) {
+        final moved = ordered.indexOf(pile[i]);
+        expect((moved - i).abs(), lessThan(12));
+      }
+    });
+
+    test('an unknown peer\'s pre-key message is never given up; the same '
+        'fetch counts once', () async {
+      var clock = DateTime.now().toUtc();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nowProvider: () => clock,
+      );
+      addTearDown(alice.dispose);
+      const unreadable = RatchetDecryptException('x');
+      for (var i = 0; i < 6; i++) {
+        alice.noteRelayFetchForTesting();
+        clock = clock.add(const Duration(minutes: 20));
+        expect(
+          alice.giveUpOnUnreadableForTesting(
+            'late-bundle',
+            const RatchetUnknownPeerException('x'),
+          ),
+          isFalse,
+        );
+      }
+      // Copies by several routes in one fetch are one try.
+      alice.noteRelayFetchForTesting();
+      for (var i = 0; i < 5; i++) {
+        expect(
+          alice.giveUpOnUnreadableForTesting('copies', unreadable),
+          isFalse,
+        );
+      }
+      clock = clock.add(const Duration(minutes: 20));
+      alice.noteRelayFetchForTesting();
+      expect(alice.giveUpOnUnreadableForTesting('copies', unreadable), isFalse);
+      alice.noteRelayFetchForTesting();
+      expect(alice.giveUpOnUnreadableForTesting('copies', unreadable), isTrue);
     });
 
     test('offers repeated while the hello is slow lose no messages', () async {

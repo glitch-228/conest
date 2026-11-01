@@ -426,9 +426,8 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// account's [NetworkLimiter] (see [NetworkBudgets.email]) keeps it.
   static const Duration defaultSendSpacing = Duration(milliseconds: 1200);
 
-  /// The longest a mail waits for its turn; a longer queue is refused at
-  /// once and the caller tries again later.
-  static const Duration maxSendWait = Duration(seconds: 30);
+  // How long a mail waits for its turn is the budget's: a longer queue is
+  // refused at once and the caller tries again later.
   final Duration sendSpacing;
   final NetworkLimiter _limiter;
 
@@ -438,7 +437,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
 
   Future<void> _waitForSendSlot() async {
     // A LimiterRefused: this account is busy, not the route broken.
-    await _limiter.acquire(maxWait: maxSendWait);
+    await _limiter.acquire();
   }
 
   /// A refusal that says the account sends too fast, or a connection the

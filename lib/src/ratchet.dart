@@ -338,6 +338,12 @@ class RatchetDecryptException implements Exception {
   String toString() => 'RatchetDecryptException: $message';
 }
 
+/// A session-opening (pre-key) message from a peer whose identity key is not
+/// known yet: it may become readable once the peer's bundle arrives.
+class RatchetUnknownPeerException extends RatchetDecryptException {
+  const RatchetUnknownPeerException(super.message);
+}
+
 /// Olm sessions per peer device, with write-before-send persistence.
 ///
 /// Operations for one peer run strictly in order. A step's new state is
@@ -545,6 +551,13 @@ class RatchetSessions {
         'no session for a type ${message.type} message from '
         '${_peerLabel(peerDeviceId)}; have ${_sessionList(state)}',
       );
+      // A pre-key message from a peer not known yet may be read once its
+      // bundle has come.
+      if (message.opensSession) {
+        throw const RatchetUnknownPeerException(
+          'No ratchet session can decrypt this message.',
+        );
+      }
       throw const RatchetDecryptException(
         'No ratchet session can decrypt this message.',
       );
