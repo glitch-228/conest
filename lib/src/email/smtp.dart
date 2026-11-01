@@ -4,9 +4,14 @@ import 'mail_socket.dart';
 
 /// An SMTP server refused a command.
 class SmtpException implements Exception {
-  const SmtpException(this.code, this.message);
+  const SmtpException(this.code, this.message, {this.recipient});
   final int code;
   final String message;
+
+  /// Set only for a refused RCPT command, never AUTH or the message body.
+  final String? recipient;
+  bool get permanentRecipientFailure =>
+      recipient != null && (code == 550 || code == 551 || code == 553);
 
   /// 4xx replies may succeed later.
   bool get temporary => code >= 400 && code < 500;
@@ -62,7 +67,11 @@ abstract final class SmtpSender {
       );
       await expect(250, 'MAIL FROM:<$from>');
       for (final recipient in {to, ...moreRecipients}) {
-        await expect(250, 'RCPT TO:<$recipient>');
+        try {
+          await expect(250, 'RCPT TO:<$recipient>');
+        } on SmtpException catch (error) {
+          throw SmtpException(error.code, error.message, recipient: recipient);
+        }
       }
       await expect(354, 'DATA');
       final body = message

@@ -277,6 +277,20 @@ class DeltaProtocol {
   )?
   saveFile;
   DeltaTokens tokens;
+
+  /// A receive batch spends reply allowances only after its state and
+  /// replies are durably admitted. Parsing/key caches may remain warm.
+  void Function() rollbackPoint() {
+    final savedTokens = tokens;
+    final answers = List<DateTime>.of(_answers);
+    return () {
+      tokens = savedTokens;
+      _answers
+        ..clear()
+        ..addAll(answers);
+    };
+  }
+
   final DateTime Function() _now;
   final Random _random;
 

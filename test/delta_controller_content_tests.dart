@@ -2,11 +2,28 @@ part of 'messenger_controller_test.dart';
 
 class _DeltaPersistenceVault extends _MemoryVaultStore {
   bool failDeltaSaves = false;
+  bool failControlSaves = false;
+  bool failJoinResponseSaves = false;
+  int failedControlSaves = 0;
+  String? blockDeltaMessage;
+  Completer<void>? deltaWriteStarted;
+  Completer<void>? deltaWriteRelease;
   int deltaSaves = 0;
   Completer<void>? blockedWrite;
   Completer<void>? writeStarted;
   @override
   Future<void> save(VaultSnapshot snapshot) async {
+    if ((failControlSaves ||
+            (failJoinResponseSaves &&
+                (snapshot.networkChats['deltaChat']?['joins'] as List? ??
+                        const [])
+                    .isEmpty)) &&
+        ((snapshot.carrierAccounts['deltaChats'] as Map?)?['outbox'] as List? ??
+                const [])
+            .isNotEmpty) {
+      failedControlSaves++;
+      throw const FileSystemException('simulated protocol outbox save failure');
+    }
     final blocked = blockedWrite;
     if (blocked != null) {
       blockedWrite = null;
@@ -15,6 +32,20 @@ class _DeltaPersistenceVault extends _MemoryVaultStore {
       throw const FileSystemException('simulated earlier vault write failure');
     }
     final delta = snapshot.networkChats['deltaChat'];
+    if (blockDeltaMessage != null &&
+        delta != null &&
+        (delta['chats'] as List? ?? const []).any(
+          (c) => (c['messages'] as List? ?? const []).any(
+            (m) => m['id'] == blockDeltaMessage,
+          ),
+        )) {
+      blockDeltaMessage = null;
+      deltaWriteStarted!.complete();
+      await deltaWriteRelease!.future;
+      throw const FileSystemException(
+        'simulated replaced mailbox save failure',
+      );
+    }
     if (failDeltaSaves &&
         delta is Map<String, dynamic> &&
         (delta['chats'] as List? ?? const []).any(
@@ -47,6 +78,8 @@ void deltaContentControllerTests() {
     late String aliceFp, bobFp, aliceMail, bobMail;
     late DateTime clock;
     var storageFails = false;
+    Object? smtpFailure;
+    var smtpFailures = 0;
     Future<void> until(bool Function() condition) async {
       final deadline = DateTime.now().add(const Duration(seconds: 15));
       while (!condition() && DateTime.now().isBefore(deadline)) {
@@ -104,14 +137,23 @@ void deltaContentControllerTests() {
       clock = DateTime.now().toUtc();
       server = await FakeMailServer.start();
       root = await Directory.systemTemp.createTemp('conest-delta-content');
-      aliceVault = _MemoryVaultStore();
+      aliceVault = _DeltaPersistenceVault();
       bobVault = _DeltaPersistenceVault();
       storageFails = false;
+      smtpFailure = null;
+      smtpFailures = 0;
       alice = await _createController(
         relayClient: _FakeRelayClient(),
         displayName: 'Alice',
         vaultStore: aliceVault,
-        mailConnector: server.connect,
+        mailConnector: (host, port, {required bool tls}) async {
+          final error = smtpFailure;
+          if (port == 465 && error != null) {
+            smtpFailures++;
+            throw error;
+          }
+          return server.connect(host, port, tls: tls);
+        },
         nowProvider: () => clock,
         attachmentRootProvider: () async => Directory('${root.path}/alice'),
       );
@@ -177,6 +219,237 @@ void deltaContentControllerTests() {
         hasLength(20),
       );
     });
+
+    test('Delta protocol reply survives a refused quota and restart', () async {
+      final carol = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Carol',
+        mailConnector: server.connect,
+      );
+      addTearDown(carol.dispose);
+      await carol.enableChatmailCarrier('chat.test');
+      await carol.enableDeltaChat();
+      final carolFp = carol.deltaFingerprint!;
+      alice.noteServerSlowDownForTesting(
+        TransportKind.deltaChat,
+        const Duration(minutes: 2),
+      );
+      await carol.joinDeltaChat(alice.deltaInviteLink!);
+      List<dynamic> outbox() =>
+          (aliceVault._snapshot.carrierAccounts['deltaChats'] as Map)['outbox']
+              as List? ??
+          const [];
+      await until(() => outbox().isNotEmpty);
+      await until(() => (server.mailboxes[aliceMail] ?? []).isEmpty);
+      expect(carol.deltaChats.peers[aliceFp]?.verified, isNot(true));
+      alice.dispose();
+      alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        vaultStore: aliceVault,
+        createIdentity: false,
+        mailConnector: server.connect,
+        attachmentRootProvider: () async => Directory('${root.path}/alice'),
+      );
+      await until(
+        () =>
+            (alice.deltaChats.peers[carolFp]?.verified ?? false) &&
+            (carol.deltaChats.peers[aliceFp]?.verified ?? false),
+      );
+      await until(() => outbox().isEmpty);
+    });
+
+    test(
+      'Delta permanently refused reply cannot block a later handshake',
+      () async {
+        final (_, key) = await keys();
+        final auth =
+            ((aliceVault._snapshot.carrierAccounts['deltaChats']
+                        as Map)['tokens']
+                    as Map)['auth']
+                as String;
+        server.recipientRefusals['gone@chat.test'] = 550;
+        server.deliver(
+          aliceMail,
+          await DeltaMail.buildSecureJoinV3(
+            key: key,
+            from: 'gone@chat.test',
+            to: aliceMail,
+            step: 'vc-request-pubkey',
+            auth: auth,
+            password: 'securejoin/$aliceFp/$auth',
+            attachKey: false,
+            messageId: 'gone@example.org',
+            date: clock,
+          ),
+        );
+        await until(() => (server.mailboxes[aliceMail] ?? []).isEmpty);
+        final carol = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Carol',
+          mailConnector: server.connect,
+        );
+        addTearDown(carol.dispose);
+        await carol.enableChatmailCarrier('chat.test');
+        await carol.enableDeltaChat();
+        await carol.joinDeltaChat(alice.deltaInviteLink!);
+        await until(() => carol.deltaChats.peers[aliceFp]?.verified ?? false);
+        await until(
+          () =>
+              ((aliceVault._snapshot.carrierAccounts['deltaChats']
+                              as Map)['outbox']
+                          as List? ??
+                      const [])
+                  .isEmpty,
+        );
+      },
+    );
+
+    test(
+      'Delta refused protocol reply retries once email permits it',
+      () async {
+        smtpFailure = const LimiterRefused(
+          LimiterRefusal.wouldWait,
+          retryIn: Duration(seconds: 1),
+        );
+        final carol = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Carol',
+          mailConnector: server.connect,
+        );
+        addTearDown(carol.dispose);
+        await carol.enableChatmailCarrier('chat.test');
+        await carol.enableDeltaChat();
+        await carol.joinDeltaChat(alice.deltaInviteLink!);
+        await until(
+          () =>
+              ((aliceVault._snapshot.carrierAccounts['deltaChats']
+                              as Map)['outbox']
+                          as List? ??
+                      const [])
+                  .isNotEmpty,
+        );
+        await until(() => smtpFailures > 0);
+        smtpFailure = null;
+        await until(() => carol.deltaChats.peers[aliceFp]?.verified ?? false);
+        await until(
+          () =>
+              ((aliceVault._snapshot.carrierAccounts['deltaChats']
+                              as Map)['outbox']
+                          as List? ??
+                      const [])
+                  .isEmpty,
+        );
+      },
+    );
+
+    test('Delta email account changes keep separate quota histories', () async {
+      final original = alice.limiterForTesting(TransportKind.deltaChat)!;
+      original.pushedBack(retryAfter: const Duration(hours: 1));
+      await alice.enableOwnEmailCarrier(
+        mail: 'other@chat.test',
+        password: 'other-password',
+        imapHost: 'chat.test',
+        smtpHost: 'chat.test',
+      );
+      final ordinary = alice.limiterForTesting(TransportKind.deltaChat)!;
+      expect(ordinary, isNot(same(original)));
+      expect(ordinary.budget.quota, 150);
+      expect(ordinary.budget.window, const Duration(hours: 1));
+      expect(ordinary.isResting, isFalse);
+      ordinary.pushedBack(retryAfter: const Duration(minutes: 2));
+      await alice.setCarrierPaused(TransportKind.deltaChat, true);
+      await alice.setCarrierPaused(TransportKind.deltaChat, false);
+      expect(alice.limiterForTesting(TransportKind.deltaChat), same(ordinary));
+      expect(ordinary.isResting, isTrue);
+    });
+
+    test('Delta protocol reply waits for durable outbox storage', () async {
+      final vault = _DeltaPersistenceVault()..failJoinResponseSaves = true;
+      final carol = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Carol',
+        vaultStore: vault,
+        mailConnector: server.connect,
+      );
+      addTearDown(carol.dispose);
+      await carol.enableChatmailCarrier('chat.test');
+      await carol.enableDeltaChat();
+      await carol.joinDeltaChat(alice.deltaInviteLink!);
+      await until(() => vault.failedControlSaves > 0);
+      final carolMail = carol.emailCarrierConfig!.mail;
+      expect(server.mailboxes[carolMail], isNotEmpty);
+      expect(server.mailboxes[carolMail]!.every((m) => !m.deleted), isTrue);
+      expect(carol.deltaChats.peers[aliceFp]?.verified, isNot(true));
+      expect(carol.deltaChats.joins, isNotEmpty);
+      vault.failJoinResponseSaves = false;
+      await until(() => carol.deltaChats.peers[aliceFp]?.verified ?? false);
+      await until(() => (server.mailboxes[carolMail] ?? []).isEmpty);
+    });
+
+    test(
+      'Delta failed batches retain their protocol reply allowance',
+      () async {
+        final vault = aliceVault as _DeltaPersistenceVault;
+        vault.failControlSaves = true;
+        final (_, key) = await keys();
+        final auth =
+            ((vault._snapshot.carrierAccounts['deltaChats'] as Map)['tokens']
+                    as Map)['auth']
+                as String;
+        final requests = <String>[];
+        for (var i = 0; i < 20; i++) {
+          requests.add(
+            await DeltaMail.buildSecureJoinV3(
+              key: key,
+              from: bobMail,
+              to: aliceMail,
+              step: 'vc-request-pubkey',
+              auth: auth,
+              password: 'securejoin/$aliceFp/$auth',
+              attachKey: false,
+              messageId: 'answer-retry-$i@example.org',
+              date: clock,
+            ),
+          );
+        }
+        for (final request in requests) {
+          server.deliver(aliceMail, request);
+        }
+        await until(() => vault.failedControlSaves >= 2);
+        expect(server.mailboxes[aliceMail], hasLength(20));
+        vault.failControlSaves = false;
+        await until(() => (server.mailboxes[aliceMail] ?? []).isEmpty);
+      },
+    );
+
+    test(
+      'Delta stale save cannot restore a replaced same-address mailbox cursor',
+      () async {
+        final vault = bobVault as _DeltaPersistenceVault;
+        vault.blockDeltaMessage = 'replaced@example.org';
+        vault.deltaWriteStarted = Completer<void>();
+        vault.deltaWriteRelease = Completer<void>();
+        server.deliver(
+          bobMail,
+          await fixture(id: 'replaced@example.org', text: 'in the old mailbox'),
+        );
+        await vault.deltaWriteStarted!.future;
+        await bob.enableOwnEmailCarrier(
+          mail: bobMail,
+          password: bob.emailCarrierConfig!.password,
+          imapHost: 'different.test',
+          smtpHost: 'chat.test',
+        );
+        await bob.setCarrierPaused(TransportKind.deltaChat, true);
+        final replacement = bob.emailCarrierConfig!;
+        vault.deltaWriteRelease!.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(bob.emailCarrierConfig!.sameMailboxAs(replacement), isTrue);
+        expect(bob.emailCarrierConfig!.lastUid, replacement.lastUid);
+        expect(bob.emailCarrierConfig!.deferred, replacement.deferred);
+      },
+    );
 
     testWidgets(
       'Delta metered file waits behind Download and retains its UID across restart',

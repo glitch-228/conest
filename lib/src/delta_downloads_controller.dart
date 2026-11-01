@@ -41,7 +41,7 @@ extension DeltaDownloadsController on MessengerController {
 
   void _setDeltaMailCursor(EmailCarrierConfig cursor) {
     final current = emailCarrierConfig;
-    if (current == null || current.mail != cursor.mail) {
+    if (current == null || !current.sameMailboxAs(cursor)) {
       throw const OtherMailRetryException();
     }
     _snapshot = _snapshot.copyWith(

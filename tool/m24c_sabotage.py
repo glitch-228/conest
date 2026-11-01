@@ -127,6 +127,70 @@ case('separate-cache-pins', 'lib/src/delta_attachments_controller.dart',
      '_deltaDescriptorIndex.containsKey(r.attachmentId)', 'true', CONTROLLER,
      'Delta prefix on a Conest archive file does not change cache ownership or saved references')
 
+case('durable-protocol-reply', 'lib/src/messenger_controller.dart',
+     'outbox: _stageDeltaControls(step.mails)', 'outbox: _deltaControlOutbox',
+     CONTROLLER, 'Delta protocol reply survives a refused quota and restart')
+case('protocol-retry-wake', 'lib/src/delta_outbox_controller.dart',
+     'final wait = error is LimiterRefused ? error.retryIn : null;',
+     'final wait = const Duration(hours: 24);', CONTROLLER,
+     'Delta refused protocol reply retries once email permits it')
+case('email-account-quota', 'lib/src/messenger_controller.dart',
+     "'${kind.name}:${email.mail}:${email.smtpHost}:${email.smtpPort}:${email.chatmail}'",
+     'kind.name', CONTROLLER,
+     'Delta email account changes keep separate quota histories')
+case('stopped-email-send', 'lib/src/email_carrier.dart',
+     '!_started ||\n        generation != _generation ||', 'false ||',
+     'test/email_carrier_test.dart',
+     'stopped email sends do not start after their limiter wait')
+case('cancelled-protocol-send', 'lib/src/email_carrier.dart',
+     '(stillWanted != null && !stillWanted())', 'false',
+     'test/email_carrier_test.dart',
+     'cancelled protocol mail is checked after its limiter wait')
+case('outbox-restored-count', 'lib/src/email/delta_outbox.dart',
+     'value.take(maxCount)', 'value', 'test/delta_outbox_test.dart',
+     'Delta outbox restores only bounded valid protocol mail')
+case('outbox-admission-count', 'lib/src/email/delta_outbox.dart',
+     'next.length >= maxCount', 'false', 'test/delta_outbox_test.dart',
+     'Delta outbox refuses overflow without evicting pending replies')
+case('outbox-admission-size', 'lib/src/email/delta_outbox.dart',
+     'mail.mail.length > maxTotalChars - total', 'false',
+     'test/delta_outbox_test.dart',
+     'Delta outbox refuses overflow without evicting pending replies')
+case('outbox-restored-size', 'lib/src/email/delta_outbox.dart',
+     'mail.length > maxTotalChars - total', 'false',
+     'test/delta_outbox_test.dart',
+     'Delta outbox refuses overflow without evicting pending replies')
+case('protocol-answer-rollback', 'lib/src/delta_protocol.dart',
+     '_answers\n        ..clear()\n        ..addAll(answers);', '',
+     'test/delta_protocol_test.dart',
+     'Delta uncommitted replies do not spend the answer allowance')
+case('batch-answer-rollback', 'lib/src/messenger_controller.dart',
+     '        rollback();', '', CONTROLLER,
+     'Delta failed batches retain their protocol reply allowance')
+case('join-state-rollback', 'lib/src/messenger_controller.dart',
+     "'deltaChat': ?previousChats",
+     "'deltaChat': json", CONTROLLER,
+     'Delta protocol reply waits for durable outbox storage')
+case('mailbox-incarnation', 'lib/src/email_carrier.dart',
+     'base64.encode(mailboxKey) == base64.encode(other.mailboxKey)', 'true',
+     'test/email_carrier_test.dart',
+     'Delta cursor ownership includes the mailbox setup and IMAP endpoint')
+case('mailbox-stale-cursor', 'lib/src/email_carrier.dart',
+     'imapHost == other.imapHost &&\n      imapPort == other.imapPort &&\n      base64.encode(mailboxKey) == base64.encode(other.mailboxKey)', 'true',
+     CONTROLLER, 'Delta stale save cannot restore a replaced same-address mailbox cursor')
+case('permanent-protocol-recipient', 'lib/src/delta_outbox_controller.dart',
+     'if (!error.permanentRecipientFailure) rethrow;', 'if (true) rethrow;',
+     CONTROLLER, 'Delta permanently refused reply cannot block a later handshake')
+case('smtp-recipient-classification', 'lib/src/email/smtp.dart',
+     'recipient != null &&', 'true &&', 'test/delta_outbox_test.dart',
+     'Delta permanent rejection classification preserves auth and temporary errors')
+case('outbox-mail-admission-size', 'lib/src/email/delta_outbox.dart',
+     'mail.mail.length > maxMailChars', 'false', 'test/delta_outbox_test.dart',
+     'Delta outbox refuses overflow without evicting pending replies')
+case('outbox-mail-restored-size', 'lib/src/email/delta_outbox.dart',
+     'mail.length > maxMailChars', 'false', 'test/delta_outbox_test.dart',
+     'Delta outbox restores only bounded valid protocol mail')
+
 
 def main():
     selected = set(sys.argv[1:]) - {'--resume'}

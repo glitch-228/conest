@@ -32,6 +32,7 @@ class FakeMailServer {
   final bool requireEncryption;
   final bool idle;
   final Map<String, String> passwords = {};
+  final Map<String, int> recipientRefusals = {};
   final Map<String, List<FakeMail>> mailboxes = {};
 
   /// UIDs whose bodies were downloaded.
@@ -167,8 +168,13 @@ class FakeMailServer {
         reply(user != null && from == user ? '250 OK' : '553 not yours');
       } else if (upper.startsWith('RCPT TO:')) {
         final recipient = RegExp(r'<([^>]*)>').firstMatch(line)?.group(1);
-        if (recipient != null) to.add(recipient);
-        reply('250 OK');
+        final refusal = recipientRefusals[recipient];
+        if (refusal != null) {
+          reply('$refusal recipient refused');
+        } else {
+          if (recipient != null) to.add(recipient);
+          reply('250 OK');
+        }
       } else if (upper == 'DATA') {
         inData = true;
         reply('354 go');

@@ -9,6 +9,7 @@ import 'package:conest/src/email/delta_content.dart';
 import 'package:conest/src/email/mail_socket.dart';
 import 'package:conest/src/email/smtp.dart';
 import 'package:conest/src/email_carrier.dart';
+import 'package:conest/src/limits/network_limiter.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fake_mail_server.dart';
@@ -105,6 +106,81 @@ void main() {
     refuse = false;
     await bob.sendFrame(alice.localAddress!, frame);
     expect(bob.currentSendSpacing, lessThan(const Duration(milliseconds: 800)));
+  });
+
+  test('stopped email sends do not start after their limiter wait', () async {
+    var smtpConnects = 0;
+    final limiter = NetworkLimiter(const LimiterBudget(name: 'test'));
+    addTearDown(limiter.close);
+    final bob = EmailCarrierChannel(
+      config: account('bob'),
+      limiter: limiter,
+      connector: (host, port, {required bool tls}) async {
+        if (port == 465) smtpConnects++;
+        return server.connect(host, port, tls: tls);
+      },
+      onFrame: (_, _) {},
+    );
+    channels.add(bob);
+    bob.start();
+    limiter.pushedBack(retryAfter: const Duration(milliseconds: 100));
+    final sending = bob.sendMail(['alice@chat.test'], 'unused');
+    final rejected = expectLater(sending, throwsStateError);
+    await bob.stop();
+    await rejected;
+    expect(smtpConnects, 0);
+  });
+
+  test(
+    'Delta cursor ownership includes the mailbox setup and IMAP endpoint',
+    () {
+      final original = account('bob');
+      expect(original.sameMailboxAs(original.copyWith(lastUid: 900)), isTrue);
+      final json = original.toJson();
+      expect(
+        original.sameMailboxAs(
+          EmailCarrierConfig.fromJson({...json, 'imapHost': 'different.test'})!,
+        ),
+        isFalse,
+      );
+      expect(
+        original.sameMailboxAs(
+          EmailCarrierConfig.fromJson({
+            ...json,
+            'mailboxKey': base64.encode(EmailCarrierConfig.newMailboxKey()),
+          })!,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('cancelled protocol mail is checked after its limiter wait', () async {
+    var smtpConnects = 0;
+    var wanted = true;
+    final limiter = NetworkLimiter(const LimiterBudget(name: 'test'));
+    addTearDown(limiter.close);
+    final bob = EmailCarrierChannel(
+      config: account('bob'),
+      limiter: limiter,
+      connector: (host, port, {required bool tls}) async {
+        if (port == 465) smtpConnects++;
+        return server.connect(host, port, tls: tls);
+      },
+      onFrame: (_, _) {},
+    );
+    channels.add(bob);
+    bob.start();
+    limiter.pushedBack(retryAfter: const Duration(milliseconds: 100));
+    final sending = bob.sendMail(
+      ['alice@chat.test'],
+      'unused',
+      stillWanted: () => wanted,
+    );
+    final rejected = expectLater(sending, throwsStateError);
+    wanted = false;
+    await rejected;
+    expect(smtpConnects, 0);
   });
 
   test(

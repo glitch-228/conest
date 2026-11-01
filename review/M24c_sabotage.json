@@ -168,5 +168,95 @@
     "name": "separate-cache-pins",
     "detected": true,
     "log": "/tmp/m24c-sabotage-separate-cache-pins.log"
+  },
+  {
+    "name": "durable-protocol-reply",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-durable-protocol-reply.log"
+  },
+  {
+    "name": "protocol-retry-wake",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-protocol-retry-wake.log"
+  },
+  {
+    "name": "email-account-quota",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-email-account-quota.log"
+  },
+  {
+    "name": "stopped-email-send",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-stopped-email-send.log"
+  },
+  {
+    "name": "cancelled-protocol-send",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-cancelled-protocol-send.log"
+  },
+  {
+    "name": "outbox-restored-count",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-outbox-restored-count.log"
+  },
+  {
+    "name": "outbox-admission-count",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-outbox-admission-count.log"
+  },
+  {
+    "name": "outbox-admission-size",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-outbox-admission-size.log"
+  },
+  {
+    "name": "outbox-restored-size",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-outbox-restored-size.log"
+  },
+  {
+    "name": "protocol-answer-rollback",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-protocol-answer-rollback.log"
+  },
+  {
+    "name": "batch-answer-rollback",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-batch-answer-rollback.log"
+  },
+  {
+    "name": "join-state-rollback",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-join-state-rollback.log"
+  },
+  {
+    "name": "mailbox-incarnation",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-mailbox-incarnation.log"
+  },
+  {
+    "name": "mailbox-stale-cursor",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-mailbox-stale-cursor.log"
+  },
+  {
+    "name": "permanent-protocol-recipient",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-permanent-protocol-recipient.log"
+  },
+  {
+    "name": "smtp-recipient-classification",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-smtp-recipient-classification.log"
+  },
+  {
+    "name": "outbox-mail-admission-size",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-outbox-mail-admission-size.log"
+  },
+  {
+    "name": "outbox-mail-restored-size",
+    "detected": true,
+    "log": "/tmp/m24c-sabotage-outbox-mail-restored-size.log"
   }
 ]

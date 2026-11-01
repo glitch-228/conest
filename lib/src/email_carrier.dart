@@ -262,6 +262,13 @@ class EmailCarrierConfig {
   final Uint8List mailboxKey;
   final bool chatmail;
 
+  /// Cursor writes belong to this setup, even when an address is reused.
+  bool sameMailboxAs(EmailCarrierConfig other) =>
+      mail == other.mail &&
+      imapHost == other.imapHost &&
+      imapPort == other.imapPort &&
+      base64.encode(mailboxKey) == base64.encode(other.mailboxKey);
+
   /// Where reading resumes: the folder's UIDVALIDITY and the last UID read.
   final int? uidValidity;
   final int lastUid;
@@ -491,8 +498,17 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         ).hasMatch(error.message);
   }
 
-  Future<void> _paced(Future<void> Function() send) async {
+  Future<void> _paced(
+    Future<void> Function() send, {
+    bool Function()? stillWanted,
+  }) async {
+    final generation = _generation;
     await _waitForSendSlot();
+    if (!_started ||
+        generation != _generation ||
+        (stillWanted != null && !stillWanted())) {
+      throw StateError('The email send was stopped.');
+    }
     try {
       await send();
     } catch (error) {
@@ -564,6 +580,12 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   Completer<void>? _wake;
 
   EmailCarrierConfig get config => _config;
+
+  /// Storage capacity became available while a receive batch was waiting.
+  void retryPendingMail() {
+    _wake?.complete();
+    _wake = null;
+  }
   EmailCarrierState get state => _state;
   String? get lastError => _lastError;
 
@@ -693,7 +715,11 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   }
 
   /// Sends [message] (RFC 5322 text) from this account to [to].
-  Future<void> sendMail(List<String> to, String message) async {
+  Future<void> sendMail(
+    List<String> to,
+    String message, {
+    bool Function()? stillWanted,
+  }) async {
     if (!_started) throw StateError('The email carrier is stopped.');
     if (to.isEmpty) return;
     await _paced(
@@ -709,6 +735,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
         connector: _connector,
         message: message,
       ),
+      stillWanted: stillWanted,
     );
   }
 

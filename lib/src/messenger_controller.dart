@@ -45,6 +45,8 @@ import 'email/pgp.dart';
 import 'email/delta_content.dart';
 import 'email/delta_download.dart';
 import 'email/delta_mail.dart' show DeltaIncoming;
+import 'email/delta_outbox.dart';
+import 'email/smtp.dart' show SmtpException;
 import 'email/delta_cache.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
@@ -158,6 +160,7 @@ import 'content_routing.dart';
 
 part 'delta_attachments_controller.dart';
 part 'delta_downloads_controller.dart';
+part 'delta_outbox_controller.dart';
 part 'group_call/group_call_controller.dart';
 part 'voice_settings_controller.dart';
 
@@ -6803,6 +6806,9 @@ class MessengerController extends ChangeNotifier {
   DeltaProtocol? _deltaProtocol;
   Future<DeltaProtocol?>? _deltaStarting;
   Future<void> _deltaQueue = Future.value();
+  Timer? _deltaControlRetry;
+  bool _deltaControlSending = false;
+  bool _deltaWaitingForOutbox = false;
   (Object?, DeltaChats)? _deltaChatsCache;
   DeltaChats? _deltaIndexedChats;
   Map<String, AttachmentDescriptor> _deltaDescriptorIndex = {};
@@ -6866,6 +6872,8 @@ class MessengerController extends ChangeNotifier {
 
   /// Turns Delta Chat chats off; the key and the chats are kept.
   Future<void> disableDeltaChat() async {
+    _deltaControlRetry?.cancel();
+    _deltaControlRetry = null;
     final config = _deltaConfig;
     _deltaProtocol = null;
     _deltaStarting = null;
@@ -6898,7 +6906,10 @@ class MessengerController extends ChangeNotifier {
               DeltaTokens.create(Random.secure()),
           now: _now,
         );
-        if (deltaChatEnabled) _deltaProtocol = protocol;
+        if (deltaChatEnabled) {
+          _deltaProtocol = protocol;
+          _retryDeltaControls();
+        }
         notifyListeners();
         return _deltaProtocol;
       } catch (_) {
@@ -6926,23 +6937,38 @@ class MessengerController extends ChangeNotifier {
         rethrow;
       }
       if (protocol == null) return null;
+      final account = _deltaConfig?['addr'];
       final tokens = protocol.tokens;
-      final step = await change(protocol, deltaChats);
+      final rollback = protocol.rollbackPoint();
+      late final DeltaStep step;
       try {
+        step = await change(protocol, deltaChats);
+        if (!deltaChatEnabled || account != _deltaConfig?['addr']) {
+          throw const OtherMailRetryException();
+        }
         await _saveDeltaChats(
           mailCursor == null
               ? step.chats
               : _withDeferredDeltaMails(step.chats, mailCursor),
           mailCursor: mailCursor,
           tokens: protocol.tokens == tokens ? null : protocol.tokens,
+          outbox: _stageDeltaControls(step.mails),
         );
-      } catch (_) {
-        if (retryMailOnSaveFailure && (step.consumed || step.retry)) {
+      } catch (error) {
+        rollback();
+        if (retryMailOnSaveFailure) {
+          if (error is OtherMailRetryException) rethrow;
           throw const OtherMailRetryException();
         }
         rethrow;
       }
-      unawaited(_sendDeltaMails(step.mails));
+      _retryDeltaControls();
+      unawaited(
+        _sendDeltaMails([
+          for (final mail in step.mails)
+            if (mail.chatKey != null && mail.messageId != null) mail,
+        ]),
+      );
       return step;
     });
     _deltaQueue = result.then((_) {}, onError: (Object _) {});
@@ -6986,18 +7012,26 @@ class MessengerController extends ChangeNotifier {
     DeltaChats chats, {
     DeltaTokens? tokens,
     EmailCarrierConfig? mailCursor,
+    List<DeltaControlMail>? outbox,
   }) async {
     final previousCursor = emailCarrierConfig;
+    final previousChats = _snapshot.networkChats['deltaChat'];
+    final previousCache = _deltaChatsCache;
     if (mailCursor != null) _setDeltaMailCursor(mailCursor);
     final json = chats.toJson();
     final config = _deltaConfig;
     _snapshot = _snapshot.copyWith(
       networkChats: {..._snapshot.networkChats, 'deltaChat': json},
-      carrierAccounts: tokens == null || config == null
+      carrierAccounts: (tokens == null && outbox == null) || config == null
           ? null
           : {
               ..._snapshot.carrierAccounts,
-              'deltaChats': {...config, 'tokens': tokens.toJson()},
+              'deltaChats': {
+                ...config,
+                if (tokens != null) 'tokens': tokens.toJson(),
+                if (outbox != null)
+                  'outbox': [for (final mail in outbox) mail.toJson()],
+              },
             },
     );
     _deltaChatsCache = (json, chats);
@@ -7005,7 +7039,28 @@ class MessengerController extends ChangeNotifier {
     try {
       await _saveSnapshotSilently(notify: true);
     } catch (_) {
-      if (mailCursor != null && previousCursor != null) {
+      if (config != null && _deltaConfig?['addr'] == config['addr']) {
+        _snapshot = _snapshot.copyWith(
+          networkChats: {..._snapshot.networkChats, 'deltaChat': ?previousChats}
+            ..removeWhere(
+              (key, _) => key == 'deltaChat' && previousChats == null,
+            ),
+          carrierAccounts: {
+            ..._snapshot.carrierAccounts,
+            'deltaChats': {
+              ..._deltaConfig!,
+              if (outbox != null) 'outbox': config['outbox'],
+              if (tokens != null) 'tokens': config['tokens'],
+            },
+          },
+        );
+        _deltaChatsCache = previousCache;
+        _deltaReferencedChats = null;
+        _recordDeltaCacheReferences();
+      }
+      if (mailCursor != null &&
+          previousCursor != null &&
+          (emailCarrierConfig?.sameMailboxAs(previousCursor) ?? false)) {
         _setDeltaMailCursor(previousCursor);
       }
       rethrow;
@@ -8836,6 +8891,7 @@ class MessengerController extends ChangeNotifier {
     final adapter =
         _carrierTransports[TransportKind.deltaChat] ??
         createEmailCarrierAdapter(sealer: carrierSealer, now: _now);
+    adapter.limiter = _limiterFor(TransportKind.deltaChat);
     final channel = EmailCarrierChannel(
       config: config,
       limiter: _limiterFor(TransportKind.deltaChat),
@@ -8843,7 +8899,7 @@ class MessengerController extends ChangeNotifier {
       now: _now,
       log: (line) => appendDebugLog('Email: $line'),
       onFrame: adapter.receiveFrame,
-      onCursor: (validity, uid) => _saveEmailCursor(config.mail, validity, uid),
+      onCursor: (validity, uid) => _saveEmailCursor(config, validity, uid),
       onStatusChanged: notifyListeners,
       onStalls: () => unawaited(_moveFrozenChatmailAccount()),
       readTimeout: emailReadTimeout,
@@ -8933,10 +8989,14 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
-  void _saveEmailCursor(String mail, int uidValidity, int lastUid) {
+  void _saveEmailCursor(
+    EmailCarrierConfig source,
+    int uidValidity,
+    int lastUid,
+  ) {
     final config = emailCarrierConfig;
     // A loop of a replaced account must not move the new one's position.
-    if (config == null || config.mail != mail) return;
+    if (config == null || !config.sameMailboxAs(source)) return;
     _snapshot = _snapshot.copyWith(
       carrierAccounts: {
         ..._snapshot.carrierAccounts,
@@ -9198,7 +9258,7 @@ class MessengerController extends ChangeNotifier {
     );
     if (budget == null) return null;
     return _limiters.forAccount(
-      kind.name,
+      _limiterAccountKey(kind),
       _limiterBudgetForTesting?.call(kind, budget) ?? budget,
     );
   }
@@ -9220,7 +9280,7 @@ class MessengerController extends ChangeNotifier {
 
   @visibleForTesting
   NetworkLimiter? limiterForTesting(TransportKind kind) =>
-      _limiters.peek(kind.name);
+      _limiters.peek(_limiterAccountKey(kind));
 
   @visibleForTesting
   void noteServerSlowDownForTesting(TransportKind kind, Duration wait) =>
@@ -9229,7 +9289,14 @@ class MessengerController extends ChangeNotifier {
   /// A server named a wait (FLOOD_WAIT, `retry_after`): the account rests
   /// that long, for every chat sending through it.
   void _noteServerSlowDown(TransportKind kind, Duration wait) =>
-      _limiters.peek(kind.name)?.pushedBack(retryAfter: wait);
+      _limiters.peek(_limiterAccountKey(kind))?.pushedBack(retryAfter: wait);
+
+  String _limiterAccountKey(TransportKind kind) {
+    final email = emailCarrierConfig;
+    return kind == TransportKind.deltaChat && email != null
+        ? '${kind.name}:${email.mail}:${email.smtpHost}:${email.smtpPort}:${email.chatmail}'
+        : kind.name;
+  }
 
   /// Joins a carrier to the transport registry, creating a carrier-only
   /// registry if native transports are unavailable.
@@ -9253,6 +9320,7 @@ class MessengerController extends ChangeNotifier {
       },
     );
     await carrier.start();
+    if (kind == TransportKind.deltaChat) _retryDeltaControls();
   }
 
   /// Takes Matrix out of the registry and stops syncing, so nothing is
@@ -41553,6 +41621,8 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _deltaControlRetry?.cancel();
+    _deltaControlRetry = null;
     for (final timer in _blobLeaveTimers.values) {
       timer.cancel();
     }

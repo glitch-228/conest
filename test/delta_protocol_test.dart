@@ -135,6 +135,30 @@ void main() {
     );
   });
 
+  test('Delta uncommitted replies do not spend the answer allowance', () async {
+    final request = await bob.protocol.join(
+      bob.chats,
+      version(alice.protocol.invite, false),
+    );
+    final raw = Uint8List.fromList(utf8.encode(request.mails.single.mail));
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final rollback = alice.protocol.rollbackPoint();
+      for (var i = 0; i < 20; i++) {
+        final step = await alice.protocol.receive(alice.chats, raw);
+        expect(
+          step.mails,
+          hasLength(1),
+          reason: 'admission retry $attempt, mail $i must still get its reply',
+        );
+      }
+      rollback();
+    }
+    expect(
+      (await alice.protocol.receive(alice.chats, raw)).mails,
+      hasLength(1),
+    );
+  });
+
   for (final v3 in [true, false]) {
     group(v3 ? 'Securejoin v3' : 'classic Securejoin', () {
       test(
