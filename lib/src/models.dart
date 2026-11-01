@@ -8,6 +8,7 @@ import 'circumvention/circumvention.dart';
 import 'links/link_preview_data.dart';
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
+import 'energy_budget_setting.dart';
 import 'feature_models.dart';
 import 'group_call/group_call_models.dart';
 import 'content_routing.dart';
@@ -752,6 +753,7 @@ class GlobalConnectivityPreferences {
     this.contentRefusals = ContentRefusals.none,
     this.circumvention = const CircumventionPreferences(),
     this.syncSpeed = SyncSpeed.steady,
+    this.energyBudget = EnergyBudgetSetting.balanced,
     this.shareSettings = false,
     this.settingsChangedAt,
     this.transportPolicies = const {
@@ -804,6 +806,9 @@ class GlobalConnectivityPreferences {
   /// How fast this device syncs with the account's other devices.
   final SyncSpeed syncSpeed;
 
+  /// How much power this device may spend on connections (M25).
+  final EnergyBudgetSetting energyBudget;
+
   /// This device shares its general settings with the account's other
   /// devices that do too (the newest change wins).
   final bool shareSettings;
@@ -837,6 +842,7 @@ class GlobalConnectivityPreferences {
     bool? shareIdentifyingCarriersWithGroups,
     ContentRefusals? contentRefusals,
     SyncSpeed? syncSpeed,
+    EnergyBudgetSetting? energyBudget,
     bool? shareSettings,
     DateTime? settingsChangedAt,
     Map<TransportKind, TransportPolicy>? transportPolicies,
@@ -848,6 +854,7 @@ class GlobalConnectivityPreferences {
       settingsChangedAt: settingsChangedAt ?? this.settingsChangedAt,
       contentRefusals: contentRefusals ?? this.contentRefusals,
       syncSpeed: syncSpeed ?? this.syncSpeed,
+      energyBudget: energyBudget ?? this.energyBudget,
       shareIdentifyingCarriersWithGroups:
           shareIdentifyingCarriersWithGroups ??
           this.shareIdentifyingCarriersWithGroups,
@@ -880,6 +887,8 @@ class GlobalConnectivityPreferences {
     if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
     if (!circumvention.isDefault) 'circumvention': circumvention.toJson(),
     if (syncSpeed != SyncSpeed.steady) 'syncSpeed': syncSpeed.name,
+    if (energyBudget != EnergyBudgetSetting.balanced)
+      'energyBudget': energyBudget.name,
     if (shareSettings) 'shareSettings': true,
     if (settingsChangedAt != null)
       'settingsChangedAt': settingsChangedAt!.toUtc().toIso8601String(),
@@ -912,6 +921,7 @@ class GlobalConnectivityPreferences {
         (value) => value.name == json['syncSpeed'],
         orElse: () => SyncSpeed.steady,
       ),
+      energyBudget: EnergyBudgetSetting.parse(json['energyBudget']),
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])

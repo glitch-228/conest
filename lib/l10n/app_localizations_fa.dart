@@ -6543,4 +6543,25 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get bitchatStartChatFailed =>
       'شروع این گفتگو ممکن نشد. دوباره تلاش کنید.';
+
+  @override
+  String get energyBudgetTitle => 'مصرف انرژی';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'اتصال‌ها چقدر از باتری مصرف کنند. حالت صرفه‌جویی هنگام بی‌شارژری حداقل را نگه می‌دارد.';
+
+  @override
+  String get energyBudgetBalanced => 'متعادل';
+
+  @override
+  String get energyBudgetEco => 'صرفه‌جویی: بیشتر فقط هنگام شارژ';
+
+  @override
+  String get energyBudgetFast => 'سریع';
+
+  @override
+  String airtimeBudgetUsed(int percent) {
+    return 'زمان پخش مصرف‌شده در دقیقهٔ گذشته: $percent٪';
+  }
 }

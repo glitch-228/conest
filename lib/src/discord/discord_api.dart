@@ -2,9 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../limits/network_limiter.dart';
+
 /// A Discord REST call that failed.
-class DiscordException implements Exception {
-  const DiscordException(this.path, this.code, this.message, {this.retryAfter});
+class DiscordException implements Exception, ServerSlowDown {
+  const DiscordException(
+    this.path,
+    this.code,
+    this.message, {
+    this.retryAfter,
+    this.global = false,
+  });
 
   final String path;
 
@@ -15,9 +23,17 @@ class DiscordException implements Exception {
   /// Seconds Discord asked to wait (429).
   final double? retryAfter;
 
+  /// The 429 is the account-wide limit, not one route's bucket.
+  final bool global;
+
   bool get unauthorized => code == 401;
   bool get forbidden => code == 403;
   bool get rateLimited => code == 429;
+
+  @override
+  Duration? get slowDownFor => rateLimited && global
+      ? Duration(milliseconds: ((retryAfter ?? 0) * 1000).ceil())
+      : null;
 
   @override
   String toString() => 'Discord $path failed ($code): $message';
@@ -129,7 +145,11 @@ class HttpDiscordApi implements DiscordApi {
               ? decoded['message'] as String
               : 'failed')
           .replaceAll(token, '***'),
-      retryAfter: retry is num ? retry.toDouble() : null,
+      // A hostile value (Infinity, negative, huge) is dropped or capped.
+      retryAfter: retry is num && retry.isFinite && retry >= 0
+          ? (retry > 86400 ? 86400.0 : retry.toDouble())
+          : null,
+      global: decoded is Map && decoded['global'] == true,
     );
   }
 

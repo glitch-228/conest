@@ -4,7 +4,11 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:conest/src/carrier.dart';
+import 'package:conest/src/limits/network_limiter.dart';
+import 'package:conest/src/limits/radio_airtime.dart';
+import 'package:conest/src/telegram/telegram_bot_api.dart';
 import 'package:conest/src/matrix_carrier.dart';
+import 'package:conest/src/meshcore_carrier.dart';
 import 'package:conest/src/models.dart';
 import 'package:conest/src/transport.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -393,6 +397,357 @@ void main() {
       }
       await Future<void>.delayed(Duration.zero);
       expect(receipts.length, 1);
+    });
+
+    test(
+      'an account limiter paces frames, and a flood wait is shared',
+      () async {
+        var now = DateTime.utc(2026, 10, 30, 12);
+        final limiter = NetworkLimiter(
+          const LimiterBudget(
+            name: 'test',
+            gap: Duration(milliseconds: 5),
+            burst: 100,
+            maxWait: Duration(seconds: 30),
+          ),
+          now: () => now,
+        );
+        adapter.limiter = limiter;
+        await adapter.start();
+        final route = (await adapter.discoverRoutes(peer)).single;
+        TransportEnvelope envelope(String id, int size) => TransportEnvelope(
+          id: id,
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(size),
+          createdAt: DateTime.utc(2026, 10, 30),
+        );
+        // Frames pass the limiter (three frames of a 50 KB envelope).
+        await adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: envelope('m1', 50 * 1024),
+        );
+        expect(channel.sent, hasLength(3));
+        // The server named a wait on another chat's send: the account rests.
+        limiter.pushedBack(retryAfter: const Duration(minutes: 5));
+        // This envelope would wait out its deadline: refused before any frame.
+        await expectLater(
+          adapter.sendEnvelope(
+            peer: peer,
+            route: route,
+            envelope: envelope('m2', 50 * 1024),
+          ),
+          throwsA(isA<LimiterRefused>()),
+        );
+        expect(channel.sent, hasLength(3), reason: 'no half-sent envelope');
+        // Time passes; the account may send again.
+        now = now.add(const Duration(minutes: 6));
+        await adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: envelope('m3', 50 * 1024),
+        );
+        expect(channel.sent, hasLength(6));
+      },
+    );
+
+    test(
+      'a server\'s slow-down in a frame\'s error makes the account rest',
+      () async {
+        final limiter = NetworkLimiter(
+          const LimiterBudget(name: 'test', maxWait: Duration(seconds: 30)),
+        );
+        final failing = _FailingChannel(
+          const TelegramBotException(
+            'sendMessage',
+            429,
+            'Too Many Requests',
+            retryAfter: 11,
+          ),
+        );
+        final telegram = CarrierTransportAdapter(
+          kind: TransportKind.nostr,
+          sealer: sealer,
+          framing: CarrierFraming.nostr,
+        )..attach(failing);
+        telegram.limiter = limiter;
+        await telegram.start();
+        final route = (await telegram.discoverRoutes(peer)).single;
+        await expectLater(
+          telegram.sendEnvelope(
+            peer: peer,
+            route: route,
+            envelope: TransportEnvelope(
+              id: 'm1',
+              recipientDeviceId: 'dev-bob',
+              bytes: pattern(100),
+              createdAt: DateTime.utc(2026, 10, 30),
+            ),
+          ),
+          throwsA(isA<TelegramBotException>()),
+        );
+        expect(limiter.restRemaining.inSeconds, inInclusiveRange(10, 11));
+      },
+    );
+
+    test('a radio sends within its airtime budget and skips spare copies '
+        'when it runs low', () async {
+      var now = DateTime.utc(2026, 10, 30, 12);
+      final limiter = NetworkLimiter(
+        RadioAirtime.forRate(name: 'test radio', bitsPerSecond: 8000),
+        now: () => now,
+      );
+      // 8000 bit/s with half kept for others: 30000 bytes a minute.
+      expect(limiter.budget.quota, 30000);
+      final small = NetworkLimiter(
+        RadioAirtime.conservative('test radio'),
+        now: () => now,
+      );
+      adapter.limiter = small;
+      await adapter.start();
+      final route = (await adapter.discoverRoutes(peer)).single;
+      TransportEnvelope envelope(String id, int size) => TransportEnvelope(
+        id: id,
+        recipientDeviceId: 'dev-bob',
+        bytes: pattern(size),
+        createdAt: DateTime.utc(2026, 10, 30),
+      );
+      expect(RadioAirtime.allowsExtraCopy(small), isTrue);
+      await adapter.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: envelope('m1', 300),
+      );
+      expect(small.usedShare, greaterThan(0.5));
+      expect(
+        RadioAirtime.allowsExtraCopy(small),
+        isFalse,
+        reason: 'over half the minute used',
+      );
+      // The account rests (a flood wait): the envelope would wait out its
+      // deadline and is refused before any frame leaves.
+      small.pushedBack(retryAfter: const Duration(hours: 1));
+      final framesBefore = channel.sent.length;
+      await expectLater(
+        adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: envelope('m2', 300),
+        ),
+        throwsA(isA<LimiterRefused>()),
+      );
+      expect(channel.sent.length, framesBefore);
+      now = now.add(const Duration(hours: 1));
+      // The minute passes: the budget is free again.
+      now = now.add(const Duration(minutes: 2));
+      expect(small.usedShare, 0);
+      expect(RadioAirtime.allowsExtraCopy(small), isTrue);
+    });
+
+    test('a long message on a radio waits its minutes, it is not refused '
+        'for being long', () async {
+      // A radio budget in miniature (a window is 60 ms): 450 bytes a window.
+      final limiter = NetworkLimiter(
+        const LimiterBudget(
+          name: 'radio',
+          costInBytes: true,
+          quota: 450,
+          window: Duration(milliseconds: 60),
+          maxQueue: 16,
+          maxWait: Duration(milliseconds: 100),
+        ),
+      );
+      final radio = CarrierTransportAdapter(
+        kind: TransportKind.nostr,
+        sealer: sealer,
+        framing: const CarrierFraming(maxSealedBytes: 4096, chunkBytes: 200),
+        sendAttemptTimeout: RadioAirtime.sendAttemptTimeout,
+      )..attach(channel);
+      radio.limiter = limiter;
+      await radio.start();
+      final route = (await radio.discoverRoutes(peer)).single;
+      // About 2 KB: several windows, more than maxWait, less than a full
+      // sealed envelope needs.
+      final started = DateTime.now();
+      await radio.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'long',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(2000),
+          createdAt: DateTime.utc(2026, 10, 30),
+        ),
+      );
+      expect(channel.sent, hasLength(greaterThan(8)));
+      expect(
+        DateTime.now().difference(started),
+        greaterThan(const Duration(milliseconds: 100)),
+      );
+    });
+
+    test('a 4 KB envelope over a base64 radio is admitted', () async {
+      // A radio budget in miniature (a window is 60 ms): 450 bytes a window.
+      // The envelope's raw bytes fit nine windows; on air (base64) it needs
+      // thirteen.
+      final text = _AirtimeChannel('npub-me|wss://relay.one');
+      final radio = CarrierTransportAdapter(
+        kind: TransportKind.meshCore,
+        sealer: sealer,
+        framing: meshCoreFraming,
+        sendAttemptTimeout: RadioAirtime.sendAttemptTimeout,
+      )..attach(text);
+      radio.limiter = NetworkLimiter(
+        const LimiterBudget(
+          name: 'radio',
+          costInBytes: true,
+          quota: 450,
+          window: Duration(milliseconds: 60),
+          maxQueue: 64,
+          maxWait: Duration(milliseconds: 100),
+        ),
+      );
+      await radio.start();
+      const meshPeer = TransportPeer(
+        deviceId: 'dev-bob',
+        transportAddresses: {
+          TransportKind.meshCore: 'npub-bob|wss://relay.two',
+        },
+      );
+      final route = (await radio.discoverRoutes(meshPeer)).single;
+      await radio.sendEnvelope(
+        peer: meshPeer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'four-kb',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(4000),
+          createdAt: DateTime.utc(2026, 10, 30),
+        ),
+      );
+      expect(text.sent, isNotEmpty);
+    });
+
+    test('waiting for a turn never outlasts the attempt', () async {
+      final limiter = NetworkLimiter(
+        const LimiterBudget(name: 'net', maxWait: Duration(seconds: 30)),
+      );
+      final hooked = _HookChannel('npub-me|wss://relay.one');
+      final timed = CarrierTransportAdapter(
+        kind: TransportKind.nostr,
+        sealer: sealer,
+        framing: CarrierFraming.nostr,
+        sendAttemptTimeout: const Duration(seconds: 4),
+      )..attach(hooked);
+      timed.limiter = limiter;
+      // A flood wait named by another chat after the first frame went out.
+      hooked.afterSend = () =>
+          limiter.pushedBack(retryAfter: const Duration(minutes: 5));
+      await timed.start();
+      final route = (await timed.discoverRoutes(peer)).single;
+      await expectLater(
+        timed.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: TransportEnvelope(
+            id: 'm1',
+            recipientDeviceId: 'dev-bob',
+            bytes: pattern(50 * 1024),
+            createdAt: DateTime.utc(2026, 10, 30),
+          ),
+        ),
+        throwsA(isA<LimiterRefused>()),
+      );
+      expect(hooked.sent, hasLength(1));
+    });
+
+    test('a frame with no ack code makes no delivery receipt', () async {
+      final radio = _AckingChannel('npub-me|wss://relay.one', zeroIds: true);
+      final tracked = CarrierTransportAdapter(
+        kind: TransportKind.nostr,
+        sealer: sealer,
+        framing: CarrierFraming.nostr,
+      )..attach(radio);
+      await tracked.start();
+      final receipts = <CarrierDeliveryReceipt>[];
+      final subscription = tracked.deliveryReceipts.listen(receipts.add);
+      addTearDown(subscription.cancel);
+      final route = (await tracked.discoverRoutes(peer)).single;
+      await tracked.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'm1',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(100),
+          createdAt: DateTime.utc(2026, 10, 30),
+        ),
+      );
+      radio.ack(0);
+      await Future<void>.delayed(Duration.zero);
+      expect(receipts, isEmpty);
+    });
+
+    test('a confirmation nobody claimed within 30 s is forgotten', () async {
+      var now = DateTime.utc(2026, 10, 30, 12);
+      for (final late in [false, true]) {
+        final radio = _AckingChannel('npub-me|wss://relay.one');
+        final tracked = CarrierTransportAdapter(
+          kind: TransportKind.nostr,
+          sealer: sealer,
+          framing: CarrierFraming.nostr,
+          now: () => now,
+        )..attach(radio);
+        await tracked.start();
+        final receipts = <CarrierDeliveryReceipt>[];
+        final subscription = tracked.deliveryReceipts.listen(receipts.add);
+        addTearDown(subscription.cancel);
+        final route = (await tracked.discoverRoutes(peer)).single;
+        radio.ack(100); // before anything was sent
+        await Future<void>.delayed(Duration.zero);
+        now = now.add(Duration(seconds: late ? 31 : 5));
+        await tracked.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: TransportEnvelope(
+            id: 'm1',
+            recipientDeviceId: 'dev-bob',
+            bytes: pattern(100),
+            createdAt: DateTime.utc(2026, 10, 30),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(receipts.length, late ? 0 : 1, reason: 'late: $late');
+      }
+    });
+
+    test('a confirmation that beats the send call still counts', () async {
+      final radio = _AckingChannel(
+        'npub-me|wss://relay.one',
+        ackBeforeReturn: true,
+      );
+      final tracked = CarrierTransportAdapter(
+        kind: TransportKind.nostr,
+        sealer: sealer,
+        framing: CarrierFraming.nostr,
+      )..attach(radio);
+      await tracked.start();
+      final receipts = <CarrierDeliveryReceipt>[];
+      final subscription = tracked.deliveryReceipts.listen(receipts.add);
+      addTearDown(subscription.cancel);
+      final route = (await tracked.discoverRoutes(peer)).single;
+      await tracked.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: TransportEnvelope(
+          id: 'm1',
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(50 * 1024),
+          createdAt: DateTime.utc(2026),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(receipts.single.envelopeId, 'm1');
     });
 
     test('a cancelled send puts no more frames on air', () async {
@@ -786,7 +1141,18 @@ class _XorSealer implements CarrierSealer {
 }
 
 class _AckingChannel implements AcknowledgingCarrierChannel {
-  _AckingChannel(this.localAddress, {this.ackAtOnce = false});
+  _AckingChannel(
+    this.localAddress, {
+    this.ackAtOnce = false,
+    this.ackBeforeReturn = false,
+    this.zeroIds = false,
+  });
+
+  /// The network gives no ack code (id 0), as a radio may for some messages.
+  final bool zeroIds;
+
+  /// The confirmation comes before the send call returns.
+  final bool ackBeforeReturn;
 
   /// The far radio confirms each frame as soon as it is sent.
   final bool ackAtOnce;
@@ -807,8 +1173,9 @@ class _AckingChannel implements AcknowledgingCarrierChannel {
 
   @override
   Future<int> sendTrackedFrame(String address, Uint8List frame) async {
-    final id = _next++;
+    final id = zeroIds ? 0 : _next++;
     sentIds.add(id);
+    if (ackBeforeReturn) ack(id);
     if (ackAtOnce) scheduleMicrotask(() => ack(id));
     return id;
   }
@@ -817,6 +1184,41 @@ class _AckingChannel implements AcknowledgingCarrierChannel {
   Stream<({int frameId, bool ok})> get frameAcks => _acks.stream;
 
   void ack(int id, {bool ok = true}) => _acks.add((frameId: id, ok: ok));
+}
+
+class _HookChannel extends _RecordingChannel {
+  _HookChannel(super.localAddress);
+
+  void Function()? afterSend;
+
+  @override
+  Future<void> sendFrame(String address, Uint8List frame) async {
+    await super.sendFrame(address, frame);
+    afterSend?.call();
+  }
+}
+
+class _FailingChannel implements CarrierChannel {
+  _FailingChannel(this.error);
+  final Object error;
+
+  @override
+  String get localAddress => 'npub-me|wss://relay.one';
+
+  @override
+  String get routeLabel => 'failing';
+
+  @override
+  Future<void> sendFrame(String address, Uint8List frame) async => throw error;
+}
+
+/// A channel that carries frames as base64 text, like MeshCore.
+class _AirtimeChannel extends _RecordingChannel
+    implements AirtimeSizedCarrierChannel {
+  _AirtimeChannel(super.localAddress);
+
+  @override
+  int airBytes(int frameLength) => (frameLength + 1 + 2) ~/ 3 * 4;
 }
 
 class _RecordingChannel implements CarrierChannel {

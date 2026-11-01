@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'carrier.dart';
+import 'limits/radio_airtime.dart';
 import 'meshcore/companion.dart';
 import 'nostr/secp256k1.dart' show hexDecode, hexEncode;
 import 'radio/android_radio_link.dart';
@@ -161,7 +162,11 @@ class MeshCoreText {
 /// as a direct "command data" message (encrypted by MeshCore with the two
 /// radios' keys, and not shown on their screens).
 class MeshCoreCarrierChannel
-    implements ManagedCarrierChannel, PeerAwareCarrierChannel {
+    implements
+        ManagedCarrierChannel,
+        PeerAwareCarrierChannel,
+        AirtimeSizedCarrierChannel,
+        AcknowledgingCarrierChannel {
   MeshCoreCarrierChannel({
     required this.config,
     required this.onFrame,
@@ -289,8 +294,26 @@ class MeshCoreCarrierChannel
     _setState(MeshCoreCarrierState.stopped);
   }
 
+  /// Acknowledgement codes of the frames sent (the radio's own: a frame is
+  /// named by the code its ack will carry).
+  final _frameAcks = StreamController<({int frameId, bool ok})>.broadcast();
+
   @override
-  Future<void> sendFrame(String address, Uint8List frame) async {
+  Stream<({int frameId, bool ok})> get frameAcks => _frameAcks.stream;
+
+  @override
+  Future<void> sendFrame(String address, Uint8List frame) =>
+      _sendFrame(address, frame);
+
+  @override
+  Future<int> sendTrackedFrame(String address, Uint8List frame) =>
+      _sendFrame(address, frame);
+
+  /// MeshCore text carries the frame in base64 behind a version byte.
+  @override
+  int airBytes(int frameLength) => (frameLength + 1 + 2) ~/ 3 * 4;
+
+  Future<int> _sendFrame(String address, Uint8List frame) async {
     final radio = _radio;
     if (!_started || radio == null) {
       throw StateError('The MeshCore radio is not connected.');
@@ -301,7 +324,7 @@ class MeshCoreCarrierChannel
       await radio.ensureContact(to.publicKey, _contactName(to));
       _onRadio.add(address);
     }
-    await radio.sendText(
+    return radio.sendText(
       to.prefix,
       ascii.encode(base64Encode([_payloadVersion, ...frame])),
       timestamp: _now().millisecondsSinceEpoch ~/ 1000,
@@ -345,7 +368,10 @@ class MeshCoreCarrierChannel
         radio = await MeshCoreRadio.open(link);
         if (!current()) break;
         final subscription = radio.messages.listen(_receive);
-        final acks = radio.confirmed.listen((code) => onAck?.call(code));
+        final acks = radio.confirmed.listen((code) {
+          onAck?.call(code);
+          if (!_frameAcks.isClosed) _frameAcks.add((frameId: code, ok: true));
+        });
         _radio = radio;
         _onRadio.clear();
         final key = radio.publicKey;
@@ -440,7 +466,7 @@ CarrierTransportAdapter createMeshCoreCarrierAdapter({
   sealer: sealer,
   framing: meshCoreFraming,
   frameSpacing: const Duration(seconds: 3),
-  sendAttemptTimeout: const Duration(minutes: 5),
+  sendAttemptTimeout: RadioAirtime.sendAttemptTimeout,
   isValidAddress: isValidMeshCoreAddress,
   now: now,
 );

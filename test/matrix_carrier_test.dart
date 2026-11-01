@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:conest/src/limits/network_limiter.dart';
 import 'package:conest/src/matrix_carrier.dart';
 import 'package:conest/src/matrix_client.dart';
 import 'package:conest/src/transport.dart';
@@ -298,6 +299,46 @@ void main() {
       },
     );
 
+    test('a later frame never waits past the attempt timeout', () async {
+      final limiter = NetworkLimiter(
+        const LimiterBudget(name: 'matrix', maxWait: Duration(seconds: 30)),
+      );
+      final sent = <(MatrixAddress, Map<String, Object?>)>[];
+      final channel = _RecordingChannel(sent)
+        ..afterSend = () =>
+            limiter.pushedBack(retryAfter: const Duration(minutes: 5));
+      final adapter =
+          MatrixTransportAdapter(
+            sealer: _PrefixSealer('alice'),
+            channel: channel,
+          )..attach(
+            MatrixSession(
+              homeserver: Uri.parse('https://hs.example'),
+              userId: '@alice:fake.test',
+              deviceId: 'CONEST_alice',
+              accessToken: 'unused',
+            ),
+          );
+      adapter.limiter = limiter;
+      final route = (await adapter.discoverRoutes(
+        peer('dev-bob', 'bob'),
+      )).single;
+      await expectLater(
+        adapter.sendEnvelope(
+          peer: peer('dev-bob', 'bob'),
+          route: route,
+          envelope: TransportEnvelope(
+            id: 'big',
+            recipientDeviceId: 'dev-bob',
+            bytes: Uint8List(100 * 1024),
+            createdAt: DateTime.now().toUtc(),
+          ),
+        ),
+        throwsA(isA<LimiterRefused>()),
+      );
+      expect(sent, hasLength(1));
+    });
+
     test('a peer without a Matrix address gets no route', () async {
       final alice = await adapter('alice', 'alice-pass');
       expect(
@@ -401,11 +442,15 @@ class _PrefixSealer implements MatrixCarrierSealer {
 class _RecordingChannel implements MatrixCarrierChannel {
   _RecordingChannel(this.sent);
   final List<(MatrixAddress, Map<String, Object?>)> sent;
+  void Function()? afterSend;
 
   @override
   Future<void> sendFrame(
     MatrixAddress to,
     Map<String, Object?> frame,
     String transactionId,
-  ) async => sent.add((to, frame));
+  ) async {
+    sent.add((to, frame));
+    afterSend?.call();
+  }
 }

@@ -49,6 +49,9 @@ import 'email/delta_cache.dart';
 import 'nostr_direct.dart';
 import 'radio_chats.dart';
 import 'carrier.dart';
+import 'limits/network_budgets.dart';
+import 'limits/network_limiter.dart';
+import 'limits/radio_airtime.dart';
 import 'circumvention/circumvention.dart';
 import 'circumvention/lan_beacon_codec.dart';
 import 'attachment_safety.dart';
@@ -146,8 +149,10 @@ import 'storage.dart';
 import 'storage_capacity.dart';
 import 'tor_carrier.dart';
 import 'transport.dart';
+import 'transfer/block_sources.dart';
 import 'transfer/gateway_election.dart';
 import 'transfer/own_device_sync_policy.dart';
+import 'transfer/relay_blobs.dart';
 import 'transfer/route_striper.dart';
 import 'content_routing.dart';
 
@@ -372,6 +377,7 @@ const Set<String> _v2PairwiseKinds = <String>{
   'attachment_cancel',
   'attachment_pause_control',
   'attachment_progress',
+  'attachment_blobs',
   'group_file_part',
   'message_edit',
   'message_delete',
@@ -701,6 +707,10 @@ class MessengerController extends ChangeNotifier {
                     ? PlatformBridgePowerSource(_platformBridge)
                     : null,
               ));
+    // Always the user's current choice, whatever read it.
+    _energyPolicy.settingSource = () =>
+        _snapshot.identity?.connectivity.energyBudget ??
+        EnergyBudgetSetting.balanced;
     voiceMessageService = VoiceMessageService(
       platformBridge: _platformBridge,
       applicationSupportDirectory: _dataRootProvider,
@@ -1064,6 +1074,7 @@ class MessengerController extends ChangeNotifier {
     // A key released while the window was elsewhere never reaches us.
     if (!focused) unawaited(releasePushToTalk());
   }
+
   DateTime? _appBackgroundedAtUtc;
   NetworkCostClass _networkCostClass = NetworkCostClass.unmetered;
   String? _statusMessage;
@@ -2276,14 +2287,26 @@ class MessengerController extends ChangeNotifier {
 
   /// How much slower background upkeep (polls, heartbeats) runs on this
   /// power: as is on mains or an unmetered network, half as often on
-  /// battery, a quarter as often in battery saver. Nothing the user waits
+  /// battery, an eighth as often in battery saver. Nothing the user waits
   /// for (an open chat, a transfer) slows down.
-  int get _backgroundEnergyFactor =>
-      switch (_energyPolicy.modeFor(_networkCostClass)) {
-        EnergyMode.unconstrained => 1,
-        EnergyMode.limited => 2,
-        EnergyMode.saver => 4,
-      };
+  int get _backgroundEnergyFactor => _currentEnergyBudget.pollFactor;
+
+  /// What the device may spend now: the user's Connectivity choice (balanced,
+  /// eco, fast) with the power state (M25).
+  EnergyBudget get _currentEnergyBudget {
+    return _energyPolicy.budgetFor(_networkCostClass);
+  }
+
+  @visibleForTesting
+  EnergyBudget get energyBudgetForTesting => _currentEnergyBudget;
+
+  /// Chooses how much power connections may use.
+  Future<void> setEnergyBudget(EnergyBudgetSetting setting) async {
+    final me = _requireIdentity();
+    await updateGlobalConnectivity(
+      me.connectivity.copyWith(energyBudget: setting),
+    );
+  }
 
   /// When a transfer last moved through a relay that has to be polled, per
   /// contact; the fast transfer poll runs only for a while after that.
@@ -4302,6 +4325,15 @@ class MessengerController extends ChangeNotifier {
 
   /// How this device's link to [deviceId] fares now.
   LinkStatus linkStatusFor(String deviceId) {
+    final status = _reachabilityLinkStatus(deviceId);
+    // Nothing heard either way, but every send lately failed.
+    return status == LinkStatus.unknown &&
+            (_transportRegistry?.failingToReach(deviceId) ?? false)
+        ? LinkStatus.failing
+        : status;
+  }
+
+  LinkStatus _reachabilityLinkStatus(String deviceId) {
     final record = _reachability.recordByDeviceId(deviceId);
     if (record == null) return LinkStatus.unknown;
     final now = _now().toUtc();
@@ -5888,6 +5920,8 @@ class MessengerController extends ChangeNotifier {
     final channel = TelegramCarrierChannel(
       config: config,
       api: _telegramNetwork.botApi(config.token),
+      onRateLimited: (wait) =>
+          _noteServerSlowDown(TransportKind.telegram, wait),
       onFrame: adapter.receiveFrame,
       onStatusChanged: notifyListeners,
       log: (line) => appendDebugLog(line),
@@ -5950,6 +5984,7 @@ class MessengerController extends ChangeNotifier {
     final channel = DiscordCarrierChannel(
       config: config,
       api: _discordNetwork.api(config.token, DiscordAuth.bot),
+      onRateLimited: (wait) => _noteServerSlowDown(TransportKind.discord, wait),
       pollInterval: _discordNetwork.pollInterval,
       slowdown: () =>
           (_appInForeground ? 1 : 3) *
@@ -8803,6 +8838,7 @@ class MessengerController extends ChangeNotifier {
         createEmailCarrierAdapter(sealer: carrierSealer, now: _now);
     final channel = EmailCarrierChannel(
       config: config,
+      limiter: _limiterFor(TransportKind.deltaChat),
       connector: _mailConnector,
       now: _now,
       log: (line) => appendDebugLog('Email: $line'),
@@ -9148,11 +9184,60 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// One limiter per network account, shared by every chat, group and own
+  /// device that sends through it (M25). The key is the network until
+  /// several accounts per network exist (M45).
+  late final LimiterBook _limiters = LimiterBook();
+
+  NetworkLimiter? _limiterFor(TransportKind kind) {
+    final budget = NetworkBudgets.forKind(
+      kind,
+      chatmail: emailCarrierConfig?.chatmail ?? false,
+      // Reticulum over TCP is no radio: no airtime budget.
+      radio: reticulumCarrierConfig?.isRadio ?? true,
+    );
+    if (budget == null) return null;
+    return _limiters.forAccount(
+      kind.name,
+      _limiterBudgetForTesting?.call(kind, budget) ?? budget,
+    );
+  }
+
+  /// Lets a test give a network a faster budget than its real one, so a
+  /// test that runs in real time does not wait for real airtime.
+  LimiterBudget Function(TransportKind kind, LimiterBudget budget)?
+  _limiterBudgetForTesting;
+
+  @visibleForTesting
+  set limiterBudgetForTesting(
+    LimiterBudget Function(TransportKind kind, LimiterBudget budget)? value,
+  ) => _limiterBudgetForTesting = value;
+
+  /// How much of a radio's airtime budget is used (0 to 1), null when the
+  /// radio has no carrier running. Shown on the radio's page.
+  double? radioAirtimeUsed(TransportKind kind) =>
+      _limiters.peek(kind.name)?.usedShare;
+
+  @visibleForTesting
+  NetworkLimiter? limiterForTesting(TransportKind kind) =>
+      _limiters.peek(kind.name);
+
+  @visibleForTesting
+  void noteServerSlowDownForTesting(TransportKind kind, Duration wait) =>
+      _noteServerSlowDown(kind, wait);
+
+  /// A server named a wait (FLOOD_WAIT, `retry_after`): the account rests
+  /// that long, for every chat sending through it.
+  void _noteServerSlowDown(TransportKind kind, Duration wait) =>
+      _limiters.peek(kind.name)?.pushedBack(retryAfter: wait);
+
   /// Joins a carrier to the transport registry, creating a carrier-only
   /// registry if native transports are unavailable.
   Future<void> _attachCarrier(TransportKind kind) async {
     final carrier = _carrierTransports[kind];
     if (carrier == null) return;
+    carrier.limiter ??= _limiterFor(kind);
+    carrier.channelPacesFrames = kind == TransportKind.deltaChat;
     if (_snapshot.identity == null || !_carrierAllowed(kind)) {
       await _detachCarrier(kind);
       return;
@@ -9191,6 +9276,7 @@ class MessengerController extends ChangeNotifier {
       await _detachMatrixTransport();
       return;
     }
+    matrix.limiter ??= _limiterFor(TransportKind.matrix);
     if (matrix.session == null) {
       matrix.attach(session, since: _snapshot.matrixSyncToken);
     }
@@ -9935,6 +10021,7 @@ class MessengerController extends ChangeNotifier {
           accepted: !restoredAwaitingAcceptance,
           receivedChunks: restoredSession.completedChunks,
           chatDeviceId: session.chatDeviceId,
+          now: _now,
         );
         final legacyPaused =
             session.state == TransferState.paused &&
@@ -9948,6 +10035,7 @@ class MessengerController extends ChangeNotifier {
         if (partialPath != null && !inboundState.paused) {
           _scheduleAttachmentRetry(session.id);
           _startInboundRequestWindow(inboundState, contact);
+          _lookForOtherSources(inboundState);
         }
       }
     }
@@ -14968,6 +15056,7 @@ class MessengerController extends ChangeNotifier {
             : DeliveryState.relayed,
         route: route,
       );
+      _scheduleBlobLeave(contact, state);
     } catch (error) {
       _statusMessage = 'Attachment is waiting for a route: $error';
       appendDebugLog(
@@ -15799,6 +15888,7 @@ class MessengerController extends ChangeNotifier {
       if (routeAvailable) {
         _scheduleAttachmentRetry(attachmentId);
         _startInboundRequestWindow(state, contact);
+        _lookForOtherSources(state);
       }
     } catch (error, stackTrace) {
       appendDebugLog(
@@ -17534,6 +17624,7 @@ class MessengerController extends ChangeNotifier {
           );
         } else {
           unawaited(_sendAttachmentCancel(entry.contact, attachmentId));
+          _dropLeftBlobs(attachmentId);
           _clearOutboundAttempt(entry.contact.deviceId, entry.message.id);
           _outboundRetryTimers.remove(attachmentId)?.cancel();
           _outboundAttachments.remove(attachmentId);
@@ -17838,6 +17929,7 @@ class MessengerController extends ChangeNotifier {
         : normalizedLabel.contains('mobile')
         ? NetworkCostClass.metered
         : NetworkCostClass.unmetered;
+    _wakeBlobWaiters();
     appendDebugLog(
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
@@ -17961,6 +18053,7 @@ class MessengerController extends ChangeNotifier {
     final contact = _contactByDeviceId(state.peerDeviceId);
     if (contact == null) return;
     unawaited(_sendAttachmentCancel(contact, attachmentId));
+    _dropLeftBlobs(attachmentId);
     _clearOutboundAttempt(contact.deviceId, state.messageId);
     _outboundRetryTimers.remove(attachmentId)?.cancel();
     _outboundAttachments.remove(attachmentId);
@@ -21206,6 +21299,7 @@ class MessengerController extends ChangeNotifier {
             envelope.kind == 'attachment_complete' ||
             envelope.kind == 'attachment_cancel' ||
             envelope.kind == 'attachment_pause_control' ||
+            envelope.kind == 'attachment_blobs' ||
             envelope.kind == 'attachment_progress') {
           await _handleAttachmentEnvelope(envelope);
           _markSeen(envelope.messageId);
@@ -21839,6 +21933,9 @@ class MessengerController extends ChangeNotifier {
       case 'attachment_progress':
         _handleAttachmentProgress(contact, payload);
         return;
+      case 'attachment_blobs':
+        _handleAttachmentBlobs(contact, payload);
+        return;
     }
   }
 
@@ -22044,6 +22141,7 @@ class MessengerController extends ChangeNotifier {
       accepted: !awaitingAcceptance && partialPath != null,
       debugTest: debugTest,
       chatDeviceId: fromOwnDevice ? chatId : null,
+      now: _now,
     );
     _inboundAttachments[descriptor.id] = inboundState;
     _upsertTransferSession(
@@ -22084,6 +22182,7 @@ class MessengerController extends ChangeNotifier {
       _scheduleAttachmentRetry(descriptor.id);
     }
     notifyListeners();
+    _lookForOtherSources(inboundState);
     // Prime the chunk-request window as a microtask so it lands AFTER the
     // current `_processEnvelopes` batch commits its state. Without this,
     // back-to-back offers (multi-file send) could race: file 1's chunk
@@ -22401,6 +22500,11 @@ class MessengerController extends ChangeNotifier {
         !striper.isLate(_BlockRoute.lanBinary);
   }
 
+  double? _measuredBytesPerSecond(String peerDeviceId, TransportKind kind) {
+    final stats = _transportRegistry?.statsFor(peerDeviceId, kind);
+    return stats != null && stats.hasThroughput ? stats.bytesPerSecond : null;
+  }
+
   RouteStriper<_BlockRoute> _blockStriperFor(String peerDeviceId) {
     final striper = _blockStripers.remove(peerDeviceId);
     // The most recently used peers stay (at most 64).
@@ -22411,9 +22515,15 @@ class MessengerController extends ChangeNotifier {
         striper ??
         RouteStriper<_BlockRoute>(
           now: _now,
-          priorBytesPerSecond: const {
-            _BlockRoute.lanBinary: 8 * 1024 * 1024,
-            _BlockRoute.iroh: 1024 * 1024,
+          // What the peer's transports have been measured to move (the
+          // registry's path stats), else a guess for each.
+          priorBytesPerSecond: {
+            _BlockRoute.lanBinary:
+                _measuredBytesPerSecond(peerDeviceId, TransportKind.lan) ??
+                8 * 1024 * 1024,
+            _BlockRoute.iroh:
+                _measuredBytesPerSecond(peerDeviceId, TransportKind.iroh) ??
+                1024 * 1024,
           },
         );
   }
@@ -22465,7 +22575,9 @@ class MessengerController extends ChangeNotifier {
       striper.noteLate(route);
       // One rule for the budget, whichever of the two is unmeasured.
       final probe = probing || striper.unmeasured(backup);
-      if (!stillActive() || !striper.mayHedge(bytes, probing: probe)) {
+      if (!stillActive() ||
+          !_currentEnergyBudget.hedgedBlocks ||
+          !striper.mayHedge(bytes, probing: probe)) {
         if (await primary) return true;
         continue;
       }
@@ -22556,6 +22668,7 @@ class MessengerController extends ChangeNotifier {
     } else if (_messageById(state.peerDeviceId, state.messageId) == null) {
       // Parent message was locally deleted; tear down outbound state and
       // notify the receiver.
+      _dropLeftBlobs(attachmentId);
       _outboundRetryTimers.remove(attachmentId)?.cancel();
       _outboundAttachments.remove(attachmentId);
       _clearActiveOutbound(state.peerDeviceId, attachmentId);
@@ -23130,8 +23243,10 @@ class MessengerController extends ChangeNotifier {
     required Uint8List expectedHash,
     // The route the block came by; the envelope's route when null.
     MessageRoute? route,
+    // The source it came from, when not [sender] itself (a relay blob).
+    BlockSource? via,
   }) async {
-    final key = '${sender.deviceId}|$attachmentId|$index';
+    final key = '${via?.toString() ?? sender.deviceId}|$attachmentId|$index';
     if (!_receivingAttachmentBlocks.add(key)) return;
     try {
       await _receiveAttachmentChunkBytes(
@@ -23141,6 +23256,7 @@ class MessengerController extends ChangeNotifier {
         packedBytes: packedBytes,
         expectedHash: expectedHash,
         route: route ?? _ingressRoute,
+        via: via,
       );
     } finally {
       _receivingAttachmentBlocks.remove(key);
@@ -23154,6 +23270,7 @@ class MessengerController extends ChangeNotifier {
     required Uint8List packedBytes,
     required Uint8List expectedHash,
     MessageRoute? route,
+    BlockSource? via,
   }) async {
     if (attachmentId.isEmpty ||
         attachmentId.length > 160 ||
@@ -23161,9 +23278,27 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final state = _inboundAttachments[attachmentId];
-    if (state == null || state.peerDeviceId != sender.deviceId) {
+    // From the sender, or from a source this file has (an own device that
+    // said it holds it; a source dropped for this file is not heard).
+    final source = via ?? BlockSource.peer(sender.deviceId);
+    if (state == null || !state.sources.contains(source)) {
       return;
     }
+    // Another device is a source only while it is still one of this
+    // account's devices.
+    if (via == null &&
+        source.id != state.peerDeviceId &&
+        !(sender.ownDevice &&
+            accountDevices?.deviceFor(sender.deviceId) != null)) {
+      state.requestedInFlight.removeAll(state.sources.drop(source));
+      return;
+    }
+    // The file's counterpart for completion, progress and cancel is the
+    // device it came from, whichever source served the last block.
+    final primary = _contactByDeviceId(state.peerDeviceId) ?? sender;
+    // A LAN block carries no proof of who sent it (any host on the network
+    // may put one): it is verified and used, but never blamed on a source.
+    final attributable = route != MessageRoute.lanDirect;
     // Janitor: if the parent ChatMessage is gone (locally deleted), drop
     // the inbound state silently. The next chunk-request retry that the
     // sender's `_handleAttachmentChunkRequest` sees will trigger the
@@ -23188,6 +23323,14 @@ class MessengerController extends ChangeNotifier {
     const authenticationTagLength = 16;
     if (packedBytes.length != expectedLength + authenticationTagLength) {
       state.requestedInFlight.remove(index);
+      await _sourceServedBadBlock(
+        state,
+        sender,
+        source,
+        index,
+        askAgain: false,
+        blame: attributable,
+      );
       return;
     }
     final Uint8List bytes;
@@ -23212,7 +23355,14 @@ class MessengerController extends ChangeNotifier {
           state.finalizing) {
         return;
       }
-      await _sendAttachmentChunkRequest(sender, attachmentId, index);
+      await _sourceServedBadBlock(
+        state,
+        sender,
+        source,
+        index,
+        askAgain: true,
+        blame: attributable,
+      );
       return;
     }
     if (!identical(_inboundAttachments[attachmentId], state) ||
@@ -23223,6 +23373,7 @@ class MessengerController extends ChangeNotifier {
       await state.writeChunk(offset, bytes);
       if (!identical(_inboundAttachments[attachmentId], state)) return;
       state.received.add(index);
+      state.sources.delivered(index, source);
       if (route != null) {
         state.routeBytes[route] = (state.routeBytes[route] ?? 0) + bytes.length;
       }
@@ -23251,9 +23402,9 @@ class MessengerController extends ChangeNotifier {
     // debounce inside the helper caps to one envelope per 250 ms; the
     // completion path below forces a final emit so the sender flips to
     // 100% in lockstep with us.
-    _maybeSendAttachmentProgress(state, sender, force: state.isComplete);
+    _maybeSendAttachmentProgress(state, primary, force: state.isComplete);
     if (state.isComplete) {
-      await _finalizeInboundAttachment(sender, attachmentId, state);
+      await _finalizeInboundAttachment(primary, attachmentId, state);
     } else if (state.paused) {
       // Paused mid-transfer — sit on the chunks we have. The owner-only
       // resume re-arms the retry timer and re-issues the next request.
@@ -23261,7 +23412,7 @@ class MessengerController extends ChangeNotifier {
       _scheduleAttachmentRetry(attachmentId);
       // Pipelined refill: keep up to _inboundChunkWindow requests in
       // flight so a slow path doesn't serialize on per-chunk RTT.
-      _startInboundRequestWindow(state, sender);
+      _startInboundRequestWindow(state, primary);
     }
   }
 
@@ -23331,6 +23482,9 @@ class MessengerController extends ChangeNotifier {
         _assembledAttachments[attachmentId] = await cacheFile.readAsBytes();
       }
       _inboundAttachments.remove(attachmentId);
+      if (state.debugTest == null) {
+        _announceFileHeld(attachmentId, state.descriptor.sizeBytes);
+      }
       _removeTransferSession(attachmentId);
       if (!hasActiveTransfer) _reschedulePolling();
       // A file an own device passed on keeps the message's own state (what
@@ -23530,57 +23684,634 @@ class MessengerController extends ChangeNotifier {
       if (!_hasAllowedFileRoute(peer, state.descriptor.sizeBytes)) return;
       state.noFileRoute = false;
     }
-    final window = _inboundWindowFor(state.descriptor.chunkSize);
+    // Whatever left the caller's set without arriving is not asked of its
+    // source any more (the other places that clear or trim the set need no
+    // change).
+    state.sources.reconcile(state.requestedInFlight);
     final requests = <Future<void>>[];
-    while (state.requestedInFlight.length < window) {
+    while (true) {
       final next = state.nextUnrequestedIndex();
       if (next < 0) break;
-      state.requestedInFlight.add(next);
-      appendDebugLog(
-        'chunk_req tx → ${sender.alias} idx=$next '
-        'attachmentId=${state.descriptor.id}',
-      );
-      requests.add(() async {
-        try {
-          final sent = await _sendAttachmentChunkRequest(
-            sender,
-            state.descriptor.id,
+      final source = state.sources.choose(next);
+      if (source == null) break;
+      if (source.route == SourceRoute.relayBlob) {
+        state.requestedInFlight.add(next);
+        state.sources.begin(next, source);
+        requests.add(
+          _fetchBlobBlock(
+            state,
+            source,
+            _contactByDeviceId(state.peerDeviceId) ?? sender,
             next,
-          );
-          if (!sent && state.noFileRoute) {
-            state.requestedInFlight.remove(next);
-          } else if (!sent) {
-            state.requestedInFlight.remove(next);
-            unawaited(
-              Future<void>.delayed(const Duration(seconds: 5), () {
-                if (identical(
-                      _inboundAttachments[state.descriptor.id],
-                      state,
-                    ) &&
-                    !state.paused &&
-                    state.accepted &&
-                    state.partialPath != null) {
-                  _startInboundRequestWindow(state, sender);
-                }
-              }),
-            );
-          }
-        } catch (error, stackTrace) {
-          state.requestedInFlight.remove(next);
-          appendDebugLog(
-            'chunk_req setup failed → ${sender.alias} idx=$next '
-            'attachmentId=${state.descriptor.id}: $error\n$stackTrace',
-          );
-          _setTransferSessionState(
-            state.descriptor.id,
-            TransferState.reconnecting,
-            error: 'The transfer route failed. Retrying automatically.',
-          );
-        }
-      }());
+          ),
+        );
+        continue;
+      }
+      final target = source.id == sender.deviceId
+          ? sender
+          : _contactByDeviceId(source.id);
+      if (target == null) {
+        // The sender itself stays (it may be back); another device that is
+        // not a contact any more (or a source this build cannot ask) goes.
+        if (source.id == state.peerDeviceId) break;
+        state.requestedInFlight.removeAll(state.sources.remove(source));
+        continue;
+      }
+      state.requestedInFlight.add(next);
+      state.sources.begin(next, source);
+      requests.add(_askSourceForBlock(state, source, target, next));
     }
+    _armHedgeTimer(state);
     await Future.wait(requests);
   }
+
+  /// Asks [source] (the contact [target]) for block [index] of [state].
+  Future<void> _askSourceForBlock(
+    _InboundAttachmentState state,
+    BlockSource source,
+    ContactRecord target,
+    int index,
+  ) async {
+    appendDebugLog(
+      'chunk_req tx → ${target.alias} idx=$index '
+      'attachmentId=${state.descriptor.id}',
+    );
+    try {
+      final sent = await _sendAttachmentChunkRequest(
+        target,
+        state.descriptor.id,
+        index,
+      );
+      if (!sent && state.noFileRoute) {
+        // No route may carry this file now: asked again when one appears.
+        state.requestedInFlight.remove(index);
+      } else if (!sent) {
+        state.sources.failed(index, source);
+        state.requestedInFlight.remove(index);
+        unawaited(
+          Future<void>.delayed(const Duration(seconds: 5), () {
+            if (identical(_inboundAttachments[state.descriptor.id], state) &&
+                !state.paused &&
+                state.accepted &&
+                state.partialPath != null) {
+              _startInboundRequestWindow(state, target);
+            }
+          }),
+        );
+      }
+    } catch (error, stackTrace) {
+      state.sources.failed(index, source);
+      state.requestedInFlight.remove(index);
+      appendDebugLog(
+        'chunk_req setup failed → ${target.alias} idx=$index '
+        'attachmentId=${state.descriptor.id}: $error\n$stackTrace',
+      );
+      _setTransferSessionState(
+        state.descriptor.id,
+        TransferState.reconnecting,
+        error: 'The transfer route failed. Retrying automatically.',
+      );
+    }
+  }
+
+  /// One timer for the file: when a block asked of one source is late, it
+  /// is asked of a second too (within the hedging budget). Armed after each
+  /// round of requests, so nothing runs while nothing is asked.
+  void _armHedgeTimer(_InboundAttachmentState state) {
+    state.hedgeTimer?.cancel();
+    state.hedgeTimer = null;
+    if (state.paused) return;
+    final wait = state.sources.nextHedgeIn();
+    if (wait == null) return;
+    state.hedgeTimer = Timer(wait, () {
+      state.hedgeTimer = null;
+      if (!identical(_inboundAttachments[state.descriptor.id], state) ||
+          state.paused ||
+          state.finalizing) {
+        return;
+      }
+      state.sources.reconcile(state.requestedInFlight);
+      for (final (index, source) in state.sources.takeHedges()) {
+        if (source.route == SourceRoute.relayBlob) {
+          final primary = _contactByDeviceId(state.peerDeviceId);
+          if (primary != null) {
+            unawaited(_fetchBlobBlock(state, source, primary, index));
+          }
+          continue;
+        }
+        final target = _contactByDeviceId(source.id);
+        if (target == null) {
+          state.sources.failed(index, source);
+          continue;
+        }
+        unawaited(_askSourceForBlock(state, source, target, index));
+      }
+      _armHedgeTimer(state);
+    });
+  }
+
+  /// [source] (the contact [sender]) served a bad block [index] of [state].
+  /// One of several sources is dropped for this file and the block is asked
+  /// of the others; the only source is asked again, as before there were
+  /// several ([askAgain] is false for a block of the wrong size, which only
+  /// waits for the retry).
+  Future<void> _sourceServedBadBlock(
+    _InboundAttachmentState state,
+    ContactRecord sender,
+    BlockSource source,
+    int index, {
+    required bool askAgain,
+    required bool blame,
+  }) async {
+    final again = blame ? state.sources.corrupt(index, source) : const <int>[];
+    appendDebugLog(
+      'A block of ${state.descriptor.id} from ${sender.alias} failed '
+      'verification (idx=$index)'
+      '${again.isEmpty ? '' : '; not asked of it again for this file'}.',
+    );
+    if (again.isNotEmpty) {
+      state.requestedInFlight.removeAll(again);
+      _startInboundRequestWindow(state, sender);
+      return;
+    }
+    if (askAgain) {
+      await _sendAttachmentChunkRequest(sender, state.descriptor.id, index);
+    }
+  }
+
+  // Relay blobs (M27 tier 2): the sender leaves a file's encrypted blocks
+  // on relays it is registered with when the receiver has not come for
+  // them; the receiver takes them as one more source. Every block still
+  // goes through the same check under the file key.
+
+  /// How long the receiver gets to start before the blocks are left on
+  /// relays.
+  @visibleForTesting
+  static Duration blobLeaveDelay = const Duration(seconds: 20);
+
+  /// How long a started transfer may get no block from the receiver before
+  /// the blocks are also left on relays.
+  @visibleForTesting
+  static Duration blobSlowAfter = const Duration(seconds: 60);
+
+  final Set<String> _leavingBlobs = <String>{};
+
+  /// Blobs this device left on relays, by file, until they are taken back.
+  final Map<String, LeftBlobs> _leftBlobs = <String, LeftBlobs>{};
+
+  /// The one timer per file that decides when to leave blobs.
+  final Map<String, Timer> _blobLeaveTimers = <String, Timer>{};
+
+  void _scheduleBlobLeave(
+    ContactRecord contact,
+    _OutboundAttachmentState state,
+  ) {
+    if (state.descriptor.chunkSize != _attachmentChunkSize ||
+        state.requiresLan ||
+        state.servesOwnDevice ||
+        !contact.featureCapabilities.contains(
+          ApplicationCapability.relayBlobAttachmentsV1,
+        )) {
+      return;
+    }
+    final id = state.descriptor.id;
+    // One timer per file: it fires when the receiver has not started, or
+    // when a started receiver has fetched no block for [blobSlowAfter]; in
+    // between it sleeps until that moment could come.
+    late final void Function() check;
+    void arm(Duration wait) {
+      _blobLeaveTimers[id]?.cancel();
+      _blobLeaveTimers[id] = Timer(wait, () => check());
+    }
+
+    check = () {
+      _blobLeaveTimers.remove(id);
+      _blobWaiters.remove(id);
+      if (_disposed || !identical(_outboundAttachments[id], state)) return;
+      if (_leftBlobs.containsKey(id) || _leavingBlobs.contains(id)) return;
+      // Nowhere to leave them: no polling for that.
+      if (_blobUploadRelays().isEmpty) return;
+      void leave(bool midTransfer) {
+        unawaited(
+          _leaveBlobs(contact, state, midTransfer: midTransfer)
+              .catchError((Object error) {
+                appendDebugLog(
+                  'Could not leave blobs for $id: ${error.runtimeType}',
+                );
+              })
+              .whenComplete(() {
+                // Nothing was left (stopped early or failed): try again.
+                if (!_disposed &&
+                    !_leftBlobs.containsKey(id) &&
+                    identical(_outboundAttachments[id], state) &&
+                    !_blobLeaveTimers.containsKey(id)) {
+                  // Backs off (the wait doubles), and gives up after a few.
+                  final attempts = (_blobAttempts[id] ?? 0) + 1;
+                  _blobAttempts[id] = attempts;
+                  if (attempts < 5) {
+                    arm(
+                      Duration(
+                        milliseconds: min(
+                          blobSlowAfter.inMilliseconds << (attempts - 1),
+                          const Duration(minutes: 10).inMilliseconds,
+                        ),
+                      ),
+                    );
+                  }
+                }
+              }),
+        );
+      }
+
+      // Not now (metered, battery saver, paused): wait for the event that
+      // can change it, not for a timer.
+      if (state.paused || !_blobUploadAllowed) {
+        _blobWaiters[id] = () => check();
+        return;
+      }
+      if (state.highestChunkSent < 0) {
+        leave(false);
+        return;
+      }
+      // Everything was served: nothing is left to leave.
+      if (state.highestChunkSent >= state.descriptor.effectiveChunkCount - 1) {
+        return;
+      }
+      final last = state.lastChunkAt ?? state.activatedAt;
+      final idle = last == null
+          ? blobSlowAfter
+          : DateTime.now().toUtc().difference(last);
+      if (idle >= blobSlowAfter && _blobUploadAllowed) {
+        leave(true);
+        return;
+      }
+      arm(idle >= blobSlowAfter ? blobSlowAfter : blobSlowAfter - idle);
+    };
+
+    arm(blobLeaveDelay);
+  }
+
+  /// The relays blobs can go to: configured, pinned, and registered.
+  Map<PeerEndpoint, String> _blobUploadRelays() {
+    final relays = <PeerEndpoint, String>{};
+    final me = identity;
+    if (me == null) return relays;
+    for (final relay in me.configuredRelays) {
+      final key = _pinnedIdentityKeyForRoute(relay);
+      if (key != null && _snapshot.relayTokens[key] != null) {
+        relays[relay] = key;
+      }
+      if (relays.length >= BlobAnnouncement.maxRelays) break;
+    }
+    return relays;
+  }
+
+  /// Files whose blobs wait for a condition (an unmetered network, no pause,
+  /// no battery saver) instead of a timer: woken by the event that can change
+  /// it (a connectivity change, a resume).
+  final Map<String, void Function()> _blobWaiters = <String, void Function()>{};
+
+  /// Failed attempts to leave blobs for a file (the wait doubles).
+  final Map<String, int> _blobAttempts = <String, int>{};
+
+  void _wakeBlobWaiters() {
+    if (_blobWaiters.isEmpty) return;
+    final waiting = _blobWaiters.values.toList();
+    _blobWaiters.clear();
+    for (final wake in waiting) {
+      wake();
+    }
+  }
+
+  @visibleForTesting
+  int get blobTimersArmedForTesting => _blobLeaveTimers.length;
+
+  /// Whether the energy policy and the network allow uploading for others.
+  bool get _blobUploadAllowed {
+    final cost = _networkCostClass;
+    return _energyPolicy.modeFor(cost) != EnergyMode.saver &&
+        cost == NetworkCostClass.unmetered;
+  }
+
+  Future<void> _leaveBlobs(
+    ContactRecord contact,
+    _OutboundAttachmentState state, {
+    bool midTransfer = false,
+  }) async {
+    final descriptor = state.descriptor;
+    final id = descriptor.id;
+    // The receiver started (unless it is only slow): nothing to leave.
+    if ((state.highestChunkSent >= 0 && !midTransfer) ||
+        state.paused ||
+        !_blobUploadAllowed ||
+        !_leavingBlobs.add(id)) {
+      return;
+    }
+    LeftBlobs? left;
+    var announced = false;
+    try {
+      final me = _requireIdentity();
+      final relays = _blobUploadRelays();
+      if (relays.isEmpty) return;
+      final leftNow = left = LeftBlobs(
+        peerDeviceId: contact.deviceId,
+        relays: {
+          for (final entry in relays.entries)
+            entry.key.routeKey: (endpoint: entry.key, key: entry.value),
+        },
+      );
+      _leftBlobs[id] = leftNow;
+      final readSecret = deriveReadSecret(
+        base64Decode(descriptor.encryptionKeyBase64),
+        id,
+      );
+      final startedAt = DateTime.now().toUtc();
+      // A receiver that was slow is back when it fetches a block after
+      // the upload began; one that had not started, when it starts.
+      bool receiverBack() => midTransfer
+          ? (state.lastChunkAt?.isAfter(startedAt) ?? false)
+          : state.highestChunkSent >= 0;
+      bool active() =>
+          identical(_outboundAttachments[id], state) &&
+          !state.paused &&
+          !_disposed;
+      final blobHashes = <String>[];
+      final plainHashes = <Uint8List>[];
+      final working = relays.keys.toSet();
+      for (var index = 0; index < descriptor.effectiveChunkCount; index++) {
+        // Stops when the receiver started after all, or the network or
+        // energy state no longer allows it.
+        if (!active() ||
+            working.isEmpty ||
+            receiverBack() ||
+            !_blobUploadAllowed) {
+          return;
+        }
+        final chunk = await _readOutboundAttachmentChunk(state, index);
+        final block = await _encryptAttachmentBlock(descriptor, index, chunk);
+        final name = blobHashOf(block.ciphertext);
+        blobHashes.add(name);
+        plainHashes.add(block.hash);
+        for (final relay in working.toList()) {
+          try {
+            leftNow.note(relay.routeKey, name);
+            final done = await _relayClient.putBlob(
+              host: relay.host,
+              port: relay.port,
+              protocol: relay.protocol,
+              hash: name,
+              bytes: block.ciphertext,
+              secret: readSecret,
+              expectedIdentityPublicKeyBase64: relays[relay],
+            );
+            if (!done) working.remove(relay);
+          } catch (error) {
+            appendDebugLog(
+              'Blob upload to ${relay.label} failed: ${error.runtimeType}',
+            );
+            working.remove(relay);
+          }
+        }
+      }
+      if (!active() || working.isEmpty) return;
+      final announcement = BlobAnnouncement(
+        attachmentId: id,
+        relays: [for (final relay in working) relay.routeKey],
+        blobHashes: blobHashes,
+        plainHashes: plainHashes,
+        readSecret: readSecret,
+      );
+      final envelope = await _crypto.encryptPayloadEnvelope(
+        kind: 'attachment_blobs',
+        messageId: _randomId('ablob'),
+        conversationId: _crypto.conversationIdFor(contact.deviceId),
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: jsonEncode(announcement.toJson()),
+      );
+      await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: envelope,
+      );
+      announced = true;
+    } finally {
+      _leavingBlobs.remove(id);
+      // Nobody was told about these blobs: take them back.
+      final unannounced = left;
+      if (!announced && unannounced != null) {
+        if (identical(_leftBlobs[id], unannounced)) _leftBlobs.remove(id);
+        unawaited(_deleteLeftBlobs(unannounced));
+      }
+    }
+  }
+
+  /// The file [attachmentId] is done another way, was declined or was
+  /// cancelled: its blobs are taken back from the relays (what is missed
+  /// expires). [fromDeviceId] is the device that said so, when one did.
+  void _dropLeftBlobs(String attachmentId, {String? fromDeviceId}) {
+    if (fromDeviceId == null) {
+      _blobLeaveTimers.remove(attachmentId)?.cancel();
+      _blobWaiters.remove(attachmentId);
+      _blobAttempts.remove(attachmentId);
+    }
+    final left = _leftBlobs[attachmentId];
+    if (left == null ||
+        (fromDeviceId != null && left.peerDeviceId != fromDeviceId)) {
+      return;
+    }
+    _leftBlobs.remove(attachmentId);
+    unawaited(_deleteLeftBlobs(left));
+  }
+
+  Future<void> _deleteLeftBlobs(LeftBlobs left, {bool retry = true}) async {
+    final todo = [
+      for (final entry in left.uploads.entries) (entry.key, [...entry.value]),
+    ];
+    // What the relays skipped because an upload was being handled: asked
+    // once more later (after that, the time to live takes it).
+    final skipped = LeftBlobs(
+      peerDeviceId: left.peerDeviceId,
+      relays: left.relays,
+    );
+    for (final (routeKey, hashes) in todo) {
+      final relay = left.relays[routeKey];
+      if (relay == null) continue;
+      // Up to 64 hashes in one request.
+      for (var start = 0; start < hashes.length; start += 64) {
+        if (_disposed) return;
+        try {
+          final busy = await _relayClient.deleteBlobs(
+            host: relay.endpoint.host,
+            port: relay.endpoint.port,
+            protocol: relay.endpoint.protocol,
+            hashes: hashes.sublist(start, min(start + 64, hashes.length)),
+            expectedIdentityPublicKeyBase64: relay.key,
+          );
+          for (final hash in busy) {
+            skipped.note(routeKey, hash);
+          }
+        } catch (error) {
+          // The relay cannot be reached: the rest would fail the same; the
+          // blobs expire by themselves.
+          appendDebugLog('Blob delete failed: ${error.runtimeType}');
+          break;
+        }
+      }
+    }
+    if (retry && skipped.uploads.isNotEmpty && !_disposed) {
+      Timer(blobSlowAfter, () {
+        if (!_disposed) unawaited(_deleteLeftBlobs(skipped, retry: false));
+      });
+    }
+  }
+
+  /// The sender left [payload]'s blocks on relays: they become a source of
+  /// the file when this device has the same relays configured (a sender
+  /// cannot send this device to a server of its choosing).
+  void _handleAttachmentBlobs(
+    ContactRecord sender,
+    Map<String, dynamic> payload,
+  ) {
+    final id = payload['attachmentId'];
+    final state = id is String ? _inboundAttachments[id] : null;
+    final me = identity;
+    if (state == null ||
+        me == null ||
+        state.peerDeviceId != sender.deviceId ||
+        state.fromOwnDevice ||
+        state.descriptor.chunkSize != _attachmentChunkSize) {
+      return;
+    }
+    final announcement = BlobAnnouncement.parse(
+      payload,
+      blocks: state.descriptor.effectiveChunkCount,
+    );
+    if (announcement == null) return;
+    final mine = {for (final r in me.configuredRelays) r.routeKey: r};
+    final relays = <PeerEndpoint>[
+      for (final key in announcement.relays)
+        if (mine[key] case final relay?
+            when _pinnedIdentityKeyForRoute(relay) != null)
+          relay,
+    ];
+    if (relays.isEmpty) return;
+    // A later announcement from the sender (it uploaded again) replaces the
+    // earlier one: its relays and secret are the ones to use.
+    state.blobs = announcement;
+    for (final relay in relays) {
+      state.blobRelays[relay.routeKey] = relay;
+      state.sources.add(BlockSource.relayBlob(relay.routeKey));
+    }
+    appendDebugLog('Blocks of ${state.descriptor.id} are also on a relay.');
+    if (!state.paused &&
+        state.accepted &&
+        !state.awaitingAcceptance &&
+        state.partialPath != null) {
+      _startInboundRequestWindow(state, sender);
+    }
+  }
+
+  /// Fetches block [index] of [state] from the relay behind [source].
+  Future<void> _fetchBlobBlock(
+    _InboundAttachmentState state,
+    BlockSource source,
+    ContactRecord primary,
+    int index,
+  ) async {
+    final blobs = state.blobs;
+    final relay = state.blobRelays[source.id];
+    final key = relay == null ? null : _pinnedIdentityKeyForRoute(relay);
+    try {
+      if (blobs == null ||
+          relay == null ||
+          key == null ||
+          index < 0 ||
+          index >= blobs.blobHashes.length) {
+        throw StateError('No blob for this block.');
+      }
+      final size =
+          min(
+            state.descriptor.chunkSize,
+            state.descriptor.sizeBytes - index * state.descriptor.chunkSize,
+          ) +
+          16;
+      final bytes = await _relayClient.getBlob(
+        host: relay.host,
+        port: relay.port,
+        protocol: relay.protocol,
+        hash: blobs.blobHashes[index],
+        size: size,
+        secret: blobs.readSecret,
+        expectedIdentityPublicKeyBase64: key,
+      );
+      if (!identical(_inboundAttachments[state.descriptor.id], state)) return;
+      await _handleAttachmentChunkBytes(
+        primary,
+        attachmentId: state.descriptor.id,
+        index: index,
+        packedBytes: bytes,
+        expectedHash: blobs.plainHashes[index],
+        route: MessageRoute.conestRelay,
+        via: source,
+      );
+    } catch (error) {
+      appendDebugLog('Blob fetch failed: ${error.runtimeType}');
+      if (!identical(_inboundAttachments[state.descriptor.id], state)) return;
+      state.sources.failed(index, source);
+      state.requestedInFlight.remove(index);
+      unawaited(
+        Future<void>.delayed(const Duration(seconds: 5), () {
+          if (identical(_inboundAttachments[state.descriptor.id], state) &&
+              !state.paused &&
+              state.accepted &&
+              state.partialPath != null) {
+            _startInboundRequestWindow(state, primary);
+          }
+        }),
+      );
+    }
+  }
+
+  @visibleForTesting
+  void handleBlobAnnouncementForTesting(
+    String senderDeviceId,
+    Map<String, dynamic> payload,
+  ) {
+    final sender = _contactByDeviceId(senderDeviceId);
+    if (sender != null) _handleAttachmentBlobs(sender, payload);
+  }
+
+  @visibleForTesting
+  Future<void> leaveBlobsForTesting(
+    String attachmentId, {
+    bool midTransfer = false,
+  }) async {
+    final state = _outboundAttachments[attachmentId];
+    final contact = state == null
+        ? null
+        : _contactByDeviceId(state.peerDeviceId);
+    if (state != null && contact != null) {
+      await _leaveBlobs(contact, state, midTransfer: midTransfer);
+    }
+  }
+
+  @visibleForTesting
+  void forgetLeftBlobsForTesting() => _leftBlobs.clear();
+
+  @visibleForTesting
+  String? blobReadSecretForTesting(String attachmentId) =>
+      _inboundAttachments[attachmentId]?.blobs?.readSecret;
+
+  @visibleForTesting
+  int leftBlobCountForTesting(String attachmentId) =>
+      _leftBlobs[attachmentId]?.uploads.values.fold<int>(
+        0,
+        (sum, hashes) => sum + hashes.length,
+      ) ??
+      0;
 
   void _scheduleAttachmentRetry(String attachmentId) {
     final state = _inboundAttachments[attachmentId];
@@ -23615,6 +24346,9 @@ class MessengerController extends ChangeNotifier {
       if (s.noFileRoute) return;
       s.nextRetryAt = null;
       s.retryAttempts = min(s.retryAttempts + 1, 1 << 20);
+      // Nothing came in time: the sources asked rest (the next round goes
+      // to those that did not stall).
+      s.sources.timedOut();
       s.requestedInFlight.clear();
       _setTransferSessionState(
         attachmentId,
@@ -23704,6 +24438,7 @@ class MessengerController extends ChangeNotifier {
     }
     if (outbound != null && outbound.peerDeviceId == sender.deviceId) {
       outbound.pausedByPeer = paused;
+      if (!paused) _wakeBlobWaiters();
     }
     if (inbound != null && inbound.peerDeviceId == sender.deviceId) {
       inbound.pausedByPeer = paused;
@@ -23766,6 +24501,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (outbound != null) outbound.pausedByMe = false;
+    _wakeBlobWaiters();
     if (inbound != null) {
       inbound.pausedByMe = false;
       if (!inbound.pausedByPeer) {
@@ -23996,6 +24732,8 @@ class MessengerController extends ChangeNotifier {
     }
     final state = _outboundAttachments[attachmentId];
     if (state != null && state.peerDeviceId != sender.deviceId) return;
+    // The file is whole: the relays need not keep its blobs.
+    _dropLeftBlobs(attachmentId, fromDeviceId: sender.deviceId);
     if (state == null) {
       // Receiver completed an attachment whose state we already cleared
       // (cancel, delete, stall). Still advance the queue so a later
@@ -24108,6 +24846,8 @@ class MessengerController extends ChangeNotifier {
     final inboundState = _inboundAttachments.remove(attachmentId);
     inboundState?.retryTimer?.cancel();
     final outboundState = _outboundAttachments.remove(attachmentId);
+    // Declined or cancelled by the receiver: take the blobs back.
+    _dropLeftBlobs(attachmentId, fromDeviceId: sender.deviceId);
     if (inboundState != null) unawaited(inboundState.closeFile());
     if (outboundState != null) unawaited(outboundState.closeFile());
     _assembledAttachments.remove(attachmentId);
@@ -28504,7 +29244,7 @@ class MessengerController extends ChangeNotifier {
               fanout.interval,
               _transportRegistry
                   ?.statsFor(contact.deviceId, first.transportKind)
-                  ?.latencyMs,
+                  ?.rttMs,
             ),
           )
         : fanout;
@@ -28566,7 +29306,10 @@ class MessengerController extends ChangeNotifier {
         for (final kind in TransportKind.values)
           if (!usedKinds.contains(kind) &&
               !(state.storedOnCarrier && _storingCarriers.contains(kind)) &&
-              (radiosAllowed || !_radioKinds.contains(kind)))
+              (radiosAllowed || !_radioKinds.contains(kind)) &&
+              // A spare copy by radio only while most of its airtime is free.
+              (!_radioKinds.contains(kind) ||
+                  RadioAirtime.allowsExtraCopy(_limiters.peek(kind.name))))
             kind,
       };
       final _DeliveryRoute route;
@@ -32830,8 +33573,9 @@ class MessengerController extends ChangeNotifier {
       if (leftAvailable != rightAvailable) {
         return leftAvailable ? -1 : 1;
       }
-      final latencyCompare = (leftHealth?.latency?.inMicroseconds ?? 1 << 62)
-          .compareTo(rightHealth?.latency?.inMicroseconds ?? 1 << 62);
+      final latencyCompare = _routeHealthTracker
+          .rankMicrosFor(left)
+          .compareTo(_routeHealthTracker.rankMicrosFor(right));
       if (latencyCompare != 0) {
         return latencyCompare;
       }
@@ -33691,6 +34435,15 @@ class MessengerController extends ChangeNotifier {
       );
       if (attempt > 0 && _ratchetControlGeneration[retryKey] == generation) {
         _ratchetControlRetries.remove(retryKey);
+        // An answer that got through late: a hello sent before it reached
+        // the peer ahead of it and was dropped there (no session yet), so a
+        // fresh one follows now.
+        final helloKey = retryKey.replaceFirst('|bundle|answer', '|hello');
+        if (helloKey != retryKey &&
+            !_disposed &&
+            _ratchetControlGeneration.containsKey(helloKey)) {
+          unawaited(_sendRatchetHello(peer));
+        }
       }
     } catch (error) {
       final delays = ratchetControlRetryDelays;
@@ -33763,6 +34516,17 @@ class MessengerController extends ChangeNotifier {
     await sessions.startSession(id, bundle);
     _newPeerSession(peer.deviceId);
     await _sendRatchetBundle(peer, reason: 'answer');
+    await _sendRatchetHello(peer);
+    // The peer had no usable session: anything recently sent on the old one
+    // may be undecryptable there, so send it again on the new session.
+    _bulkKeyAnnouncedAt.removeWhere((key, _) => key.startsWith('$id|'));
+    _resendRecentControls(peer);
+    _resendWaitingMessages(peer);
+  }
+
+  /// Sends a fresh session hello to [peer] (a new envelope each time, so it
+  /// never counts as a copy of one the peer already handled or dropped).
+  Future<void> _sendRatchetHello(ContactRecord peer) async {
     final me = _requireIdentity();
     try {
       final hello = await _crypto.encryptPayloadEnvelope(
@@ -33786,11 +34550,6 @@ class MessengerController extends ChangeNotifier {
       // Real traffic on the new session also opens it at the peer.
       appendDebugLog('Ratchet hello to ${peer.alias} not sent: $error');
     }
-    // The peer had no usable session: anything recently sent on the old one
-    // may be undecryptable there, so send it again on the new session.
-    _bulkKeyAnnouncedAt.removeWhere((key, _) => key.startsWith('$id|'));
-    _resendRecentControls(peer);
-    _resendWaitingMessages(peer);
   }
 
   final Map<String, DateTime> _waitingResentAt = {};
@@ -36427,7 +37186,7 @@ class MessengerController extends ChangeNotifier {
     if (plaintext == null) return null;
     // Never folded: not worth decoding them for it.
     if (foldableOnly) {
-      for (final type in const ['sent', 'rx', 'seen']) {
+      for (final type in const ['sent', 'rx', 'seen', 'have', 'have_q']) {
         if (plaintext.contains('"type":"$type"')) return {'type': type};
       }
     }
@@ -36466,7 +37225,10 @@ class MessengerController extends ChangeNotifier {
         queued['chat'] == event['chat'] &&
         switch (event['type']) {
           'read' || 'group_state' || 'digest' || 'reach' || 'settings' => true,
-          'state' || 'group_message' => queued['id'] == event['id'],
+          'state' ||
+          'group_message' ||
+          'have' ||
+          'have_q' => queued['id'] == event['id'],
           _ => false,
         };
     for (final device in devices) {
@@ -36489,8 +37251,11 @@ class MessengerController extends ChangeNotifier {
       // messages, the oldest first.
       final excess = forDevice.length - (_maxQueuedSyncEvents - 1);
       if (excess > 0) {
-        bool seenOnly(PendingAckDelivery entry) =>
-            entry.payload?.plaintext.contains('"type":"seen"') ?? false;
+        bool seenOnly(PendingAckDelivery entry) {
+          final text = entry.payload?.plaintext ?? '';
+          return text.contains('"type":"seen"') ||
+              text.contains('"type":"have');
+        }
         final order = [...forDevice]
           ..sort((a, b) {
             if (seenOnly(a.$1) != seenOnly(b.$1)) {
@@ -36514,6 +37279,8 @@ class MessengerController extends ChangeNotifier {
       'group_message',
       'history_page',
       'tgx',
+      'have',
+      'have_q',
     }.contains(event['type']);
     for (final device in devices) {
       final payload = QueuedEnvelopePayload(
@@ -37268,6 +38035,140 @@ class MessengerController extends ChangeNotifier {
       'Got ${_boundedLogValue(state.descriptor.fileName)} from your '
       '${_contactByDeviceId(state.peerDeviceId)?.deviceName ?? "other device"}.',
     );
+  }
+
+  // One file from several sources (M27): the account's other devices say
+  // when they hold a file ("have", or when asked, "have_q"), and this device
+  // then asks them for blocks too, next to the sender. Every block is
+  // verified under the file's key whoever served it.
+
+  final OwnDeviceFileIndex _ownDeviceFiles = OwnDeviceFileIndex();
+
+  /// Files below this are fetched from one source: sharing them is not
+  /// worth the messages.
+  static const int _multiSourceMinBytes = 512 * 1024;
+
+  bool _speaksMultiSource(ContactRecord device) => device.featureCapabilities
+      .contains(ApplicationCapability.multiSourceTransferV1);
+
+  /// This device now holds [attachmentId]: the account's other devices that
+  /// understand it are told (they may be fetching it).
+  void _announceFileHeld(String attachmentId, int sizeBytes) {
+    if (sizeBytes < _multiSourceMinBytes || !ownDeviceSyncPermission.allowed) {
+      return;
+    }
+    _syncToOwnDevices({
+      'type': 'have',
+      'id': attachmentId,
+    }, to: _speaksMultiSource);
+  }
+
+  /// An own device says it holds [id].
+  void _takeFileHeld(ContactRecord sender, Object? id) {
+    if (id is! String || id.isEmpty || id.length > 160) return;
+    _ownDeviceFiles.note(id, sender.deviceId);
+    final state = _inboundAttachments[id];
+    if (state != null) _useOwnDeviceAsSource(state, sender);
+  }
+
+  /// An own device asks whether this one holds [id].
+  void _answerFileQuery(ContactRecord sender, Object? id) {
+    if (id is! String || id.isEmpty || id.length > 160) return;
+    if (!_locallyAvailableAttachments.contains(id) ||
+        !ownDeviceSyncPermission.allowed) {
+      return;
+    }
+    _syncToOwnDevices({'type': 'have', 'id': id}, only: sender.deviceId);
+  }
+
+  /// Takes [device] (an own device that holds the file) in as a source of
+  /// [state], and asks it for blocks.
+  void _useOwnDeviceAsSource(
+    _InboundAttachmentState state,
+    ContactRecord device,
+  ) {
+    if (state.finalizing ||
+        state.descriptor.sizeBytes < _multiSourceMinBytes ||
+        !device.ownDevice ||
+        !device.canSendOutbound ||
+        isOwnDeviceUnconfirmed(device) ||
+        !ownDeviceSyncPermission.allowed ||
+        !state.sources.add(BlockSource.peer(device.deviceId))) {
+      return;
+    }
+    appendDebugLog(
+      'Fetching ${_boundedLogValue(state.descriptor.fileName)} from your '
+      '${device.deviceName ?? "other device"} too.',
+    );
+    if (!state.paused &&
+        state.accepted &&
+        !state.awaitingAcceptance &&
+        state.partialPath != null) {
+      _startInboundRequestWindow(state, device);
+    }
+  }
+
+  /// A file starts (or resumes): own devices known to hold it are used,
+  /// and the others asked whether they do.
+  void _lookForOtherSources(_InboundAttachmentState state) {
+    if (state.descriptor.sizeBytes < _multiSourceMinBytes) return;
+    for (final deviceId in _ownDeviceFiles.devicesWith(state.descriptor.id)) {
+      final device = _contactByDeviceId(deviceId);
+      if (device != null) _useOwnDeviceAsSource(state, device);
+    }
+    if (!ownDeviceSyncPermission.allowed) return;
+    _syncToOwnDevices(
+      {'type': 'have_q', 'id': state.descriptor.id},
+      to: (device) =>
+          _speaksMultiSource(device) &&
+          !state.sources.contains(BlockSource.peer(device.deviceId)) &&
+          !state.sources.wasDropped(BlockSource.peer(device.deviceId)),
+    );
+  }
+
+  @visibleForTesting
+  BlockSourceSet? blockSourcesForTesting(String attachmentId) =>
+      _inboundAttachments[attachmentId]?.sources;
+
+  /// As after a restart: [attachmentId]'s sources forget [forgetDevice],
+  /// and the other devices are asked who holds the file.
+  @visibleForTesting
+  void askForOtherSourcesForTesting(
+    String attachmentId, {
+    required String forgetDevice,
+  }) {
+    final state = _inboundAttachments[attachmentId];
+    if (state == null) return;
+    state.requestedInFlight.removeAll(
+      state.sources.remove(BlockSource.peer(forgetDevice)),
+    );
+    _ownDeviceFiles.forgetDevice(forgetDevice);
+    _lookForOtherSources(state);
+  }
+
+  @visibleForTesting
+  Future<void> receiveBlockForTesting(
+    String senderDeviceId,
+    String attachmentId,
+    int index,
+    Uint8List packedBytes,
+    Uint8List hash,
+  ) async {
+    final sender = _contactByDeviceId(senderDeviceId);
+    if (sender == null) return;
+    await _handleAttachmentChunkBytes(
+      sender,
+      attachmentId: attachmentId,
+      index: index,
+      packedBytes: packedBytes,
+      expectedHash: hash,
+    );
+  }
+
+  @visibleForTesting
+  void ownDeviceHasFileForTesting(String deviceId, String attachmentId) {
+    final device = _contactByDeviceId(deviceId);
+    if (device != null) _takeFileHeld(device, attachmentId);
   }
 
   // Groups through a gateway (M29e, step 1): this account's other devices
@@ -38094,6 +38995,14 @@ class MessengerController extends ChangeNotifier {
       }
       if (event['type'] == 'digest') {
         _takeDigests(sender, event['chats']);
+        continue;
+      }
+      if (event['type'] == 'have') {
+        _takeFileHeld(sender, event['id']);
+        continue;
+      }
+      if (event['type'] == 'have_q') {
+        _answerFileQuery(sender, event['id']);
         continue;
       }
       try {
@@ -39038,6 +39947,8 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.xmppCarrierV1,
       ApplicationCapability.telegramCarrierV1,
       ApplicationCapability.discordCarrierV1,
+      ApplicationCapability.multiSourceTransferV1,
+      ApplicationCapability.relayBlobAttachmentsV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -40248,6 +41159,7 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(conversations: conversations);
     _markConversationMutationForBatch();
     if (attachmentId != null) {
+      _dropLeftBlobs(attachmentId);
       _outboundRetryTimers.remove(attachmentId)?.cancel();
       _outboundAttachments.remove(attachmentId);
       final inbound = _inboundAttachments.remove(attachmentId);
@@ -40641,10 +41553,16 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    for (final timer in _blobLeaveTimers.values) {
+      timer.cancel();
+    }
+    _blobLeaveTimers.clear();
+    _blobWaiters.clear();
     for (final timer in _ratchetControlRetries.values) {
       timer.cancel();
     }
     _ratchetControlRetries.clear();
+    _limiters.close();
     _matrixClient?.dispose();
     _linkPreviews?.dispose();
     for (final subscription in _carrierReceiptSubscriptions.values) {
@@ -41081,11 +41999,34 @@ class _InboundAttachmentState {
     this.debugTest,
     Iterable<int> receivedChunks = const <int>[],
     String? chatDeviceId,
+    DateTime Function()? now,
   }) : received = <int>{...receivedChunks},
-       _chatDeviceId = chatDeviceId;
+       _chatDeviceId = chatDeviceId,
+       sources = BlockSourceSet(
+         primary: BlockSource.peer(peerDeviceId),
+         blockBytes: descriptor.chunkSize,
+         now: now,
+         windowPerSource: MessengerController._inboundWindowFor(
+           descriptor.chunkSize,
+         ),
+       );
 
   final String messageId;
   final String peerDeviceId;
+
+  /// Where the blocks come from: [peerDeviceId] (the sender, or the own
+  /// device that passed the file on), and the account's other devices that
+  /// say they hold the file. Not persisted: a resumed transfer learns them
+  /// again, and the journal ([received]) is what survives.
+  final BlockSourceSet sources;
+
+  /// Asks late blocks of a second source.
+  Timer? hedgeTimer;
+
+  /// Relay blobs the sender left (M27 tier 2): per block, the blob's name
+  /// and the plaintext hash; and the relays by source key.
+  BlobAnnouncement? blobs;
+  final Map<String, PeerEndpoint> blobRelays = {};
 
   /// The chat the message is in: [peerDeviceId], unless an own device of
   /// this account passed the file on (then the blocks come from it, but the
@@ -41158,6 +42099,8 @@ class _InboundAttachmentState {
   Future<void> closeFile() {
     checkpointTimer?.cancel();
     checkpointTimer = null;
+    hedgeTimer?.cancel();
+    hedgeTimer = null;
     final completer = Completer<void>();
     _partialIo = _partialIo.catchError((_) {}).then((_) async {
       try {
@@ -41482,6 +42425,86 @@ class _ScoringRelayClient implements RelayClient {
       ),
     );
   }
+
+  @override
+  Future<Set<String>> hasBlobs({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required List<String> hashes,
+    required String secret,
+    Duration timeout = const Duration(seconds: 6),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.hasBlobs(
+    host: host,
+    port: port,
+    protocol: protocol,
+    hashes: hashes,
+    secret: secret,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
+  @override
+  Future<Set<String>> deleteBlobs({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required List<String> hashes,
+    Duration timeout = const Duration(seconds: 6),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.deleteBlobs(
+    host: host,
+    port: port,
+    protocol: protocol,
+    hashes: hashes,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
+  @override
+  Future<bool> putBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    required Uint8List bytes,
+    required String secret,
+    Duration ttl = const Duration(hours: 24),
+    Duration timeout = const Duration(seconds: 10),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.putBlob(
+    host: host,
+    port: port,
+    protocol: protocol,
+    hash: hash,
+    bytes: bytes,
+    secret: secret,
+    ttl: ttl,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
+
+  @override
+  Future<Uint8List> getBlob({
+    required String host,
+    required int port,
+    PeerRouteProtocol protocol = PeerRouteProtocol.tcp,
+    required String hash,
+    required int size,
+    required String secret,
+    Duration timeout = const Duration(seconds: 10),
+    String? expectedIdentityPublicKeyBase64,
+  }) => inner.getBlob(
+    host: host,
+    port: port,
+    protocol: protocol,
+    hash: hash,
+    size: size,
+    secret: secret,
+    timeout: timeout,
+    expectedIdentityPublicKeyBase64: expectedIdentityPublicKeyBase64,
+  );
 
   @override
   Future<bool> storeEnvelope({

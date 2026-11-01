@@ -1739,5 +1739,11 @@
     }
   },
   "bitchatMessageReachabilityWarning": "این دستگاه برای کاربران نزدیک bitchat نمایان می‌شود و آن‌ها می‌توانند به شما پیام بدهند.",
-  "bitchatStartChatFailed": "شروع این گفتگو ممکن نشد. دوباره تلاش کنید."
+  "bitchatStartChatFailed": "شروع این گفتگو ممکن نشد. دوباره تلاش کنید.",
+  "energyBudgetTitle": "مصرف انرژی",
+  "energyBudgetSubtitle": "اتصال‌ها چقدر از باتری مصرف کنند. حالت صرفه‌جویی هنگام بی‌شارژری حداقل را نگه می‌دارد.",
+  "energyBudgetBalanced": "متعادل",
+  "energyBudgetEco": "صرفه‌جویی: بیشتر فقط هنگام شارژ",
+  "energyBudgetFast": "سریع",
+  "airtimeBudgetUsed": "زمان پخش مصرف‌شده در دقیقهٔ گذشته: {percent}٪"
 }

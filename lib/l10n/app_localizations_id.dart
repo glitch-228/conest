@@ -6538,4 +6538,25 @@ class AppLocalizationsId extends AppLocalizations {
   @override
   String get bitchatStartChatFailed =>
       'Tidak dapat memulai obrolan ini. Coba lagi.';
+
+  @override
+  String get energyBudgetTitle => 'Penggunaan daya';
+
+  @override
+  String get energyBudgetSubtitle =>
+      'Seberapa banyak baterai boleh dipakai koneksi. Hemat menjaga minimum saat tidak diisi daya.';
+
+  @override
+  String get energyBudgetBalanced => 'Seimbang';
+
+  @override
+  String get energyBudgetEco => 'Hemat: lebih banyak hanya saat mengisi daya';
+
+  @override
+  String get energyBudgetFast => 'Cepat';
+
+  @override
+  String airtimeBudgetUsed(int percent) {
+    return 'Airtime terpakai dalam semenit terakhir: $percent%';
+  }
 }

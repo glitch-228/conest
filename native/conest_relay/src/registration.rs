@@ -34,6 +34,8 @@ pub(crate) const REGISTER_LABEL: &[u8] = b"conest-relay-register-v1";
 /// Scope bits a token carries.
 pub(crate) const SCOPE_MESSAGES: u8 = 1;
 pub(crate) const SCOPE_EXTENDED: u8 = 2 | 4 | 8;
+/// The scope bit that covers blobs.
+pub(crate) const SCOPE_BLOBS: u8 = 2;
 const DAY_MILLIS: u64 = 24 * 60 * 60 * 1000;
 /// Registrations one address may make a day.
 const REGISTRATIONS_PER_DAY: u32 = 16;
@@ -249,7 +251,7 @@ fn verify(key: &[u8; 32], message: &[u8], signature: &str) -> bool {
 
 /// Compares two byte strings in time that does not depend on where they
 /// differ.
-fn same(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn same(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -315,6 +317,7 @@ impl RelayState {
         json!({
             "tier1": self.config.ext.tier1.name(),
             "registration": self.config.ext.registration.name(),
+            "blobs": self.blob_info(),
         })
     }
 
@@ -354,7 +357,7 @@ impl RelayState {
     }
 
     /// An account's store budget: its quota, in bytes a minute.
-    fn allow_account_bytes(&self, token: &Token, bytes: u64) -> Result<(), String> {
+    pub(crate) fn allow_account_bytes(&self, token: &Token, bytes: u64) -> Result<(), String> {
         let minute = now_millis() / 60_000;
         let mut accounts = self
             .accounts
@@ -438,6 +441,7 @@ impl RelayState {
                             params![account.to_vec(), now_millis(), quota],
                         )
                         .map_err(|error| format!("recording an account: {error}"))?;
+                    crate::blobs::note_account_group(&database, &account, &peer_group(source));
                 }
                 self.accounts
                     .lock()
@@ -1068,5 +1072,26 @@ mod tests {
         let (_, health) = client.next_json();
         assert_eq!(health["stats"]["v2"]["policy"]["registration"], "open");
         assert_eq!(health["stats"]["v2"]["policy"]["tier1"], "open");
+    }
+
+    #[test]
+    fn a_new_account_is_filed_under_the_address_it_registered_from() {
+        let state = state_with(|config| config.ext.registration = RegistrationPolicy::Open);
+        let hash = [9_u8; 32];
+        let account = SigningKey::from_bytes(&[5_u8; 32]);
+        state
+            .register(&register_request(&account, &hash, json!({})), &hash, "198.51.100.8")
+            .expect("registers");
+        let group: String = state
+            .database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT grp FROM blob_account_groups WHERE account = ?1",
+                params![account.verifying_key().to_bytes().to_vec()],
+                |row| row.get(0),
+            )
+            .expect("filed");
+        assert_eq!(group, peer_group("198.51.100.8"));
     }
 }

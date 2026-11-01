@@ -1739,5 +1739,11 @@
     }
   },
   "bitchatMessageReachabilityWarning": "Это устройство станет видно пользователям bitchat поблизости, и они смогут вам написать.",
-  "bitchatStartChatFailed": "Не удалось начать чат. Попробуйте ещё раз."
+  "bitchatStartChatFailed": "Не удалось начать чат. Попробуйте ещё раз.",
+  "energyBudgetTitle": "Расход энергии",
+  "energyBudgetSubtitle": "Сколько заряда могут тратить соединения. Эко держит минимум без зарядки.",
+  "energyBudgetBalanced": "Сбалансированный",
+  "energyBudgetEco": "Эко: больше только при зарядке",
+  "energyBudgetFast": "Быстрый",
+  "airtimeBudgetUsed": "Эфирное время за последнюю минуту: {percent}%"
 }
