@@ -6791,6 +6791,164 @@ void main() {
     },
   );
 
+  group('receipts are sent off the processing path', () {
+    Future<(MessengerController, MessengerController, _FakeRelayClient)>
+    pairOnRelay({_MemoryVaultStore? bobVault, bool disposeBob = true}) async {
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        vaultStore: bobVault,
+      );
+      addTearDown(alice.dispose);
+      if (disposeBob) addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      // Each learns what the other can do.
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        unawaited(bob.pollNow());
+        return bob.contacts.single.featureCapabilities.contains(
+          ApplicationCapability.batchedAcksV1,
+        );
+      }, reason: 'Bob did not learn what Alice can do');
+      return (alice, bob, relay);
+    }
+
+    Future<List<RelayEnvelope>> sendBurst(
+      MessengerController alice,
+      _FakeRelayClient relay,
+      int count,
+    ) async {
+      relay.storedEnvelopes.clear();
+      for (var i = 0; i < count; i++) {
+        await alice.sendMessage(contact: alice.contacts.single, body: 'm$i');
+      }
+      final messages = relay.storedEnvelopes
+          .where((e) => e.kind == 'direct_message')
+          .toList();
+      expect(messages, hasLength(count));
+      relay.storedEnvelopes.clear();
+      return messages;
+    }
+
+    test('a carrier that holds sends does not hold message processing, and '
+        'the receipts arrive later', () async {
+      final (alice, bob, relay) = await pairOnRelay();
+      final messages = await sendBurst(alice, relay, 3);
+      relay.storeDelayFor = (e) =>
+          e.kind == 'ack' ? const Duration(seconds: 2) : Duration.zero;
+      final watch = Stopwatch()..start();
+      await bob.processEnvelopesForTesting(messages, settleReceipts: false);
+      watch.stop();
+      expect(
+        watch.elapsed,
+        lessThan(const Duration(seconds: 1)),
+        reason: 'processing waited for the receipts',
+      );
+      expect(bob.messagesFor(alice.identity!.deviceId), hasLength(3));
+      expect(relay.storedEnvelopes.where((e) => e.kind == 'ack'), isEmpty);
+      await bob.settleReceiptsForTesting();
+      expect(relay.storedEnvelopes.where((e) => e.kind == 'ack'), isNotEmpty);
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice
+            .messagesFor(bob.identity!.deviceId)
+            .every((m) => m.state == DeliveryState.delivered);
+      }, reason: 'the receipts did not arrive');
+    });
+
+    test('a burst of 20 messages gets a few receipts from a peer that takes '
+        'batched ones, and single receipts from one that does not', () async {
+      for (final batched in [true, false]) {
+        final (alice, bob, relay) = await pairOnRelay();
+        if (!batched) {
+          bob.dropContactCapabilityForTesting(
+            alice.identity!.deviceId,
+            ApplicationCapability.batchedAcksV1,
+          );
+        } else {
+          expect(
+            bob.contacts.single.featureCapabilities,
+            contains(ApplicationCapability.batchedAcksV1),
+          );
+        }
+        final messages = await sendBurst(alice, relay, 20);
+        // A send waits for its turn: the rest of the burst queues behind it.
+        relay.storeDelayFor = (e) =>
+            e.kind == 'ack' ? const Duration(seconds: 1) : Duration.zero;
+        await bob.processEnvelopesForTesting(messages, settleReceipts: false);
+        await bob.settleReceiptsForTesting();
+        final acks = relay.storedEnvelopes
+            .where((e) => e.kind == 'ack')
+            .map((e) => e.messageId)
+            .toSet();
+        if (batched) {
+          expect(acks.length, inInclusiveRange(1, 4), reason: 'batched');
+        } else {
+          // One receipt per message (a copy that came by a second route
+          // may add one that names it).
+          expect(
+            relay.storedEnvelopes
+                .where((e) => e.kind == 'ack')
+                .map((e) => e.acknowledgedMessageId)
+                .toSet(),
+            hasLength(20),
+            reason: 'old peer',
+          );
+          expect(acks.length, inInclusiveRange(20, 26), reason: 'old peer');
+        }
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice
+              .messagesFor(bob.identity!.deviceId)
+              .where((m) => m.body.startsWith('m'))
+              .every((m) => m.state == DeliveryState.delivered);
+        }, reason: 'a message stayed unconfirmed (batched: $batched)');
+      }
+    });
+
+    test(
+      'a receipt not sent before a crash is sent after the restart',
+      () async {
+        final vault = _MemoryVaultStore();
+        final (alice, bob, relay) = await pairOnRelay(
+          bobVault: vault,
+          disposeBob: false,
+        );
+        final messages = await sendBurst(alice, relay, 1);
+        // The send never completes: the app goes away while it waits.
+        relay.storeDelayFor = (e) =>
+            e.kind == 'ack' ? const Duration(minutes: 10) : Duration.zero;
+        await bob.processEnvelopesForTesting(messages, settleReceipts: false);
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        expect(relay.storedEnvelopes.where((e) => e.kind == 'ack'), isEmpty);
+        bob.dispose();
+        relay.storeDelayFor = null;
+        final restored = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          vaultStore: vault,
+          createIdentity: false,
+        );
+        addTearDown(restored.dispose);
+        expect(restored.pendingAckDeliveries, isNotEmpty);
+        await restored.retryPendingAckDeliveriesForTesting();
+        expect(relay.storedEnvelopes.where((e) => e.kind == 'ack'), isNotEmpty);
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice
+              .messagesFor(bob.identity!.deviceId)
+              .where((m) => m.body == 'm0')
+              .every((m) => m.state == DeliveryState.delivered);
+        }, reason: 'the receipt after the restart did not confirm');
+      },
+    );
+  });
+
   group('push to talk', () {
     Future<(MessengerController, MessengerController, _VoiceRecordingBridge)>
     pair() async {
