@@ -97,6 +97,15 @@ class EnergyBudget {
     hedgedBlocks: false,
   );
 
+  /// Cold mode: nothing extra; a message goes on one route, and what is
+  /// polled is woken by the cold-mode timer instead.
+  static const EnergyBudget cold = EnergyBudget(
+    maxActiveTransports: 1,
+    pollFactor: 8,
+    maxExtraCopies: 0,
+    hedgedBlocks: false,
+  );
+
   /// Battery saver: the strictest.
   static const EnergyBudget saver = EnergyBudget(
     maxActiveTransports: 2,
@@ -136,7 +145,9 @@ class EnergyPolicy {
     Duration refreshEvery = const Duration(minutes: 1),
     DateTime Function()? now,
     EnergyMode? fixedMode,
+    bool? isPhone,
   }) : _source = source ?? platformPowerStateSource(),
+       _isPhone = isPhone ?? (Platform.isAndroid || Platform.isIOS),
        _refreshEvery = refreshEvery,
        _now = now ?? DateTime.now,
        _fixedMode = fixedMode;
@@ -159,7 +170,7 @@ class EnergyPolicy {
   /// from there every time, so it is never stale.
   EnergyBudgetSetting get setting => settingSource?.call() ?? _setting;
   set setting(EnergyBudgetSetting value) => _setting = value;
-  EnergyBudgetSetting _setting = EnergyBudgetSetting.balanced;
+  EnergyBudgetSetting _setting = EnergyBudgetSetting.automatic;
   EnergyBudgetSetting Function()? settingSource;
 
   /// Larger groups escalate even when the device can afford more: every
@@ -168,6 +179,7 @@ class EnergyPolicy {
   final Duration _refreshEvery;
   final DateTime Function() _now;
   final EnergyMode? _fixedMode;
+  final bool _isPhone;
 
   PowerState _power = PowerState.unknown;
   DateTime? _readAt;
@@ -193,12 +205,27 @@ class EnergyPolicy {
     }();
   }
 
+  /// The setting as it applies now: Automatic is cold on phones and on
+  /// laptops running on battery, balanced on mains power. A policy that
+  /// answers a fixed mode (tests) never goes cold by itself.
+  EnergyBudgetSetting get effectiveSetting {
+    final chosen = setting;
+    if (chosen != EnergyBudgetSetting.automatic) return chosen;
+    if (_fixedMode != null) return EnergyBudgetSetting.balanced;
+    if (_isPhone) return EnergyBudgetSetting.cold;
+    final onBattery = _power.hasBattery == true && _power.charging == false;
+    return onBattery ? EnergyBudgetSetting.cold : EnergyBudgetSetting.balanced;
+  }
+
+  /// Whether cold mode applies now.
+  bool get isCold => effectiveSetting == EnergyBudgetSetting.cold;
+
   EnergyMode modeFor(NetworkCostClass network) {
     final fixed = _fixedMode;
     final mode = fixed ?? modeOf(_power, network);
     // Fast treats battery like mains; battery saver still wins, and a
     // metered or roaming network stays limited.
-    if (setting == EnergyBudgetSetting.fast &&
+    if (effectiveSetting == EnergyBudgetSetting.fast &&
         mode == EnergyMode.limited &&
         network != NetworkCostClass.metered &&
         network != NetworkCostClass.roaming) {
@@ -211,10 +238,16 @@ class EnergyPolicy {
   /// (charging, or a desktop without a battery, on an unmetered network):
   /// more only while charging.
   EnergyBudget budgetFor(NetworkCostClass network) =>
+      // Battery saver is the strictest of all.
+      isCold && modeFor(network) != EnergyMode.saver
+      ? EnergyBudget.cold
+      : _warmBudgetFor(network);
+
+  EnergyBudget _warmBudgetFor(NetworkCostClass network) =>
       switch (modeFor(network)) {
         EnergyMode.saver => EnergyBudget.saver,
         EnergyMode.limited =>
-          setting == EnergyBudgetSetting.eco
+          effectiveSetting == EnergyBudgetSetting.eco
               ? EnergyBudget.eco
               : EnergyBudget.reduced,
         EnergyMode.unconstrained => EnergyBudget.full,

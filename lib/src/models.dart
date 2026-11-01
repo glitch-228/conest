@@ -8,6 +8,8 @@ import 'circumvention/circumvention.dart';
 import 'links/link_preview_data.dart';
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
+import 'cold_mode.dart'
+    show ColdTransportMode, defaultColdWakeMinutes, normalizeColdWakeMinutes;
 import 'energy_budget_setting.dart';
 import 'feature_models.dart';
 import 'group_call/group_call_models.dart';
@@ -753,7 +755,9 @@ class GlobalConnectivityPreferences {
     this.contentRefusals = ContentRefusals.none,
     this.circumvention = const CircumventionPreferences(),
     this.syncSpeed = SyncSpeed.steady,
-    this.energyBudget = EnergyBudgetSetting.balanced,
+    this.energyBudget = EnergyBudgetSetting.automatic,
+    this.coldWakeMinutes = defaultColdWakeMinutes,
+    this.coldTransportModes = const {},
     this.shareSettings = false,
     this.settingsChangedAt,
     this.transportPolicies = const {
@@ -809,6 +813,13 @@ class GlobalConnectivityPreferences {
   /// How much power this device may spend on connections (M25).
   final EnergyBudgetSetting energyBudget;
 
+  /// In cold mode: how often (minutes) this device looks for news; zero is
+  /// only when asked.
+  final int coldWakeMinutes;
+
+  /// In cold mode: what each transport (by name) does; unlisted are cold.
+  final Map<String, ColdTransportMode> coldTransportModes;
+
   /// This device shares its general settings with the account's other
   /// devices that do too (the newest change wins).
   final bool shareSettings;
@@ -843,6 +854,8 @@ class GlobalConnectivityPreferences {
     ContentRefusals? contentRefusals,
     SyncSpeed? syncSpeed,
     EnergyBudgetSetting? energyBudget,
+    int? coldWakeMinutes,
+    Map<String, ColdTransportMode>? coldTransportModes,
     bool? shareSettings,
     DateTime? settingsChangedAt,
     Map<TransportKind, TransportPolicy>? transportPolicies,
@@ -855,6 +868,8 @@ class GlobalConnectivityPreferences {
       contentRefusals: contentRefusals ?? this.contentRefusals,
       syncSpeed: syncSpeed ?? this.syncSpeed,
       energyBudget: energyBudget ?? this.energyBudget,
+      coldWakeMinutes: coldWakeMinutes ?? this.coldWakeMinutes,
+      coldTransportModes: coldTransportModes ?? this.coldTransportModes,
       shareIdentifyingCarriersWithGroups:
           shareIdentifyingCarriersWithGroups ??
           this.shareIdentifyingCarriersWithGroups,
@@ -887,8 +902,16 @@ class GlobalConnectivityPreferences {
     if (!contentRefusals.isEmpty) 'contentRefusals': contentRefusals.toJson(),
     if (!circumvention.isDefault) 'circumvention': circumvention.toJson(),
     if (syncSpeed != SyncSpeed.steady) 'syncSpeed': syncSpeed.name,
-    if (energyBudget != EnergyBudgetSetting.balanced)
+    // The default is left out; a chosen Balanced is stored as such.
+    if (energyBudget != EnergyBudgetSetting.automatic)
       'energyBudget': energyBudget.name,
+    if (coldWakeMinutes != defaultColdWakeMinutes)
+      'coldWakeMinutes': coldWakeMinutes,
+    if (coldTransportModes.isNotEmpty)
+      'coldTransportModes': {
+        for (final entry in coldTransportModes.entries)
+          entry.key: entry.value.name,
+      },
     if (shareSettings) 'shareSettings': true,
     if (settingsChangedAt != null)
       'settingsChangedAt': settingsChangedAt!.toUtc().toIso8601String(),
@@ -922,6 +945,13 @@ class GlobalConnectivityPreferences {
         orElse: () => SyncSpeed.steady,
       ),
       energyBudget: EnergyBudgetSetting.parse(json['energyBudget']),
+      coldWakeMinutes: normalizeColdWakeMinutes(json['coldWakeMinutes']),
+      coldTransportModes: {
+        if (json['coldTransportModes'] case final Map<String, dynamic> modes)
+          for (final entry in modes.entries.take(64))
+            if (entry.key.length <= 40)
+              entry.key: ColdTransportMode.parse(entry.value),
+      },
       irohRelayEnabled: json['irohRelayEnabled'] as bool? ?? true,
       irohRelayUrls: normalizeIrohRelayUrls(
         (json['irohRelayUrls'] as List<dynamic>? ?? const [])

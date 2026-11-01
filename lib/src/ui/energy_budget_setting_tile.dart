@@ -25,6 +25,8 @@ class EnergyBudgetSettingTile extends StatelessWidget {
       EnergyBudgetSetting.balanced => l10n.energyBudgetBalanced,
       EnergyBudgetSetting.eco => l10n.energyBudgetEco,
       EnergyBudgetSetting.fast => l10n.energyBudgetFast,
+      EnergyBudgetSetting.cold => l10n.energyBudgetCold,
+      EnergyBudgetSetting.automatic => l10n.energyBudgetAutomatic,
     };
     return ListTile(
       key: const Key('energy-budget-setting'),

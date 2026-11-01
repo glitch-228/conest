@@ -81,6 +81,7 @@ import 'src/ui/nostr_chats_screen.dart';
 import 'src/ui/delta_chats_screen.dart';
 import 'src/ui/delta_attachment_card.dart';
 import 'src/ui/message_info_dialog.dart';
+import 'src/ui/cold_mode_ui.dart';
 import 'src/ui/message_times.dart';
 import 'l10n/app_localizations.dart';
 import 'src/app_locales.dart';
@@ -6613,7 +6614,9 @@ class _Sidebar extends StatelessWidget {
     final lanSummary = identity.lanAddresses.isEmpty
         ? 'no LAN address detected'
         : 'LAN ${identity.lanAddresses.take(2).join(', ')}';
-    return StableScrollbar(
+    return ColdRefresh(
+      controller: controller,
+      child: StableScrollbar(
       child: ListView(
         padding: const EdgeInsets.all(18),
         children: [
@@ -6978,6 +6981,7 @@ class _Sidebar extends StatelessWidget {
               child: _EmptyContactsState(palette: palette),
             )
           else ...[
+            ColdModeBanner(controller: controller),
             Row(
               children: [
                 Text(
@@ -7147,6 +7151,7 @@ class _Sidebar extends StatelessWidget {
           ],
           const SizedBox(height: 18),
         ],
+      ),
       ),
     );
   }
@@ -10464,6 +10469,8 @@ class _GroupChatPanelState extends State<_GroupChatPanel> {
                     ? () => _deleteSelected(messages)
                     : null,
               ),
+            // Cold mode: when this device last looked, and a refresh.
+            ColdModeBanner(controller: controller, compact: true),
             Expanded(
               child: Builder(
                 builder: (context) {
@@ -12563,6 +12570,8 @@ class _ChatPanelState extends State<_ChatPanel> {
                     ? () => _deleteSelected(messages)
                     : null,
               ),
+            // Cold mode: when this device last looked, and a refresh.
+            ColdModeBanner(controller: controller, compact: true),
             Expanded(
               child: Builder(
                 builder: (context) {
@@ -16160,6 +16169,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                               ),
                             ),
                             EnergyBudgetSettingTile(
+                              controller: widget.controller,
+                              busy: _busy,
+                            ),
+                            ColdModeSettings(
                               controller: widget.controller,
                               busy: _busy,
                             ),

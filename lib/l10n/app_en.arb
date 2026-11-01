@@ -9679,6 +9679,90 @@
   "@energyBudgetFast": {
     "description": "Power use choice: treat battery like mains power."
   },
+  "energyBudgetCold": "Cold: stopped until needed",
+  "@energyBudgetCold": {
+    "description": "Power use choice: cold mode, where unused connections are stopped and only wake now and then."
+  },
+  "energyBudgetAutomatic": "Automatic (cold on battery)",
+  "@energyBudgetAutomatic": {
+    "description": "Power use choice: cold on phones and laptops on battery, balanced on mains power."
+  },
+  "coldBannerChecked": "Cold mode · checked {ago}",
+  "@coldBannerChecked": {
+    "description": "Chat list banner in cold mode: when this device last looked for new messages, e.g. 'Cold mode · checked 3 min ago'.",
+    "placeholders": {
+      "ago": {
+        "type": "String"
+      }
+    }
+  },
+  "coldBannerNeverChecked": "Cold mode · not checked yet",
+  "@coldBannerNeverChecked": {
+    "description": "Chat list banner in cold mode before the first check."
+  },
+  "coldAgoJustNow": "just now",
+  "@coldAgoJustNow": {
+    "description": "How long ago, shorter than a minute."
+  },
+  "coldAgoMinutes": "{minutes} min ago",
+  "@coldAgoMinutes": {
+    "description": "How long ago, in minutes or hours as text, e.g. '3 min ago'.",
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "coldAgoHours": "{hours} h ago",
+  "@coldAgoHours": {
+    "description": "How long ago in hours.",
+    "placeholders": {
+      "hours": {
+        "type": "int"
+      }
+    }
+  },
+  "coldRefresh": "Check now",
+  "@coldRefresh": {
+    "description": "Tooltip of the button that looks for new messages now in cold mode."
+  },
+  "coldWakeTitle": "Cold mode: check every",
+  "@coldWakeTitle": {
+    "description": "Settings: how often a cold device looks for news."
+  },
+  "coldWakeManual": "Only when I ask",
+  "@coldWakeManual": {
+    "description": "Cold mode check interval choice: only when asked."
+  },
+  "coldWakeMinutes": "{minutes} minutes",
+  "@coldWakeMinutes": {
+    "description": "Cold mode check interval choice in minutes.",
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "coldWakeNote": "Your first relay stays connected, so messages and calls through it arrive at once. Other routes wake at each check, when you refresh, and to send.",
+  "@coldWakeNote": {
+    "description": "Settings note under the cold mode interval: calls and the relay's live connection."
+  },
+  "coldTransportsTitle": "Routes in cold mode",
+  "@coldTransportsTitle": {
+    "description": "Settings heading: per transport choice in cold mode."
+  },
+  "coldTransportCold": "Cold",
+  "@coldTransportCold": {
+    "description": "A route choice in cold mode: stopped until needed."
+  },
+  "coldTransportAlwaysOn": "Always on",
+  "@coldTransportAlwaysOn": {
+    "description": "A route choice in cold mode: never stopped."
+  },
+  "coldTransportOff": "Off",
+  "@coldTransportOff": {
+    "description": "A route choice in cold mode: never started."
+  },
   "airtimeBudgetUsed": "Airtime used in the last minute: {percent}%",
   "@airtimeBudgetUsed": {
     "description": "Radio page: share of the airtime budget used in the last minute.",

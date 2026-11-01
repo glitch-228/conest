@@ -6293,6 +6293,62 @@ class AppLocalizationsZh extends AppLocalizations {
   String get energyBudgetFast => '快速';
 
   @override
+  String get energyBudgetCold => '冷模式：不用时停止';
+
+  @override
+  String get energyBudgetAutomatic => '自动（用电池时为冷模式）';
+
+  @override
+  String coldBannerChecked(String ago) {
+    return '冷模式 · $ago检查';
+  }
+
+  @override
+  String get coldBannerNeverChecked => '冷模式 · 尚未检查';
+
+  @override
+  String get coldAgoJustNow => '刚刚';
+
+  @override
+  String coldAgoMinutes(int minutes) {
+    return '$minutes 分钟前';
+  }
+
+  @override
+  String coldAgoHours(int hours) {
+    return '$hours 小时前';
+  }
+
+  @override
+  String get coldRefresh => '立即检查';
+
+  @override
+  String get coldWakeTitle => '冷模式：检查间隔';
+
+  @override
+  String get coldWakeManual => '仅在我操作时';
+
+  @override
+  String coldWakeMinutes(int minutes) {
+    return '$minutes 分钟';
+  }
+
+  @override
+  String get coldWakeNote => '第一个中继保持连接，通过它的消息和来电会立即送达。其他线路在检查、刷新和发送时唤醒。';
+
+  @override
+  String get coldTransportsTitle => '冷模式下的线路';
+
+  @override
+  String get coldTransportCold => '冷';
+
+  @override
+  String get coldTransportAlwaysOn => '始终开启';
+
+  @override
+  String get coldTransportOff => '关闭';
+
+  @override
   String airtimeBudgetUsed(int percent) {
     return '最近一分钟已用空中时间：$percent%';
   }

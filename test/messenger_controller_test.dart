@@ -43,6 +43,8 @@ import 'package:conest/src/ui/email_carrier_panel.dart';
 import 'package:conest/src/ui/group_call_screen.dart';
 import 'package:conest/src/ui/nostr_carrier_panel.dart';
 import 'package:conest/src/account/account_model.dart';
+import 'package:conest/src/cold_mode.dart';
+import 'package:conest/src/ui/cold_mode_ui.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
 import 'package:conest/src/connection_map.dart';
@@ -1526,6 +1528,9 @@ class _InProcessIrohNetwork {
   /// arrives while the other way works).
   final droppedPairs = <(String, String)>{};
 
+  /// Every envelope send tried over this network, delivered or not.
+  final sendAttempts = <String, int>{};
+
   Future<TransportRegistry?> registry(IdentityRecord identity) async {
     final bridge = _InProcessIrohBridge(this, identity.irohEndpointId!);
     bridges[bridge.endpointId] = bridge;
@@ -1610,6 +1615,8 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
     required bool allowRelay,
     List<String> directAddresses = const [],
   }) async {
+    network.sendAttempts[endpointId] =
+        (network.sendAttempts[endpointId] ?? 0) + 1;
     if (!network.bridges.containsKey(endpointId)) {
       throw StateError('Sender offline');
     }
@@ -20947,6 +20954,194 @@ void main() {
         expect(keptBefore, greaterThanOrEqualTo(1));
       });
     }
+  });
+
+  group('Cold mode', () {
+    Future<(MessengerController, MessengerController, _InProcessIrohNetwork)>
+    coldPair() async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      for (final controller in [alice, bob]) {
+        controller.coldModeForTesting
+          ..lingerAfterSend = const Duration(milliseconds: 400)
+          ..holdAfterWake = const Duration(milliseconds: 400);
+      }
+      return (alice, bob, network);
+    }
+
+    bool irohUp(MessengerController controller) =>
+        controller.coldTransports.any((t) => t.id == 'iroh' && t.up);
+
+    test(
+      'idle transports are stopped, the relay push is not among them',
+      () async {
+        final (alice, _, _) = await coldPair();
+        expect(alice.coldModeActive, isFalse);
+        expect(irohUp(alice), isTrue);
+        await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+        expect(alice.coldModeActive, isTrue);
+        expect(irohUp(alice), isFalse);
+        // The relay's live connection is not something cold mode can stop.
+        expect(
+          alice.coldTransports.map((t) => t.id),
+          everyElement(isNot(anyOf('conestRelay', 'telegram', 'discord'))),
+        );
+        await alice.setEnergyBudget(EnergyBudgetSetting.balanced);
+        expect(alice.coldModeActive, isFalse);
+        expect(irohUp(alice), isTrue);
+      },
+    );
+
+    test('a send wakes the routes it needs and they go cold after the '
+        'linger', () async {
+      final (alice, bob, _) = await coldPair();
+      await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+      expect(irohUp(alice), isFalse);
+      await alice.sendMessage(contact: alice.contacts.single, body: 'wake');
+      expect(irohUp(alice), isTrue);
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'wake');
+      }, reason: 'the message did not arrive');
+      await _waitForIroh(
+        () => !irohUp(alice),
+        reason: 'the route stayed up after the linger',
+        timeout: const Duration(seconds: 6),
+      );
+    });
+
+    test('a transport set to always on stays up', () async {
+      final (alice, _, _) = await coldPair();
+      final prefs = alice.identity!.connectivity.copyWith(
+        energyBudget: EnergyBudgetSetting.cold,
+        coldTransportModes: {'iroh': ColdTransportMode.alwaysOn},
+      );
+      await alice.updateGlobalConnectivity(prefs);
+      expect(alice.coldModeActive, isTrue);
+      expect(irohUp(alice), isTrue);
+    });
+
+    test(
+      'a refresh wakes the transports, polls, and stops them again',
+      () async {
+        final (alice, bob, _) = await coldPair();
+        await bob.setEnergyBudget(EnergyBudgetSetting.cold);
+        expect(bob.coldLastCheckedAt, isNotNull);
+        final before = bob.coldLastCheckedAt!;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await alice.sendMessage(contact: alice.contacts.single, body: 'later');
+        await bob.refreshNow();
+        expect(bob.coldLastCheckedAt!.isAfter(before), isTrue);
+        expect(
+          bob
+              .messagesFor(alice.identity!.deviceId)
+              .any((m) => m.body == 'later'),
+          isTrue,
+        );
+        await _waitForIroh(
+          () => !irohUp(bob),
+          reason: 'it stayed awake after the refresh',
+          timeout: const Duration(seconds: 6),
+        );
+      },
+    );
+
+    testWidgets('the chat list says when it last looked and offers a '
+        'refresh; the settings list the routes', (tester) async {
+      late MessengerController alice;
+      await tester.runAsync(() async {
+        final (a, _, _) = await coldPair();
+        alice = a;
+      });
+      DateTime now = DateTime.now();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                ColdModeBanner(controller: alice, now: () => now),
+                ColdModeSettings(controller: alice, busy: false),
+              ],
+            ),
+          ),
+        ),
+      );
+      expect(find.byKey(const ValueKey('cold-mode-banner')), findsNothing);
+      await tester.runAsync(() async {
+        await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pump();
+      expect(find.text('Cold mode · checked just now'), findsOneWidget);
+      now = now.add(const Duration(minutes: 3));
+      await tester.runAsync(() async {
+        await alice.refreshNow();
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+      });
+      await tester.pump();
+      expect(find.textContaining('Cold mode · checked'), findsOneWidget);
+      expect(find.byKey(const ValueKey('cold-mode-iroh')), findsOneWidget);
+      expect(find.byKey(const ValueKey('cold-wake-minutes')), findsOneWidget);
+    });
+
+    test('a contact told that this device is cold stops trying its direct '
+        'routes and uses a storing one', () async {
+      final (alice, bob, network) = await coldPair();
+      await bob.setEnergyBudget(EnergyBudgetSetting.cold);
+      final bobId = bob.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.peerIsColdForTesting(bobId);
+      }, reason: 'Alice was not told');
+      await _waitForIroh(
+        () => !irohUp(bob),
+        reason: 'Bob stayed awake',
+        timeout: const Duration(seconds: 6),
+      );
+      // The first message finds Bob asleep and goes by the relay.
+      await alice.sendMessage(contact: alice.contacts.single, body: 'one');
+      await _waitForIroh(
+        () => alice.coldDirectSkippedForTesting(bobId),
+        reason: 'the direct routes were still tried',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.refreshNow());
+        return bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'one');
+      }, reason: 'the relay did not carry the first message');
+      final aliceEndpoint = alice.identity!.irohEndpointId!;
+      final attempts = network.sendAttempts[aliceEndpoint];
+      await alice.sendMessage(contact: alice.contacts.single, body: 'two');
+      await _waitForIroh(() {
+        unawaited(bob.refreshNow());
+        return bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'two');
+      }, reason: 'the relay did not carry the second message');
+      expect(
+        network.sendAttempts[aliceEndpoint],
+        attempts,
+        reason: 'a sleeping contact was dialed again',
+      );
+    });
   });
 
   group('Linking a device that already has data', () {
