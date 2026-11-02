@@ -31331,7 +31331,11 @@ void main() {
       final parkedHere = aliceFirst ? alice : bob;
       for (
         var i = 0;
-        i < 40 && parkedHere.parkedUnreadableCountForTesting == 0;
+        i < 40 &&
+            (parkedHere.parkedUnreadableCountForTesting == 0 ||
+                // (A route update ahead of its bundle parks first; wait for
+                // the hello this test is about.)
+                !relay.storedEnvelopes.any((e) => e.kind == 'ratchet_hello'));
         i++
       ) {
         clock = clock.add(const Duration(minutes: 1));
