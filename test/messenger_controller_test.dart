@@ -1290,6 +1290,24 @@ class _RealHttpOverrides extends HttpOverrides {}
 MatrixHttp _realMatrixHttp() =>
     HttpOverrides.runWithHttpOverrides(IoMatrixHttp.new, _RealHttpOverrides());
 
+/// A temp folder that is deleted when the current test ends (after the
+/// test's own tear-downs, which are registered later and run first).
+Directory _tempDirRemovedAfterTest(String prefix) {
+  final dir = Directory.systemTemp.createTempSync(prefix);
+  try {
+    addTearDown(() async {
+      try {
+        if (dir.existsSync()) await dir.delete(recursive: true);
+      } on FileSystemException {
+        // A file still open on Windows: the OS cleans temp later.
+      }
+    });
+  } on StateError {
+    // Outside a test body (no tear-down to attach to): the OS cleans temp.
+  }
+  return dir;
+}
+
 Future<MessengerController> _createController({
   required RelayClient relayClient,
   required String displayName,
@@ -1331,6 +1349,7 @@ Future<MessengerController> _createController({
   Future<Directory> Function()? dataRoot,
   Future<Directory> Function()? legacyAttachmentRoot,
 }) async {
+  Directory? attachmentBase;
   final controller = MessengerController(
     keepErrorHistory: keepErrorHistory,
     // No real XMPP server is ever contacted from tests.
@@ -1386,11 +1405,12 @@ Future<MessengerController> _createController({
             : () async {
                 // Isolated per-test tmpdir so concurrent tests don't share an
                 // attachment cache and so a passed `path_provider` isn't
-                // required in the test runner.
-                final base = Directory.systemTemp.createTempSync(
+                // required in the test runner. One per controller, removed
+                // when the test ends (31,000 were left behind once and
+                // filled /tmp).
+                return attachmentBase ??= _tempDirRemovedAfterTest(
                   'conest_test_attachments_',
                 );
-                return base;
               }),
   );
   await controller.initialize();
@@ -17356,7 +17376,7 @@ void main() {
         matrixNativeApi: FakeMatrixNative(hub),
         loadNativeMatrixClient: false,
         attachmentRootProvider: () async =>
-            Directory.systemTemp.createTempSync('conest_test_attachments_'),
+            _tempDirRemovedAfterTest('conest_test_attachments_'),
       );
       addTearDown(later.dispose);
       await later.initialize();
