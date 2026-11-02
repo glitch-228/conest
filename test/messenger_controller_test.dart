@@ -373,11 +373,15 @@ class _MemoryVaultStore extends VaultStore {
   VaultSnapshot _snapshot = VaultSnapshot.empty();
   int saveCount = 0;
 
+  /// Saves fail while this is set.
+  bool failSaves = false;
+
   @override
   Future<VaultSnapshot> load() async => _snapshot;
 
   @override
   Future<void> save(VaultSnapshot snapshot) async {
+    if (failSaves) throw const FileSystemException('disk full');
     saveCount++;
     _snapshot = snapshot;
   }
@@ -31410,6 +31414,100 @@ void main() {
       await alice.processEnvelopesForTesting([
         garbage,
       ], failOnProcessingError: true);
+      expect(alice.parkedUnreadableCountForTesting, 0);
+    });
+
+    RelayEnvelope garbagePreKey(
+      MessengerController to,
+      MessengerController from,
+      String id,
+    ) => RelayEnvelope(
+      protocolVersion: 3,
+      kind: 'ratchet_hello',
+      messageId: id,
+      conversationId: 'c',
+      senderAccountId: from.identity!.accountId,
+      senderDeviceId: from.identity!.deviceId,
+      recipientDeviceId: to.identity!.deviceId,
+      createdAt: DateTime.now().toUtc(),
+      ciphertextBase64: base64Encode(utf8.encode('x')),
+      ratchetType: 0,
+    );
+
+    test('a batch that parked something fails, keeping its lease, when the '
+        'save fails', () async {
+      final vault = _MemoryVaultStore();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        vaultStore: vault,
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        ratchetEngine: FakeRatchetEngine(),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      relay.shouldFailStore = (_, _, _, _, e) => e.kind == 'ratchet_bundle';
+      await _pairControllers(alice, bob);
+      vault.failSaves = true;
+      await expectLater(
+        alice.processEnvelopesForTesting([
+          garbagePreKey(alice, bob, 'rhello-1'),
+        ], failOnProcessingError: true),
+        throwsA(anything),
+      );
+      vault.failSaves = false;
+      // Not leased: the same call succeeds and parks.
+      await alice.processEnvelopesForTesting([
+        garbagePreKey(alice, bob, 'rhello-2'),
+      ], failOnProcessingError: true);
+      expect(alice.parkedUnreadableCountForTesting, greaterThan(0));
+    });
+
+    test('a parked envelope read again keeps its first time and is given up '
+        'after three tries; old ones go when the vault loads', () async {
+      var clock = DateTime.utc(2026, 11, 2, 12);
+      final vault = _MemoryVaultStore();
+      final relay = _FakeRelayClient();
+      Future<MessengerController> device(String name, {bool create = true}) =>
+          _createController(
+            relayClient: relay,
+            displayName: name,
+            vaultStore: name == 'Alice' ? vault : null,
+            createIdentity: create,
+            ratchetEngine: FakeRatchetEngine(),
+            nowProvider: () => clock,
+          );
+      var alice = await device('Alice');
+      final bob = await device('Bob');
+      addTearDown(bob.dispose);
+      relay.shouldFailStore = (_, _, _, _, e) => e.kind == 'ratchet_bundle';
+      await _pairControllers(alice, bob);
+      await alice.processEnvelopesForTesting([garbagePreKey(alice, bob, 'h1')]);
+      final first = alice.firstParkedAtForTesting;
+      expect(first, isNotNull);
+      for (var i = 0; i < 2; i++) {
+        clock = clock.add(const Duration(hours: 1));
+        alice.replayParkedForTesting(bob.identity!.deviceId);
+        await alice.settleReplaysForTesting();
+        expect(alice.parkedUnreadableCountForTesting, 1, reason: 'try $i');
+        expect(alice.firstParkedAtForTesting, first, reason: 'clock restarted');
+      }
+      clock = clock.add(const Duration(hours: 1));
+      alice.replayParkedForTesting(bob.identity!.deviceId);
+      await alice.settleReplaysForTesting();
+      expect(alice.parkedUnreadableCountForTesting, 0, reason: 'no cap');
+      // Old ones go on load.
+      await alice.processEnvelopesForTesting([garbagePreKey(alice, bob, 'h2')]);
+      expect(alice.parkedUnreadableCountForTesting, 1);
+      alice.dispose();
+      clock = clock.add(const Duration(hours: 25));
+      alice = await device('Alice', create: false);
+      addTearDown(alice.dispose);
       expect(alice.parkedUnreadableCountForTesting, 0);
     });
 

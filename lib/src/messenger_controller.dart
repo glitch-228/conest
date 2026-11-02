@@ -21020,13 +21020,15 @@ class MessengerController extends ChangeNotifier {
         _scheduleTransferForegroundSync();
       }
     }
-    if (_parkedSinceSave > 0 && !_disposed) {
-      // What was parked is on disk before the batch's lease is acknowledged.
-      _parkedSinceSave = 0;
+    if (outcome.parked > 0 && !_disposed) {
+      // What this batch parked is on disk before its lease is acknowledged;
+      // if the save fails the lease is kept (the batch fails) and the relay
+      // hands the envelopes out again.
       try {
         await _saveSnapshotSilently(notify: false);
       } catch (error) {
         recordError('vault', 'Parked envelopes not saved: $error');
+        if (failOnProcessingError) rethrow;
       }
     }
     if (failOnProcessingError && outcome.failed > 0) {
@@ -21060,6 +21062,7 @@ class MessengerController extends ChangeNotifier {
   ) async {
     var processed = 0;
     var failed = 0;
+    var parked = 0;
     final orderedEnvelopes = _orderForProcessing(envelopes);
     for (final envelope in orderedEnvelopes) {
       if (!_isValidInboundEnvelope(envelope)) {
@@ -21467,7 +21470,7 @@ class MessengerController extends ChangeNotifier {
           // A pre-key message ahead of its bundle, or one from a peer we hold
           // no session with: kept here, not on the relay's lease, and read
           // again when the peer's bundle arrives (see [_replayParked]).
-          _parkUnreadable(envelope);
+          if (_parkUnreadable(envelope)) parked++;
         } else if (error is RatchetDecryptException) {
           // Late or unreadable for good (its key is gone): the sender's
           // retry encrypts it afresh. The relay's copy goes.
@@ -21497,13 +21500,20 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
-    return _EnvelopeProcessingOutcome(processed: processed, failed: failed);
+    return _EnvelopeProcessingOutcome(
+      processed: processed,
+      failed: failed,
+      parked: parked,
+    );
   }
 
   /// Whether an envelope that failed with [error] may be read later.
   static bool _canBecomeReadable(Object error) =>
-      error is RatchetUnknownPeerException ||
-      error is RatchetNoSessionException;
+      error is RatchetUnknownPeerException;
+
+  /// Set around a replay: the parked entry being read again.
+  static const Object _replayKey = #conestParkedReplay;
+  static const int _parkedReplays = 3;
 
   /// Bytes the parked envelopes may take in the vault: in all, per sender,
   /// and each. Every vault save rewrites them, so they are small.
@@ -21512,16 +21522,23 @@ class MessengerController extends ChangeNotifier {
   static const int _parkedEnvelopeBytes = 64 * 1024;
   static const Duration _parkedLifetime = Duration(hours: 24);
 
-  /// Parked envelopes added since the last look (a save goes before the
-  /// relay lease is acknowledged).
-  int _parkedSinceSave = 0;
-
-  void _parkUnreadable(RelayEnvelope envelope, {DateTime? since}) {
-    final contact = _contactByDeviceId(envelope.senderDeviceId);
-    if (contact == null) return;
+  /// Whether the envelope was kept.
+  bool _parkUnreadable(RelayEnvelope envelope) {
+    // A contact, or a group member who is no contact.
+    final contact = _ratchetPeer(envelope.senderDeviceId);
+    if (contact == null) return false;
+    var since = _now().toUtc();
+    var replays = 0;
+    if (Zone.current[_replayKey] case final (DateTime, int) again) {
+      // Read again and still not readable: it keeps its first time, and is
+      // given up after a few tries.
+      if (again.$2 + 1 >= _parkedReplays) return false;
+      since = again.$1;
+      replays = again.$2 + 1;
+    }
     final encoded = jsonEncode(envelope.toJson());
     final size = utf8.encode(encoded).length;
-    if (size > _parkedEnvelopeBytes) return;
+    if (size > _parkedEnvelopeBytes) return false;
     final now = _now().toUtc();
     final cutoff = now.subtract(_parkedLifetime);
     var kept = [
@@ -21532,8 +21549,9 @@ class MessengerController extends ChangeNotifier {
         senderDeviceId: envelope.senderDeviceId,
         conversationId: envelope.conversationId,
         envelopeJson: encoded,
-        receivedAt: since ?? now,
+        receivedAt: since,
         peerKey: contact.publicKeyBase64,
+        replays: replays,
       ),
     ];
     int bytes(Iterable<HeldEnvelope> entries) =>
@@ -21551,7 +21569,7 @@ class MessengerController extends ChangeNotifier {
       kept.removeAt(0);
     }
     _snapshot = _snapshot.copyWith(parkedUnreadable: kept);
-    _parkedSinceSave++;
+    return true;
   }
 
   /// A bundle from an authenticated contact arrived: what was parked for it
@@ -21592,7 +21610,10 @@ class MessengerController extends ChangeNotifier {
           }
           // Not a leased batch: nothing is held for it, and a failure parks
           // it again (with its first time) or drops it.
-          await _processEnvelopes([envelope]);
+          await runZoned(
+            () => _processEnvelopes([envelope]),
+            zoneValues: {_replayKey: (entry.receivedAt, entry.replays)},
+          );
         }
       } finally {
         _replayingParked.remove(peer.deviceId);
@@ -21600,6 +21621,23 @@ class MessengerController extends ChangeNotifier {
       }
     }());
   }
+
+  @visibleForTesting
+  void replayParkedForTesting(String deviceId) {
+    final peer = _ratchetPeer(deviceId);
+    if (peer != null) _replayParked(peer);
+  }
+
+  @visibleForTesting
+  Future<void> settleReplaysForTesting() async {
+    while (_replayingParked.isNotEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  @visibleForTesting
+  DateTime? get firstParkedAtForTesting =>
+      _snapshot.parkedUnreadable.firstOrNull?.receivedAt;
 
   @visibleForTesting
   int get parkedUnreadableCountForTesting => _snapshot.parkedUnreadable.length;
@@ -27994,8 +28032,41 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(pendingAckDeliveries: filtered);
   }
 
+  static bool _isStaleSessionCiphertext(PendingAckDelivery entry) {
+    if (!entry.kind.carriesEnvelope ||
+        entry.envelopeJson == null ||
+        entry.payload != null) {
+      return false;
+    }
+    try {
+      return RelayEnvelope.fromJson(entry.envelopeJson!).protocolVersion == 3;
+    } catch (_) {
+      return false;
+    }
+  }
+
   bool _markLegacyQueuedControlsIncompatible() {
     var changed = false;
+    // Parked envelopes older than their lifetime go.
+    final parkedCutoff = _now().toUtc().subtract(_parkedLifetime);
+    final parkedKept = [
+      for (final entry in _snapshot.parkedUnreadable)
+        if (entry.receivedAt.isAfter(parkedCutoff)) entry,
+    ];
+    if (parkedKept.length != _snapshot.parkedUnreadable.length) {
+      changed = true;
+      _snapshot = _snapshot.copyWith(parkedUnreadable: parkedKept);
+    }
+    // A control queued by an older build as session ciphertext cannot be
+    // sent again (its session is gone): it goes, the sender resends.
+    final withoutStale = [
+      for (final entry in _snapshot.pendingAckDeliveries)
+        if (!_isStaleSessionCiphertext(entry)) entry,
+    ];
+    if (withoutStale.length != _snapshot.pendingAckDeliveries.length) {
+      changed = true;
+      _snapshot = _snapshot.copyWith(pendingAckDeliveries: withoutStale);
+    }
     final entries = _snapshot.pendingAckDeliveries
         .map((entry) {
           if (!entry.kind.carriesEnvelope ||
@@ -42407,10 +42478,17 @@ class _PairingBeaconRoute {
 }
 
 class _EnvelopeProcessingOutcome {
-  const _EnvelopeProcessingOutcome({this.processed = 0, this.failed = 0});
+  const _EnvelopeProcessingOutcome({
+    this.processed = 0,
+    this.failed = 0,
+    this.parked = 0,
+  });
 
   final int processed;
   final int failed;
+
+  /// Envelopes this batch parked (they are saved before its lease goes).
+  final int parked;
 }
 
 class _DeliveryRoute {

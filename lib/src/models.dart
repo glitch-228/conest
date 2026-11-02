@@ -5017,6 +5017,7 @@ class HeldEnvelope {
     required this.envelopeJson,
     required this.receivedAt,
     this.peerKey = '',
+    this.replays = 0,
   });
 
   final String senderDeviceId;
@@ -5028,18 +5029,23 @@ class HeldEnvelope {
   /// envelopes only): after a key change it is not read again.
   final String peerKey;
 
+  /// How often a parked envelope was read again and still failed.
+  final int replays;
+
   Map<String, dynamic> toJson() => {
     'senderDeviceId': senderDeviceId,
     'conversationId': conversationId,
     'envelopeJson': envelopeJson,
     'receivedAt': receivedAt.toIso8601String(),
     if (peerKey.isNotEmpty) 'peerKey': peerKey,
+    if (replays > 0) 'replays': replays,
   };
 
   factory HeldEnvelope.fromJson(Map<String, dynamic> json) => HeldEnvelope(
     senderDeviceId: json['senderDeviceId'] as String,
     conversationId: json['conversationId'] as String? ?? '',
     peerKey: json['peerKey'] as String? ?? '',
+    replays: (json['replays'] as num?)?.toInt() ?? 0,
     envelopeJson: json['envelopeJson'] as String,
     receivedAt:
         DateTime.tryParse(json['receivedAt'] as String? ?? '') ??
