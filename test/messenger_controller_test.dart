@@ -31447,6 +31447,133 @@ void main() {
       expect(alice.parkedUnreadableCountForTesting, 0);
     });
 
+    Future<(MessengerController, MessengerController, _FakeRelayClient)>
+    strictPair({bool Function(RelayEnvelope envelope)? lose}) async {
+      final relay = _FakeRelayClient(
+        shouldBlackholeStore: lose == null ? null : (_, _, _, _, e) => lose(e),
+      );
+      Future<MessengerController> device(String name) => _createController(
+        relayClient: relay,
+        displayName: name,
+        ratchetEngine: FakeRatchetEngine(
+          skippedKeyLimit: 40,
+          receivingChains: 5,
+        ),
+      );
+      final alice = await device('Alice');
+      final bob = await device('Bob');
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await establish(alice, bob);
+      return (alice, bob, relay);
+    }
+
+    test('a retry after the peer has spoken is sealed again and read; one '
+        'after it said nothing reuses the bytes', () async {
+      var losing = false;
+      String? firstId;
+      final cipher = <String>[];
+      String? aliceId;
+      final (alice, bob, relay) = await strictPair(
+        lose: (e) {
+          if (e.kind != 'direct_message' || e.senderDeviceId != aliceId) {
+            return false;
+          }
+          // The first message sent while losing never arrives.
+          if (losing) firstId ??= e.messageId;
+          if (e.messageId != firstId) return false;
+          cipher.add(e.ciphertextBase64!);
+          return losing;
+        },
+      );
+      final me = alice.identity!.deviceId;
+      aliceId = me;
+      final bobId = bob.identity!.deviceId;
+      losing = true;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'first');
+      // The peer says nothing: a retry goes out with the same bytes.
+      await alice.retryUnacknowledgedMessagesNow();
+      await alice.retryUnacknowledgedMessagesNow();
+      expect(cipher, isNotEmpty);
+      expect(cipher.toSet(), hasLength(1), reason: 'silent peer: same bytes');
+      // Six round trips while it is stuck: the peer keeps only the last five
+      // chains of this device, and the one of the stuck message is gone.
+      for (var i = 0; i < 6; i++) {
+        await alice.sendMessage(contact: alice.contacts.single, body: 'p$i');
+        await _waitForIroh(() {
+          unawaited(bob.pollNow());
+          return bob.messagesFor(me).any((m) => m.body == 'p$i');
+        }, reason: 'Bob did not get p$i');
+        await bob.sendMessage(contact: bob.contacts.single, body: 'q$i');
+        await _waitForIroh(() {
+          unawaited(alice.pollNow());
+          return alice.messagesFor(bobId).any((m) => m.body == 'q$i');
+        }, reason: 'Alice did not get q$i');
+      }
+      expect(
+        bob.messagesFor(me).any((m) => m.body == 'first'),
+        isFalse,
+        reason: 'the first got through by itself',
+      );
+      losing = false;
+      await _waitForIroh(() {
+        unawaited(alice.retryUnacknowledgedMessagesNow());
+        unawaited(bob.pollNow());
+        return bob.messagesFor(me).any((m) => m.body == 'first');
+      }, reason: 'the retry arrived on a chain the peer had dropped');
+      expect(cipher.toSet().length, greaterThan(1), reason: 'sealed afresh');
+    }, timeout: const Timeout(Duration(minutes: 3)));
+
+    test('a message of a working session that cannot be read is late, and no '
+        'reset follows for a peer that sends fresh retries; an older build '
+        'gets one', () async {
+      for (final fresh in [true, false]) {
+        final (alice, bob, relay) = await strictPair();
+        final bobId = bob.identity!.deviceId;
+        if (!fresh) {
+          alice.dropContactCapabilityForTesting(
+            bobId,
+            ApplicationCapability.freshRetriesV1,
+          );
+        } else {
+          expect(
+            alice.contacts.single.featureCapabilities,
+            contains(ApplicationCapability.freshRetriesV1),
+          );
+        }
+        relay.fetchDelay = const Duration(hours: 1);
+        relay.storedEnvelopes.clear();
+        // Bob writes 45 messages of one chain; the first reaches Alice last,
+        // after 44 newer ones: its key is gone.
+        for (var i = 0; i < 45; i++) {
+          await bob.sendMessage(contact: bob.contacts.single, body: 'b$i');
+        }
+        final fromBob = <RelayEnvelope>[];
+        for (final e in relay.storedEnvelopes) {
+          if (e.senderDeviceId == bobId &&
+              e.kind == 'direct_message' &&
+              e.protocolVersion == 3 &&
+              !fromBob.any((known) => known.messageId == e.messageId)) {
+            fromBob.add(e);
+          }
+        }
+        for (final e in fromBob.skip(1)) {
+          await alice.processEnvelopesForTesting([e]);
+        }
+        relay.storedEnvelopes.clear();
+        await alice.processEnvelopesForTesting([fromBob.first]);
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        final resets = relay.storedEnvelopes.where(
+          (e) => e.kind == 'ratchet_bundle',
+        );
+        if (fresh) {
+          expect(resets, isEmpty, reason: 'a late message started a reset');
+        } else {
+          expect(resets, isNotEmpty, reason: 'an older build got no reset');
+        }
+      }
+    }, timeout: const Timeout(Duration(minutes: 5)));
+
     test('envelopes arrive in order within a run, and a bulk key at the end '
         'of a pile stays near it', () async {
       final alice = await _createController(

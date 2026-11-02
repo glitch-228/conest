@@ -437,6 +437,8 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
 
   Future<void> _waitForSendSlot() async {
     // A LimiterRefused: this account is busy, not the route broken.
+    // The adapter took this frame's turn already, to seal after it.
+    if (TurnToken.take()) return;
     await _limiter.acquire();
   }
 

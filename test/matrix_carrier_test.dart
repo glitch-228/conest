@@ -339,6 +339,63 @@ void main() {
       expect(sent, hasLength(1));
     });
 
+    test(
+      'a session-encrypted envelope is sealed after its Matrix turn',
+      () async {
+        final limiter = NetworkLimiter(
+          const LimiterBudget(
+            name: 'matrix',
+            gap: Duration(milliseconds: 300),
+            burst: 1,
+            maxWait: Duration(seconds: 30),
+          ),
+        );
+        final sent = <(MatrixAddress, Map<String, Object?>)>[];
+        final adapter =
+            MatrixTransportAdapter(
+              sealer: _PrefixSealer('alice'),
+              channel: _RecordingChannel(sent),
+            )..attach(
+              MatrixSession(
+                homeserver: Uri.parse('https://hs.example'),
+                userId: '@alice:fake.test',
+                deviceId: 'CONEST_alice',
+                accessToken: 'unused',
+              ),
+            );
+        adapter.limiter = limiter;
+        final route = (await adapter.discoverRoutes(
+          peer('dev-bob', 'bob'),
+        )).single;
+        var seals = 0;
+        TransportEnvelope envelope(String id) => TransportEnvelope(
+          id: id,
+          recipientDeviceId: 'dev-bob',
+          bytes: Uint8List(300),
+          seal: () async {
+            seals++;
+            return Uint8List(200);
+          },
+          createdAt: DateTime.now().toUtc(),
+        );
+        await adapter.sendEnvelope(
+          peer: peer('dev-bob', 'bob'),
+          route: route,
+          envelope: envelope('m1'),
+        );
+        expect(seals, 1);
+        final waiting = adapter.sendEnvelope(
+          peer: peer('dev-bob', 'bob'),
+          route: route,
+          envelope: envelope('m2'),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(seals, 1, reason: 'sealed before its turn');
+        await waiting;
+        expect(seals, 2);
+      },
+    );
+
     test('a peer without a Matrix address gets no route', () async {
       final alice = await adapter('alice', 'alice-pass');
       expect(

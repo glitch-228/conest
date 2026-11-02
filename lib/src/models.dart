@@ -4106,6 +4106,37 @@ class PendingForward {
   }
 }
 
+/// The making of an envelope's session-encrypted bytes, deferred to the
+/// moment a transport sends it. One call seals; calls made while it runs
+/// share it; one that failed lets the next call try again (another route).
+class LazySeal {
+  LazySeal(this._seal, {this.onSealed});
+
+  final Future<RelayEnvelope> Function() _seal;
+  final void Function()? onSealed;
+  Future<RelayEnvelope>? _running;
+  RelayEnvelope? _done;
+
+  bool get isSealed => _done != null;
+
+  Future<RelayEnvelope> call() =>
+      _done != null ? Future.value(_done) : (_running ??= _run());
+
+  Future<RelayEnvelope> _run() async {
+    try {
+      final envelope = await _seal();
+      _done = envelope;
+      onSealed?.call();
+      return envelope;
+    } catch (_) {
+      _running = null;
+      rethrow;
+    } finally {
+      _running = null;
+    }
+  }
+}
+
 class RelayEnvelope {
   RelayEnvelope({
     this.protocolVersion = 2,
@@ -4122,7 +4153,24 @@ class RelayEnvelope {
     this.acknowledgedMessageId,
     this.payloadBase64,
     this.ratchetType,
+    this.lazy,
+    this.sealedAfterReceived,
   });
+
+  /// How many ratchet messages from the recipient had been read when this
+  /// envelope was sealed; null before. A retry may reuse the sealed bytes
+  /// only while the recipient has said nothing since.
+  final int? Function()? sealedAfterReceived;
+
+  /// Set while the envelope is only a header with a placeholder of the right
+  /// size: the session-encrypted bytes are made by [sealed] when a transport
+  /// takes the envelope, after any wait for its turn (an Olm message held
+  /// after encryption can become unreadable). Not serialized.
+  final LazySeal? lazy;
+
+  /// The envelope as it goes on the wire: itself, or sealed now. Copies sent
+  /// together by several routes share one seal.
+  Future<RelayEnvelope> sealed() => lazy == null ? Future.value(this) : lazy!();
 
   final int protocolVersion;
   final String kind;

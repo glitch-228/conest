@@ -78,6 +78,11 @@ enum ApplicationCapability {
   /// instead of one receipt per message, so a burst costs a few sends on a
   /// carrier.
   batchedAcksV1,
+
+  /// Encrypts a retry afresh (a new Olm message for the same message id)
+  /// instead of resending the same bytes, so a receiver need not reset its
+  /// session over a late copy.
+  freshRetriesV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

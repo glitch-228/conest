@@ -314,8 +314,22 @@ class MatrixTransportAdapter implements TransportAdapter, RateLimited {
         address == null) {
       throw StateError('Matrix is not available for this contact.');
     }
-    final sealed = await _sealer.seal(peer.deviceId, envelope.bytes);
-    final frames = matrixCarrierFrames(MatrixClient.newTransactionId(), sealed);
+    // Frames of the placeholder (as big as the sealed bytes can be) count
+    // the turns needed; the real ones are made when the first turn has come.
+    var frames = matrixCarrierFrames(
+      MatrixClient.newTransactionId(),
+      await _sealer.seal(peer.deviceId, envelope.bytes),
+    );
+    var realFrames = envelope.seal == null;
+    Future<void> realize() async {
+      if (realFrames) return;
+      frames = matrixCarrierFrames(
+        MatrixClient.newTransactionId(),
+        await _sealer.seal(peer.deviceId, await envelope.sealedBytes()),
+      );
+      realFrames = true;
+    }
+
     final turns = limiter;
     // The registry cuts this attempt off after the capability's timeout: the
     // limiter's waits end before that, so waiting for a turn is never
@@ -348,15 +362,22 @@ class MatrixTransportAdapter implements TransportAdapter, RateLimited {
       return result;
     }
 
-    for (final frame in frames) {
+    for (var index = 0; index < frames.length; index++) {
       final transactionId = MatrixClient.newTransactionId();
       if (channel != null) {
-        await paced(() => channel.sendFrame(address, frame, transactionId));
+        await paced(() async {
+          await realize();
+          await channel.sendFrame(address, frames[index], transactionId);
+        });
         continue;
       }
-      Future<void> send() => client!.sendToDevice(matrixCarrierEventType, {
-        address.userId: {address.deviceId: frame},
-      }, transactionId: transactionId);
+      Future<void> send() async {
+        await realize();
+        return client!.sendToDevice(matrixCarrierEventType, {
+          address.userId: {address.deviceId: frames[index]},
+        }, transactionId: transactionId);
+      }
+
       try {
         await paced(send);
       } on MatrixException catch (error) {

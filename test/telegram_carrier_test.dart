@@ -89,7 +89,7 @@ void main() {
       retryDelay: const Duration(milliseconds: 10),
       sendSpacing: Duration.zero,
       wait: (delay) =>
-          delay.inSeconds == 25 ? restGate.future : Future<void>.value(),
+          delay.inSeconds == 3 ? restGate.future : Future<void>.value(),
     )..start();
     addTearDown(channel.stop);
     await until(() => channel.state == TelegramCarrierState.connected);
@@ -182,7 +182,7 @@ void main() {
       retryDelay: const Duration(milliseconds: 10),
       sendSpacing: Duration.zero,
       wait: (delay) =>
-          delay.inSeconds == 25 ? restGate.future : Future<void>.value(),
+          delay.inSeconds == 3 ? restGate.future : Future<void>.value(),
     )..start();
     addTearDown(channel.stop);
     await until(() => channel.state == TelegramCarrierState.connected);
@@ -293,13 +293,37 @@ void main() {
         'sendMessage',
         429,
         'Too Many Requests',
-        retryAfter: 7,
+        retryAfter: 3,
       ),
     );
     await alice.channel.sendFrame('bob_conest_bot', Uint8List.fromList([9]));
-    expect(alice.waits, contains(const Duration(seconds: 7)));
-    expect(alice.rested, [const Duration(seconds: 7)]);
+    expect(alice.waits, contains(const Duration(seconds: 3)));
+    expect(alice.rested, [const Duration(seconds: 3)]);
     await until(() => bob.received.isNotEmpty);
+  });
+
+  test('a rate limit longer than a blip is refused, not waited out inside '
+      'the queue with the envelope sealed', () async {
+    final hub = FakeTelegramBots();
+    final alice = _Side(hub, hub.addBot('alice_conest_bot'));
+    hub.addBot('bob_conest_bot');
+    alice.channel.start();
+    addTearDown(alice.channel.stop);
+    await until(() => alice.channel.state == TelegramCarrierState.connected);
+    alice.bot.failNext.add(
+      const TelegramBotException(
+        'sendMessage',
+        429,
+        'Too Many Requests',
+        retryAfter: 20,
+      ),
+    );
+    await expectLater(
+      alice.channel.sendFrame('bob_conest_bot', Uint8List(3)),
+      throwsA(isA<LimiterRefused>()),
+    );
+    expect(alice.rested, [const Duration(seconds: 20)]);
+    expect(alice.waits, isNot(contains(const Duration(seconds: 20))));
   });
 
   test('a refusal explains that both bots need bot-to-bot messaging', () async {
@@ -528,7 +552,7 @@ class _RateLimitOnceApi implements TelegramBotApi {
         'sendMessage',
         429,
         'Too Many Requests',
-        retryAfter: 25,
+        retryAfter: 3,
       );
     }
     return inner.call(method, parameters, timeout);

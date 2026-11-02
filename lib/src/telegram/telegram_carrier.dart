@@ -127,6 +127,11 @@ class TelegramCarrierChannel
   final Duration sendSpacing;
   final int maxRateRetries;
 
+  /// A rate limit up to this many seconds is waited out inside the queue
+  /// (the sealed envelope waits no longer than that); a longer one is
+  /// refused (see [_sendOne]).
+  static const int _inChannelRetryMax = 3;
+
   /// Told of every wait Telegram asks for (FLOOD_WAIT), so the account's
   /// limiter rests that long for every chat, not just this send.
   final void Function(Duration wait)? onRateLimited;
@@ -310,6 +315,8 @@ class TelegramCarrierChannel
       try {
         await _sendOne(address, text, sender);
         done.complete();
+      } on LimiterRefused catch (error) {
+        done.completeError(error);
       } on TelegramBotException catch (error) {
         done.completeError(
           TelegramBotException(
@@ -348,7 +355,7 @@ class TelegramCarrierChannel
         if (error.rateLimited &&
             !(sender is LimiterWaitProbe && sender.abandoned) &&
             attempt < maxRateRetries &&
-            (error.retryAfter ?? 1) <= 30) {
+            (error.retryAfter ?? 1) <= _inChannelRetryMax) {
           _resting++;
           try {
             await LimiterWaitProbe.hold(
@@ -360,6 +367,16 @@ class TelegramCarrierChannel
           // Given up on during the rest: no further call.
           if (sender is LimiterWaitProbe && sender.abandoned) rethrow;
           continue;
+        }
+        // Longer than a blip: not waited for here, where the envelope would
+        // be held, already sealed, behind this queue. The account rests that
+        // long (onRateLimited) and the send is refused for the registry to
+        // try again, sealed afresh.
+        if (error.rateLimited) {
+          throw LimiterRefused(
+            LimiterRefusal.wouldWait,
+            retryIn: Duration(seconds: error.retryAfter ?? 1),
+          );
         }
         if (error.code == 400 || error.code == 403) {
           throw StateError(

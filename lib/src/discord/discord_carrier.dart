@@ -419,7 +419,7 @@ class DiscordCarrierChannel
         if (error.rateLimited &&
             !(sender is LimiterWaitProbe && sender.abandoned) &&
             attempt < 3 &&
-            (error.retryAfter ?? 1) <= 30) {
+            (error.retryAfter ?? 1) <= 3) {
           _resting++;
           try {
             await LimiterWaitProbe.hold(
@@ -435,6 +435,17 @@ class DiscordCarrierChannel
           // Given up on during the rest: no further call.
           if (sender is LimiterWaitProbe && sender.abandoned) rethrow;
           continue;
+        }
+        // Longer than a blip: refused, not waited for inside this queue with
+        // the envelope already sealed (the registry tries again, sealed
+        // afresh; the account rests for the named wait).
+        if (error.rateLimited) {
+          throw LimiterRefused(
+            LimiterRefusal.wouldWait,
+            retryIn: Duration(
+              milliseconds: ((error.retryAfter ?? 1) * 1000).ceil(),
+            ),
+          );
         }
         if (error.forbidden || error.code == 404) {
           throw StateError(

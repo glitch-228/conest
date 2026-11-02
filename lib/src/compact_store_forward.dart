@@ -391,6 +391,7 @@ class CompactStoreForwardAdapter implements TransportAdapter {
   }) async {
     final expiry =
         envelope.expiresAt ?? envelope.createdAt.add(const Duration(days: 7));
+    final wire = await envelope.sealedBytes();
     queue.enqueue(
       envelope: CompactStoreForwardEnvelope(
         messageId: envelope.id,
@@ -398,7 +399,7 @@ class CompactStoreForwardAdapter implements TransportAdapter {
         recipientDeviceId: peer.deviceId,
         createdAt: envelope.createdAt,
         expiresAt: expiry,
-        payload: envelope.bytes,
+        payload: wire,
       ),
       sourcePeerDeviceId: localDeviceId,
       sourceIsLocal: true,

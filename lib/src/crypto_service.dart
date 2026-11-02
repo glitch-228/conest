@@ -75,6 +75,31 @@ class CryptoService {
   /// Forward-secret sessions; null when this build or device has none.
   RatchetSessions? ratchet;
 
+  /// Make session-encrypted envelopes only when a transport sends them
+  /// (see [RelayEnvelope.lazy]); off, they are made at once.
+  bool sealLater = false;
+
+  /// An upper bound for the ciphertext Olm makes of [plainBytes] (padding,
+  /// MAC, ratchet key, index and a pre-key message's keys): admission
+  /// counts frames before the envelope is sealed.
+  static int ratchetCiphertextUpperBound(int plainBytes) => plainBytes + 400;
+
+  /// Ratchet messages from each peer read so far this run (bounded): a
+  /// retry reuses its sealed bytes only if the peer has said nothing since.
+  final Map<String, int> _receivedFrom = {};
+
+  int receivedCount(ContactRecord contact) =>
+      _receivedFrom[ratchetPeerId(contact)] ?? 0;
+
+  void _noteReceived(ContactRecord contact) {
+    final key = ratchetPeerId(contact);
+    final count = (_receivedFrom.remove(key) ?? 0) + 1;
+    _receivedFrom[key] = count;
+    while (_receivedFrom.length > 256) {
+      _receivedFrom.remove(_receivedFrom.keys.first);
+    }
+  }
+
   /// Called when a ratcheted envelope cannot be decrypted, or a ratchet peer
   /// sent static-key traffic ([downgrade]). The controller answers with a
   /// fresh bundle so the peer can start a new session.
@@ -523,15 +548,36 @@ class CryptoService {
         acknowledgedMessageId: acknowledgedMessageId,
       );
       // Olm has no associated data: bind the header inside the plaintext.
-      final message = await sessions.encrypt(
-        ratchetPeerId(contact),
-        utf8.encode(
-          jsonEncode({
-            'h': utf8.decode(header.authenticatedHeaderBytes()),
-            'p': plaintext,
-          }),
-        ),
+      final inner = utf8.encode(
+        jsonEncode({
+          'h': utf8.decode(header.authenticatedHeaderBytes()),
+          'p': plaintext,
+        }),
       );
+      final peerId = ratchetPeerId(contact);
+      Future<RelayEnvelope> seal() async {
+        final message = await sessions.encrypt(peerId, inner);
+        return RelayEnvelope(
+          protocolVersion: 3,
+          kind: kind,
+          messageId: messageId,
+          conversationId: conversationId,
+          senderAccountId: senderAccountId,
+          senderDeviceId: senderDeviceId,
+          recipientDeviceId: recipientDeviceId,
+          createdAt: effectiveCreatedAt,
+          ciphertextBase64: base64Encode(message.ciphertext),
+          ratchetType: message.type,
+          acknowledgedMessageId: acknowledgedMessageId,
+        );
+      }
+
+      if (!sealLater) return seal();
+      // Sealed when a transport takes it, after any wait for its turn: an
+      // Olm message held after encryption can arrive on a chain the peer has
+      // dropped. The placeholder has the size the sealed one is at most.
+      final bound = ratchetCiphertextUpperBound(inner.length);
+      final receivedAtSeal = <int>[];
       return RelayEnvelope(
         protocolVersion: 3,
         kind: kind,
@@ -541,9 +587,19 @@ class CryptoService {
         senderDeviceId: senderDeviceId,
         recipientDeviceId: recipientDeviceId,
         createdAt: effectiveCreatedAt,
-        ciphertextBase64: base64Encode(message.ciphertext),
-        ratchetType: message.type,
+        ciphertextBase64: 'A' * (((bound + 2) ~/ 3) * 4),
+        ratchetType: 0,
         acknowledgedMessageId: acknowledgedMessageId,
+        lazy: LazySeal(
+          () async {
+            receivedAtSeal
+              ..clear()
+              ..add(receivedCount(contact));
+            return seal();
+          },
+        ),
+        sealedAfterReceived: () =>
+            receivedAtSeal.isEmpty ? null : receivedAtSeal.first,
       );
     }
     final secretKey = await sessionKeyFor(contact);
@@ -658,10 +714,23 @@ class CryptoService {
         ratchetPeerId(contact),
         RatchetMessage(type: type!, ciphertext: base64Decode(ciphertext)),
       );
-    } on RatchetDecryptException {
-      if (reportFailure) onRatchetFailure?.call(contact, downgrade: false);
+    } on RatchetDecryptException catch (error) {
+      // A message of a session that is working (it decrypted newer traffic a
+      // moment ago) that cannot be read is late: a peer that encrypts its
+      // retries afresh sends it again, and a reset would only break the
+      // session. Peers of older builds resend the same bytes: they get the
+      // reset.
+      final late =
+          error is RatchetStaleMessageException &&
+          contact.featureCapabilities.contains(
+            ApplicationCapability.freshRetriesV1,
+          );
+      if (reportFailure && !late) {
+        onRatchetFailure?.call(contact, downgrade: false);
+      }
       rethrow;
     }
+    _noteReceived(contact);
     final inner = jsonDecode(utf8.decode(clear));
     if (inner is! Map<String, dynamic> ||
         inner['h'] != header ||

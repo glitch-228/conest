@@ -30479,7 +30479,9 @@ class MessengerController extends ChangeNotifier {
       dart_crypto.sha256.convert(utf8.encode(payload)),
     ].join('|');
     final cached = _envelopeOutbox.remove(key);
-    if (cached != null && cached.fingerprint == fingerprint) {
+    if (cached != null &&
+        cached.fingerprint == fingerprint &&
+        await _sealedStillUsable(cached.envelope, contact)) {
       _envelopeOutbox[key] = cached;
       return cached.envelope;
     }
@@ -30498,6 +30500,27 @@ class MessengerController extends ChangeNotifier {
       }
       rethrow;
     }
+  }
+
+  /// A retry reuses the bytes sealed for an earlier try only while the peer
+  /// has said nothing since: any message from it may have turned the
+  /// conversation to a new chain, and then the old bytes would arrive on a
+  /// chain the peer has dropped. A retry that was never sealed (no transport
+  /// took it yet) is sealed when one does.
+  Future<bool> _sealedStillUsable(
+    Future<RelayEnvelope> pending,
+    ContactRecord contact,
+  ) async {
+    final RelayEnvelope envelope;
+    try {
+      envelope = await pending;
+    } catch (_) {
+      return false;
+    }
+    final lazy = envelope.lazy;
+    if (lazy == null || !lazy.isSealed) return true;
+    final at = envelope.sealedAfterReceived?.call();
+    return at != null && at == _crypto.receivedCount(contact);
   }
 
   static const int _seenMessageDigestCap = 4096;
@@ -31027,10 +31050,12 @@ class MessengerController extends ChangeNotifier {
         !recipient.routing.onlineEnabled) {
       return null;
     }
-    final inner = envelope.toJson();
-    if (utf8.encode(jsonEncode(inner)).length > _maxForwardEnvelopeBytes) {
+    if (utf8.encode(jsonEncode(envelope.toJson())).length >
+        _maxForwardEnvelopeBytes) {
       return null;
     }
+    // Sealed now, as a route would (see [RelayEnvelope.lazy]).
+    final inner = (await envelope.sealed()).toJson();
     final me = _requireIdentity();
     for (final forwarder in _forwardersFor(recipient).take(3)) {
       try {
@@ -31672,7 +31697,15 @@ class MessengerController extends ChangeNotifier {
       envelope: TransportEnvelope(
         id: envelope.messageId,
         recipientDeviceId: envelope.recipientDeviceId,
+        // For a session-encrypted envelope not sealed yet: the placeholder,
+        // as big as the sealed one can be (admission counts on it); the
+        // adapter asks for the sealed bytes when its turn has come.
         bytes: Uint8List.fromList(utf8.encode(jsonEncode(envelope.toJson()))),
+        seal: envelope.lazy == null
+            ? null
+            : () async => Uint8List.fromList(
+                utf8.encode(jsonEncode((await envelope.sealed()).toJson())),
+              ),
         createdAt: envelope.createdAt,
       ),
       skipRouteIds: skipRouteIds,
@@ -32593,12 +32626,15 @@ class MessengerController extends ChangeNotifier {
         await _checkMailboxVouched(route, recipientDeviceId, expectedRelayKey);
         _storeCallCount++;
         final stopwatch = Stopwatch()..start();
+        // Sealed here, right before the store: the checks above and the
+        // earlier routes are behind it (see [RelayEnvelope.lazy]).
+        final onTheWire = await envelope.sealed();
         final stored = await _relayClient.storeEnvelope(
           host: route.host,
           port: route.port,
           protocol: route.protocol,
           recipientDeviceId: recipientDeviceId,
-          envelope: envelope,
+          envelope: onTheWire,
           expectedIdentityPublicKeyBase64: expectedRelayKey,
           timeout: route.kind == PeerRouteKind.lan
               ? lanTimeout ?? const Duration(milliseconds: 900)
@@ -34713,6 +34749,7 @@ class MessengerController extends ChangeNotifier {
       );
       _ratchet = sessions;
       _crypto
+        ..sealLater = true
         ..ratchet = sessions
         ..groupFileSendKey = _groupFileSendKey
         ..onRatchetFailure = (peer, {required bool downgrade}) {
@@ -40602,6 +40639,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.multiSourceTransferV1,
       ApplicationCapability.relayBlobAttachmentsV1,
       ApplicationCapability.batchedAcksV1,
+      ApplicationCapability.freshRetriesV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,

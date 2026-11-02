@@ -575,6 +575,7 @@ class RatchetSessions {
       final lastRead = _lastDecryptedAtMs[peerDeviceId];
       final working =
           lastRead != null &&
+          (state?.sessions.isNotEmpty ?? false) &&
           _nowMs() - lastRead < staleMessageWindow.inMilliseconds;
       if (!message.opensSession && working) {
         throw const RatchetStaleMessageException(
@@ -792,6 +793,7 @@ class RatchetSessions {
   /// Drops every session with a peer (reset or contact removal).
   Future<void> forget(String peerDeviceId) => _withPeer(peerDeviceId, () {
     _log?.call('forgetting every session with ${_peerLabel(peerDeviceId)}');
+    _lastDecryptedAtMs.remove(peerDeviceId);
     return _deletePeer(peerDeviceId);
   });
 

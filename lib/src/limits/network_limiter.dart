@@ -222,6 +222,24 @@ class LimiterWaitProbe {
   }
 }
 
+/// Says the current send has taken its turn in the account's limiter
+/// already (the carrier adapter did, so it could seal after it): a channel
+/// that would take a turn for its next frame skips it, once.
+class TurnToken {
+  static const Object zoneKey = #conestTurnTaken;
+  bool used = false;
+
+  /// True, once, inside a send that carries a token.
+  static bool take() {
+    final token = Zone.current[zoneKey];
+    if (token is TurnToken && !token.used) {
+      token.used = true;
+      return true;
+    }
+    return false;
+  }
+}
+
 class _Waiter {
   _Waiter(this.cost, this.priority, this.deadline);
 

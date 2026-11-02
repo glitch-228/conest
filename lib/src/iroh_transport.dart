@@ -449,10 +449,13 @@ class IrohTransportAdapter implements IrohCallMediaAdapter {
       throw StateError('Iroh transport identity is not pinned.');
     }
     IrohBridgeReceipt result;
+    // No wait for a turn here: sealed (if it is not yet) right before the
+    // send.
+    final wire = await envelope.sealedBytes();
     try {
       final hintedAttempt = _bridge.sendEnvelope(
         remoteEndpointId: endpoint,
-        bytes: envelope.bytes,
+        bytes: wire,
         allowRelay: peer.allowRelay,
         directAddresses: peer.directAddresses,
       );
@@ -469,7 +472,7 @@ class IrohTransportAdapter implements IrohCallMediaAdapter {
       try {
         result = await _bridge.sendEnvelope(
           remoteEndpointId: endpoint,
-          bytes: envelope.bytes,
+          bytes: wire,
           allowRelay: peer.allowRelay,
           directAddresses: const <String>[],
         );

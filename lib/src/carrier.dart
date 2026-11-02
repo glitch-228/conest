@@ -624,19 +624,35 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
     final generation = _generation;
     final startedAt = _now();
     final sendId = carrierSendId(peer.deviceId, envelope.id);
-    final sealed = await _sealer.seal(kind, peer.deviceId, envelope.bytes);
-    final frames = carrierBinaryFrames(framing, sealed, random: _random);
-    // A first request over a channel with inboxes: decided per envelope,
-    // so other envelopes to the same address meanwhile are not affected.
+    // For an envelope still to be sealed this is its placeholder, as big as
+    // the sealed bytes can be: it counts the frames (admission); the real
+    // frames are made when the first turn has come (see [realize]).
     final sealer = _sealer;
     final random = _random ?? Random.secure();
-    final inboxKey =
-        channel is InboxCarrierChannel && sealer is InboxCarrierSealer
-        ? (sealer as InboxCarrierSealer).inboxKeyFor(sealed)
-        : null;
-    final inboxSender = inboxKey == null
-        ? null
-        : Uint8List.fromList(List.generate(8, (_) => random.nextInt(256)));
+    var frames = <Uint8List>[];
+    Uint8List? inboxKey;
+    Uint8List? inboxSender;
+    // A first request over a channel with inboxes: decided per envelope,
+    // so other envelopes to the same address meanwhile are not affected.
+    Future<void> frameUp(Uint8List bytes) async {
+      final sealed = await sealer.seal(kind, peer.deviceId, bytes);
+      frames = carrierBinaryFrames(framing, sealed, random: random);
+      inboxKey = channel is InboxCarrierChannel && sealer is InboxCarrierSealer
+          ? (sealer as InboxCarrierSealer).inboxKeyFor(sealed)
+          : null;
+      inboxSender = inboxKey == null
+          ? null
+          : Uint8List.fromList(List.generate(8, (_) => random.nextInt(256)));
+    }
+
+    await frameUp(envelope.bytes);
+    var realFrames = envelope.seal == null;
+    Future<void> realize() async {
+      if (realFrames) return;
+      await frameUp(await envelope.sealedBytes());
+      realFrames = true;
+    }
+
     // Registered before the first frame: confirmations of early frames
     // can come while later ones are still going out.
     final pending = _RadioEnvelope(envelope.id, peer.deviceId);
@@ -669,7 +685,8 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
           when !cancelledAt.isBefore(startedAt)) {
         throw TransportSendCancelled('${kind.label}: no longer needed.');
       }
-      return send();
+      // The turn has come: seal now, not before the wait.
+      return realize().then((_) => send());
     };
     for (var index = 0; index < frames.length; index++) {
       if (index > 0 && frameSpacing > Duration.zero) {
@@ -717,7 +734,7 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
             () => (channel as InboxCarrierChannel).sendInboxFrame(
               address,
               frames[index],
-              inboxSender,
+              inboxSender!,
               inboxKey!,
             ),
           ),
@@ -762,15 +779,24 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
     bool started = false,
     required Duration timeLeft,
   }) {
-    final turns = channelPacesFrames ? null : limiter;
+    final turns = limiter;
     if (turns == null) return send();
     // An envelope that has begun is finished, not dropped half-way, but not
     // past the attempt's end.
     final wait = started ? const Duration(minutes: 10) : turns.budget.maxWait;
+    final allowed = wait < timeLeft ? wait : timeLeft;
+    if (channelPacesFrames) {
+      // The channel keeps its own books (mail's per-account pacing); the
+      // turn is taken here so the envelope can be sealed after it, and the
+      // channel is told not to take it again.
+      return turns.acquire(maxWait: allowed).then(
+        (_) => runZoned(send, zoneValues: {TurnToken.zoneKey: TurnToken()}),
+      );
+    }
     return turns.run(
       send,
       cost: turns.budget.costInBytes ? cost : 1,
-      maxWait: wait < timeLeft ? wait : timeLeft,
+      maxWait: allowed,
     );
   }
 

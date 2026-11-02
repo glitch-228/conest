@@ -270,7 +270,7 @@ void main() {
         '/channels/x/messages',
         429,
         'slow',
-        retryAfter: 25,
+        retryAfter: 3,
       );
     });
     final bob = DiscordCarrierChannel(
@@ -285,7 +285,7 @@ void main() {
       pollInterval: const Duration(milliseconds: 10),
       sendSpacing: Duration.zero,
       wait: (delay) =>
-          delay.inSeconds == 25 ? gate.future : Future<void>.delayed(delay),
+          delay.inSeconds == 3 ? gate.future : Future<void>.delayed(delay),
     )..start();
     addTearDown(bob.stop);
     final probes = [for (var i = 0; i < 3; i++) LimiterWaitProbe()];
@@ -360,7 +360,7 @@ void main() {
           '/channels/x/messages',
           429,
           'slow',
-          retryAfter: 25,
+          retryAfter: 3,
         );
       }
     });
@@ -376,7 +376,7 @@ void main() {
       pollInterval: const Duration(milliseconds: 10),
       sendSpacing: Duration.zero,
       wait: (delay) =>
-          delay.inSeconds == 25 ? gate.future : Future<void>.delayed(delay),
+          delay.inSeconds == 3 ? gate.future : Future<void>.delayed(delay),
     )..start();
     addTearDown(bob.stop);
     final probe = LimiterWaitProbe();
