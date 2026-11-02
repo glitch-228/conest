@@ -4110,7 +4110,11 @@ class PendingForward {
 /// moment a transport sends it. One call seals; calls made while it runs
 /// share it; one that failed lets the next call try again (another route).
 class LazySeal {
-  LazySeal(this._seal, {this.onSealed});
+  LazySeal(this._seal, {this.onSealed, this.stale});
+
+  /// True once what was sealed should not be sent again (the peer has said
+  /// something since): the next call seals afresh.
+  final bool Function()? stale;
 
   final Future<RelayEnvelope> Function() _seal;
   final void Function()? onSealed;
@@ -4119,8 +4123,13 @@ class LazySeal {
 
   bool get isSealed => _done != null;
 
-  Future<RelayEnvelope> call() =>
-      _done != null ? Future.value(_done) : (_running ??= _run());
+  /// Sealed, and out of date.
+  bool get isStale => _done != null && (stale?.call() ?? false);
+
+  Future<RelayEnvelope> call() {
+    if (isStale) _done = null;
+    return _done != null ? Future.value(_done) : (_running ??= _run());
+  }
 
   Future<RelayEnvelope> _run() async {
     try {
@@ -4154,13 +4163,8 @@ class RelayEnvelope {
     this.payloadBase64,
     this.ratchetType,
     this.lazy,
-    this.sealedAfterReceived,
   });
 
-  /// How many ratchet messages from the recipient had been read when this
-  /// envelope was sealed; null before. A retry may reuse the sealed bytes
-  /// only while the recipient has said nothing since.
-  final int? Function()? sealedAfterReceived;
 
   /// Set while the envelope is only a header with a placeholder of the right
   /// size: the session-encrypted bytes are made by [sealed] when a transport

@@ -82,7 +82,7 @@ final Expando<Future<Uint8List>> _sealedOnce = Expando('sealed bytes');
 
 Future<Uint8List> _sealOnce(TransportEnvelope envelope) {
   final done = _sealedOnce[envelope];
-  if (done != null) return done;
+  if (done != null && !(envelope.sealIsStale?.call() ?? false)) return done;
   final running = envelope.seal!();
   _sealedOnce[envelope] = running;
   // A failed seal lets the next route try again.
@@ -101,7 +101,11 @@ class TransportEnvelope {
     required this.createdAt,
     this.expiresAt,
     this.seal,
+    this.sealIsStale,
   });
+
+  /// True when the bytes sealed earlier should not be sent again.
+  final bool Function()? sealIsStale;
 
   final String id;
   final String recipientDeviceId;

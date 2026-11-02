@@ -640,6 +640,9 @@ class RatchetSessions {
     return plaintext;
   });
 
+  /// Forgets what this run knows about peers (a vault reset).
+  void clearRuntime() => _lastDecryptedAtMs.clear();
+
   /// When something from each peer last decrypted (this run only).
   final Map<String, int> _lastDecryptedAtMs = {};
 

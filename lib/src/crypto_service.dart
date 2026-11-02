@@ -82,11 +82,14 @@ class CryptoService {
   /// An upper bound for the ciphertext Olm makes of [plainBytes] (padding,
   /// MAC, ratchet key, index and a pre-key message's keys): admission
   /// counts frames before the envelope is sealed.
-  static int ratchetCiphertextUpperBound(int plainBytes) => plainBytes + 400;
+  static int ratchetCiphertextUpperBound(int plainBytes) => plainBytes + 256;
 
   /// Ratchet messages from each peer read so far this run (bounded): a
   /// retry reuses its sealed bytes only if the peer has said nothing since.
   final Map<String, int> _receivedFrom = {};
+
+  /// Forgets the per-peer counts (a vault reset).
+  void clearRuntime() => _receivedFrom.clear();
 
   int receivedCount(ContactRecord contact) =>
       _receivedFrom[ratchetPeerId(contact)] ?? 0;
@@ -577,7 +580,7 @@ class CryptoService {
       // Olm message held after encryption can arrive on a chain the peer has
       // dropped. The placeholder has the size the sealed one is at most.
       final bound = ratchetCiphertextUpperBound(inner.length);
-      final receivedAtSeal = <int>[];
+      var receivedAtSeal = 0;
       return RelayEnvelope(
         protocolVersion: 3,
         kind: kind,
@@ -590,16 +593,10 @@ class CryptoService {
         ciphertextBase64: 'A' * (((bound + 2) ~/ 3) * 4),
         ratchetType: 0,
         acknowledgedMessageId: acknowledgedMessageId,
-        lazy: LazySeal(
-          () async {
-            receivedAtSeal
-              ..clear()
-              ..add(receivedCount(contact));
-            return seal();
-          },
-        ),
-        sealedAfterReceived: () =>
-            receivedAtSeal.isEmpty ? null : receivedAtSeal.first,
+        lazy: LazySeal(() async {
+          receivedAtSeal = receivedCount(contact);
+          return seal();
+        }, stale: () => receivedAtSeal != receivedCount(contact)),
       );
     }
     final secretKey = await sessionKeyFor(contact);

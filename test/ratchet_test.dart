@@ -92,6 +92,36 @@ void main() {
       await read(b, 'a', burst[5]);
     });
 
+    test('a late type 1 message is stale while a session works, and plain '
+        'after the runtime state is cleared', () async {
+      final engine = FakeRatchetEngine(random: Random(7));
+      final a = _Device(engine);
+      final b = _Device(engine);
+      await a.sessions.startSession('b', await b.sessions.createBundle());
+      final first = await a.sessions.encrypt('b', utf8.encode('hi'));
+      await b.sessions.decrypt(
+        'a',
+        first,
+        peerIdentityKey: await a.sessions.identityKey(),
+      );
+      final garbage = RatchetMessage(type: 1, ciphertext: utf8.encode('x'));
+      await expectLater(
+        b.sessions.decrypt('a', garbage),
+        throwsA(isA<RatchetStaleMessageException>()),
+      );
+      b.sessions.clearRuntime();
+      await expectLater(
+        b.sessions.decrypt('a', garbage),
+        throwsA(
+          isA<RatchetDecryptException>().having(
+            (e) => e is RatchetStaleMessageException,
+            'stale',
+            false,
+          ),
+        ),
+      );
+    });
+
     test('a pre-key message from a peer not known yet says so; one that '
         'cannot be read otherwise does not', () async {
       final engine = FakeRatchetEngine(random: Random(7));

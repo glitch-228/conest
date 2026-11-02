@@ -12574,6 +12574,8 @@ class MessengerController extends ChangeNotifier {
     _routeReceiptAfterFlight.clear();
     _snapshot = _snapshot.copyWith(parkedUnreadable: const []);
     _replayingParked.clear();
+    _crypto.clearRuntime();
+    _ratchet?.clearRuntime();
     _debugProbeAcknowledgements.clear();
     _debugTwoWayReplies.clear();
     _authorizedInboundDebugFileTests.clear();
@@ -30554,13 +30556,18 @@ class MessengerController extends ChangeNotifier {
       hasSession,
       dart_crypto.sha256.convert(utf8.encode(payload)),
     ].join('|');
-    final cached = _envelopeOutbox.remove(key);
+    final cached = _envelopeOutbox[key];
     if (cached != null &&
         cached.fingerprint == fingerprint &&
-        await _sealedStillUsable(cached.envelope, contact)) {
-      _envelopeOutbox[key] = cached;
+        await _sealedStillUsable(cached.envelope)) {
+      // (Looked up, not removed, while awaiting: another try may replace it.)
+      if (identical(_envelopeOutbox[key], cached)) {
+        _envelopeOutbox.remove(key);
+        _envelopeOutbox[key] = cached;
+      }
       return cached.envelope;
     }
+    _envelopeOutbox.remove(key);
     // The pending encryption is shared, so two sends at once still go out
     // as one ciphertext.
     final envelope = encrypt();
@@ -30583,20 +30590,14 @@ class MessengerController extends ChangeNotifier {
   /// conversation to a new chain, and then the old bytes would arrive on a
   /// chain the peer has dropped. A retry that was never sealed (no transport
   /// took it yet) is sealed when one does.
-  Future<bool> _sealedStillUsable(
-    Future<RelayEnvelope> pending,
-    ContactRecord contact,
-  ) async {
+  Future<bool> _sealedStillUsable(Future<RelayEnvelope> pending) async {
     final RelayEnvelope envelope;
     try {
       envelope = await pending;
     } catch (_) {
       return false;
     }
-    final lazy = envelope.lazy;
-    if (lazy == null || !lazy.isSealed) return true;
-    final at = envelope.sealedAfterReceived?.call();
-    return at != null && at == _crypto.receivedCount(contact);
+    return !(envelope.lazy?.isStale ?? false);
   }
 
   static const int _seenMessageDigestCap = 4096;
@@ -31777,6 +31778,7 @@ class MessengerController extends ChangeNotifier {
         // as big as the sealed one can be (admission counts on it); the
         // adapter asks for the sealed bytes when its turn has come.
         bytes: Uint8List.fromList(utf8.encode(jsonEncode(envelope.toJson()))),
+        sealIsStale: () => envelope.lazy?.isStale ?? false,
         seal: envelope.lazy == null
             ? null
             : () async => Uint8List.fromList(
