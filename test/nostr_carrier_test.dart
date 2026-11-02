@@ -149,6 +149,96 @@ void main() {
 
   final frame = Uint8List.fromList(List<int>.generate(3000, (i) => i % 7));
 
+  test('a relay that says "rate-limited" rests, and every frame still '
+      'arrives', () async {
+    final a = relays.relay('wss://a.test')
+      ..eventsPerMinute = 3
+      ..disconnectAfterRefusals = 3;
+    relays.relay('wss://b.test');
+    relays.relay('wss://c.test');
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel([
+      'wss://a.test',
+      'wss://b.test',
+      'wss://c.test',
+    ], bobGot)..start();
+    final alice = channel(['wss://a.test'], [])..start();
+    final address = bob.localAddress!;
+    for (var i = 0; i < 24; i++) {
+      await alice.sendFrame(address, Uint8List.fromList([i, ...frame]));
+      await until(() => bobGot.length >= i + 1);
+      alice.noteDelivered(address);
+    }
+    expect(bobGot.map((g) => g.$2.first).toSet(), hasLength(24));
+    expect(a.refusals, lessThanOrEqualTo(3), reason: 'it was kept pushing');
+    expect(a.accepted, lessThanOrEqualTo(3));
+  });
+
+  test('an event goes to two relays once the recipient is known, to every '
+      'relay (up to three) before', () async {
+    final all = [for (var i = 0; i < 3; i++) relays.relay('wss://r$i.test')];
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel([for (var i = 0; i < 3; i++) 'wss://r$i.test'], bobGot)
+      ..start();
+    final alice = channel(['wss://r0.test'], [])..start();
+    final address = bob.localAddress!;
+    await alice.sendFrame(address, Uint8List.fromList([0, ...frame]));
+    await until(() => bobGot.isNotEmpty);
+    expect(all.map((r) => r.stored.length), [1, 1, 1], reason: 'first contact');
+    alice.noteDelivered(address);
+    for (var i = 1; i < 4; i++) {
+      await alice.sendFrame(address, Uint8List.fromList([i, ...frame]));
+      await until(() => bobGot.length >= i + 1);
+      alice.noteDelivered(address);
+    }
+    final perEvent = <String, int>{};
+    for (final relay in all) {
+      for (final event in relay.stored) {
+        perEvent[event.id] = (perEvent[event.id] ?? 0) + 1;
+      }
+    }
+    expect(perEvent.values.where((n) => n > 2), hasLength(1));
+  });
+
+  test('a relay that says OK and drops what it gets loses its rank, and '
+      'every frame still arrives', () async {
+    final bad = relays.relay('wss://bad.test')..discard = true;
+    relays.relay('wss://g1.test');
+    relays.relay('wss://g2.test');
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel([
+      'wss://bad.test',
+      'wss://g1.test',
+      'wss://g2.test',
+    ], bobGot)..start();
+    final alice = channel(['wss://g1.test'], [])..start();
+    final address = bob.localAddress!;
+    await alice.sendFrame(address, Uint8List.fromList([0, ...frame]));
+    await until(() => bobGot.isNotEmpty);
+    alice.noteDelivered(address);
+    var acceptedBefore = 0;
+    for (var i = 1; i < 60; i++) {
+      if (i == 40) acceptedBefore = bad.accepted;
+      final before = bobGot.length;
+      await alice.sendFrame(address, Uint8List.fromList([i, ...frame]));
+      // A solo send to the bad relay never arrives: a retry follows, as the
+      // controller's would when no receipt comes.
+      for (var tries = 0; tries < 3 && bobGot.length == before; tries++) {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        if (bobGot.length == before && tries == 2) {
+          await alice.sendFrame(address, Uint8List.fromList([i, ...frame]));
+        }
+      }
+      await until(() => bobGot.length > before);
+      alice.noteDelivered(address);
+    }
+    expect(
+      bad.accepted - acceptedBefore,
+      lessThan(6),
+      reason: 'the dropping relay kept its rank',
+    );
+  });
+
   test(
     'a frame reaches the recipient, hiding the sender from relays',
     () async {

@@ -345,22 +345,41 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
     );
     final errors = <Object>[];
     var stored = 0;
+    // Where the event goes: the recipient reads every relay it lists, so one
+    // stored copy is enough. Two relays carry it once this contact has been
+    // heard from through here (ranked by receipts, resting ones left out);
+    // all of them (up to three) while that is not known yet, as for a first
+    // contact, a session setup or a group member who is no contact.
+    final chosen = _chooseRelays(address, to.relays);
+    final used = <Uri>[];
     // Sent once any relay stored it: one slow or unreachable relay must not
     // hold every message for its whole publish timeout (15 s on a phone
     // that could not reach one of three). The others finish meanwhile.
     final firstStored = Completer<void>();
-    final all = Future.wait(
-      to.relays.map((url) async {
-        try {
-          await _relayFor(url).publish(event);
-          stored++;
-          if (!firstStored.isCompleted) firstStored.complete();
-        } catch (error) {
-          errors.add(error);
-        }
-      }),
-    );
+    Future<void> publishTo(Uri url) async {
+      used.add(url);
+      try {
+        await _relayFor(url).publish(event);
+        stored++;
+        if (!firstStored.isCompleted) firstStored.complete();
+      } catch (error) {
+        errors.add(error);
+      }
+    }
+
+    final all = Future.wait(chosen.map(publishTo));
     await Future.any([firstStored.future, all]);
+    if (stored == 0) {
+      await all;
+    }
+    // None took it: the next relays of the list, one at a time.
+    for (final url in to.relays) {
+      if (stored > 0) break;
+      if (used.contains(url) || _relayFor(url).restRemaining > Duration.zero) {
+        continue;
+      }
+      await publishTo(url);
+    }
     if (stored == 0) {
       final rateLimited = errors.whereType<NostrRelayException>().any(
         (error) => error.rateLimited,
@@ -371,6 +390,101 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
             : 'No Nostr relay stored the message: ${errors.join('; ')}',
       );
     }
+    final solo = used.length == 1;
+    _lastSend[address] = (
+      relays: [for (final url in used) url.toString()],
+      solo: solo,
+    );
+    while (_lastSend.length > 256) {
+      _lastSend.remove(_lastSend.keys.first);
+    }
+    // Only a send through one relay says anything about that relay: with two,
+    // a receipt could have come by either.
+    if (solo) {
+      final key = used.single.toString();
+      final score = _scores.remove(key) ?? (sent: 0, delivered: 0);
+      _scores[key] = (sent: score.sent + 1, delivered: score.delivered);
+      while (_scores.length > 64) {
+        _scores.remove(_scores.keys.first);
+      }
+    }
+  }
+
+  /// Relays an event was last published to, by recipient address.
+  final Map<String, ({List<String> relays, bool solo})> _lastSend = {};
+
+  /// Sends per recipient (every few go through a single relay to test it).
+  final Map<String, int> _sendCounts = {};
+
+  /// Per relay: events published there and receipts that came for events
+  /// published there (a relay that says OK and drops them loses its rank).
+  final Map<String, ({int sent, int delivered})> _scores = {};
+
+  /// Recipients heard from through this channel (bounded).
+  final LinkedHashSet<String> _heardFrom = LinkedHashSet();
+
+  /// The recipient at [address] confirmed (a receipt came) what was sent
+  /// last: the relays it went through are credited.
+  void noteDelivered(String address) {
+    final last = _lastSend.remove(address);
+    _heardFrom.remove(address);
+    _heardFrom.add(address);
+    while (_heardFrom.length > 256) {
+      _heardFrom.remove(_heardFrom.first);
+    }
+    if (last == null || !last.solo) return;
+    for (final url in last.relays) {
+      final score = _scores[url];
+      if (score != null) {
+        _scores[url] = (sent: score.sent, delivered: score.delivered + 1);
+      }
+    }
+  }
+
+  List<Uri> _chooseRelays(String address, List<Uri> listed) {
+    final awake = [
+      for (final url in listed)
+        if (_relayFor(url).restRemaining <= Duration.zero) url,
+    ];
+    // All of them resting: the one that rests the shortest is tried; the
+    // send is refused if it refuses (the caller tries again later).
+    if (awake.isEmpty) {
+      final byRest = [...listed]
+        ..sort(
+          (a, b) =>
+              _relayFor(a).restRemaining.compareTo(_relayFor(b).restRemaining),
+        );
+      return [byRest.first];
+    }
+    if (!_heardFrom.contains(address)) return awake.take(3).toList();
+    // The previous send to this recipient has no receipt yet: other relays
+    // first this time.
+    final lastRelays = _lastSend[address]?.relays ?? const <String>[];
+    double rank(Uri url) {
+      final score = _scores[url.toString()] ?? (sent: 0, delivered: 0);
+      final base = (score.delivered + 1) / (score.sent + 2);
+      return lastRelays.contains(url.toString()) ? base * 0.5 : base;
+    }
+
+    final ranked = [...awake]..sort((a, b) => rank(b).compareTo(rank(a)));
+    final count = (_sendCounts.remove(address) ?? 0) + 1;
+    _sendCounts[address] = count;
+    while (_sendCounts.length > 256) {
+      _sendCounts.remove(_sendCounts.keys.first);
+    }
+    // Every fourth send goes through the relay tried least, alone: a receipt
+    // for it then credits that relay and no other, and one that says OK and
+    // drops what it gets is found out.
+    if (count % 4 == 0 && awake.length > 1) {
+      final least = [...awake]
+        ..sort(
+          (a, b) => (_scores[a.toString()]?.sent ?? 0).compareTo(
+            _scores[b.toString()]?.sent ?? 0,
+          ),
+        );
+      return [least.first];
+    }
+    return ranked.take(2).toList();
   }
 
   NostrRelay _relayFor(Uri url) {
