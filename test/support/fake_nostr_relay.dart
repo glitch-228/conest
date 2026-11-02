@@ -68,6 +68,23 @@ class FakeNostrRelay {
   /// Never answers a published event (stores nothing, says nothing), as a
   /// relay the device cannot really reach.
   bool silent = false;
+
+  /// Answers "OK" and keeps nothing: a relay that accepts and drops.
+  bool discard = false;
+
+  /// Public relays answer "rate-limited" above some events a minute per
+  /// connection. Null: no limit.
+  int? eventsPerMinute;
+
+  /// After this many refused events the relay closes the connection.
+  int? disconnectAfterRefusals;
+
+  /// Refusals so far, and events accepted (stored or discarded).
+  int refusals = 0;
+  int accepted = 0;
+
+  /// The clock the limit is measured on.
+  DateTime Function() clock = DateTime.now;
   final List<NostrEvent> stored = [];
 
   /// Public keys that signed in (NIP-42) to this relay.
@@ -111,6 +128,28 @@ class FakeNostrRelay {
       from._reply(['OK', event.id, false, reject]);
       return;
     }
+    final limit = eventsPerMinute;
+    if (limit != null) {
+      final now = clock();
+      from._recent.removeWhere(
+        (at) => now.difference(at) >= const Duration(minutes: 1),
+      );
+      if (from._recent.length >= limit) {
+        refusals++;
+        from._reply(['OK', event.id, false, 'rate-limited: slow down']);
+        final cut = disconnectAfterRefusals;
+        if (cut != null && refusals >= cut) {
+          scheduleMicrotask(from.close);
+        }
+        return;
+      }
+      from._recent.add(now);
+    }
+    accepted++;
+    if (discard) {
+      from._reply(['OK', event.id, true, '']);
+      return;
+    }
     if (!stored.any((existing) => existing.id == event.id)) {
       stored.add(event);
       for (final connection in _connections) {
@@ -127,6 +166,7 @@ class _Connection implements NostrSocket {
   final FakeNostrRelay _relay;
   final _incoming = StreamController<String>();
   final Map<String, Map<String, dynamic>> _subscriptions = {};
+  final List<DateTime> _recent = [];
   String? _pendingChallenge;
   String? _authedPubkey;
 

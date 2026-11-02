@@ -136,6 +136,7 @@ export 'beam_protocol.dart'
         BeamPackage,
         PreparedBeamTransfer,
         conestBeamMaximumPayloadBytes;
+import 'receipt_sender.dart';
 import 'relay_client.dart';
 import 'relay_v2/session.dart' show RelayV2Unavailable;
 import 'relay_v2/subscription_backoff.dart';
@@ -1288,8 +1289,10 @@ class MessengerController extends ChangeNotifier {
   /// regardless of the backoff window. Production code reaches this path
   /// via the periodic `_retryUnacknowledgedMessages` poll.
   @visibleForTesting
-  Future<void> debugRunPendingAckRetries() =>
-      _retryPendingAckDeliveries(force: true);
+  Future<void> debugRunPendingAckRetries() async {
+    await _retryPendingAckDeliveries(force: true);
+    await _receiptQueue.whenIdle();
+  }
 
   /// Group-membership envelopes still awaiting an ack from the targeted
   /// recipient. Exposed for diagnostics and tests; the retry loop drains
@@ -1519,7 +1522,19 @@ class MessengerController extends ChangeNotifier {
   Future<int> processEnvelopesForTesting(
     List<RelayEnvelope> envelopes, {
     MessageRoute? route,
-  }) => _processEnvelopes(envelopes, route: route);
+    // Receipts are sent after processing returns; a test that looks at
+    // them waits for them, one that tests processing itself does not.
+    bool settleReceipts = true,
+    bool failOnProcessingError = false,
+  }) async {
+    final processed = await _processEnvelopes(
+      envelopes,
+      route: route,
+      failOnProcessingError: failOnProcessingError,
+    );
+    if (settleReceipts) await _receiptQueue.whenIdle();
+    return processed;
+  }
 
   /// Marks an outgoing contact request as accepted, as if the peer's
   /// authenticated acceptance had arrived. Waits for the in-flight pairing
@@ -12406,6 +12421,11 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(
       contacts: contacts,
       conversations: conversations,
+      // What was parked for it is never read.
+      parkedUnreadable: [
+        for (final entry in _snapshot.parkedUnreadable)
+          if (entry.senderDeviceId != deviceId) entry,
+      ],
       contactRemovalTombstones: <String, ContactRemovalTombstone>{
         ..._snapshot.contactRemovalTombstones,
         if (removed != null)
@@ -12546,6 +12566,16 @@ class MessengerController extends ChangeNotifier {
     _routeHealthTracker.clear();
     _pendingRouteUpdateProbes.clear();
     _outboundAttemptedAt.clear();
+    _receiptsInFlight.clear();
+    _receiptRetryDue.clear();
+    _receiptFailedAt.clear();
+    _urgentReceiptKeys.clear();
+    _receiptRoutesNamed.clear();
+    _routeReceiptAfterFlight.clear();
+    _snapshot = _snapshot.copyWith(parkedUnreadable: const []);
+    _replayingParked.clear();
+    _crypto.clearRuntime();
+    _ratchet?.clearRuntime();
     _debugProbeAcknowledgements.clear();
     _debugTwoWayReplies.clear();
     _authorizedInboundDebugFileTests.clear();
@@ -20992,6 +21022,17 @@ class MessengerController extends ChangeNotifier {
         _scheduleTransferForegroundSync();
       }
     }
+    if (outcome.parked > 0 && !_disposed) {
+      // What this batch parked is on disk before its lease is acknowledged;
+      // if the save fails the lease is kept (the batch fails) and the relay
+      // hands the envelopes out again.
+      try {
+        await _saveSnapshotSilently(notify: false);
+      } catch (error) {
+        recordError('vault', 'Parked envelopes not saved: $error');
+        if (failOnProcessingError) rethrow;
+      }
+    }
     if (failOnProcessingError && outcome.failed > 0) {
       throw StateError(
         '${outcome.failed} relay envelope(s) failed during processing.',
@@ -21023,12 +21064,8 @@ class MessengerController extends ChangeNotifier {
   ) async {
     var processed = 0;
     var failed = 0;
-    final orderedEnvelopes = List<RelayEnvelope>.from(envelopes)
-      ..sort((left, right) {
-        final leftPriority = _processingPriority(left.kind);
-        final rightPriority = _processingPriority(right.kind);
-        return leftPriority.compareTo(rightPriority);
-      });
+    var parked = 0;
+    final orderedEnvelopes = _orderForProcessing(envelopes);
     for (final envelope in orderedEnvelopes) {
       if (!_isValidInboundEnvelope(envelope)) {
         appendDebugLog(
@@ -21427,7 +21464,21 @@ class MessengerController extends ChangeNotifier {
         _rememberMessageDigest(envelope);
         _markSeen(envelope.messageId);
       } catch (error) {
-        failed++;
+        // A copy no session can read does not become readable by being
+        // fetched again; the sender's session reset sends it afresh. Held,
+        // it kept its relay lease for good: fetched and failed every
+        // minute, and each time a reason to offer another session.
+        if (_canBecomeReadable(error)) {
+          // A pre-key message ahead of its bundle, or one from a peer we hold
+          // no session with: kept here, not on the relay's lease, and read
+          // again when the peer's bundle arrives (see [_replayParked]).
+          if (_parkUnreadable(envelope)) parked++;
+        } else if (error is RatchetDecryptException) {
+          // Late or unreadable for good (its key is gone): the sender's
+          // retry encrypts it afresh. The relay's copy goes.
+        } else {
+          failed++;
+        }
         recordError(
           'receive',
           'Dropped ${_boundedLogValue(envelope.kind)} '
@@ -21451,18 +21502,225 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
-    return _EnvelopeProcessingOutcome(processed: processed, failed: failed);
+    return _EnvelopeProcessingOutcome(
+      processed: processed,
+      failed: failed,
+      parked: parked,
+    );
   }
+
+  /// Whether an envelope that failed with [error] may be read later.
+  static bool _canBecomeReadable(Object error) =>
+      error is RatchetUnknownPeerException;
+
+  /// Set around a replay: the parked entry being read again.
+  static const Object _replayKey = #conestParkedReplay;
+  static const int _parkedReplays = 3;
+
+  /// Bytes the parked envelopes may take in the vault: in all, per sender,
+  /// and each. Every vault save rewrites them, so they are small.
+  static const int _parkedTotalBytes = 2 * 1024 * 1024;
+  static const int _parkedSenderBytes = 256 * 1024;
+  static const int _parkedEnvelopeBytes = 64 * 1024;
+  static const Duration _parkedLifetime = Duration(hours: 24);
+
+  /// Whether the envelope was kept.
+  bool _parkUnreadable(RelayEnvelope envelope) {
+    // A contact, or a group member who is no contact.
+    final contact = _ratchetPeer(envelope.senderDeviceId);
+    if (contact == null) return false;
+    var since = _now().toUtc();
+    var replays = 0;
+    if (Zone.current[_replayKey] case final (DateTime, int) again) {
+      // Read again and still not readable: it keeps its first time, and is
+      // given up after a few tries.
+      if (again.$2 + 1 >= _parkedReplays) return false;
+      since = again.$1;
+      replays = again.$2 + 1;
+    }
+    final encoded = jsonEncode(envelope.toJson());
+    final size = utf8.encode(encoded).length;
+    if (size > _parkedEnvelopeBytes) return false;
+    final now = _now().toUtc();
+    final cutoff = now.subtract(_parkedLifetime);
+    var kept = [
+      for (final entry in _snapshot.parkedUnreadable)
+        if (entry.receivedAt.isAfter(cutoff) && entry.envelopeJson != encoded)
+          entry,
+      HeldEnvelope(
+        senderDeviceId: envelope.senderDeviceId,
+        conversationId: envelope.conversationId,
+        envelopeJson: encoded,
+        receivedAt: since,
+        peerKey: contact.publicKeyBase64,
+        replays: replays,
+      ),
+    ];
+    int bytes(Iterable<HeldEnvelope> entries) =>
+        entries.fold(0, (sum, entry) => sum + entry.envelopeJson.length);
+    // Oldest first: per sender, then in all.
+    while (bytes(
+          kept.where((e) => e.senderDeviceId == envelope.senderDeviceId),
+        ) >
+        _parkedSenderBytes) {
+      kept.remove(
+        kept.firstWhere((e) => e.senderDeviceId == envelope.senderDeviceId),
+      );
+    }
+    while (kept.length > 1 && bytes(kept) > _parkedTotalBytes) {
+      kept.removeAt(0);
+    }
+    _snapshot = _snapshot.copyWith(parkedUnreadable: kept);
+    return true;
+  }
+
+  /// A bundle from an authenticated contact arrived: what was parked for it
+  /// is read again, if the contact is still the one that sent it. An
+  /// envelope that still cannot be read goes back with its first time (so it
+  /// ages out), one that can never be read is dropped.
+  final Set<String> _replayingParked = {};
+
+  void _replayParked(ContactRecord peer) {
+    if (_disposed || !_replayingParked.add(peer.deviceId)) return;
+    final now = _now().toUtc();
+    final mine = <HeldEnvelope>[];
+    final rest = <HeldEnvelope>[];
+    for (final entry in _snapshot.parkedUnreadable) {
+      (entry.senderDeviceId == peer.deviceId ? mine : rest).add(entry);
+    }
+    if (mine.isEmpty) {
+      _replayingParked.remove(peer.deviceId);
+      return;
+    }
+    _snapshot = _snapshot.copyWith(parkedUnreadable: rest);
+    final due = [
+      for (final entry in mine)
+        if (entry.peerKey == peer.publicKeyBase64 &&
+            now.difference(entry.receivedAt) < _parkedLifetime)
+          entry,
+    ];
+    unawaited(() async {
+      try {
+        for (final entry in due) {
+          final RelayEnvelope envelope;
+          try {
+            envelope = RelayEnvelope.fromJson(
+              jsonDecode(entry.envelopeJson) as Map<String, dynamic>,
+            );
+          } catch (_) {
+            continue;
+          }
+          // Not a leased batch: nothing is held for it, and a failure parks
+          // it again (with its first time) or drops it.
+          await runZoned(
+            () => _processEnvelopes([envelope]),
+            zoneValues: {_replayKey: (entry.receivedAt, entry.replays)},
+          );
+        }
+      } finally {
+        _replayingParked.remove(peer.deviceId);
+        if (!_disposed) await _saveSnapshotSilently(notify: false);
+      }
+    }());
+  }
+
+  @visibleForTesting
+  void replayParkedForTesting(String deviceId) {
+    final peer = _ratchetPeer(deviceId);
+    if (peer != null) _replayParked(peer);
+  }
+
+  @visibleForTesting
+  Future<void> settleReplaysForTesting() async {
+    while (_replayingParked.isNotEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  @visibleForTesting
+  DateTime? get firstParkedAtForTesting =>
+      _snapshot.parkedUnreadable.firstOrNull?.receivedAt;
+
+  @visibleForTesting
+  int get parkedUnreadableCountForTesting => _snapshot.parkedUnreadable.length;
+
+  @visibleForTesting
+  int get parkedUnreadableBytesForTesting => _snapshot.parkedUnreadable.fold(
+    0,
+    (sum, entry) => sum + entry.envelopeJson.length,
+  );
+
+  @visibleForTesting
+  void parkUnreadableForTesting(RelayEnvelope envelope) =>
+      _parkUnreadable(envelope);
+
+  @visibleForTesting
+  int get routeReceiptTimersForTesting => _routeReceiptTimers.length;
+
+  @visibleForTesting
+  List<RelayEnvelope> orderForProcessingForTesting(
+    List<RelayEnvelope> envelopes,
+  ) => _orderForProcessing(envelopes);
+
+  /// Envelopes in the order they are processed: by kind (static-key setup
+  /// before messages), but never far from the order they arrived in.
+  ///
+  /// A forward-secret session decrypts a message that arrives out of order
+  /// only while its key is among the last 40 skipped ones. Sorting a whole
+  /// batch by kind moved every receipt ahead of every message, and
+  /// [List.sort] is not stable beyond 32 entries: a batch of a hundred (what
+  /// piles up while a relay is slow) lost the keys of the messages it passed,
+  /// they could never be read, and both ends reset their sessions over and
+  /// over (device lab, relay only). Only what is not sent in a session
+  /// (contact exchange, session bundles) goes first; everything else,
+  /// session-encrypted kinds like bulk keys included, is ordered by kind in
+  /// runs of [_processingRun] arrival-ordered envelopes, so none passes more
+  /// than that many others. Runs are short (12) because some of a session's
+  /// 40 skipped keys may be spent already on messages that were lost, and
+  /// the kinds that need to go ahead (membership before group messages) are
+  /// sent close together.
+  List<RelayEnvelope> _orderForProcessing(List<RelayEnvelope> envelopes) {
+    // The arrival position breaks ties: the sort alone is not stable.
+    int byKind((int, RelayEnvelope) left, (int, RelayEnvelope) right) {
+      final order = _processingPriority(
+        left.$2.kind,
+      ).compareTo(_processingPriority(right.$2.kind));
+      return order != 0 ? order : left.$1.compareTo(right.$1);
+    }
+
+    final setup = <(int, RelayEnvelope)>[];
+    final rest = <(int, RelayEnvelope)>[];
+    for (var i = 0; i < envelopes.length; i++) {
+      (_processingPriority(envelopes[i].kind) < 0 ? setup : rest).add((
+        i,
+        envelopes[i],
+      ));
+    }
+    setup.sort(byKind);
+    final ordered = [for (final entry in setup) entry.$2];
+    for (var start = 0; start < rest.length; start += _processingRun) {
+      final run = rest.sublist(start, min(start + _processingRun, rest.length))
+        ..sort(byKind);
+      ordered.addAll(run.map((entry) => entry.$2));
+    }
+    return ordered;
+  }
+
+  /// How far an envelope may be moved ahead of the ones that arrived before
+  /// it (a session keeps 40 skipped keys).
+  static const int _processingRun = 12;
 
   int _processingPriority(String kind) {
     switch (kind) {
-      // Capabilities first, then ratchet bundles and keys, so a bundle or
-      // hello in the same batch finds the state it depends on.
+      // Capabilities first, then ratchet bundles, so a bundle in the same
+      // batch finds the state it depends on.
       case 'contact_exchange':
         return -2;
       case _ratchetBundleKind:
-      case 'ratchet_bulk_key':
         return -1;
+      // Session-encrypted: ahead of the messages of its run, not of the
+      // whole batch (see [_orderForProcessing]).
+      case 'ratchet_bulk_key':
       case 'route_update':
         return 0;
       case 'lan_lobby_message':
@@ -21622,10 +21880,101 @@ class MessengerController extends ChangeNotifier {
         target != envelope.acknowledgedMessageId) {
       return;
     }
-    // The routes copies of it arrived by (newer apps name them).
-    final namedRoutes = decoded['routes'];
-    final arrivedBy = MessageRoute.namedInReceipt(namedRoutes);
+    // One receipt may name several messages (batchedAcksV1): the one in the
+    // envelope's header comes first, so an app without it still reads that.
+    final targets = <String>[target];
+    final named = decoded['acknowledgedMessageIds'];
+    if (named is List && receipt == 'delivered') {
+      for (final id in named.take(_maxBatchedAckIds)) {
+        if (id is String &&
+            id.isNotEmpty &&
+            id.length <= 160 &&
+            !targets.contains(id)) {
+          targets.add(id);
+        }
+      }
+    }
+    final routesById = decoded['routesById'];
+    var applied = false;
+    for (final id in targets) {
+      // The routes copies of it arrived by (newer apps name them).
+      final Object? namedRoutes = id == target && decoded['routes'] is List
+          ? decoded['routes']
+          : routesById is Map
+          ? routesById[id]
+          : null;
+      // The ids a batched receipt adds are not authenticated one by one:
+      // only messages of this chat that went to this contact count, and
+      // others touch nothing (no route marks, no cancelled copies).
+      if (id != target && !_ownsReceiptTarget(group, contact, envelope, id)) {
+        continue;
+      }
+      if (_applyReceipt(
+        group: group,
+        contact: contact,
+        envelope: envelope,
+        receipt: receipt!,
+        target: id,
+        arrivedBy: MessageRoute.namedInReceipt(namedRoutes),
+      )) {
+        applied = true;
+      }
+    }
+    if (!applied) return;
+    // When the ack was sent, not when it was fetched: one waiting on a relay
+    // for hours does not make the contact look online now.
+    final now = _now().toUtc();
+    final sentAt = envelope.createdAt.toUtc();
+    _reachability.noteTwoWaySuccess(
+      contact.deviceId,
+      at: sentAt.isAfter(now) ? now : sentAt,
+    );
+  }
+
+  /// Most messages one receipt may name.
+  static const int _maxBatchedAckIds = 64;
+
+  bool _ownsReceiptTarget(
+    GroupRecord? group,
+    ContactRecord contact,
+    RelayEnvelope envelope,
+    String id,
+  ) {
+    if (group != null) {
+      if (!group.hasActiveMember(contact.deviceId)) return false;
+      final message = _groupMessageById(group.groupId, id);
+      return message != null &&
+          message.outbound &&
+          message.recipientStates.containsKey(contact.deviceId);
+    }
+    if (envelope.conversationId !=
+        _crypto.conversationIdFor(contact.deviceId)) {
+      return false;
+    }
+    final message = _messageById(_chatIdFor(contact), id);
+    return message != null && message.outbound;
+  }
+
+  /// Applies a receipt for one message; whether it counted.
+  bool _applyReceipt({
+    required GroupRecord? group,
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required String receipt,
+    required String target,
+    required Set<MessageRoute>? arrivedBy,
+  }) {
     _noteConfirmed(contact.deviceId, target, arrivedBy: arrivedBy);
+    // Came by Nostr: the relays it went through earn their rank.
+    if (arrivedBy != null && arrivedBy.contains(MessageRoute.nostrCarrier)) {
+      final address = contact.carrierAddress(TransportKind.nostr);
+      if (address != null) {
+        _nostrChannel?.noteDelivered(
+          address,
+          sendId: carrierSendId(contact.deviceId, target),
+        );
+      }
+    }
     final ackedAt = envelope.createdAt.toUtc().isAfter(_now().toUtc())
         ? _now().toUtc()
         : envelope.createdAt.toUtc();
@@ -21640,7 +21989,7 @@ class MessengerController extends ChangeNotifier {
       );
     }
     if (group != null) {
-      if (!group.hasActiveMember(contact.deviceId)) return;
+      if (!group.hasActiveMember(contact.deviceId)) return false;
       _updateGroupRecipientState(
         group.groupId,
         target,
@@ -21650,12 +21999,12 @@ class MessengerController extends ChangeNotifier {
     } else {
       if (envelope.conversationId !=
           _crypto.conversationIdFor(contact.deviceId)) {
-        return;
+        return false;
       }
       // A receipt from any of the contact's devices counts.
       final chatId = _chatIdFor(contact);
       final message = _messageById(chatId, target);
-      if (message == null || !message.outbound) return;
+      if (message == null || !message.outbound) return false;
       final before = message.state;
       if (receipt == 'read') {
         _markMessagesReadThroughMessage(chatId, target);
@@ -21673,14 +22022,7 @@ class MessengerController extends ChangeNotifier {
         });
       }
     }
-    // When the ack was sent, not when it was fetched: one waiting on a relay
-    // for hours does not make the contact look online now.
-    final now = _now().toUtc();
-    final sentAt = envelope.createdAt.toUtc();
-    _reachability.noteTwoWaySuccess(
-      contact.deviceId,
-      at: sentAt.isAfter(now) ? now : sentAt,
-    );
+    return true;
   }
 
   Future<void> _handleVoiceCallSignal(RelayEnvelope envelope) async {
@@ -27091,11 +27433,16 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// Records that the sender of [envelope] is owed a receipt, and hands it
+  /// to [_receiptQueue]; it does not wait for the send. A carrier send waits
+  /// for its turn in the account's limiter, and the handlers that call this
+  /// run inside the processing of incoming messages, one batch at a time.
+  /// The obligation is persisted with the vault (the pending queue), so a
+  /// crash before the send loses nothing.
   Future<void> _sendAck({
     required ContactRecord contact,
     required RelayEnvelope envelope,
   }) async {
-    final me = _requireIdentity();
     // Every route a copy of the message came by, so the sender knows which
     // of the routes it used work.
     final isMessage =
@@ -27105,27 +27452,45 @@ class MessengerController extends ChangeNotifier {
       _traceArrival(contact, envelope);
     }
     final arrivals = isMessage ? _arrivals[envelope.messageId] : null;
-    final ack = await _crypto.encryptPayloadEnvelope(
-      kind: 'ack',
-      messageId: _randomId('ack'),
-      conversationId: envelope.conversationId,
-      senderAccountId: me.accountId,
-      senderDeviceId: me.deviceId,
-      recipientDeviceId: contact.deviceId,
-      contact: contact,
-      plaintext: jsonEncode({
-        'receipt': 'delivered',
-        'acknowledgedMessageId': envelope.messageId,
-        if (arrivals != null && arrivals.arrived.isNotEmpty)
-          'routes': [for (final route in arrivals.arrived.keys) route.name],
-      }),
-      createdAt: _now().toUtc(),
-      acknowledgedMessageId: envelope.messageId,
-    );
     arrivals?.acked.addAll(arrivals.arrived.keys);
-    // Enqueue first so a crash mid-send doesn't lose the obligation; the
-    // happy-path delivery clears the entry immediately. Retries are
-    // independent of the original message-retry pass.
+    // A copy of a message whose receipt is still waiting to go out (behind
+    // a limiter, say) adds nothing: that receipt covers it.
+    final waiting = _snapshot.pendingAckDeliveries
+        .where(
+          (entry) =>
+              entry.kind == PendingAckKind.delivered &&
+              entry.targetDeviceId == contact.deviceId &&
+              entry.acknowledgedMessageId == envelope.messageId &&
+              (entry.attempts <= 1 ||
+                  _receiptsInFlight.contains(_receiptKey(entry))),
+        )
+        .firstOrNull;
+    if (waiting != null) {
+      // One already built and on its way names the routes known when it
+      // was built: a copy that came by another route since gets a receipt
+      // of its own once that one is done.
+      if (arrivals != null &&
+          _receiptsInFlight.contains(_receiptKey(waiting))) {
+        // Event-driven: when that receipt is done, the routes it did not
+        // name get one of their own (see [_sendQueuedReceipts]).
+        if (_routeReceiptAfterFlight.length < 256 ||
+            _routeReceiptAfterFlight.containsKey(envelope.messageId)) {
+          _routeReceiptAfterFlight[envelope.messageId] = (
+            deviceId: contact.deviceId,
+            conversationId: envelope.conversationId,
+          );
+        }
+      }
+      return;
+    }
+    // The answer to a call signal or a file offer is not for a message and
+    // is not held up behind bulk receipts.
+    if (!isMessage) {
+      final prefix = '${contact.deviceId}|';
+      final mine = _urgentReceiptKeys.where((k) => k.startsWith(prefix));
+      if (mine.length >= 64) _urgentReceiptKeys.remove(mine.first);
+      _urgentReceiptKeys.add('$prefix${envelope.messageId}');
+    }
     _enqueuePendingAckDelivery(
       PendingAckDelivery(
         targetDeviceId: contact.deviceId,
@@ -27136,21 +27501,11 @@ class MessengerController extends ChangeNotifier {
         attempts: 1,
       ),
     );
-    try {
-      await _deliverToContact(
-        contact: contact,
-        recipientDeviceId: contact.deviceId,
-        envelope: ack,
-      );
-      _clearPendingAckDelivery(
-        targetDeviceId: contact.deviceId,
-        acknowledgedMessageId: envelope.messageId,
-        kind: PendingAckKind.delivered,
-      );
-    } catch (_) {
-      // Stays queued; the retry loop will pick it up.
-    }
-    await _saveSnapshotSilently(notify: false);
+    _scheduleReceiptSend(
+      contact.deviceId,
+      envelope.conversationId,
+      urgent: !isMessage,
+    );
   }
 
   Future<void> _sendReadReceipt({
@@ -27168,7 +27523,8 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     readReceiptsSent++;
-    // Queued first: if sealing it fails, the retry loop still sends it.
+    // Queued first, then sent off this path: the queue is saved with the
+    // caller's snapshot save, and the retry loop has whatever fails.
     _enqueuePendingAckDelivery(
       PendingAckDelivery(
         targetDeviceId: contact.deviceId,
@@ -27179,21 +27535,402 @@ class MessengerController extends ChangeNotifier {
         attempts: 1,
       ),
     );
+    _scheduleReceiptSend(contact.deviceId, conversationId);
+  }
+
+  /// Sends receipts off the path that processes incoming messages, a few
+  /// runs at a time (see [ReceiptSendQueue]).
+  final ReceiptSendQueue _receiptQueue = ReceiptSendQueue();
+
+  /// `target|message|kind` of the receipts a run is sending now: the retry
+  /// loop leaves them alone (a send waiting for its limiter is not lost).
+  final Set<String> _receiptsInFlight = {};
+
+  /// Receipts the retry loop wants sent again (see [_receiptKey]).
+  final Set<String> _receiptRetryDue = {};
+
+  /// `target|message` of receipts that answer something other than a
+  /// message (they go first, past the queue's limits).
+  final Set<String> _urgentReceiptKeys = {};
+
+  /// Messages a copy by a new route arrived for while their receipt was on
+  /// its way: when it is done, the routes it did not name get a receipt.
+  final Map<String, ({String deviceId, String conversationId})>
+  _routeReceiptAfterFlight = {};
+
+  /// The routes named in the receipt built last for a message (bounded).
+  final Map<String, Set<String>> _receiptRoutesNamed = {};
+
+  /// When sending a receipt to a contact last failed: its fresh receipts
+  /// wait for the retry loop instead of each holding the queue.
+  final Map<String, DateTime> _receiptFailedAt = {};
+
+  /// Most messages one receipt names; a test may raise it.
+  @visibleForTesting
+  static int receiptBatchLimit = 32;
+
+  /// Sends one pass is allowed before it yields its place in the queue.
+  static const int _receiptSendsPerPass = 4;
+  static const Duration _receiptPassTime = Duration(seconds: 15);
+  static const Duration _receiptFailureRest = Duration(seconds: 60);
+
+  /// Receipt envelopes sent (a batched one counts once).
+  @visibleForTesting
+  int receiptEnvelopesSent = 0;
+
+  /// Completes when no receipt is being sent or waits to be.
+  @visibleForTesting
+  Future<void> settleReceiptsForTesting() => _receiptQueue.whenIdle();
+
+  static String _receiptKey(PendingAckDelivery entry) =>
+      '${entry.targetDeviceId}|${entry.acknowledgedMessageId}|'
+      '${entry.kind.name}';
+
+  /// Queues a receipt as if a message had just been received (tests).
+  @visibleForTesting
+  void queueReceiptForTesting({
+    required String contactDeviceId,
+    required String messageId,
+    required String conversationId,
+    bool send = true,
+  }) {
+    _enqueuePendingAckDelivery(
+      PendingAckDelivery(
+        targetDeviceId: contactDeviceId,
+        acknowledgedMessageId: messageId,
+        conversationId: conversationId,
+        kind: PendingAckKind.delivered,
+        lastAttemptedAt: _now(),
+        attempts: 1,
+      ),
+    );
+    if (send) _scheduleReceiptSend(contactDeviceId, conversationId);
+  }
+
+  /// Receipts of other messages this device has confirmed so far (tests).
+  @visibleForTesting
+  int get confirmedFamiliesForTesting => _confirmedFamilies.length;
+
+  void _scheduleReceiptSend(
+    String targetDeviceId,
+    String conversationId, {
+    bool urgent = false,
+  }) {
+    if (_disposed) return;
+    // The obligation reaches the vault soon, whatever the send does.
+    unawaited(
+      _saveSnapshotSilently(notify: false, debounce: true).catchError((
+        Object error,
+      ) {
+        recordError('vault', 'Receipt queue not saved: $error');
+      }),
+    );
+    _receiptQueue.schedule(
+      '$targetDeviceId|$conversationId',
+      () => _sendQueuedReceipts(targetDeviceId, conversationId),
+      urgent: urgent,
+    );
+  }
+
+  /// Sends what is queued for one contact and conversation: the delivered
+  /// receipts as one envelope when the contact takes it
+  /// ([ApplicationCapability.batchedAcksV1]), then the read receipts. What
+  /// is queued while a send waits goes in the next send. A pass does at most
+  /// a few sends, or runs a few seconds, and then gives its place in the
+  /// queue to the next contact; one whose send fails stops the pass and
+  /// leaves the rest to the retry loop for a while.
+  Future<void> _sendQueuedReceipts(
+    String targetDeviceId,
+    String conversationId,
+  ) async {
+    final skipped = <String>{};
+    final clock = Stopwatch()..start();
+    var sends = 0;
+    var yielded = false;
+    while (!_disposed) {
+      if (sends >= _receiptSendsPerPass || clock.elapsed > _receiptPassTime) {
+        yielded = true;
+        break;
+      }
+      final me = _snapshot.identity;
+      if (me == null) return;
+      final failedAt = _receiptFailedAt[targetDeviceId];
+      final resting =
+          failedAt != null && _now().difference(failedAt) < _receiptFailureRest;
+      // New obligations only: one that was tried (and failed) waits for the
+      // retry loop, which marks it due.
+      final fresh = _snapshot.pendingAckDeliveries
+          .where((entry) {
+            if (entry.kind != PendingAckKind.delivered &&
+                entry.kind != PendingAckKind.read) {
+              return false;
+            }
+            final key = _receiptKey(entry);
+            final due = _receiptRetryDue.contains(key);
+            return entry.targetDeviceId == targetDeviceId &&
+                entry.conversationId == conversationId &&
+                (due || (entry.attempts <= 1 && !resting)) &&
+                !entry.requiresPeerUpdate &&
+                !_receiptsInFlight.contains(key) &&
+                !skipped.contains(key);
+          })
+          .toList(growable: false);
+      if (fresh.isEmpty) break;
+      // The contact as it is now, before every send: it may have been
+      // removed or have a new key since the last one.
+      final group = _groupById(conversationId);
+      final contact = group == null
+          ? _contactByDeviceId(targetDeviceId)
+          : group.hasActiveMember(me.deviceId) &&
+                group.hasActiveMember(targetDeviceId)
+          ? _groupMemberContact(group, targetDeviceId)
+          : null;
+      if (contact == null || contact.isArchived) {
+        for (final entry in fresh) {
+          _clearPendingAckDelivery(
+            targetDeviceId: entry.targetDeviceId,
+            acknowledgedMessageId: entry.acknowledgedMessageId,
+            kind: entry.kind,
+          );
+        }
+        continue;
+      }
+      if (contact.pendingVerification || !contact.canSendOutbound) {
+        // Held until the contact is confirmed (see the retry loop).
+        skipped.addAll(fresh.map(_receiptKey));
+        continue;
+      }
+      // One send: an urgent receipt, else a read receipt, else the delivered
+      // ones (one envelope if the contact takes it).
+      final reads = {
+        for (final entry in fresh)
+          if (entry.kind == PendingAckKind.read) entry.acknowledgedMessageId,
+      };
+      // A read receipt says delivered too.
+      final delivered = [
+        for (final entry in fresh)
+          if (entry.kind == PendingAckKind.delivered &&
+              !reads.contains(entry.acknowledgedMessageId))
+            entry,
+      ];
+      final urgent = delivered
+          .where(
+            (entry) => _urgentReceiptKeys.contains(
+              '${entry.targetDeviceId}|${entry.acknowledgedMessageId}',
+            ),
+          )
+          .toList(growable: false);
+      final readEntries = [
+        for (final entry in fresh)
+          if (entry.kind == PendingAckKind.read) entry,
+      ];
+      final List<PendingAckDelivery> unit;
+      if (urgent.isNotEmpty) {
+        unit =
+            urgent.length > 1 &&
+                contact.featureCapabilities.contains(
+                  ApplicationCapability.batchedAcksV1,
+                )
+            ? urgent.take(receiptBatchLimit).toList(growable: false)
+            : [urgent.first];
+      } else if (readEntries.isNotEmpty) {
+        unit = [readEntries.first];
+      } else if (delivered.length > 1 &&
+          contact.featureCapabilities.contains(
+            ApplicationCapability.batchedAcksV1,
+          )) {
+        unit = delivered.take(receiptBatchLimit).toList(growable: false);
+      } else if (delivered.isNotEmpty) {
+        unit = [delivered.first];
+      } else {
+        skipped.addAll(fresh.map(_receiptKey));
+        continue;
+      }
+      final unitKeys = unit.map(_receiptKey).toList(growable: false);
+      _receiptRetryDue.removeAll(unitKeys);
+      _receiptsInFlight.addAll(unitKeys);
+      final bool sent;
+      try {
+        sent = unit.first.kind == PendingAckKind.read
+            ? await _sendQueuedReadReceipt(me, contact, unit.first)
+            : await _sendDeliveredReceipts(me, contact, conversationId, unit);
+      } finally {
+        _receiptsInFlight.removeAll(unitKeys);
+        for (final entry in unit) {
+          _urgentReceiptKeys.remove(
+            '${entry.targetDeviceId}|${entry.acknowledgedMessageId}',
+          );
+        }
+      }
+      sends++;
+      skipped.addAll(unitKeys);
+      if (sent && unit.first.kind == PendingAckKind.delivered) {
+        _sendRouteFollowUps(unit, conversationId);
+      } else {
+        for (final entry in unit) {
+          _routeReceiptAfterFlight.remove(entry.acknowledgedMessageId);
+        }
+      }
+      if (!sent) {
+        // Its route is dead or slow: the rest waits for the retry loop.
+        _receiptFailedAt[targetDeviceId] = _now();
+        while (_receiptFailedAt.length > 256) {
+          _receiptFailedAt.remove(_receiptFailedAt.keys.first);
+        }
+        break;
+      }
+      _receiptFailedAt.remove(targetDeviceId);
+    }
+    if (_disposed) return;
+    // Still more to send: back of the queue, so other contacts go first.
+    if (yielded) {
+      final prefix = '$targetDeviceId|';
+      _scheduleReceiptSend(
+        targetDeviceId,
+        conversationId,
+        urgent: _urgentReceiptKeys.any((k) => k.startsWith(prefix)),
+      );
+    }
+    try {
+      await _saveSnapshotSilently(notify: false, debounce: true);
+    } catch (error) {
+      // The queue is saved with the next change.
+      recordError('vault', 'Receipt queue not saved: $error');
+    }
+  }
+
+  /// Copies by a new route arrived while [sent] was on its way: a receipt
+  /// that names the routes it missed is queued for each such message.
+  void _sendRouteFollowUps(
+    List<PendingAckDelivery> sent,
+    String conversationId,
+  ) {
+    var any = false;
+    for (final entry in sent) {
+      final id = entry.acknowledgedMessageId;
+      final waiting = _routeReceiptAfterFlight.remove(id);
+      if (waiting == null) continue;
+      final named = _receiptRoutesNamed[id];
+      final arrivals = _arrivals[id];
+      if (arrivals == null ||
+          !arrivals.arrived.keys.any(
+            (route) => !(named?.contains(route.name) ?? false),
+          )) {
+        continue;
+      }
+      _enqueuePendingAckDelivery(
+        PendingAckDelivery(
+          targetDeviceId: entry.targetDeviceId,
+          acknowledgedMessageId: id,
+          conversationId: conversationId,
+          kind: PendingAckKind.delivered,
+          lastAttemptedAt: _now(),
+          attempts: 1,
+        ),
+      );
+      any = true;
+    }
+    if (any) {
+      _scheduleReceiptSend(sent.first.targetDeviceId, conversationId);
+    }
+  }
+
+  /// Whether the receipt went out.
+  Future<bool> _sendDeliveredReceipts(
+    IdentityRecord me,
+    ContactRecord contact,
+    String conversationId,
+    List<PendingAckDelivery> entries,
+  ) async {
+    final now = _now();
+    for (final entry in entries) {
+      _enqueuePendingAckDelivery(
+        entry.copyWith(lastAttemptedAt: now, attempts: entry.attempts + 1),
+      );
+    }
+    try {
+      List<String>? routesOf(String id) {
+        final arrivals = _arrivals[id];
+        if (arrivals == null || arrivals.arrived.isEmpty) return null;
+        arrivals.acked.addAll(arrivals.arrived.keys);
+        final names = [for (final route in arrivals.arrived.keys) route.name];
+        _receiptRoutesNamed.remove(id);
+        _receiptRoutesNamed[id] = names.toSet();
+        while (_receiptRoutesNamed.length > 512) {
+          _receiptRoutesNamed.remove(_receiptRoutesNamed.keys.first);
+        }
+        return names;
+      }
+
+      final first = entries.first.acknowledgedMessageId;
+      final firstRoutes = routesOf(first);
+      final Map<String, Object?> plaintext = {
+        'receipt': 'delivered',
+        'acknowledgedMessageId': first,
+        'routes': ?firstRoutes,
+      };
+      if (entries.length > 1) {
+        plaintext['acknowledgedMessageIds'] = [
+          for (final entry in entries) entry.acknowledgedMessageId,
+        ];
+        final routes = <String, List<String>?>{
+          for (final entry in entries.skip(1))
+            entry.acknowledgedMessageId: routesOf(entry.acknowledgedMessageId),
+        }..removeWhere((_, named) => named == null);
+        if (routes.isNotEmpty) plaintext['routesById'] = routes;
+      }
+      final ack = await _crypto.encryptPayloadEnvelope(
+        kind: 'ack',
+        messageId: _randomId('ack'),
+        conversationId: conversationId,
+        senderAccountId: me.accountId,
+        senderDeviceId: me.deviceId,
+        recipientDeviceId: contact.deviceId,
+        contact: contact,
+        plaintext: jsonEncode(plaintext),
+        createdAt: _now().toUtc(),
+        acknowledgedMessageId: first,
+      );
+      await _deliverToContact(
+        contact: contact,
+        recipientDeviceId: contact.deviceId,
+        envelope: ack,
+      );
+      receiptEnvelopesSent++;
+      for (final entry in entries) {
+        _clearPendingAckDelivery(
+          targetDeviceId: entry.targetDeviceId,
+          acknowledgedMessageId: entry.acknowledgedMessageId,
+          kind: PendingAckKind.delivered,
+        );
+      }
+      return true;
+    } catch (_) {
+      // Stays queued (attempts counted); the retry loop will pick it up.
+      return false;
+    }
+  }
+
+  Future<bool> _sendQueuedReadReceipt(
+    IdentityRecord me,
+    ContactRecord contact,
+    PendingAckDelivery entry,
+  ) async {
+    _enqueuePendingAckDelivery(
+      entry.copyWith(lastAttemptedAt: _now(), attempts: entry.attempts + 1),
+    );
     try {
       await _deliverReadReceipt(
         me: me,
         contact: contact,
-        conversationId: conversationId,
-        acknowledgedMessageId: acknowledgedMessageId,
+        conversationId: entry.conversationId,
+        acknowledgedMessageId: entry.acknowledgedMessageId,
       );
+      receiptEnvelopesSent++;
+      return true;
     } catch (_) {
       // Stays queued; the retry loop will pick it up.
-    }
-    try {
-      await _saveSnapshotSilently(notify: false);
-    } catch (error) {
-      // The queue is saved with the next change.
-      recordError('vault', 'Read receipt queue not saved: $error');
+      return false;
     }
   }
 
@@ -27302,8 +28039,41 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(pendingAckDeliveries: filtered);
   }
 
+  static bool _isStaleSessionCiphertext(PendingAckDelivery entry) {
+    if (!entry.kind.carriesEnvelope ||
+        entry.envelopeJson == null ||
+        entry.payload != null) {
+      return false;
+    }
+    try {
+      return RelayEnvelope.fromJson(entry.envelopeJson!).protocolVersion == 3;
+    } catch (_) {
+      return false;
+    }
+  }
+
   bool _markLegacyQueuedControlsIncompatible() {
     var changed = false;
+    // Parked envelopes older than their lifetime go.
+    final parkedCutoff = _now().toUtc().subtract(_parkedLifetime);
+    final parkedKept = [
+      for (final entry in _snapshot.parkedUnreadable)
+        if (entry.receivedAt.isAfter(parkedCutoff)) entry,
+    ];
+    if (parkedKept.length != _snapshot.parkedUnreadable.length) {
+      changed = true;
+      _snapshot = _snapshot.copyWith(parkedUnreadable: parkedKept);
+    }
+    // A control queued by an older build as session ciphertext cannot be
+    // sent again (its session is gone): it goes, the sender resends.
+    final withoutStale = [
+      for (final entry in _snapshot.pendingAckDeliveries)
+        if (!_isStaleSessionCiphertext(entry)) entry,
+    ];
+    if (withoutStale.length != _snapshot.pendingAckDeliveries.length) {
+      changed = true;
+      _snapshot = _snapshot.copyWith(pendingAckDeliveries: withoutStale);
+    }
     final entries = _snapshot.pendingAckDeliveries
         .map((entry) {
           if (!entry.kind.carriesEnvelope ||
@@ -27442,6 +28212,8 @@ class MessengerController extends ChangeNotifier {
       if (entry.requiresPeerUpdate) {
         continue;
       }
+      // A receipt being sent now, maybe waiting for a limiter's turn.
+      if (_receiptsInFlight.contains(_receiptKey(entry))) continue;
       // What this account's devices tell each other waits for a device that
       // is away for days: retried ever more slowly, until it expires.
       final sync = entry.kind == PendingAckKind.accountSync;
@@ -27511,6 +28283,20 @@ class MessengerController extends ChangeNotifier {
       if (contact.pendingVerification) {
         // Hold the entry; confirm-replacement will drain it once the
         // unverified key is promoted and the crypto layer can encrypt.
+        continue;
+      }
+      if (!entry.kind.carriesEnvelope) {
+        // Receipts go through the receipt queue: batched where the contact
+        // takes that, and not awaited here, where a send waiting for its
+        // turn in a limiter would hold every message retry behind it.
+        final failedAt = _receiptFailedAt[entry.targetDeviceId];
+        if (failedAt != null &&
+            now.difference(failedAt) < _receiptFailureRest) {
+          // Its route just failed: not before it has rested.
+          continue;
+        }
+        _receiptRetryDue.add(_receiptKey(entry));
+        _scheduleReceiptSend(entry.targetDeviceId, entry.conversationId);
         continue;
       }
       // Control kinds (delete, cancel, edit, call signal, etc.) encrypt their
@@ -28974,9 +29760,8 @@ class MessengerController extends ChangeNotifier {
     if (_routeReceiptTimers.length >= 256) {
       // Too many waiting: answered at once rather than not at all.
       unawaited(
-        _sendAck(
-          contact: contact,
-          envelope: envelope,
+        Future(
+          () => _sendAck(contact: contact, envelope: envelope),
         ).catchError((Object _) {}),
       );
       return;
@@ -29776,11 +30561,18 @@ class MessengerController extends ChangeNotifier {
       hasSession,
       dart_crypto.sha256.convert(utf8.encode(payload)),
     ].join('|');
-    final cached = _envelopeOutbox.remove(key);
-    if (cached != null && cached.fingerprint == fingerprint) {
-      _envelopeOutbox[key] = cached;
+    final cached = _envelopeOutbox[key];
+    if (cached != null &&
+        cached.fingerprint == fingerprint &&
+        await _sealedStillUsable(cached.envelope)) {
+      // (Looked up, not removed, while awaiting: another try may replace it.)
+      if (identical(_envelopeOutbox[key], cached)) {
+        _envelopeOutbox.remove(key);
+        _envelopeOutbox[key] = cached;
+      }
       return cached.envelope;
     }
+    _envelopeOutbox.remove(key);
     // The pending encryption is shared, so two sends at once still go out
     // as one ciphertext.
     final envelope = encrypt();
@@ -29796,6 +30588,21 @@ class MessengerController extends ChangeNotifier {
       }
       rethrow;
     }
+  }
+
+  /// A retry reuses the bytes sealed for an earlier try only while the peer
+  /// has said nothing since: any message from it may have turned the
+  /// conversation to a new chain, and then the old bytes would arrive on a
+  /// chain the peer has dropped. A retry that was never sealed (no transport
+  /// took it yet) is sealed when one does.
+  Future<bool> _sealedStillUsable(Future<RelayEnvelope> pending) async {
+    final RelayEnvelope envelope;
+    try {
+      envelope = await pending;
+    } catch (_) {
+      return false;
+    }
+    return !(envelope.lazy?.isStale ?? false);
   }
 
   static const int _seenMessageDigestCap = 4096;
@@ -30325,10 +31132,14 @@ class MessengerController extends ChangeNotifier {
         !recipient.routing.onlineEnabled) {
       return null;
     }
-    final inner = envelope.toJson();
-    if (utf8.encode(jsonEncode(inner)).length > _maxForwardEnvelopeBytes) {
+    if (utf8.encode(jsonEncode(envelope.toJson())).length >
+        _maxForwardEnvelopeBytes) {
       return null;
     }
+    // Sealed now, as a route would (see [RelayEnvelope.lazy]). Carried for a
+    // while by a forwarder, so it cannot be kept fresh; recovery is the fresh
+    // retry and the receiver's stale-message rule.
+    final inner = (await envelope.sealed()).toJson();
     final me = _requireIdentity();
     for (final forwarder in _forwardersFor(recipient).take(3)) {
       try {
@@ -30970,7 +31781,16 @@ class MessengerController extends ChangeNotifier {
       envelope: TransportEnvelope(
         id: envelope.messageId,
         recipientDeviceId: envelope.recipientDeviceId,
+        // For a session-encrypted envelope not sealed yet: the placeholder,
+        // as big as the sealed one can be (admission counts on it); the
+        // adapter asks for the sealed bytes when its turn has come.
         bytes: Uint8List.fromList(utf8.encode(jsonEncode(envelope.toJson()))),
+        sealIsStale: () => envelope.lazy?.isStale ?? false,
+        seal: envelope.lazy == null
+            ? null
+            : () async => Uint8List.fromList(
+                utf8.encode(jsonEncode((await envelope.sealed()).toJson())),
+              ),
         createdAt: envelope.createdAt,
       ),
       skipRouteIds: skipRouteIds,
@@ -31891,12 +32711,15 @@ class MessengerController extends ChangeNotifier {
         await _checkMailboxVouched(route, recipientDeviceId, expectedRelayKey);
         _storeCallCount++;
         final stopwatch = Stopwatch()..start();
+        // Sealed here, right before the store: the checks above and the
+        // earlier routes are behind it (see [RelayEnvelope.lazy]).
+        final onTheWire = await envelope.sealed();
         final stored = await _relayClient.storeEnvelope(
           host: route.host,
           port: route.port,
           protocol: route.protocol,
           recipientDeviceId: recipientDeviceId,
-          envelope: envelope,
+          envelope: onTheWire,
           expectedIdentityPublicKeyBase64: expectedRelayKey,
           timeout: route.kind == PeerRouteKind.lan
               ? lanTimeout ?? const Duration(milliseconds: 900)
@@ -32742,8 +33565,10 @@ class MessengerController extends ChangeNotifier {
   /// production loop runs from `pollNow`; the test wants to validate
   /// post-offline drainage without depending on its cadence.
   @visibleForTesting
-  Future<void> retryPendingAckDeliveriesForTesting({bool force = true}) =>
-      _retryPendingAckDeliveries(force: force);
+  Future<void> retryPendingAckDeliveriesForTesting({bool force = true}) async {
+    await _retryPendingAckDeliveries(force: force);
+    await _receiptQueue.whenIdle();
+  }
 
   /// Whether a LAN path to [contact] worked recently: a fresh LAN-direct
   /// endpoint, or a LAN route that answered within ten minutes.
@@ -34009,6 +34834,7 @@ class MessengerController extends ChangeNotifier {
       );
       _ratchet = sessions;
       _crypto
+        ..sealLater = true
         ..ratchet = sessions
         ..groupFileSendKey = _groupFileSendKey
         ..onRatchetFailure = (peer, {required bool downgrade}) {
@@ -34458,6 +35284,8 @@ class MessengerController extends ChangeNotifier {
     // Messages encrypted before this bundle must be encrypted again.
     _newPeerSession(peer.deviceId);
     await sessions.rememberPeerIdentity(id, bundle.identityKey);
+    // Envelopes parked for want of this identity can be read now.
+    _replayParked(peer);
     if (reason == 'answer') return;
     await sessions.startSession(id, bundle);
     _newPeerSession(peer.deviceId);
@@ -39895,6 +40723,8 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.discordCarrierV1,
       ApplicationCapability.multiSourceTransferV1,
       ApplicationCapability.relayBlobAttachmentsV1,
+      ApplicationCapability.batchedAcksV1,
+      ApplicationCapability.freshRetriesV1,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,
@@ -41508,6 +42338,7 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _ratchetControlRetries.clear();
+    _receiptQueue.close();
     _limiters.close();
     _matrixClient?.dispose();
     _linkPreviews?.dispose();
@@ -41656,10 +42487,17 @@ class _PairingBeaconRoute {
 }
 
 class _EnvelopeProcessingOutcome {
-  const _EnvelopeProcessingOutcome({this.processed = 0, this.failed = 0});
+  const _EnvelopeProcessingOutcome({
+    this.processed = 0,
+    this.failed = 0,
+    this.parked = 0,
+  });
 
   final int processed;
   final int failed;
+
+  /// Envelopes this batch parked (they are saved before its lease goes).
+  final int parked;
 }
 
 class _DeliveryRoute {

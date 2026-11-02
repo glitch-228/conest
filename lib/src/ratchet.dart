@@ -338,6 +338,25 @@ class RatchetDecryptException implements Exception {
   String toString() => 'RatchetDecryptException: $message';
 }
 
+/// A message of a session that is working: it decrypted something newer a
+/// moment ago, so this one is late (its key was dropped), not the sign of a
+/// lost session. No reset is offered for it.
+class RatchetStaleMessageException extends RatchetDecryptException {
+  const RatchetStaleMessageException(super.message);
+}
+
+/// A message from a peer this device holds no session with at all: it may
+/// become readable when a session is opened.
+class RatchetNoSessionException extends RatchetDecryptException {
+  const RatchetNoSessionException(super.message);
+}
+
+/// A session-opening (pre-key) message from a peer whose identity key is not
+/// known yet: it may become readable once the peer's bundle arrives.
+class RatchetUnknownPeerException extends RatchetDecryptException {
+  const RatchetUnknownPeerException(super.message);
+}
+
 /// Olm sessions per peer device, with write-before-send persistence.
 ///
 /// Operations for one peer run strictly in order. A step's new state is
@@ -537,6 +556,7 @@ class RatchetSessions {
           confirmed: true,
         ),
       );
+      _lastDecryptedAtMs[peerDeviceId] = _nowMs();
       return base64Decode(result['plaintext'] as String);
     }
     final identity = peerIdentityKey ?? state?.peerIdentityKey;
@@ -545,6 +565,28 @@ class RatchetSessions {
         'no session for a type ${message.type} message from '
         '${_peerLabel(peerDeviceId)}; have ${_sessionList(state)}',
       );
+      // A pre-key message from a peer not known yet may be read once its
+      // bundle has come.
+      if (message.opensSession) {
+        throw const RatchetUnknownPeerException(
+          'No ratchet session can decrypt this message.',
+        );
+      }
+      final lastRead = _lastDecryptedAtMs[peerDeviceId];
+      final working =
+          lastRead != null &&
+          (state?.sessions.isNotEmpty ?? false) &&
+          _nowMs() - lastRead < staleMessageWindow.inMilliseconds;
+      if (!message.opensSession && working) {
+        throw const RatchetStaleMessageException(
+          'No ratchet session can decrypt this message.',
+        );
+      }
+      if (state == null || state.sessions.isEmpty) {
+        throw const RatchetNoSessionException(
+          'No ratchet session can decrypt this message.',
+        );
+      }
       throw const RatchetDecryptException(
         'No ratchet session can decrypt this message.',
       );
@@ -594,8 +636,19 @@ class RatchetSessions {
       '${_peerLabel(peerDeviceId)}; now ${_sessionList(next)}',
     );
     await _writePeer(peerDeviceId, next);
+    _lastDecryptedAtMs[peerDeviceId] = _nowMs();
     return plaintext;
   });
+
+  /// Forgets what this run knows about peers (a vault reset).
+  void clearRuntime() => _lastDecryptedAtMs.clear();
+
+  /// When something from each peer last decrypted (this run only).
+  final Map<String, int> _lastDecryptedAtMs = {};
+
+  /// A type 1 message no session reads is taken as late (not as a lost
+  /// session) while a session was used this recently.
+  static const Duration staleMessageWindow = Duration(seconds: 60);
 
   /// How long this device uses one bulk key before creating the next.
   static const Duration bulkKeyRotation = Duration(days: 1);
@@ -743,6 +796,7 @@ class RatchetSessions {
   /// Drops every session with a peer (reset or contact removal).
   Future<void> forget(String peerDeviceId) => _withPeer(peerDeviceId, () {
     _log?.call('forgetting every session with ${_peerLabel(peerDeviceId)}');
+    _lastDecryptedAtMs.remove(peerDeviceId);
     return _deletePeer(peerDeviceId);
   });
 

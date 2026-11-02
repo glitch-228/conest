@@ -4106,6 +4106,46 @@ class PendingForward {
   }
 }
 
+/// The making of an envelope's session-encrypted bytes, deferred to the
+/// moment a transport sends it. One call seals; calls made while it runs
+/// share it; one that failed lets the next call try again (another route).
+class LazySeal {
+  LazySeal(this._seal, {this.onSealed, this.stale});
+
+  /// True once what was sealed should not be sent again (the peer has said
+  /// something since): the next call seals afresh.
+  final bool Function()? stale;
+
+  final Future<RelayEnvelope> Function() _seal;
+  final void Function()? onSealed;
+  Future<RelayEnvelope>? _running;
+  RelayEnvelope? _done;
+
+  bool get isSealed => _done != null;
+
+  /// Sealed, and out of date.
+  bool get isStale => _done != null && (stale?.call() ?? false);
+
+  Future<RelayEnvelope> call() {
+    if (isStale) _done = null;
+    return _done != null ? Future.value(_done) : (_running ??= _run());
+  }
+
+  Future<RelayEnvelope> _run() async {
+    try {
+      final envelope = await _seal();
+      _done = envelope;
+      onSealed?.call();
+      return envelope;
+    } catch (_) {
+      _running = null;
+      rethrow;
+    } finally {
+      _running = null;
+    }
+  }
+}
+
 class RelayEnvelope {
   RelayEnvelope({
     this.protocolVersion = 2,
@@ -4122,7 +4162,19 @@ class RelayEnvelope {
     this.acknowledgedMessageId,
     this.payloadBase64,
     this.ratchetType,
+    this.lazy,
   });
+
+
+  /// Set while the envelope is only a header with a placeholder of the right
+  /// size: the session-encrypted bytes are made by [sealed] when a transport
+  /// takes the envelope, after any wait for its turn (an Olm message held
+  /// after encryption can become unreadable). Not serialized.
+  final LazySeal? lazy;
+
+  /// The envelope as it goes on the wire: itself, or sealed now. Copies sent
+  /// together by several routes share one seal.
+  Future<RelayEnvelope> sealed() => lazy == null ? Future.value(this) : lazy!();
 
   final int protocolVersion;
   final String kind;
@@ -4968,6 +5020,8 @@ class HeldEnvelope {
     required this.conversationId,
     required this.envelopeJson,
     required this.receivedAt,
+    this.peerKey = '',
+    this.replays = 0,
   });
 
   final String senderDeviceId;
@@ -4975,16 +5029,27 @@ class HeldEnvelope {
   final String envelopeJson;
   final DateTime receivedAt;
 
+  /// The sender's static key when the envelope was parked (parked
+  /// envelopes only): after a key change it is not read again.
+  final String peerKey;
+
+  /// How often a parked envelope was read again and still failed.
+  final int replays;
+
   Map<String, dynamic> toJson() => {
     'senderDeviceId': senderDeviceId,
     'conversationId': conversationId,
     'envelopeJson': envelopeJson,
     'receivedAt': receivedAt.toIso8601String(),
+    if (peerKey.isNotEmpty) 'peerKey': peerKey,
+    if (replays > 0) 'replays': replays,
   };
 
   factory HeldEnvelope.fromJson(Map<String, dynamic> json) => HeldEnvelope(
     senderDeviceId: json['senderDeviceId'] as String,
     conversationId: json['conversationId'] as String? ?? '',
+    peerKey: json['peerKey'] as String? ?? '',
+    replays: (json['replays'] as num?)?.toInt() ?? 0,
     envelopeJson: json['envelopeJson'] as String,
     receivedAt:
         DateTime.tryParse(json['receivedAt'] as String? ?? '') ??
@@ -5367,6 +5432,7 @@ class VaultSnapshot {
     this.defaultRelaysLastFetchedAt,
     this.customRelaySources = const <CustomRelaySource>[],
     this.heldUnverifiedEnvelopes = const <HeldEnvelope>[],
+    this.parkedUnreadable = const <HeldEnvelope>[],
     this.pendingContactRequests = const <PendingContactRequest>[],
     this.contactRemovalTombstones = const <String, ContactRemovalTombstone>{},
     this.transferSessions = const <TransferSession>[],
@@ -5477,6 +5543,12 @@ class VaultSnapshot {
   /// reject.
   final List<HeldEnvelope> heldUnverifiedEnvelopes;
 
+  /// Envelopes no session could read yet (a pre-key message ahead of its
+  /// bundle), kept on the device with their relay lease acknowledged and
+  /// read again when the peer's bundle arrives. A separate list from the
+  /// quarantine above, bounded in bytes, dropped after a day.
+  final List<HeldEnvelope> parkedUnreadable;
+
   /// Bootstrap contact exchanges from unknown devices awaiting an explicit
   /// local approval decision.
   final List<PendingContactRequest> pendingContactRequests;
@@ -5580,6 +5652,7 @@ class VaultSnapshot {
       defaultRelaysLastFetchedAt: null,
       customRelaySources: const <CustomRelaySource>[],
       heldUnverifiedEnvelopes: const <HeldEnvelope>[],
+      parkedUnreadable: const <HeldEnvelope>[],
       pendingContactRequests: const <PendingContactRequest>[],
       transferSessions: const <TransferSession>[],
       attachmentCacheReferences: const <AttachmentCacheReference>[],
@@ -5610,6 +5683,7 @@ class VaultSnapshot {
     bool clearDefaultRelaysLastFetchedAt = false,
     List<CustomRelaySource>? customRelaySources,
     List<HeldEnvelope>? heldUnverifiedEnvelopes,
+    List<HeldEnvelope>? parkedUnreadable,
     List<PendingContactRequest>? pendingContactRequests,
     Map<String, ContactRemovalTombstone>? contactRemovalTombstones,
     List<TransferSession>? transferSessions,
@@ -5671,6 +5745,7 @@ class VaultSnapshot {
       customRelaySources: customRelaySources ?? this.customRelaySources,
       heldUnverifiedEnvelopes:
           heldUnverifiedEnvelopes ?? this.heldUnverifiedEnvelopes,
+      parkedUnreadable: parkedUnreadable ?? this.parkedUnreadable,
       pendingContactRequests:
           pendingContactRequests ?? this.pendingContactRequests,
       contactRemovalTombstones:
@@ -5750,6 +5825,10 @@ class VaultSnapshot {
       'heldUnverifiedEnvelopes': heldUnverifiedEnvelopes
           .map((entry) => entry.toJson())
           .toList(),
+      if (parkedUnreadable.isNotEmpty)
+        'parkedUnreadable': parkedUnreadable
+            .map((entry) => entry.toJson())
+            .toList(),
       'pendingContactRequests': pendingContactRequests
           .map((entry) => entry.toJson())
           .toList(),
@@ -5973,6 +6052,10 @@ class VaultSnapshot {
               .cast<Map<String, dynamic>>()
               .map(HeldEnvelope.fromJson)
               .toList(),
+      parkedUnreadable: (json['parkedUnreadable'] as List<dynamic>? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(HeldEnvelope.fromJson)
+          .toList(),
       pendingContactRequests:
           (json['pendingContactRequests'] as List<dynamic>? ?? const [])
               .cast<Map<String, dynamic>>()

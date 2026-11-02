@@ -33,6 +33,129 @@ void main() {
       expect(_fakeIndex(next), _fakeIndex(first) + 1);
     });
 
+    test('the strict fake: chains follow the DH ratchet, 5 are kept, keys '
+        'per chain are limited', () async {
+      final engine = FakeRatchetEngine(
+        random: Random(7),
+        skippedKeyLimit: 40,
+        receivingChains: 5,
+      );
+      final a = _Device(engine);
+      final b = _Device(engine);
+      await a.sessions.startSession('b', await b.sessions.createBundle());
+      Future<RatchetMessage> send(_Device from, String to, String text) =>
+          from.sessions.encrypt(to, utf8.encode(text));
+      Future<void> read(_Device at, String from, RatchetMessage m) async {
+        await at.sessions.decrypt(
+          from,
+          m,
+          peerIdentityKey: await (identical(at, a) ? b : a).sessions
+              .identityKey(),
+        );
+      }
+
+      // A reply that crosses a message in flight does not start a chain.
+      final a0 = await send(a, 'b', 'a0');
+      await read(b, 'a', a0);
+      final b0 = await send(b, 'a', 'b0');
+      final a1 = await send(a, 'b', 'a1'); // a has not read b0 yet
+      await read(a, 'b', b0);
+      await read(b, 'a', a1); // still the first chain of a: readable
+      // After reading b0, a's next message starts a chain.
+      final a2 = await send(a, 'b', 'a2');
+      expect(_fakeChain(a2), 1);
+      expect(_fakeChain(a1), 0);
+      // An envelope held back while the conversation turns 6 times is lost,
+      // and so is every older chain once 5 newer ones are known.
+      final held = await send(b, 'a', 'held'); // b chain 1 after reading a1?
+      for (var i = 0; i < 6; i++) {
+        final m = await send(a, 'b', 'x$i');
+        await read(b, 'a', m);
+        final r = await send(b, 'a', 'y$i');
+        await read(a, 'b', r);
+      }
+      await expectLater(
+        read(a, 'b', held),
+        throwsA(isA<RatchetDecryptException>()),
+        reason: 'a chain older than the ones kept was still readable',
+      );
+      // 41 messages of one chain: the first one is out of reach.
+      final burst = <RatchetMessage>[];
+      for (var i = 0; i < 42; i++) {
+        burst.add(await send(a, 'b', 'n$i'));
+      }
+      await read(b, 'a', burst.last);
+      await expectLater(
+        read(b, 'a', burst.first),
+        throwsA(isA<RatchetDecryptException>()),
+      );
+      await read(b, 'a', burst[5]);
+    });
+
+    test('a late type 1 message is stale while a session works, and plain '
+        'after the runtime state is cleared', () async {
+      final engine = FakeRatchetEngine(random: Random(7));
+      final a = _Device(engine);
+      final b = _Device(engine);
+      await a.sessions.startSession('b', await b.sessions.createBundle());
+      final first = await a.sessions.encrypt('b', utf8.encode('hi'));
+      await b.sessions.decrypt(
+        'a',
+        first,
+        peerIdentityKey: await a.sessions.identityKey(),
+      );
+      final garbage = RatchetMessage(type: 1, ciphertext: utf8.encode('x'));
+      await expectLater(
+        b.sessions.decrypt('a', garbage),
+        throwsA(isA<RatchetStaleMessageException>()),
+      );
+      b.sessions.clearRuntime();
+      await expectLater(
+        b.sessions.decrypt('a', garbage),
+        throwsA(
+          isA<RatchetDecryptException>().having(
+            (e) => e is RatchetStaleMessageException,
+            'stale',
+            false,
+          ),
+        ),
+      );
+    });
+
+    test('a pre-key message from a peer not known yet says so; one that '
+        'cannot be read otherwise does not', () async {
+      final engine = FakeRatchetEngine(random: Random(7));
+      final alice = _Device(engine);
+      final bob = _Device(engine);
+      await alice.sessions.startSession(
+        'bob',
+        await bob.sessions.createBundle(),
+      );
+      final first = await alice.sessions.encrypt('bob', utf8.encode('hi'));
+      await expectLater(
+        bob.sessions.decrypt('alice', first),
+        throwsA(isA<RatchetUnknownPeerException>()),
+      );
+      await bob.sessions.decrypt(
+        'alice',
+        first,
+        peerIdentityKey: await alice.sessions.identityKey(),
+      );
+      await expectLater(
+        bob.sessions.decrypt(
+          'alice',
+          RatchetMessage(type: 1, ciphertext: utf8.encode('garbage')),
+        ),
+        throwsA(
+          isA<RatchetDecryptException>().having(
+            (error) => error is RatchetUnknownPeerException,
+            'unknown peer',
+            false,
+          ),
+        ),
+      );
+    });
+
     test('a failed decrypt leaves stored state untouched', () async {
       final engine = FakeRatchetEngine(random: Random(7));
       final alice = _Device(engine);
@@ -401,6 +524,9 @@ class _RecordingStore extends MemoryRatchetStore {
     await super.writePeer(deviceId, state);
   }
 }
+
+int _fakeChain(RatchetMessage message) =>
+    (jsonDecode(utf8.decode(message.ciphertext)) as Map)['c'] as int;
 
 int _fakeIndex(RatchetMessage message) =>
     (jsonDecode(utf8.decode(message.ciphertext)) as Map)['n'] as int;

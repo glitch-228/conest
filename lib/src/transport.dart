@@ -78,6 +78,21 @@ class RouteCandidate {
       maximumPayloadBytes == null || byteLength <= maximumPayloadBytes!;
 }
 
+final Expando<Future<Uint8List>> _sealedOnce = Expando('sealed bytes');
+
+Future<Uint8List> _sealOnce(TransportEnvelope envelope) {
+  final done = _sealedOnce[envelope];
+  if (done != null && !(envelope.sealIsStale?.call() ?? false)) return done;
+  final running = envelope.seal!();
+  _sealedOnce[envelope] = running;
+  // A failed seal lets the next route try again.
+  running.catchError((Object _) {
+    if (identical(_sealedOnce[envelope], running)) _sealedOnce[envelope] = null;
+    return Uint8List(0);
+  });
+  return running;
+}
+
 class TransportEnvelope {
   const TransportEnvelope({
     required this.id,
@@ -85,11 +100,28 @@ class TransportEnvelope {
     required this.bytes,
     required this.createdAt,
     this.expiresAt,
+    this.seal,
+    this.sealIsStale,
   });
+
+  /// True when the bytes sealed earlier should not be sent again.
+  final bool Function()? sealIsStale;
 
   final String id;
   final String recipientDeviceId;
+
+  /// What goes on the wire; for an envelope with [seal] only its placeholder
+  /// (as big as the sealed bytes can be), good for sizes and admission.
   final Uint8List bytes;
+
+  /// Makes the sealed bytes (an Olm message) when the adapter's turn has
+  /// come. Routes tried for one send share one result.
+  final Future<Uint8List> Function()? seal;
+
+  /// The bytes to send: [bytes], or the sealed ones (made once, shared).
+  Future<Uint8List> sealedBytes() =>
+      seal == null ? Future.value(bytes) : _sealOnce(this);
+
   final DateTime createdAt;
   final DateTime? expiresAt;
 }

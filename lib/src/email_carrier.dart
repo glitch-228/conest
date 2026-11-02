@@ -363,7 +363,8 @@ enum EmailCarrierState { stopped, connecting, connected, failed }
 /// inbox (IMAP IDLE, or polling where IDLE is missing) and sends each frame
 /// as one mail (SMTP). Mail that is not carrier mail for this mailbox key
 /// is left untouched; carrier mail is deleted once read.
-class EmailCarrierChannel implements ManagedCarrierChannel {
+class EmailCarrierChannel
+    implements ManagedCarrierChannel, LazyFrameCarrierChannel {
   EmailCarrierChannel({
     required EmailCarrierConfig config,
     required this.onFrame,
@@ -390,7 +391,7 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
            NetworkLimiter(
              NetworkBudgets.email(
                chatmail: config.chatmail,
-             ).copyWith(gap: sendSpacing).withoutQuota(),
+             ).copyWith(gap: sendSpacing, burst: 1).withoutQuota(),
            ),
        // Chatmail servers also listen on 443, for networks that block the
        // mail ports.
@@ -426,9 +427,8 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
   /// account's [NetworkLimiter] (see [NetworkBudgets.email]) keeps it.
   static const Duration defaultSendSpacing = Duration(milliseconds: 1200);
 
-  /// The longest a mail waits for its turn; a longer queue is refused at
-  /// once and the caller tries again later.
-  static const Duration maxSendWait = Duration(seconds: 30);
+  // How long a mail waits for its turn is the budget's: a longer queue is
+  // refused at once and the caller tries again later.
   final Duration sendSpacing;
   final NetworkLimiter _limiter;
 
@@ -438,7 +438,9 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
 
   Future<void> _waitForSendSlot() async {
     // A LimiterRefused: this account is busy, not the route broken.
-    await _limiter.acquire(maxWait: maxSendWait);
+    // The adapter took this frame's turn already, to seal after it.
+    if (TurnToken.take()) return;
+    await _limiter.acquire();
   }
 
   /// A refusal that says the account sends too fast, or a connection the
@@ -623,6 +625,35 @@ class EmailCarrierChannel implements ManagedCarrierChannel {
           to: to.mail,
           mailboxKey: to.mailboxKey,
           frame: frame,
+          date: _now(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Future<void> sendFrameLazy(
+    String address,
+    Future<Uint8List> Function() makeFrame,
+  ) async {
+    if (!_started) throw StateError('The email carrier is stopped.');
+    final to = EmailAddress.tryParse(address);
+    if (to == null) throw ArgumentError('Not an email carrier address.');
+    await _paced(
+      () => SmtpSender.send(
+        host: _config.smtpHost,
+        port: _config.smtpPort,
+        user: _config.mail,
+        password: _config.password,
+        from: _config.mail,
+        to: to.mail,
+        tls: tls,
+        connector: _connector,
+        buildMessage: () async => CarrierMail.build(
+          from: _config.mail,
+          to: to.mail,
+          mailboxKey: to.mailboxKey,
+          frame: await makeFrame(),
           date: _now(),
         ),
       ),

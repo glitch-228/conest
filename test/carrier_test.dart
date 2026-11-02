@@ -399,6 +399,170 @@ void main() {
       expect(receipts.length, 1);
     });
 
+    test('a session-encrypted envelope is sealed after its turn, not before '
+        'it; one that is refused is never sealed', () async {
+      final limiter = NetworkLimiter(
+        const LimiterBudget(
+          name: 'test',
+          gap: Duration(milliseconds: 300),
+          burst: 1,
+          maxWait: Duration(seconds: 30),
+        ),
+      );
+      adapter.limiter = limiter;
+      await adapter.start();
+      final route = (await adapter.discoverRoutes(peer)).single;
+      var sealCalls = 0;
+      TransportEnvelope sealedLater(String id) => TransportEnvelope(
+        id: id,
+        recipientDeviceId: 'dev-bob',
+        // The placeholder: as big as the sealed bytes can be.
+        bytes: pattern(2000),
+        seal: () async {
+          sealCalls++;
+          return pattern(1500);
+        },
+        createdAt: DateTime.utc(2026, 10, 30),
+      );
+      // The first takes the turn and is sealed at once (nothing to wait for).
+      await adapter.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: sealedLater('s1'),
+      );
+      expect(sealCalls, 1);
+      // The second waits for its turn: not sealed while it waits.
+      final waiting = adapter.sendEnvelope(
+        peer: peer,
+        route: route,
+        envelope: sealedLater('s2'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(sealCalls, 1, reason: 'sealed before its turn');
+      await waiting;
+      expect(sealCalls, 2);
+      // A refused one spends no key.
+      limiter.pushedBack(retryAfter: const Duration(minutes: 5));
+      await expectLater(
+        adapter.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: sealedLater('s3'),
+        ),
+        throwsA(isA<LimiterRefused>()),
+      );
+      expect(sealCalls, 2, reason: 'a refused send was sealed');
+    });
+
+    test(
+      'a channel that paces its own frames (mail) gets the turn taken for '
+      'it: sealed after the turn, and the channel does not take another',
+      () async {
+        final limiter = NetworkLimiter(
+          const LimiterBudget(
+            name: 'mail',
+            gap: Duration(milliseconds: 300),
+            burst: 1,
+            maxWait: Duration(seconds: 30),
+          ),
+        );
+        final mail = _TurnCheckingChannel('npub-me|wss://relay.one');
+        final paced = CarrierTransportAdapter(
+          kind: TransportKind.nostr,
+          sealer: sealer,
+          framing: CarrierFraming.nostr,
+        )..attach(mail);
+        paced
+          ..limiter = limiter
+          ..channelPacesFrames = true;
+        await paced.start();
+        final route = (await paced.discoverRoutes(peer)).single;
+        var seals = 0;
+        TransportEnvelope envelope(String id) => TransportEnvelope(
+          id: id,
+          recipientDeviceId: 'dev-bob',
+          bytes: pattern(600),
+          seal: () async {
+            seals++;
+            return pattern(500);
+          },
+          createdAt: DateTime.utc(2026, 10, 30),
+        );
+        await paced.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: envelope('a'),
+        );
+        final waiting = paced.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: envelope('b'),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(seals, 1, reason: 'sealed before the turn');
+        await waiting;
+        expect(seals, 2);
+        expect(mail.tokens, [
+          true,
+          true,
+        ], reason: 'the channel took its own turn');
+      },
+    );
+
+    test(
+      'a channel with waits of its own is given the seal to run last',
+      () async {
+        final lazy = _LazyChannel('npub-me|wss://relay.one');
+        final a = CarrierTransportAdapter(
+          kind: TransportKind.nostr,
+          sealer: sealer,
+          framing: CarrierFraming.nostr,
+        )..attach(lazy);
+        await a.start();
+        final route = (await a.discoverRoutes(peer)).single;
+        var seals = 0;
+        lazy.probe = () => seals;
+        await a.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: TransportEnvelope(
+            id: 'z',
+            recipientDeviceId: 'dev-bob',
+            bytes: pattern(900),
+            seal: () async {
+              seals++;
+              return pattern(800);
+            },
+            createdAt: DateTime.utc(2026, 11, 2),
+          ),
+        );
+        expect(lazy.sealsSeenBeforeWait, 0);
+        expect(lazy.sealsSeenAfterWait, 1);
+        expect(seals, 1);
+      },
+    );
+
+    test('routes tried for one send share one seal; a seal that failed is '
+        'made again by the next route', () async {
+      var calls = 0;
+      final envelope = TransportEnvelope(
+        id: 'x',
+        recipientDeviceId: 'dev-bob',
+        bytes: pattern(100),
+        seal: () async {
+          calls++;
+          if (calls == 1) throw StateError('no session');
+          return pattern(80);
+        },
+        createdAt: DateTime.utc(2026, 10, 30),
+      );
+      await expectLater(envelope.sealedBytes(), throwsStateError);
+      final second = await envelope.sealedBytes();
+      final third = await envelope.sealedBytes();
+      expect(calls, 2);
+      expect(identical(second, third), isTrue);
+    });
+
     test(
       'an account limiter paces frames, and a flood wait is shared',
       () async {
@@ -1235,6 +1399,46 @@ class _RecordingChannel implements CarrierChannel {
   @override
   Future<void> sendFrame(String address, Uint8List frame) async =>
       sent.add((address, frame));
+}
+
+/// A channel that waits on its own before it needs the frame.
+class _LazyChannel extends _RecordingChannel
+    implements LazyFrameCarrierChannel {
+  _LazyChannel(super.localAddress);
+
+  int Function()? probe;
+  int sealsSeenBeforeWait = -1;
+  int sealsSeenAfterWait = -1;
+  int calls = 0;
+
+  @override
+  Future<void> sendFrameLazy(
+    String address,
+    Future<Uint8List> Function() makeFrame,
+  ) async {
+    // (The adapter counts seals through the envelope; the test reads them
+    // via the frame being made only now.)
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    sealsSeenBeforeWait = probe?.call() ?? -1;
+    final frame = await makeFrame();
+    calls++;
+    sealsSeenAfterWait = calls;
+    sent.add((address, frame));
+  }
+}
+
+/// A channel that would take its own turn for each frame: it says whether
+/// the turn was already taken for it.
+class _TurnCheckingChannel extends _RecordingChannel {
+  _TurnCheckingChannel(super.localAddress);
+
+  final List<bool> tokens = [];
+
+  @override
+  Future<void> sendFrame(String address, Uint8List frame) async {
+    tokens.add(TurnToken.take());
+    return super.sendFrame(address, frame);
+  }
 }
 
 /// Always offers one store-and-forward route and accepts after [delay].

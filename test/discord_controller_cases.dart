@@ -134,7 +134,7 @@ void _discordControllerTests() {
       );
       for (
         var round = 0;
-        round < 15 &&
+        round < 30 &&
             (alice.contacts.single.pairingState !=
                     ContactPairingState.accepted ||
                 bob.contacts.single.pairingState !=

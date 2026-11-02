@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:conest/src/carrier.dart';
 import 'package:conest/src/nostr/event.dart';
 import 'package:conest/src/nostr/relay.dart';
 import 'package:conest/src/nostr/secp256k1.dart';
@@ -21,6 +23,54 @@ void main() {
     for (final channel in channels) {
       await channel.stop();
     }
+  });
+
+  test('the strict fake relay: rate-limited above the limit, may discard, '
+      'may cut the connection', () async {
+    var now = DateTime.utc(2026, 11, 1, 12);
+    final relay = relays.relay('wss://limited.test')
+      ..eventsPerMinute = 3
+      ..disconnectAfterRefusals = 2
+      ..clock = () => now;
+    final socket = await relays.connect(Uri.parse('wss://limited.test'));
+    final answers = <List<dynamic>>[];
+    final done = Completer<void>();
+    socket.messages.listen(
+      (raw) => answers.add(jsonDecode(raw) as List<dynamic>),
+      onDone: done.complete,
+    );
+    NostrEvent event(int i) => NostrEvent.sign(
+      secretKey: Secp256k1.generateSecretKey(),
+      kind: 1,
+      tags: const [],
+      content: 'e$i',
+      createdAt: 1,
+    );
+    for (var i = 0; i < 5; i++) {
+      socket.send(jsonEncode(['EVENT', event(i).toJson()]));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(answers.where((a) => a[2] == true), hasLength(3));
+    expect(
+      answers.where((a) => '${a[3]}'.startsWith('rate-limited')),
+      hasLength(2),
+    );
+    expect(relay.refusals, 2);
+    await done.future.timeout(const Duration(seconds: 2));
+    // A minute later the limit has passed.
+    now = now.add(const Duration(minutes: 2));
+    final again = await relays.connect(Uri.parse('wss://limited.test'));
+    final more = <List<dynamic>>[];
+    again.messages.listen((raw) => more.add(jsonDecode(raw) as List<dynamic>));
+    again.send(jsonEncode(['EVENT', event(9).toJson()]));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(more.single[2], true);
+    relay.discard = true;
+    final storedBefore = relay.stored.length;
+    again.send(jsonEncode(['EVENT', event(10).toJson()]));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(more.last[2], true, reason: 'a discarding relay still says OK');
+    expect(relay.stored.length, storedBefore);
   });
 
   test('relays are probed a few at a time', () async {
@@ -99,6 +149,160 @@ void main() {
   }
 
   final frame = Uint8List.fromList(List<int>.generate(3000, (i) => i % 7));
+
+  test('a relay that says "rate-limited" rests, and every frame still '
+      'arrives', () async {
+    final a = relays.relay('wss://a.test')
+      ..eventsPerMinute = 3
+      ..disconnectAfterRefusals = 3;
+    relays.relay('wss://b.test');
+    relays.relay('wss://c.test');
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel([
+      'wss://a.test',
+      'wss://b.test',
+      'wss://c.test',
+    ], bobGot)..start();
+    final alice = channel(['wss://a.test'], [])..start();
+    final address = bob.localAddress!;
+    for (var i = 0; i < 24; i++) {
+      await alice.sendFrame(address, Uint8List.fromList([i, ...frame]));
+      await until(() => bobGot.length >= i + 1);
+      alice.noteDelivered(address);
+    }
+    expect(bobGot.map((g) => g.$2.first).toSet(), hasLength(24));
+    expect(a.refusals, lessThanOrEqualTo(3), reason: 'it was kept pushing');
+    expect(a.accepted, lessThanOrEqualTo(3));
+  });
+
+  test('an event goes to two relays once the recipient is known, to every '
+      'relay (up to three) before', () async {
+    final all = [for (var i = 0; i < 3; i++) relays.relay('wss://r$i.test')];
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel([for (var i = 0; i < 3; i++) 'wss://r$i.test'], bobGot)
+      ..start();
+    final alice = channel(['wss://r0.test'], [])..start();
+    final address = bob.localAddress!;
+    await alice.sendFrame(address, Uint8List.fromList([0, ...frame]));
+    await until(() => bobGot.isNotEmpty);
+    expect(all.map((r) => r.stored.length), [1, 1, 1], reason: 'first contact');
+    alice.noteDelivered(address);
+    for (var i = 1; i < 4; i++) {
+      await alice.sendFrame(address, Uint8List.fromList([i, ...frame]));
+      await until(() => bobGot.length >= i + 1);
+      alice.noteDelivered(address);
+    }
+    final perEvent = <String, int>{};
+    for (final relay in all) {
+      for (final event in relay.stored) {
+        perEvent[event.id] = (perEvent[event.id] ?? 0) + 1;
+      }
+    }
+    expect(perEvent.values.where((n) => n > 2), hasLength(1));
+  });
+
+  test('a receipt credits the relays of the message it names, not of the '
+      'last one sent', () async {
+    for (var i = 0; i < 3; i++) {
+      relays.relay('wss://q$i.test');
+    }
+    final bob = channel([for (var i = 0; i < 3; i++) 'wss://q$i.test'], [])
+      ..start();
+    final alice = channel(['wss://q0.test'], [])..start();
+    final address = bob.localAddress!;
+    Future<void> send(String id) => runZoned(
+      () => alice.sendFrame(address, Uint8List.fromList([1, ...frame])),
+      zoneValues: {carrierSendZoneKey: id},
+    );
+    await send('s0');
+    alice.noteDelivered(address, sendId: 's0');
+    // The fourth send after that goes through one relay alone.
+    for (var i = 1; i <= 4; i++) {
+      await send('s$i');
+    }
+    await send('later');
+    alice.noteDelivered(address, sendId: 'later');
+    expect(alice.deliveredForTesting.values.fold<int>(0, (a, b) => a + b), 0);
+    alice.noteDelivered(address, sendId: 's4');
+    expect(
+      alice.deliveredForTesting.values.fold<int>(0, (a, b) => a + b),
+      1,
+      reason: 'the receipt of the solo send was not credited',
+    );
+  });
+
+  test('the frame is made after the relay connection is up and the first '
+      'relay has its turn, and the other relays reuse the event', () async {
+    relays.relay('wss://l1.test');
+    relays.relay('wss://l2.test');
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel(['wss://l1.test', 'wss://l2.test'], bobGot)..start();
+    var open = false;
+    final alice = NostrCarrierChannel(
+      secretKey: Secp256k1.generateSecretKey(),
+      relays: [Uri.parse('wss://l1.test')],
+      connector: (url) async {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        open = true;
+        return relays.connect(url);
+      },
+      onFrame: (_, _) {},
+    );
+    channels.add(alice);
+    alice.start();
+    var made = 0;
+    var openWhenMade = false;
+    final sending = alice.sendFrameLazy(bob.localAddress!, () async {
+      made++;
+      openWhenMade = open;
+      return frame;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(made, 0, reason: 'sealed before the connection was up');
+    await sending;
+    expect(made, 1, reason: 'one event for every relay');
+    expect(openWhenMade, isTrue);
+    await until(() => bobGot.isNotEmpty);
+  });
+
+  test('a relay that says OK and drops what it gets loses its rank, and '
+      'every frame still arrives', () async {
+    final bad = relays.relay('wss://bad.test')..discard = true;
+    relays.relay('wss://g1.test');
+    relays.relay('wss://g2.test');
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel([
+      'wss://bad.test',
+      'wss://g1.test',
+      'wss://g2.test',
+    ], bobGot)..start();
+    final alice = channel(['wss://g1.test'], [])..start();
+    final address = bob.localAddress!;
+    await alice.sendFrame(address, Uint8List.fromList([0, ...frame]));
+    await until(() => bobGot.isNotEmpty);
+    alice.noteDelivered(address);
+    var acceptedBefore = 0;
+    for (var i = 1; i < 60; i++) {
+      if (i == 40) acceptedBefore = bad.accepted;
+      final before = bobGot.length;
+      await alice.sendFrame(address, Uint8List.fromList([i, ...frame]));
+      // A solo send to the bad relay never arrives: a retry follows, as the
+      // controller's would when no receipt comes.
+      for (var tries = 0; tries < 3 && bobGot.length == before; tries++) {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        if (bobGot.length == before && tries == 2) {
+          await alice.sendFrame(address, Uint8List.fromList([i, ...frame]));
+        }
+      }
+      await until(() => bobGot.length > before);
+      alice.noteDelivered(address);
+    }
+    expect(
+      bad.accepted - acceptedBefore,
+      lessThan(6),
+      reason: 'the dropping relay kept its rank',
+    );
+  });
 
   test(
     'a frame reaches the recipient, hiding the sender from relays',

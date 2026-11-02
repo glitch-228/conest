@@ -70,6 +70,8 @@ void main() {
     fake.rejectWith = 'rate-limited: slow down';
     await expectLater(relay.publish(_event(0)), throwsA(isA<Object>()));
     fake.rejectWith = null;
+    // The relay rested after the refusal; that time passes.
+    relay.clock = () => DateTime.now().add(const Duration(minutes: 1));
     await relay.publish(_event(1));
     await relay.publish(_event(2));
     expect(

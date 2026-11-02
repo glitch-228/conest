@@ -129,6 +129,38 @@ class NostrRelay {
   @visibleForTesting
   Duration get currentPublishSpacing => _limiter.currentGap;
 
+  /// A relay that answers "rate-limited" or hangs up on a publisher rests:
+  /// no event goes to it for 5 s, then 10, doubling to 5 minutes, and the
+  /// steps start again after ten quiet minutes. A timestamp checked when an
+  /// event is published; no timer.
+  static const Duration _restFirst = Duration(seconds: 5);
+  static const Duration _restMax = Duration(minutes: 5);
+  static const Duration _restForget = Duration(minutes: 10);
+  DateTime? _restUntil;
+  DateTime? _lastRefusalAt;
+  Duration _restStep = _restFirst;
+  DateTime Function() clock = DateTime.now;
+
+  /// How long this relay is to be left alone.
+  Duration get restRemaining {
+    final until = _restUntil;
+    if (until == null) return Duration.zero;
+    final left = until.difference(clock());
+    return left.isNegative ? Duration.zero : left;
+  }
+
+  void _rest() {
+    final now = clock();
+    final last = _lastRefusalAt;
+    if (last != null && now.difference(last) > _restForget) {
+      _restStep = _restFirst;
+    }
+    _restUntil = now.add(_restStep);
+    _lastRefusalAt = now;
+    final doubled = _restStep * 2;
+    _restStep = doubled > _restMax ? _restMax : doubled;
+  }
+
   /// The subscription filter, read on every (re)connect so its `since`
   /// moves forward; null for a publish-only connection.
   final Map<String, Object?> Function()? filter;
@@ -186,13 +218,26 @@ class NostrRelay {
   /// Sends [event] and waits for the relay to accept it. A relay that
   /// requires authentication gets it first and the event once more. The
   /// connection must have been started; a stopped one refuses.
-  Future<void> publish(NostrEvent event) async {
+  Future<void> publish(NostrEvent event) => publishLazy(() async => event);
+
+  /// Like [publish], for an event made at the last moment: [make] is called
+  /// once the connection is up and this event's turn has come, so what it
+  /// seals does not wait for either.
+  Future<void> publishLazy(Future<NostrEvent> Function() make) async {
     if (!_running) throw StateError('Relay connection is stopped.');
+    if (restRemaining > Duration.zero) {
+      // Resting after a refusal: the caller uses another relay.
+      throw NostrRelayException(
+        url.host,
+        'rate-limited: resting ${restRemaining.inSeconds} s',
+      );
+    }
     _lastUsed = DateTime.now();
     final deadline = DateTime.now().add(_publishTimeout);
     // Connected first: a turn is not spent while the connection opens.
     await _waitConnected(deadline);
     await _waitForSlot(deadline);
+    final event = await make();
     var (accepted, message) = await _send(event, deadline);
     if (!accepted && isAuthRequired(message)) {
       await _waitForAuth(deadline);
@@ -201,7 +246,10 @@ class NostrRelay {
     if (accepted) {
       _limiter.succeeded();
     } else {
-      if (_pushesBack(message)) _limiter.pushedBack();
+      if (_pushesBack(message)) {
+        _limiter.pushedBack();
+        _rest();
+      }
       throw NostrRelayException(url.host, message);
     }
   }
@@ -237,6 +285,7 @@ class NostrRelay {
     } on TimeoutException {
       // Sent, and no answer in time: the relay is slow or dropping events.
       _limiter.pushedBack();
+      _rest();
       rethrow;
     } finally {
       _pendingOk.remove(event.id);

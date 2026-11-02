@@ -391,6 +391,10 @@ class CompactStoreForwardAdapter implements TransportAdapter {
   }) async {
     final expiry =
         envelope.expiresAt ?? envelope.createdAt.add(const Duration(days: 7));
+    // Sealed when queued: a courier holds it for days, so an Olm message
+    // cannot be kept fresh here. Recovery is the sender's fresh retry (a
+    // new message of the same id) and the receiver's stale-message rule.
+    final wire = await envelope.sealedBytes();
     queue.enqueue(
       envelope: CompactStoreForwardEnvelope(
         messageId: envelope.id,
@@ -398,7 +402,7 @@ class CompactStoreForwardAdapter implements TransportAdapter {
         recipientDeviceId: peer.deviceId,
         createdAt: envelope.createdAt,
         expiresAt: expiry,
-        payload: envelope.bytes,
+        payload: wire,
       ),
       sourcePeerDeviceId: localDeviceId,
       sourceIsLocal: true,

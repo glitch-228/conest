@@ -73,6 +73,16 @@ enum ApplicationCapability {
   /// Takes a file's encrypted blocks from relay blobs the sender left
   /// (attachment_blobs), and leaves them when the receiver is slow (M27).
   relayBlobAttachmentsV1,
+
+  /// Takes one receipt that names several messages (`acknowledgedMessageIds`)
+  /// instead of one receipt per message, so a burst costs a few sends on a
+  /// carrier.
+  batchedAcksV1,
+
+  /// Encrypts a retry afresh (a new Olm message for the same message id)
+  /// instead of resending the same bytes, so a receiver need not reset its
+  /// session over a late copy.
+  freshRetriesV1,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

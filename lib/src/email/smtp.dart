@@ -24,7 +24,11 @@ abstract final class SmtpSender {
     required String password,
     required String from,
     required String to,
-    required String message,
+    String? message,
+
+    /// Makes the message after the login and the recipients are accepted:
+    /// what is to be sealed waits for the connection, not the other way.
+    Future<String> Function()? buildMessage,
     List<String> moreRecipients = const [],
     bool tls = true,
     MailConnector? connector,
@@ -64,8 +68,9 @@ abstract final class SmtpSender {
       for (final recipient in {to, ...moreRecipients}) {
         await expect(250, 'RCPT TO:<$recipient>');
       }
+      final text = message ?? await buildMessage!();
       await expect(354, 'DATA');
-      final body = message
+      final body = text
           .replaceAll('\r\n', '\n')
           .split('\n')
           .map((line) => line.startsWith('.') ? '.$line' : line)

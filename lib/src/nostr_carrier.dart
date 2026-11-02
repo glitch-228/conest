@@ -3,6 +3,8 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'carrier.dart';
 import 'nostr/event.dart';
 import 'nostr/nip44.dart';
@@ -202,7 +204,8 @@ bool isValidNostrAddress(String address) =>
 /// content is NIP-44 encrypted to the recipient and holds the sender's
 /// carrier key (the hint that picks the contact) and the frame, which the
 /// carrier seal authenticates.
-class NostrCarrierChannel implements ManagedCarrierChannel {
+class NostrCarrierChannel
+    implements ManagedCarrierChannel, LazyFrameCarrierChannel {
   NostrCarrierChannel({
     required Uint8List secretKey,
     required List<Uri> relays,
@@ -315,52 +318,84 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
   }
 
   @override
-  Future<void> sendFrame(String address, Uint8List frame) async {
+  Future<void> sendFrame(String address, Uint8List frame) =>
+      sendFrameLazy(address, () async => frame);
+
+  /// The event is made (and a session-encrypted frame sealed) by the first
+  /// relay that has its connection and its turn; the others reuse it.
+  @override
+  Future<void> sendFrameLazy(
+    String address,
+    Future<Uint8List> Function() makeFrame,
+  ) async {
     if (!_started) throw StateError('The Nostr carrier is stopped.');
     final to = NostrAddress.tryParse(
       address,
       allowLoopback: allowLoopbackRelays,
     );
     if (to == null) throw ArgumentError('Not a Nostr carrier address.');
-    final ephemeral = Secp256k1.generateSecretKey();
-    final plaintext = Uint8List.fromList([
-      _contentVersion,
-      ...hexDecode(_publicKey)!,
-      ...frame,
-    ]);
-    final content = Nip44.encrypt(
-      plaintext,
-      Nip44.conversationKey(ephemeral, hexDecode(to.publicKey)!),
-    );
-    final createdAt = _seconds(_now());
-    final event = NostrEvent.sign(
-      secretKey: ephemeral,
-      kind: NostrKind.giftWrap,
-      tags: [
-        ['p', to.publicKey],
-        ['expiration', '${createdAt + nostrCarrierExpiry.inSeconds}'],
-      ],
-      content: content,
-      createdAt: createdAt,
-    );
+    Future<NostrEvent>? made;
+    Future<NostrEvent> makeEvent() => made ??= () async {
+      final frame = await makeFrame();
+      final ephemeral = Secp256k1.generateSecretKey();
+      final plaintext = Uint8List.fromList([
+        _contentVersion,
+        ...hexDecode(_publicKey)!,
+        ...frame,
+      ]);
+      final content = Nip44.encrypt(
+        plaintext,
+        Nip44.conversationKey(ephemeral, hexDecode(to.publicKey)!),
+      );
+      final createdAt = _seconds(_now());
+      return NostrEvent.sign(
+        secretKey: ephemeral,
+        kind: NostrKind.giftWrap,
+        tags: [
+          ['p', to.publicKey],
+          ['expiration', '${createdAt + nostrCarrierExpiry.inSeconds}'],
+        ],
+        content: content,
+        createdAt: createdAt,
+      );
+    }();
     final errors = <Object>[];
     var stored = 0;
+    // Where the event goes: the recipient reads every relay it lists, so one
+    // stored copy is enough. Two relays carry it once this contact has been
+    // heard from through here (ranked by receipts, resting ones left out);
+    // all of them (up to three) while that is not known yet, as for a first
+    // contact, a session setup or a group member who is no contact.
+    final chosen = _chooseRelays(address, to.relays);
+    final used = <Uri>[];
     // Sent once any relay stored it: one slow or unreachable relay must not
     // hold every message for its whole publish timeout (15 s on a phone
     // that could not reach one of three). The others finish meanwhile.
     final firstStored = Completer<void>();
-    final all = Future.wait(
-      to.relays.map((url) async {
-        try {
-          await _relayFor(url).publish(event);
-          stored++;
-          if (!firstStored.isCompleted) firstStored.complete();
-        } catch (error) {
-          errors.add(error);
-        }
-      }),
-    );
+    Future<void> publishTo(Uri url) async {
+      used.add(url);
+      try {
+        await _relayFor(url).publishLazy(makeEvent);
+        stored++;
+        if (!firstStored.isCompleted) firstStored.complete();
+      } catch (error) {
+        errors.add(error);
+      }
+    }
+
+    final all = Future.wait(chosen.map(publishTo));
     await Future.any([firstStored.future, all]);
+    if (stored == 0) {
+      await all;
+    }
+    // None took it: the next relays of the list, one at a time.
+    for (final url in to.relays) {
+      if (stored > 0) break;
+      if (used.contains(url) || _relayFor(url).restRemaining > Duration.zero) {
+        continue;
+      }
+      await publishTo(url);
+    }
     if (stored == 0) {
       final rateLimited = errors.whereType<NostrRelayException>().any(
         (error) => error.rateLimited,
@@ -371,6 +406,122 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
             : 'No Nostr relay stored the message: ${errors.join('; ')}',
       );
     }
+    final solo = used.length == 1;
+    // Kept by the send the frame belongs to (all its frames together), so a
+    // receipt credits the relays of the message it names, not the last one.
+    final sendKey = _sendKey(address);
+    final known = _sends.remove(sendKey);
+    _sends[sendKey] = (
+      relays: {...?known?.relays, for (final url in used) url.toString()},
+      solo: solo && (known?.solo ?? true),
+    );
+    while (_sends.length > 512) {
+      _sends.remove(_sends.keys.first);
+    }
+    _lastRelays[address] = [for (final url in used) url.toString()];
+    while (_lastRelays.length > 256) {
+      _lastRelays.remove(_lastRelays.keys.first);
+    }
+    // Only a send through one relay says anything about that relay: with two,
+    // a receipt could have come by either.
+    if (solo) {
+      final key = used.single.toString();
+      final score = _scores.remove(key) ?? (sent: 0, delivered: 0);
+      _scores[key] = (sent: score.sent + 1, delivered: score.delivered);
+      while (_scores.length > 64) {
+        _scores.remove(_scores.keys.first);
+      }
+    }
+  }
+
+  /// Relays each send went through (by send id, or by address when the
+  /// caller names none), and whether it was one relay alone.
+  final Map<String, ({Set<String> relays, bool solo})> _sends = {};
+
+  /// Relays the last event to a recipient went through.
+  final Map<String, List<String>> _lastRelays = {};
+
+  String _sendKey(String address) =>
+      (Zone.current[carrierSendZoneKey] as String?) ?? 'addr:$address';
+
+  /// Sends per recipient (every few go through a single relay to test it).
+  final Map<String, int> _sendCounts = {};
+
+  /// Per relay: events published there and receipts that came for events
+  /// published there (a relay that says OK and drops them loses its rank).
+  final Map<String, ({int sent, int delivered})> _scores = {};
+
+  @visibleForTesting
+  Map<String, int> get deliveredForTesting => {
+    for (final e in _scores.entries) e.key: e.value.delivered,
+  };
+
+  /// Recipients heard from through this channel (bounded).
+  final LinkedHashSet<String> _heardFrom = LinkedHashSet();
+
+  /// The recipient at [address] confirmed (a receipt came) the send
+  /// [sendId] (or, with none named, what was sent last): the relays it went
+  /// through are credited, if it went through one alone.
+  void noteDelivered(String address, {String? sendId}) {
+    final last = _sends.remove(sendId ?? 'addr:$address');
+    _heardFrom.remove(address);
+    _heardFrom.add(address);
+    while (_heardFrom.length > 256) {
+      _heardFrom.remove(_heardFrom.first);
+    }
+    if (last == null || !last.solo) return;
+    for (final url in last.relays) {
+      final score = _scores[url];
+      if (score != null) {
+        _scores[url] = (sent: score.sent, delivered: score.delivered + 1);
+      }
+    }
+  }
+
+  List<Uri> _chooseRelays(String address, List<Uri> listed) {
+    final awake = [
+      for (final url in listed)
+        if (_relayFor(url).restRemaining <= Duration.zero) url,
+    ];
+    // All of them resting: the one that rests the shortest is tried; the
+    // send is refused if it refuses (the caller tries again later).
+    if (awake.isEmpty) {
+      final byRest = [...listed]
+        ..sort(
+          (a, b) =>
+              _relayFor(a).restRemaining.compareTo(_relayFor(b).restRemaining),
+        );
+      return [byRest.first];
+    }
+    if (!_heardFrom.contains(address)) return awake.take(3).toList();
+    // The previous send to this recipient has no receipt yet: other relays
+    // first this time.
+    final lastRelays = _lastRelays[address] ?? const <String>[];
+    double rank(Uri url) {
+      final score = _scores[url.toString()] ?? (sent: 0, delivered: 0);
+      final base = (score.delivered + 1) / (score.sent + 2);
+      return lastRelays.contains(url.toString()) ? base * 0.5 : base;
+    }
+
+    final ranked = [...awake]..sort((a, b) => rank(b).compareTo(rank(a)));
+    final count = (_sendCounts.remove(address) ?? 0) + 1;
+    _sendCounts[address] = count;
+    while (_sendCounts.length > 256) {
+      _sendCounts.remove(_sendCounts.keys.first);
+    }
+    // Every fourth send goes through the relay tried least, alone: a receipt
+    // for it then credits that relay and no other, and one that says OK and
+    // drops what it gets is found out.
+    if (count % 4 == 0 && awake.length > 1) {
+      final least = [...awake]
+        ..sort(
+          (a, b) => (_scores[a.toString()]?.sent ?? 0).compareTo(
+            _scores[b.toString()]?.sent ?? 0,
+          ),
+        );
+      return [least.first];
+    }
+    return ranked.take(2).toList();
   }
 
   NostrRelay _relayFor(Uri url) {
