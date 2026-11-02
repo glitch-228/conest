@@ -298,6 +298,24 @@ abstract class AppLocalizations {
   /// **'Delivered {time}'**
   String messageDeliveredAt(String time);
 
+  /// Under a sent message that was delivered more than a minute after it was sent: the delivery time next to the sent time, for example '14:02 · delivered 14:20'.
+  ///
+  /// In en, this message translates to:
+  /// **'delivered {time}'**
+  String messageTimeDelivered(String time);
+
+  /// Under a received message that arrived more than a minute after it was sent: the arrival time next to the sent time, for example '14:02 · arrived 14:20'.
+  ///
+  /// In en, this message translates to:
+  /// **'arrived {time}'**
+  String messageTimeArrived(String time);
+
+  /// Message details of a group message: how many of the members have it.
+  ///
+  /// In en, this message translates to:
+  /// **'Delivered to {delivered} of {total}'**
+  String messageDeliveredToCount(int delivered, int total);
+
   /// When the other person read the message.
   ///
   /// In en, this message translates to:
@@ -8279,6 +8297,12 @@ abstract class AppLocalizations {
   /// **'failing'**
   String get connectionsRouteFailing;
 
+  /// Connections screen: a route that works on this network some of the time but also fails like a block
+  ///
+  /// In en, this message translates to:
+  /// **'unreliable on this network'**
+  String get connectionsRouteUnreliable;
+
   /// Connections screen: how old another device's report about a link is
   ///
   /// In en, this message translates to:
@@ -10592,6 +10616,102 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Fast'**
   String get energyBudgetFast;
+
+  /// Power use choice: cold mode, where unused connections are stopped and only wake now and then.
+  ///
+  /// In en, this message translates to:
+  /// **'Cold: stopped until needed'**
+  String get energyBudgetCold;
+
+  /// Power use choice: cold on phones and laptops on battery, balanced on mains power.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic (cold on battery)'**
+  String get energyBudgetAutomatic;
+
+  /// Chat list banner in cold mode: when this device last looked for new messages, e.g. 'Cold mode · checked 3 min ago'.
+  ///
+  /// In en, this message translates to:
+  /// **'Cold mode · checked {ago}'**
+  String coldBannerChecked(String ago);
+
+  /// Chat list banner in cold mode before the first check.
+  ///
+  /// In en, this message translates to:
+  /// **'Cold mode · not checked yet'**
+  String get coldBannerNeverChecked;
+
+  /// How long ago, shorter than a minute.
+  ///
+  /// In en, this message translates to:
+  /// **'just now'**
+  String get coldAgoJustNow;
+
+  /// How long ago, in minutes or hours as text, e.g. '3 min ago'.
+  ///
+  /// In en, this message translates to:
+  /// **'{minutes} min ago'**
+  String coldAgoMinutes(int minutes);
+
+  /// How long ago in hours.
+  ///
+  /// In en, this message translates to:
+  /// **'{hours} h ago'**
+  String coldAgoHours(int hours);
+
+  /// Tooltip of the button that looks for new messages now in cold mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Check now'**
+  String get coldRefresh;
+
+  /// Settings: how often a cold device looks for news.
+  ///
+  /// In en, this message translates to:
+  /// **'Cold mode: check every'**
+  String get coldWakeTitle;
+
+  /// Cold mode check interval choice: only when asked.
+  ///
+  /// In en, this message translates to:
+  /// **'Only when I ask'**
+  String get coldWakeManual;
+
+  /// Cold mode check interval choice in minutes.
+  ///
+  /// In en, this message translates to:
+  /// **'{minutes} minutes'**
+  String coldWakeMinutes(int minutes);
+
+  /// Settings note under the cold mode interval: calls and the relay's live connection.
+  ///
+  /// In en, this message translates to:
+  /// **'Your first relay stays connected, so messages and calls through it arrive at once. Other routes wake at each check, when you refresh, and to send.'**
+  String get coldWakeNote;
+
+  /// Settings heading: per transport choice in cold mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Routes in cold mode'**
+  String get coldTransportsTitle;
+
+  /// A route choice in cold mode: stopped until needed.
+  ///
+  /// In en, this message translates to:
+  /// **'Cold'**
+  String get coldTransportCold;
+
+  /// A route choice in cold mode: never stopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Always on'**
+  String get coldTransportAlwaysOn;
+
+  /// A route choice in cold mode: never started.
+  ///
+  /// In en, this message translates to:
+  /// **'Off'**
+  String get coldTransportOff;
 
   /// Radio page: share of the airtime budget used in the last minute.
   ///

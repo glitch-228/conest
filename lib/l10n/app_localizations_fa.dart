@@ -127,6 +127,21 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'تحویل شد $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'رسید $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'به $delivered از $total نفر تحویل شد';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'خوانده شد: $time';
   }
@@ -5215,6 +5230,9 @@ class AppLocalizationsFa extends AppLocalizations {
   String get connectionsRouteFailing => 'خطا دارد';
 
   @override
+  String get connectionsRouteUnreliable => 'در این شبکه ناپایدار است';
+
+  @override
   String connectionsAsOf(String when) {
     return 'تا $when';
   }
@@ -6559,6 +6577,63 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get energyBudgetFast => 'سریع';
+
+  @override
+  String get energyBudgetCold => 'سرد: خاموش تا زمان نیاز';
+
+  @override
+  String get energyBudgetAutomatic => 'خودکار (سرد روی باتری)';
+
+  @override
+  String coldBannerChecked(String ago) {
+    return 'حالت سرد · بررسی $ago';
+  }
+
+  @override
+  String get coldBannerNeverChecked => 'حالت سرد · هنوز بررسی نشده';
+
+  @override
+  String get coldAgoJustNow => 'همین حالا';
+
+  @override
+  String coldAgoMinutes(int minutes) {
+    return '$minutes دقیقه پیش';
+  }
+
+  @override
+  String coldAgoHours(int hours) {
+    return '$hours ساعت پیش';
+  }
+
+  @override
+  String get coldRefresh => 'اکنون بررسی کن';
+
+  @override
+  String get coldWakeTitle => 'حالت سرد: بررسی هر';
+
+  @override
+  String get coldWakeManual => 'فقط وقتی بخواهم';
+
+  @override
+  String coldWakeMinutes(int minutes) {
+    return '$minutes دقیقه';
+  }
+
+  @override
+  String get coldWakeNote =>
+      'اولین رله متصل می‌ماند و پیام‌ها و تماس‌ها از آن بی‌درنگ می‌رسند. مسیرهای دیگر در هر بررسی، هنگام تازه‌سازی و برای ارسال بیدار می‌شوند.';
+
+  @override
+  String get coldTransportsTitle => 'مسیرها در حالت سرد';
+
+  @override
+  String get coldTransportCold => 'سرد';
+
+  @override
+  String get coldTransportAlwaysOn => 'همیشه روشن';
+
+  @override
+  String get coldTransportOff => 'خاموش';
 
   @override
   String airtimeBudgetUsed(int percent) {

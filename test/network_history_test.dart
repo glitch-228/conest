@@ -64,6 +64,75 @@ void main() {
     expect(history.blockedHere(), isEmpty);
   });
 
+  test('a route that works some of the time is unreliable, not blocked', () {
+    final history = NetworkHistory();
+    home(history, t0);
+    history.worked('nostr', t0);
+    for (var i = 0; i < 4; i++) {
+      history.failed(
+        'nostr',
+        RouteFailureKind.timeout,
+        t0.add(Duration(minutes: i + 1)),
+      );
+    }
+    history.worked('iroh', t0.add(const Duration(minutes: 6)));
+    expect(history.blockedHere(), isEmpty);
+    expect(history.unreliableHere(), {'nostr'});
+    // A route that only fails is the one that is blocked.
+    for (var i = 0; i < 3; i++) {
+      history.failed('tor', RouteFailureKind.reset, t0);
+    }
+    expect(history.blockedHere(), {'tor'});
+    expect(history.unreliableHere(), {'nostr'});
+  });
+
+  test('one offline contact does not block a route between devices', () {
+    final history = NetworkHistory();
+    home(history, t0);
+    history.worked('nostr', t0);
+    for (var i = 0; i < 6; i++) {
+      history.failed('iroh', RouteFailureKind.timeout, t0, peer: 'alice');
+    }
+    expect(history.blockedHere(), isEmpty);
+    // The same route failing for several contacts, with no success: blocked.
+    history.failed('iroh', RouteFailureKind.timeout, t0, peer: 'bob');
+    expect(history.blockedHere(), {'iroh'});
+    // A route of a carrier account fails for the account, not a contact.
+    history.failed('matrix', RouteFailureKind.dns, t0, peer: 'alice');
+    history.failed('matrix', RouteFailureKind.dns, t0, peer: 'alice');
+    history.failed('matrix', RouteFailureKind.dns, t0, peer: 'alice');
+    expect(history.blockedHere(), {'iroh', 'matrix'});
+    // The route's own infrastructure failing (no contact involved) counts.
+    final other = NetworkHistory();
+    home(other, t0);
+    other.worked('nostr', t0);
+    for (var i = 0; i < 3; i++) {
+      other.failed('iroh', RouteFailureKind.timeout, t0);
+    }
+    expect(other.blockedHere(), {'iroh'});
+  });
+
+  test('only the last day counts', () {
+    final history = NetworkHistory();
+    home(history, t0);
+    for (var i = 0; i < 3; i++) {
+      history.failed('nostr', RouteFailureKind.reset, t0);
+    }
+    history.worked('iroh', t0);
+    expect(history.blockedHere(), {'nostr'});
+    // A day later the failures are old, and something worked since.
+    final later = t0.add(const Duration(hours: 25));
+    history.worked('iroh', later);
+    expect(history.blockedHere(now: later), isEmpty);
+    // An old success does not excuse failures of today.
+    history.worked('tor', t0);
+    for (var i = 0; i < 3; i++) {
+      history.failed('tor', RouteFailureKind.reset, later);
+    }
+    expect(history.blockedHere(now: later), {'tor'});
+    expect(history.unreliableHere(now: later), isEmpty);
+  });
+
   test('nothing is blocked where nothing works at all', () {
     final history = NetworkHistory();
     home(history, t0);
@@ -108,7 +177,7 @@ void main() {
     final history = NetworkHistory();
     home(history, t0);
     history.worked('iroh', t0);
-    history.failed('tor', RouteFailureKind.tls, t0);
+    history.failed('tor', RouteFailureKind.tls, t0, peer: 'alice');
     final restored = NetworkHistory.fromJson(
       jsonDecode(jsonEncode(history.toJson())),
     );
@@ -116,6 +185,8 @@ void main() {
     expect(record.label, 'Wi-Fi 192.168.3.x');
     expect(record.routes['iroh']!.ok, 1);
     expect(record.routes['tor']!.failures[RouteFailureKind.tls], 1);
+    expect(record.routes['tor']!.recent.single.kind, RouteFailureKind.tls);
+    expect(record.routes['tor']!.recent.single.peer, isNot('alice'));
     expect(NetworkHistory.fromJson('nonsense').networks, isEmpty);
   });
 

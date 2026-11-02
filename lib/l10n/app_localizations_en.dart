@@ -125,6 +125,21 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'delivered $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'arrived $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'Delivered to $delivered of $total';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'Read $time';
   }
@@ -5216,6 +5231,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get connectionsRouteFailing => 'failing';
 
   @override
+  String get connectionsRouteUnreliable => 'unreliable on this network';
+
+  @override
   String connectionsAsOf(String when) {
     return 'as of $when';
   }
@@ -6557,6 +6575,63 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get energyBudgetFast => 'Fast';
+
+  @override
+  String get energyBudgetCold => 'Cold: stopped until needed';
+
+  @override
+  String get energyBudgetAutomatic => 'Automatic (cold on battery)';
+
+  @override
+  String coldBannerChecked(String ago) {
+    return 'Cold mode · checked $ago';
+  }
+
+  @override
+  String get coldBannerNeverChecked => 'Cold mode · not checked yet';
+
+  @override
+  String get coldAgoJustNow => 'just now';
+
+  @override
+  String coldAgoMinutes(int minutes) {
+    return '$minutes min ago';
+  }
+
+  @override
+  String coldAgoHours(int hours) {
+    return '$hours h ago';
+  }
+
+  @override
+  String get coldRefresh => 'Check now';
+
+  @override
+  String get coldWakeTitle => 'Cold mode: check every';
+
+  @override
+  String get coldWakeManual => 'Only when I ask';
+
+  @override
+  String coldWakeMinutes(int minutes) {
+    return '$minutes minutes';
+  }
+
+  @override
+  String get coldWakeNote =>
+      'Your first relay stays connected, so messages and calls through it arrive at once. Other routes wake at each check, when you refresh, and to send.';
+
+  @override
+  String get coldTransportsTitle => 'Routes in cold mode';
+
+  @override
+  String get coldTransportCold => 'Cold';
+
+  @override
+  String get coldTransportAlwaysOn => 'Always on';
+
+  @override
+  String get coldTransportOff => 'Off';
 
   @override
   String airtimeBudgetUsed(int percent) {

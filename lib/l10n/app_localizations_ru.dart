@@ -127,6 +127,21 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'доставлено $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'пришло $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'Доставлено $delivered из $total';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'Прочитано $time';
   }
@@ -5331,6 +5346,9 @@ class AppLocalizationsRu extends AppLocalizations {
   String get connectionsRouteFailing => 'сбои';
 
   @override
+  String get connectionsRouteUnreliable => 'ненадёжно в этой сети';
+
+  @override
   String connectionsAsOf(String when) {
     return 'на $when';
   }
@@ -6691,6 +6709,63 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get energyBudgetFast => 'Быстрый';
+
+  @override
+  String get energyBudgetCold => 'Холодный: выключено, пока не нужно';
+
+  @override
+  String get energyBudgetAutomatic => 'Автоматически (холодный от батареи)';
+
+  @override
+  String coldBannerChecked(String ago) {
+    return 'Холодный режим · проверено $ago';
+  }
+
+  @override
+  String get coldBannerNeverChecked => 'Холодный режим · ещё не проверялось';
+
+  @override
+  String get coldAgoJustNow => 'только что';
+
+  @override
+  String coldAgoMinutes(int minutes) {
+    return '$minutes мин назад';
+  }
+
+  @override
+  String coldAgoHours(int hours) {
+    return '$hours ч назад';
+  }
+
+  @override
+  String get coldRefresh => 'Проверить сейчас';
+
+  @override
+  String get coldWakeTitle => 'Холодный режим: проверять каждые';
+
+  @override
+  String get coldWakeManual => 'Только по запросу';
+
+  @override
+  String coldWakeMinutes(int minutes) {
+    return '$minutes мин';
+  }
+
+  @override
+  String get coldWakeNote =>
+      'Первое реле остаётся на связи: сообщения и звонки через него приходят сразу. Остальные маршруты просыпаются при проверке, обновлении и отправке.';
+
+  @override
+  String get coldTransportsTitle => 'Маршруты в холодном режиме';
+
+  @override
+  String get coldTransportCold => 'Холодный';
+
+  @override
+  String get coldTransportAlwaysOn => 'Всегда включён';
+
+  @override
+  String get coldTransportOff => 'Выключен';
 
   @override
   String airtimeBudgetUsed(int percent) {

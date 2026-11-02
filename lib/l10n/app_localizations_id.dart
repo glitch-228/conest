@@ -127,6 +127,21 @@ class AppLocalizationsId extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'terkirim $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'tiba $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'Terkirim ke $delivered dari $total';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'Dibaca $time';
   }
@@ -5204,6 +5219,9 @@ class AppLocalizationsId extends AppLocalizations {
   String get connectionsRouteFailing => 'gagal';
 
   @override
+  String get connectionsRouteUnreliable => 'tidak andal di jaringan ini';
+
+  @override
   String connectionsAsOf(String when) {
     return 'per $when';
   }
@@ -6554,6 +6572,63 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get energyBudgetFast => 'Cepat';
+
+  @override
+  String get energyBudgetCold => 'Dingin: berhenti sampai dibutuhkan';
+
+  @override
+  String get energyBudgetAutomatic => 'Otomatis (dingin saat baterai)';
+
+  @override
+  String coldBannerChecked(String ago) {
+    return 'Mode dingin · diperiksa $ago';
+  }
+
+  @override
+  String get coldBannerNeverChecked => 'Mode dingin · belum diperiksa';
+
+  @override
+  String get coldAgoJustNow => 'baru saja';
+
+  @override
+  String coldAgoMinutes(int minutes) {
+    return '$minutes mnt lalu';
+  }
+
+  @override
+  String coldAgoHours(int hours) {
+    return '$hours j lalu';
+  }
+
+  @override
+  String get coldRefresh => 'Periksa sekarang';
+
+  @override
+  String get coldWakeTitle => 'Mode dingin: periksa setiap';
+
+  @override
+  String get coldWakeManual => 'Hanya saat diminta';
+
+  @override
+  String coldWakeMinutes(int minutes) {
+    return '$minutes menit';
+  }
+
+  @override
+  String get coldWakeNote =>
+      'Relay pertama tetap terhubung, jadi pesan dan panggilan lewat relay itu tiba seketika. Rute lain bangun saat pemeriksaan, penyegaran, dan pengiriman.';
+
+  @override
+  String get coldTransportsTitle => 'Rute dalam mode dingin';
+
+  @override
+  String get coldTransportCold => 'Dingin';
+
+  @override
+  String get coldTransportAlwaysOn => 'Selalu aktif';
+
+  @override
+  String get coldTransportOff => 'Mati';
 
   @override
   String airtimeBudgetUsed(int percent) {

@@ -33,6 +33,8 @@ import 'bitchat/direct.dart';
 import 'bitchat/gateway.dart';
 import 'bitchat/geo_relays.g.dart';
 import 'bitchat/mesh.dart' show randomBitchatBytes;
+import 'activity_counters.dart';
+import 'cold_mode.dart';
 import 'bitchat_carrier.dart';
 import 'bitchat_chats.dart';
 import 'bitchat_gateway_relays.dart';
@@ -705,9 +707,12 @@ class MessengerController extends ChangeNotifier {
                     : null,
               ));
     // Always the user's current choice, whatever read it.
+    _energyPolicy.onPowerChanged = () {
+      if (!_disposed) unawaited(syncColdMode().catchError((Object _) {}));
+    };
     _energyPolicy.settingSource = () =>
         _snapshot.identity?.connectivity.energyBudget ??
-        EnergyBudgetSetting.balanced;
+        EnergyBudgetSetting.automatic;
     voiceMessageService = VoiceMessageService(
       platformBridge: _platformBridge,
       applicationSupportDirectory: _dataRootProvider,
@@ -864,6 +869,7 @@ class MessengerController extends ChangeNotifier {
     _requestVisibleGroupCatchUp();
     _scheduleScheduledMessagePump();
     _useBitchatGateway();
+    unawaited(syncColdMode().catchError((Object _) {}));
   }
 
   /// Stops Conest's networking for Matrix-only mode. Every entry point also
@@ -1737,7 +1743,8 @@ class MessengerController extends ChangeNotifier {
         'Experimental voice calls are off. Enable them in Settings to call.',
       );
     }
-    if (signal.action == 'invite' && !_canUseIrohForContact(contact)) {
+    if (signal.action == 'invite' &&
+        !_canUseIrohForContact(contact, asleepOk: true)) {
       throw StateError(
         'Voice calls require Iroh to be enabled for this contact.',
       );
@@ -1758,6 +1765,10 @@ class MessengerController extends ChangeNotifier {
         'This contact has not confirmed voice-call support. Both devices need a compatible Conest build; retry after their profile updates.',
       );
     }
+    // The call's media goes over Iroh: it comes up with the signal.
+    await _cold.wakeFor([
+      TransportKind.iroh.name,
+    ], linger: const Duration(minutes: 2));
     await _enqueueAndDeliverEnvelope(
       contact: contact,
       payload: QueuedEnvelopePayload(
@@ -2060,7 +2071,9 @@ class MessengerController extends ChangeNotifier {
     } else if (!value) {
       unawaited(voiceMessageService.stopForInterruption());
       savePendingChangesForLifecycle();
-      _stopLongPoll();
+      // Cold mode keeps the relay's live connection in the background too:
+      // it is what brings messages and calls at once.
+      if (!_cold.active) _stopLongPoll();
     }
     _reschedulePolling();
     _scheduleScheduledMessagePump();
@@ -2266,6 +2279,8 @@ class MessengerController extends ChangeNotifier {
     // into a 15 s wait (nightly.6 battle tests). Blocks pushed over LAN or
     // Iroh need no polling, and polling every 250 ms for them only drained
     // the battery.
+    // Cold: the timer, a refresh and a send do the looking.
+    if (_cold.active) return null;
     if (hasActiveTransfer) {
       final now = _now();
       _relayPolledTransferAt.removeWhere(
@@ -2276,6 +2291,8 @@ class MessengerController extends ChangeNotifier {
       }
       return _foregroundActivePollInterval;
     }
+    // Cold: the timer, a refresh and a send do the looking.
+    if (_cold.active) return null;
     return switch (_runtimeMode) {
       _RuntimeMode.foregroundActive => _foregroundActivePollInterval,
       _RuntimeMode.foregroundIdle => _foregroundIdlePollInterval,
@@ -3008,6 +3025,8 @@ class MessengerController extends ChangeNotifier {
               _groupFileDiscoveryTimers.remove(session.event.eventId)?.cancel();
               return;
             }
+            // Cold: the cold-mode checks look for providers.
+            if (_cold.active) return;
             unawaited(_startGroupFileDownload(session));
           },
         );
@@ -3175,6 +3194,7 @@ class MessengerController extends ChangeNotifier {
     String request,
     Uint8List frame,
   ) {
+    _noteTransferMoved();
     final key = jsonEncode([event.eventId, peerId, request]);
     final task = () async {
       if (await _groupHistory.fileForPeer(
@@ -4723,11 +4743,29 @@ class MessengerController extends ChangeNotifier {
   /// The Android call notification and foreground service, for 1:1 and
   /// group calls alike. Told only what changed: calls notify far more often
   /// than this changes, and each update restarts the service.
+  /// Whether Iroh polls quickly because a call is on.
+  bool _callPollHold = false;
+
+  void _syncCallPollHold({bool callOver = false}) {
+    _callPollHold =
+        (!callOver && _voiceCallService?.active != null) ||
+        _groupCallService?.active != null;
+    _applyCallPollHold();
+  }
+
+  void _applyCallPollHold() {
+    final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
+    if (adapter is IrohTransportAdapter) adapter.holdFastPolling(_callPollHold);
+  }
+
   void _updateCallForeground({
     required String? title,
     required String state,
     required bool incoming,
   }) {
+    // Incoming call media may come while this side is silent: the Iroh
+    // poll stays quick for the whole call.
+    _syncCallPollHold(callOver: state == 'idle');
     final me = identity;
     if (me == null) return;
     final runtimeEnabled = me.androidBackgroundRuntimeEnabled;
@@ -4767,15 +4805,19 @@ class MessengerController extends ChangeNotifier {
     PeerRouteKind.relay => 'relay:${route.host}:${route.port}',
   };
 
-  void _noteTransportOutcome(TransportKind kind, bool ok, Object? error) =>
-      _noteRouteOutcome(kind.name, ok, error?.toString());
+  void _noteTransportOutcome(
+    TransportKind kind,
+    bool ok,
+    Object? error,
+    String deviceId,
+  ) => _noteRouteOutcome(kind.name, ok, error?.toString(), peer: deviceId);
 
-  void _noteRouteOutcome(String route, bool ok, String? error) {
+  void _noteRouteOutcome(String route, bool ok, String? error, {String? peer}) {
     final now = _now();
     if (ok) {
       _networkHistory.worked(route, now);
     } else {
-      _networkHistory.failed(route, routeFailureKindOf(error), now);
+      _networkHistory.failed(route, routeFailureKindOf(error), now, peer: peer);
     }
     _networkHistoryChanged = true;
     _syncCircumvention();
@@ -4785,7 +4827,7 @@ class MessengerController extends ChangeNotifier {
   /// network seems to block (M38).
   void _syncCircumvention() => Circumvention.instance.update(
     preferences: _snapshot.identity?.connectivity.circumvention,
-    blockedHere: _networkHistory.blockedHere().isNotEmpty,
+    blockedHere: _networkHistory.blockedHere(now: _now()).isNotEmpty,
   );
 
   /// Whether private DNS or split TLS greetings are in use now.
@@ -4799,6 +4841,7 @@ class MessengerController extends ChangeNotifier {
   /// The network now in use ([label]: connectivity_plus's names, such as
   /// "wifi,vpn"), told apart by its kind and this device's LAN subnets.
   Future<void> noteNetwork(String label) async {
+    unawaited(syncColdMode().catchError((Object _) {}));
     final lower = label.toLowerCase();
     if (lower.contains('none')) return;
     List<String> addresses;
@@ -5143,17 +5186,21 @@ class MessengerController extends ChangeNotifier {
     final me = _snapshot.identity;
     if (me == null) return;
     try {
-      final registry = await factory(me);
-      if (registry == null) return;
-      await registry.start();
-      // A carrier-only registry from before keeps its running adapters and
-      // inbound subscriptions.
-      final carrierOnly = _transportRegistry;
-      for (final adapter
-          in carrierOnly?.adapters ?? const <TransportAdapter>[]) {
-        registry.register(adapter);
+      final fresh = await factory(me);
+      if (fresh == null) return;
+      await fresh.start();
+      // A registry from before (carriers only, or the one a cold stop took
+      // the native adapters out of) stays: it keeps its running adapters,
+      // its inbound subscriptions and what it learned about each route.
+      final existing = _transportRegistry;
+      final registry = existing ?? fresh;
+      if (existing != null) {
+        for (final adapter in fresh.adapters.toList()) {
+          existing.register(adapter);
+        }
       }
       _transportRegistry = registry..onOutcome = _noteTransportOutcome;
+      _applyCallPollHold();
       // Routes exist now: files that waited for one ask again.
       _resumeInboundWithoutFileRoute();
       for (final adapter in registry.adapters.where(
@@ -6430,7 +6477,10 @@ class MessengerController extends ChangeNotifier {
       config: config,
       connector: _bitchatConnector ?? openPlatformBitchatLinks,
       keyFor: _bitchatPairKeys,
-      onFrame: adapter.receiveFrame,
+      onFrame: (sender, frame) {
+        _noteMeshFrameFrom(sender);
+        adapter.receiveFrame(sender, frame);
+      },
       onStatusChanged: notifyListeners,
       onPublic: _onBitchatPublic,
       now: _now,
@@ -9060,6 +9110,7 @@ class MessengerController extends ChangeNotifier {
       await _carrierInboundSubscriptions.remove(carrier.kind)?.cancel();
     }
     _carrierTransports[carrier.kind] = carrier;
+    unawaited(syncColdMode().catchError((Object _) {}));
     await _carrierReceiptSubscriptions.remove(carrier.kind)?.cancel();
     _carrierReceiptSubscriptions[carrier.kind] = carrier.deliveryReceipts
         .listen(_onCarrierDeliveryReceipt);
@@ -10175,6 +10226,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> flushErrorHistory() async => _errorHistory?.flush();
 
   void appendDebugLog(String line) {
+    ActivityCounters.instance.noteLogLine();
     _appendDebugLine(line);
     _errorHistory?.add('log', line);
   }
@@ -10510,6 +10562,8 @@ class MessengerController extends ChangeNotifier {
   }
 
   bool _shouldRunAutomaticHeartbeats(IdentityRecord me) {
+    // Cold: no periodic upkeep; contacts are told when this changes.
+    if (_cold.active) return false;
     if (!Platform.isAndroid) {
       return true;
     }
@@ -11862,6 +11916,10 @@ class MessengerController extends ChangeNotifier {
       await _stopTransportRegistry();
     }
     await _applyGlobalConnectivityState();
+    // That started everything the flags allow: cold mode stops what it
+    // should again.
+    _cold.markAllUp();
+    await syncColdMode();
     // A route or a refusal changed: files that waited for a route ask again.
     _resumeInboundWithoutFileRoute();
     _syncXmppChats();
@@ -12499,6 +12557,18 @@ class MessengerController extends ChangeNotifier {
     _errorHistory?.discard();
     _errorHistory = null;
     _parkedOwnSync.clear();
+    _peerCold.clear();
+    _peerColdGone.clear();
+    _coldDirectSkipUntil.clear();
+    _readThroughAt.clear();
+    _readThroughSentAt.clear();
+    _storedOn.clear();
+    _relayLiveHosts.clear();
+    _relayFetchedAt.clear();
+    _meshHeardAt.clear();
+    _transferMovedAt = null;
+    _coldRetryRound = 0;
+
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
     for (final timer in _groupHistoryTimers.values) {
@@ -13844,6 +13914,9 @@ class MessengerController extends ChangeNotifier {
     if (trimmed.isEmpty) {
       return;
     }
+    // Something new to wait for: cold retries start over from a minute.
+    _coldRetryRound = 0;
+    _cold.rearm();
     if (contact.deviceId == me.deviceId) {
       await _saveText(trimmed, replyTo: replyTo, messageId: outgoingMessageId);
       return;
@@ -16684,6 +16757,8 @@ class MessengerController extends ChangeNotifier {
     String? outgoingMessageId,
     LinkPreview? linkPreview,
   }) async {
+    _coldRetryRound = 0;
+    _cold.rearm();
     final me = _requireIdentity();
     final group = _requireGroup(groupId);
     if (!group.hasActiveMember(me.deviceId) &&
@@ -18959,6 +19034,12 @@ class MessengerController extends ChangeNotifier {
       // What not to send this device over which transport (empty: all
       // that each carries).
       'contentRefusals': _ownContentRefusalsFor(contact).toJson(),
+      // Cold mode: this device sleeps between looks (minutes, zero: only
+      // when asked); a sender then does not keep trying its direct routes.
+      if (_cold.active) ...{
+        'cold': _snapshot.identity?.connectivity.coldWakeMinutes ?? 15,
+        'coldAwake': _coldAwakeNames(),
+      },
       ..._localLanDirectHintPayload(contact),
     };
     if (effectiveProbeId != null) {
@@ -19080,6 +19161,9 @@ class MessengerController extends ChangeNotifier {
     final pollCompleter = Completer<void>();
     _pollCompleter = pollCompleter;
     notifyListeners();
+    // Plugging a laptop in or out changes what Automatic is (once a minute
+    // at most).
+    unawaited(_energyPolicy.refresh());
     try {
       _schedulePendingContactPairingRetries();
       await _ensureLocalRelayRunning();
@@ -19266,8 +19350,10 @@ class MessengerController extends ChangeNotifier {
     final generation = ++_longPollGeneration;
     unawaited(_runLongPollLoop(generation: generation));
     // A second relay too, while this device can afford it: a contact may
-    // have left a message on either.
-    unawaited(_runLongPollLoop(slot: 1, generation: generation));
+    // have left a message on either. Not in cold mode: one light push.
+    if (!_cold.active) {
+      unawaited(_runLongPollLoop(slot: 1, generation: generation));
+    }
   }
 
   /// Bumped on each start: a loop from an earlier start (asleep when it was
@@ -19346,6 +19432,7 @@ class MessengerController extends ChangeNotifier {
       if (me == null) {
         break;
       }
+      if (slot > 0 && _cold.active) break;
       if (slot > 0 &&
           _energyPolicy.modeFor(_networkCostClass) !=
               EnergyMode.unconstrained) {
@@ -19393,6 +19480,7 @@ class MessengerController extends ChangeNotifier {
           fetch: true,
           latency: stopwatch.elapsed,
         );
+        _noteRelayFetched(route.host);
       } catch (error) {
         stopwatch.stop();
         _routeHealthTracker.recordFailure(route, error: error.toString());
@@ -19466,6 +19554,7 @@ class MessengerController extends ChangeNotifier {
   ) async {
     final stopwatch = Stopwatch()..start();
     var stoppedOnPurpose = false;
+    _relayLiveHosts.add(route.host);
     try {
       final expectedRelayKey = await _requireOperationalRelayPin(route);
       await for (final batch in _relayClient.subscribeEnvelopes(
@@ -19481,6 +19570,7 @@ class MessengerController extends ChangeNotifier {
           fetch: true,
           latency: stopwatch.elapsed,
         );
+        _noteRelayFetched(route.host);
         stopwatch.reset();
         final envelopes = batch.envelopes;
         if (envelopes.isNotEmpty) {
@@ -19542,6 +19632,8 @@ class MessengerController extends ChangeNotifier {
         appendDebugLog('Relay subscription to ${route.host} ended: $error');
       }
       await Future<void>.delayed(const Duration(seconds: 2));
+    } finally {
+      _relayLiveHosts.remove(route.host);
     }
   }
 
@@ -20483,6 +20575,8 @@ class MessengerController extends ChangeNotifier {
     if (me == null || !conestActive) {
       return;
     }
+    // Cold mode keeps the LAN node stopped until it wakes it.
+    if (_cold.isCold(TransportKind.lan.name)) return;
     if (!me.connectivity.lanEnabled) {
       return;
     }
@@ -20538,6 +20632,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _ensurePairingBeaconRunning() async {
+    if (_cold.isCold(TransportKind.lan.name)) return;
     if (!_pairingBeaconEnabled ||
         kIsWeb ||
         _pairingBeaconSocket != null ||
@@ -20891,6 +20986,7 @@ class MessengerController extends ChangeNotifier {
   final List<Timer> _lanRecheckTimers = [];
 
   void _notifyTransferProgress() {
+    _noteTransferMoved();
     if (_disposed || _transferProgressUiTimer != null) return;
     _transferProgressUiTimer = Timer(const Duration(milliseconds: 100), () {
       _transferProgressUiTimer = null;
@@ -20919,6 +21015,7 @@ class MessengerController extends ChangeNotifier {
       _scheduleDeferredNotificationFlush();
       return;
     }
+    ActivityCounters.instance.noteNotification();
     super.notifyListeners();
     _scheduleTransferForegroundSync();
   }
@@ -21199,7 +21296,15 @@ class MessengerController extends ChangeNotifier {
           // Decrypting it opens the inbound session; nothing else to do.
           final peer = _ratchetPeer(envelope.senderDeviceId);
           if (peer != null) {
-            await _crypto.decryptMessage(contact: peer, envelope: envelope);
+            // A hello that beat the answer cannot open before the peer's
+            // identity is known: that is no broken session, so no reset
+            // (one more round of session churn).
+            final known = await _ratchet?.knowsPeer(ratchetPeerId(peer));
+            await _crypto.decryptMessage(
+              contact: peer,
+              envelope: envelope,
+              reportFailure: known ?? true,
+            );
           }
           _markSeen(envelope.messageId);
           continue;
@@ -21988,39 +22093,48 @@ class MessengerController extends ChangeNotifier {
         group: group,
       );
     }
-    if (group != null) {
-      if (!group.hasActiveMember(contact.deviceId)) return false;
-      _updateGroupRecipientState(
-        group.groupId,
-        target,
-        contact.deviceId,
-        receipt == 'read' ? DeliveryState.read : DeliveryState.delivered,
-      );
-    } else {
-      if (envelope.conversationId !=
-          _crypto.conversationIdFor(contact.deviceId)) {
-        return false;
-      }
-      // A receipt from any of the contact's devices counts.
-      final chatId = _chatIdFor(contact);
-      final message = _messageById(chatId, target);
-      if (message == null || !message.outbound) return false;
-      final before = message.state;
-      if (receipt == 'read') {
-        _markMessagesReadThroughMessage(chatId, target);
+    _readReceiptSentAt = envelope.createdAt.toUtc();
+    try {
+      if (group != null) {
+        if (!group.hasActiveMember(contact.deviceId)) return false;
+        _updateGroupRecipientState(
+          group.groupId,
+          target,
+          contact.deviceId,
+          receipt == 'read' ? DeliveryState.read : DeliveryState.delivered,
+        );
       } else {
-        _updateMessageState(chatId, target, DeliveryState.delivered);
-        _clearOutboundAttempt(chatId, target);
+        if (envelope.conversationId !=
+            _crypto.conversationIdFor(contact.deviceId)) {
+          return false;
+        }
+        // A receipt from any of the contact's devices counts.
+        final chatId = _chatIdFor(contact);
+        final message = _messageById(chatId, target);
+        if (message == null || !message.outbound) return false;
+        final before = message.state;
+        if (receipt == 'read') {
+          _markMessagesReadThroughMessage(chatId, target);
+        } else if (_readThroughCovers(chatId, message.createdAt)) {
+          // Their read receipt for a later message overtook this delivery
+          // receipt: it was read.
+          _markMessagesReadThroughMessage(chatId, target);
+        } else {
+          _updateMessageState(chatId, target, DeliveryState.delivered);
+          _clearOutboundAttempt(chatId, target);
+        }
+        final after = _messageById(chatId, target)?.state;
+        if (after != null && after != before) {
+          _syncToOwnDevices({
+            'type': 'state',
+            'chat': chatId,
+            'id': target,
+            'state': after == DeliveryState.read ? 'read' : 'delivered',
+          });
+        }
       }
-      final after = _messageById(chatId, target)?.state;
-      if (after != null && after != before) {
-        _syncToOwnDevices({
-          'type': 'state',
-          'chat': chatId,
-          'id': target,
-          'state': after == DeliveryState.read ? 'read' : 'delivered',
-        });
-      }
+    } finally {
+      _readReceiptSentAt = null;
     }
     return true;
   }
@@ -22060,6 +22174,17 @@ class MessengerController extends ChangeNotifier {
       if (secret.length != 32) return;
       _rememberVoiceCallMediaSecret(signal.callId, secret);
     }
+    if (signal.action == 'invite') {
+      // A call to a cold device: Iroh comes up for its media, without
+      // holding up what else arrived.
+      unawaited(
+        _cold
+            .wakeFor([
+              TransportKind.iroh.name,
+            ], linger: const Duration(minutes: 2))
+            .catchError((Object _) {}),
+      );
+    }
     if (signal.action == 'invite' &&
         identity?.experimentalVoiceCallsEnabled != true) {
       final me = identity;
@@ -22077,7 +22202,8 @@ class MessengerController extends ChangeNotifier {
       await _sendAck(contact: contact, envelope: envelope);
       return;
     }
-    if (signal.action == 'invite' && !_canUseIrohForContact(contact)) {
+    if (signal.action == 'invite' &&
+        !_canUseIrohForContact(contact, asleepOk: true)) {
       final me = identity;
       if (me != null) {
         await _sendVoiceCallSignal(
@@ -25923,6 +26049,12 @@ class MessengerController extends ChangeNotifier {
     }
     if (routePayload != null) {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
+      _notePeerCold(
+        sender.deviceId,
+        routePayload['cold'],
+        routePayload['coldAwake'],
+        sentAt ?? envelope.createdAt,
+      );
     }
     _acceptedByTraffic(sender, sentAt: envelope.createdAt);
     _resumeInboundWithoutFileRoute(sender.deviceId);
@@ -28755,7 +28887,7 @@ class MessengerController extends ChangeNotifier {
             'check does not apply.',
       );
     }
-    final expectedRunning = _appInForeground && hasIdentity;
+    final expectedRunning = (_appInForeground || _cold.active) && hasIdentity;
     if (_longPollRunning != expectedRunning) {
       return DebugCheckResult(
         name: 'Long-poll lifecycle',
@@ -29325,6 +29457,54 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// A retry of [envelope]: the routes that already stored it come last
+  /// (a relay holding a message has not delivered it), so each pass reaches
+  /// another route. With only those left, true: it is held there, and only
+  /// stored again after [_storeRefresh].
+  Future<_DeliveryRoute?> _deliverRetry({
+    required ContactRecord contact,
+    required RelayEnvelope envelope,
+    required bool background,
+  }) async {
+    final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
+    final stored = _storedOn[key];
+    if (stored != null && stored.isNotEmpty) {
+      try {
+        return await _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+          background: background,
+          excludeRouteKeys: stored.keys.toSet(),
+        );
+      } on TransportSendCancelled {
+        rethrow;
+      } catch (_) {
+        // Only the stores are left. Each is stored again when its own copy
+        // is old; the others are left alone.
+        final now = _now();
+        final fresh = {
+          for (final entry in stored.entries)
+            if (now.difference(entry.value) < _storeRefresh) entry.key,
+        };
+        if (fresh.length == stored.length) return null;
+        return _deliverToContact(
+          contact: contact,
+          recipientDeviceId: contact.deviceId,
+          envelope: envelope,
+          background: background,
+          excludeRouteKeys: fresh,
+        );
+      }
+    }
+    return _deliverToContact(
+      contact: contact,
+      recipientDeviceId: contact.deviceId,
+      envelope: envelope,
+      background: background,
+    );
+  }
+
   Future<bool> _tryDeliverExistingMessage({
     required ContactRecord contact,
     required ChatMessage message,
@@ -29354,12 +29534,13 @@ class MessengerController extends ChangeNotifier {
           _messageById(contact.deviceId, message.id) == null) {
         return true;
       }
-      final route = await _deliverToContact(
+      final route = await _deliverRetry(
         contact: contact,
-        recipientDeviceId: contact.deviceId,
         envelope: envelope,
         background: background,
       );
+      // Held on a relay already, no other route took it this time.
+      if (route == null) return true;
       // Handing it to a forwarder says nothing about reaching them.
       if (!route.forwarded) _reachability.noteAvailablePath(contact.deviceId);
       if (_locallyDeletedMessageIds.contains(message.id) ||
@@ -29429,12 +29610,13 @@ class MessengerController extends ChangeNotifier {
           message: message,
         ),
       );
-      final route = await _deliverToContact(
+      final route = await _deliverRetry(
         contact: contact,
-        recipientDeviceId: contact.deviceId,
         envelope: envelope,
         background: background,
       );
+      // Held on a relay already, no other route took it this time.
+      if (route == null) return true;
       _reachability.noteAvailablePath(contact.deviceId);
       if (route.endpoint?.kind == PeerRouteKind.lan) {
         await _rememberLanRoutesForGroupMember(
@@ -29833,10 +30015,32 @@ class MessengerController extends ChangeNotifier {
   static const Duration _routeAckTimeout = Duration(seconds: 8);
   static const Duration _unconfirmedRouteMemory = Duration(minutes: 10);
 
+  /// Routes that stored a message (a relay, a carrier's mailbox), by
+  /// [_outboundAttemptKey], then route key, since when. A store is no
+  /// delivery: the retry goes to the other routes first.
+  final LinkedHashMap<String, Map<String, DateTime>> _storedOn =
+      LinkedHashMap();
+  static const int _maxStoredOn = 2048;
+
+  /// A stored message is stored again after this long, in case the relay
+  /// dropped it.
+  static const Duration _storeRefresh = Duration(minutes: 30);
+
   void _noteHandedOff(String deviceId, String messageId, _DeliveryRoute route) {
     // A relay or a forwarding contact keeps it until they fetch it: no
     // receipt is due soon.
     if (route.forwarded || route.path == TransportPathKind.storeForward) {
+      if (!route.forwarded) {
+        final storeKey = _outboundAttemptKey(deviceId, messageId);
+        if (!_confirmedFamilies.containsKey(storeKey)) {
+          final stored = _storedOn.remove(storeKey) ?? <String, DateTime>{};
+          if (stored.length < 16) stored[route.routeKey] = _now();
+          _storedOn[storeKey] = stored;
+          while (_storedOn.length > _maxStoredOn) {
+            _storedOn.remove(_storedOn.keys.first);
+          }
+        }
+      }
       return;
     }
     final key = _outboundAttemptKey(deviceId, messageId);
@@ -29867,6 +30071,7 @@ class MessengerController extends ChangeNotifier {
     Set<MessageRoute>? arrivedBy,
   }) {
     final key = _outboundAttemptKey(deviceId, messageId);
+    _storedOn.remove(key);
     final copies = _copyRuns[key];
     if (copies != null && !copies.isCompleted) copies.complete();
     // Copies still going out frame by frame (radios) can stop.
@@ -29916,6 +30121,481 @@ class MessengerController extends ChangeNotifier {
     };
   }
 
+  // ---- Cold mode (see cold_mode.dart) ----
+
+  /// Stops the transports nothing needs now and wakes them on a timer, on
+  /// a refresh and to send. The Conest relay's subscription and the chat
+  /// networks (Telegram, Discord, Matrix) are never touched.
+  late final ColdMode _cold = ColdMode(fetch: _coldFetch)
+    ..onChanged = _coldChanged
+    ..inUse = _coldInUse
+    ..retryDue = _coldRetryDue
+    ..retryWake = _coldRetryWake
+    ..onError = ((id, error) => appendDebugLog('Cold mode: $id: $error'))
+    ..modeOf = ((id) =>
+        _snapshot.identity?.connectivity.coldTransportModes[id] ??
+        ColdTransportMode.cold);
+
+  /// Chat networks that sync themselves.
+  static const Set<TransportKind> _coldExemptKinds = {
+    TransportKind.matrix,
+    TransportKind.telegram,
+    TransportKind.discord,
+  };
+
+  /// Whether cold mode is on now.
+  bool get coldModeActive => _cold.active;
+
+  /// When cold mode last looked for news.
+  DateTime? get coldLastCheckedAt => _cold.lastCheckedAt;
+
+  /// When the timer looks next (null: only when asked).
+  DateTime? get coldNextCheckAt => _cold.nextCheckAt;
+
+  /// Looks for news now: wakes the transports, polls, and lets them go cold
+  /// again. Also what pull-to-refresh does.
+  Future<void> refreshNow() async {
+    if (_disposed || !hasIdentity) return;
+    await _cold.refresh();
+  }
+
+  /// The transports cold mode can stop, with what each does now.
+  List<({String id, bool up})> get coldTransports => [
+    for (final id in _cold.handleIds.toList()..sort())
+      (id: id, up: _cold.upIds.contains(id)),
+  ];
+
+  @visibleForTesting
+  ColdMode get coldModeForTesting => _cold;
+
+  @visibleForTesting
+  bool get longPollRunningForTesting => _longPollRunning;
+
+  Future<void> _coldFetch() async {
+    if (_disposed) return;
+    // The power source may have changed since the last look.
+    await _energyPolicy.refresh(force: true);
+    await pollNow();
+    _requestVisibleGroupCatchUp();
+    // Group files waiting for a provider look again at each check.
+    for (final session in _groupFileSessions.values.toList()) {
+      if ((session.download.state == GroupFileDownloadState.waiting ||
+              session.download.state == GroupFileDownloadState.failed) &&
+          !session.preferences.paused) {
+        unawaited(_startGroupFileDownload(session).catchError((Object _) {}));
+      }
+    }
+  }
+
+  /// When bytes of a transfer or a group file last moved.
+  DateTime? _transferMovedAt;
+  static const Duration _transferMovingWindow = Duration(seconds: 60);
+
+  void _noteTransferMoved() => _transferMovedAt = _now();
+
+  /// Whether a transfer is moving bytes now (not one stuck on an offline
+  /// sender).
+  bool get _transferMoving {
+    final at = _transferMovedAt;
+    return at != null && _now().difference(at) < _transferMovingWindow;
+  }
+
+  @visibleForTesting
+  bool coldInUseForTesting(String id) => _coldInUse(id);
+
+  @visibleForTesting
+  void noteTransferMovedForTesting() => _noteTransferMoved();
+
+  /// Whether the transport [id] carries something that must not be cut off
+  /// when its stay ends: a call (its media goes over Iroh or the LAN) or a
+  /// transfer that moved bytes lately. Carriers are never held.
+  bool _coldInUse(String id) {
+    final direct =
+        id == TransportKind.iroh.name || id == TransportKind.lan.name;
+    if (!direct) return false;
+    final inCall =
+        _voiceCallService?.active != null || _groupCallService?.active != null;
+    return inCall || _transferMoving;
+  }
+
+  /// Retry wakes since a message was last sent by the user: each waits
+  /// twice as long as the one before (a minute to half an hour).
+  int _coldRetryRound = 0;
+
+  /// The oldest a message may be to keep waking a cold device for it.
+  static const Duration _coldRetryAge = Duration(hours: 24);
+
+  /// When a cold device should wake to retry what still awaits an answer
+  /// (messages, receipts, group updates); null when nothing does.
+  DateTime? _coldRetryDue() {
+    if (!_hasWorkAwaitingAnswer()) return null;
+    final spacing = _cold.retryEvery * min(1 << min(_coldRetryRound, 5), 30);
+    return (_cold.lastWakeAt ?? _now()).add(spacing);
+  }
+
+  @visibleForTesting
+  int get coldRetryRoundForTesting => _coldRetryRound;
+
+  /// A retry wake: the retry pass runs, and sending wakes the routes it
+  /// needs; nothing else is held.
+  Future<void> _coldRetryWake() async {
+    if (_disposed) return;
+    _coldRetryRound++;
+    await _retryUnacknowledgedMessages();
+  }
+
+  bool _hasWorkAwaitingAnswer() {
+    final oldest = _now().subtract(_coldRetryAge);
+    // Receipts and membership updates matter only while their last try is
+    // recent, and never wake a device that checks only on request.
+    final automatic =
+        (_snapshot.identity?.connectivity.coldWakeMinutes ?? 15) > 0;
+    if (automatic &&
+        (_snapshot.pendingAckDeliveries.any(
+              (entry) => entry.lastAttemptedAt.isAfter(oldest),
+            ) ||
+            _snapshot.pendingGroupMembershipDeliveries.any(
+              (entry) => entry.lastAttemptedAt.isAfter(oldest),
+            ))) {
+      return true;
+    }
+    for (final conversation in _snapshot.conversations) {
+      for (final message in conversation.messages.reversed) {
+        if (message.createdAt.isBefore(oldest)) break;
+        if (message.outbound &&
+            message.route != MessageRoute.plainMatrix &&
+            (message.state.awaitsRecipientAck ||
+                message.recipientStates.values.any(
+                  (state) => state.awaitsRecipientAck,
+                ))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  void _coldChanged() {
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<void> _coldSyncing = Future<void>.value();
+
+  /// Brings cold mode in line with the setting, the power state and the
+  /// transports that exist (one pass at a time).
+  Future<void> syncColdMode() {
+    final next = _coldSyncing.catchError((Object _) {}).then((_) async {
+      if (_disposed) return;
+      final me = _snapshot.identity;
+      await _energyPolicy.refresh();
+      final wanted = me != null && conestActive && _energyPolicy.isCold;
+      final was = _cold.active;
+      _cold.setHandles(_coldHandles());
+      await _cold.configure(
+        active: wanted,
+        wakeMinutes: me?.connectivity.coldWakeMinutes ?? defaultColdWakeMinutes,
+      );
+      if (was != _cold.active) {
+        _reschedulePolling();
+        // One relay subscription while cold (also in the background), the
+        // usual ones otherwise.
+        _stopLongPoll();
+        if (_appInForeground || _cold.active) {
+          unawaited(_startLongPollIfEnabled());
+        }
+        // Contacts learn at once that this device is (no longer) cold.
+        for (final contact in _snapshot.contacts.where(
+          (entry) => entry.canSendOutbound && !entry.ownDevice,
+        )) {
+          unawaited(
+            _sendRouteUpdate(
+              contact,
+              requestReply: false,
+              reason: 'cold_mode',
+            ).catchError((Object error) {
+              appendDebugLog('Cold mode: route update failed: $error');
+              return false;
+            }),
+          );
+        }
+      }
+    });
+    _coldSyncing = next;
+    return next;
+  }
+
+  List<ColdHandle> _coldHandles() {
+    final me = _snapshot.identity;
+    if (me == null) return const [];
+    return [
+      if (me.connectivity.lanEnabled)
+        ColdHandle(
+          id: TransportKind.lan.name,
+          stop: () async {
+            await _stopPairingBeacon();
+            await _localRelayNode.stop();
+            await _lanDirectChannel?.stop();
+          },
+          start: () async {
+            await _startLanDirectChannel();
+            await _ensureLocalRelayRunning();
+            await _ensurePairingBeaconRunning();
+          },
+        ),
+      if (_transportRegistryFactory != null)
+        ColdHandle(
+          id: TransportKind.iroh.name,
+          stop: _stopNativeTransports,
+          start: _startNativeTransportRegistry,
+        ),
+      for (final kind in _carrierTransports.keys)
+        if (!_coldExemptKinds.contains(kind))
+          ColdHandle(
+            id: kind.name,
+            stop: () => _detachCarrier(kind),
+            start: () => _attachCarrier(kind),
+          ),
+    ];
+  }
+
+  /// Stops the Iroh adapter and its listeners (the adapter first, so it
+  /// cannot hand anything to a listener that is gone). The registry stays,
+  /// with what it learned about each route.
+  Future<void> _stopNativeTransports() async {
+    final registry = _transportRegistry;
+    final adapter = registry?.adapterFor(TransportKind.iroh);
+    if (registry != null && adapter != null) {
+      registry.unregister(TransportKind.iroh);
+      await adapter.stop();
+    }
+    for (final subscription in _transportInboundSubscriptions) {
+      await subscription.cancel();
+    }
+    _transportInboundSubscriptions.clear();
+    await _voiceCallDatagramSubscription?.cancel();
+    _voiceCallDatagramSubscription = null;
+  }
+
+  /// The cold-mode id of the transport a message arrived by, if it has one.
+  String? _coldIdForRoute(MessageRoute route) {
+    switch (route) {
+      case MessageRoute.lanDirect:
+      case MessageRoute.lanRelay:
+      case MessageRoute.lanLobby:
+      case MessageRoute.internetDirect:
+        return TransportKind.lan.name;
+      case MessageRoute.irohDirect:
+      case MessageRoute.irohRelay:
+        return TransportKind.iroh.name;
+      default:
+        for (final kind in TransportKind.values) {
+          if (MessageRoute.forCarrier(kind) == route) return kind.name;
+        }
+        return null;
+    }
+  }
+
+  /// Whether the Conest relay's live connection is up, so receipts and
+  /// replies can go through it without waking anything.
+  void _noteRelayFetched(String host) {
+    _relayFetchedAt.remove(host);
+    _relayFetchedAt[host] = _now();
+    while (_relayFetchedAt.length > 64) {
+      _relayFetchedAt.remove(_relayFetchedAt.keys.first);
+    }
+  }
+
+  final Set<String> _relayLiveHosts = {};
+  final LinkedHashMap<String, DateTime> _relayFetchedAt = LinkedHashMap();
+
+  /// Warm only while a subscription is open, or a poll succeeded lately,
+  /// on a relay [contact] also uses.
+  bool _relayWarmFor(ContactRecord contact) {
+    if (!_longPollRunning) return false;
+    final now = _now();
+    final mine = {
+      for (final relay in _snapshot.identity?.configuredRelays ?? const [])
+        relay.host,
+    };
+    for (final route in contact.routeHints) {
+      if (route.kind != PeerRouteKind.relay || !mine.contains(route.host)) {
+        continue;
+      }
+      if (_relayLiveHosts.contains(route.host)) return true;
+      final at = _relayFetchedAt[route.host];
+      if (at != null && now.difference(at) < const Duration(minutes: 2)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Envelope kinds that never wake a cold route while the relay is warm.
+  static const Set<String> _coldQuietKinds = {
+    'ack',
+    'contact_exchange',
+    'route_update',
+    'route_probe',
+    'ratchet_bundle',
+    'ratchet_hello',
+    'ratchet_bulk_key',
+  };
+
+  /// Wakes the cold transports sending [envelope] to [contact] may need.
+  /// What answers an incoming message uses the route it came by (and never
+  /// holds up the processing of what arrived); a receipt wakes nothing
+  /// while the relay is warm; this device's own sends wake every route the
+  /// contact has.
+  Future<void> _wakeColdRoutesFor(
+    ContactRecord contact,
+    RelayEnvelope envelope,
+  ) async {
+    if (!_cold.active) return;
+    final ingress = _ingressRoute;
+    // Receipts and upkeep go through the relay's live connection while it is
+    // there: they wake nothing.
+    if (_relayWarmFor(contact) && _coldQuietKinds.contains(envelope.kind)) {
+      return;
+    }
+    if (ingress != null) {
+      final id = _coldIdForRoute(ingress);
+      if (id != null) unawaited(_cold.wakeFor([id]));
+      return;
+    }
+    await _cold.wakeFor({
+      if (contact.lanRouteHints.isNotEmpty || contact.routeHints.isNotEmpty)
+        TransportKind.lan.name,
+      if (contact.irohEndpointId != null) TransportKind.iroh.name,
+      for (final kind in _carrierTransports.keys)
+        if (contact.carrierAddress(kind) != null) kind.name,
+    });
+    _cold.rearm();
+  }
+
+  /// What contacts told this device about their own cold mode: how often
+  /// (minutes, zero: only when asked), which of their routes stay awake, the
+  /// time of the update that said so, and when it arrived.
+  final Map<
+    String,
+    ({int minutes, Set<String> awake, DateTime sent, DateTime at})
+  >
+  _peerCold = {};
+
+  /// Until when direct routes to a cold contact are not tried again.
+  final Map<String, DateTime> _coldDirectSkipUntil = {};
+
+  @visibleForTesting
+  bool peerIsColdForTesting(String deviceId) => _peerIsCold(deviceId);
+
+  @visibleForTesting
+  bool coldDirectSkippedForTesting(String deviceId) =>
+      _skipDirectToColdPeer(deviceId);
+
+  bool _peerIsCold(String deviceId) {
+    final entry = _peerCold[deviceId];
+    if (entry == null) return false;
+    // Told long ago and not since: no longer assumed.
+    if (_now().difference(entry.at) > const Duration(days: 2)) {
+      _peerCold.remove(deviceId);
+      return false;
+    }
+    return true;
+  }
+
+  /// This device's own side of the field: the routes that stay awake.
+  List<String> _coldAwakeNames() => [
+    for (final id in _cold.handleIds)
+      if ((_snapshot.identity?.connectivity.coldTransportModes[id] ??
+              ColdTransportMode.cold) ==
+          ColdTransportMode.alwaysOn)
+        id,
+    for (final kind in _coldExemptKinds) kind.name,
+  ];
+
+  /// A route update said the contact is cold ([told] minutes) or not
+  /// (null). An update older than the last one applied is ignored.
+  void _notePeerCold(
+    String deviceId,
+    Object? told,
+    Object? awake,
+    DateTime sent,
+  ) {
+    final known = _peerCold[deviceId];
+    if (known != null && sent.isBefore(known.sent)) return;
+    final goneAt = _peerColdGone[deviceId];
+    if (goneAt != null && sent.isBefore(goneAt)) return;
+    if (told is int && told >= 0 && told <= 1440) {
+      if (_peerCold.length >= 512 && !_peerCold.containsKey(deviceId)) {
+        _peerCold.remove(_peerCold.keys.first);
+      }
+      _peerColdGone.remove(deviceId);
+      _peerCold[deviceId] = (
+        minutes: told,
+        awake: {
+          if (awake is List)
+            for (final name in awake.take(16))
+              if (name is String && name.length <= 24) name,
+        },
+        sent: sent,
+        at: _now(),
+      );
+    } else {
+      _peerCold.remove(deviceId);
+      _coldDirectSkipUntil.remove(deviceId);
+      // Remembered for the ordering check above.
+      {
+        _peerColdGone.remove(deviceId);
+        _peerColdGone[deviceId] = sent;
+        while (_peerColdGone.length > 512) {
+          _peerColdGone.remove(_peerColdGone.keys.first);
+        }
+      }
+    }
+  }
+
+  final LinkedHashMap<String, DateTime> _peerColdGone = LinkedHashMap();
+
+  /// Transports that reach a contact only while both are awake.
+  static const Set<TransportKind> _coldDirectKinds = {
+    TransportKind.iroh,
+    TransportKind.lan,
+    TransportKind.localSend,
+    TransportKind.bitchat,
+    TransportKind.tor,
+    TransportKind.optical,
+  };
+
+  /// The direct kinds to leave out for the cold contact [deviceId]: not the
+  /// ones it said stay awake.
+  Set<TransportKind> _coldDirectKindsFor(String deviceId) {
+    final awake = _peerCold[deviceId]?.awake ?? const <String>{};
+    return {
+      for (final kind in _coldDirectKinds)
+        if (!awake.contains(kind.name)) kind,
+    };
+  }
+
+  /// Whether direct routes to [deviceId] are left out for now: it is cold
+  /// and a try a moment ago found it asleep.
+  bool _skipDirectToColdPeer(String deviceId) {
+    if (!_peerIsCold(deviceId)) return false;
+    final until = _coldDirectSkipUntil[deviceId];
+    return until != null && _now().isBefore(until);
+  }
+
+  /// A cold contact took a message by a storing route after the direct
+  /// ones were tried: leave the direct ones alone for as long as it sleeps
+  /// (a stay already running is not extended by later messages).
+  void _noteColdPeerAsleep(String deviceId) {
+    if (_skipDirectToColdPeer(deviceId)) return;
+    final minutes = _peerCold[deviceId]?.minutes ?? 0;
+    final wait = Duration(minutes: minutes == 0 ? 60 : minutes.clamp(1, 60));
+    if (_coldDirectSkipUntil.length >= 512) {
+      _coldDirectSkipUntil.remove(_coldDirectSkipUntil.keys.first);
+    }
+    _coldDirectSkipUntil[deviceId] = _now().add(wait);
+  }
+
   final EnergyPolicy? _injectedEnergyPolicy;
 
   /// What this device can afford: how many routes a message goes on.
@@ -29937,6 +30617,30 @@ class MessengerController extends ChangeNotifier {
     TransportKind.nostr,
     TransportKind.deltaChat,
   };
+
+  /// When a contact's Bluetooth mesh frames were last heard, by device id
+  /// (bounded): the contact is nearby.
+  final Map<String, DateTime> _meshHeardAt = {};
+  static const Duration _meshNearbyFor = Duration(minutes: 5);
+
+  void _noteMeshFrameFrom(String address) {
+    for (final contact in _snapshot.contacts) {
+      if (contact.carrierAddress(TransportKind.bitchat) == address) {
+        _noteMeshHeard(contact.deviceId);
+      }
+    }
+  }
+
+  void _noteMeshHeard(String deviceId) {
+    _meshHeardAt.remove(deviceId);
+    _meshHeardAt[deviceId] = _now();
+    while (_meshHeardAt.length > 512) {
+      _meshHeardAt.remove(_meshHeardAt.keys.first);
+    }
+  }
+
+  @visibleForTesting
+  void noteMeshHeardForTesting(String deviceId) => _noteMeshHeard(deviceId);
 
   /// Radios with little airtime: a copy goes by radio only when nothing
   /// else has reached the contact lately, and only a small one.
@@ -30010,6 +30714,7 @@ class MessengerController extends ChangeNotifier {
     final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
     final state = _copyStates.remove(key) ?? _CopyState();
     _copyStates[key] = state;
+
     while (_copyStates.length > _maxCopyStates) {
       _copyStates.remove(_copyStates.keys.first);
     }
@@ -30033,9 +30738,18 @@ class MessengerController extends ChangeNotifier {
           !state.radioUsed &&
           (lastTwoWay == null ||
               _now().difference(lastTwoWay) > const Duration(minutes: 5));
+      // A copy over the Bluetooth mesh only where the contact can be: heard
+      // on it lately, or no other route has worked with them lately.
+      final meshHeard = _meshHeardAt[contact.deviceId];
+      final meshAllowed =
+          (meshHeard != null &&
+              _now().difference(meshHeard) < _meshNearbyFor) ||
+          lastTwoWay == null ||
+          _now().difference(lastTwoWay) > _meshNearbyFor;
       final allowed = <TransportKind>{
         for (final kind in TransportKind.values)
           if (!usedKinds.contains(kind) &&
+              (meshAllowed || kind != TransportKind.bitchat) &&
               !(state.storedOnCarrier && _storingCarriers.contains(kind)) &&
               (radiosAllowed || !_radioKinds.contains(kind)) &&
               // A spare copy by radio only while most of its airtime is free.
@@ -30685,6 +31399,23 @@ class MessengerController extends ChangeNotifier {
     if (_receiptCameFor(contact.deviceId, envelope)) {
       throw const TransportSendCancelled('Its receipt already came.');
     }
+    // Cold mode: the routes this needs come up first, and stay up a while
+    // for the receipt.
+    await _wakeColdRoutesFor(contact, envelope);
+    // A cold contact that was found asleep is left to its storing routes
+    // for a while, when it has any.
+    if (_skipDirectToColdPeer(contact.deviceId) && !ignoreRouteBackoff) {
+      final direct = _coldDirectKindsFor(contact.deviceId);
+      allowedUnifiedKinds = {
+        for (final kind in allowedUnifiedKinds ?? TransportKind.values)
+          if (!direct.contains(kind)) kind,
+      };
+      skipLegacyKinds = {
+        ...skipLegacyKinds,
+        if (direct.contains(TransportKind.lan)) PeerRouteKind.lan,
+        if (direct.contains(TransportKind.lan)) PeerRouteKind.directInternet,
+      };
+    }
     final effective = _effectiveTransports(contact);
     final policies = _contentPolicies(
       contact,
@@ -30723,7 +31454,7 @@ class MessengerController extends ChangeNotifier {
     // Routes that took messages no receipt confirmed (a one-way link: a
     // firewall dropping what arrives, say) go last, after every other.
     // Routes this network blocks (as far as its history tells) go last too.
-    final blockedHere = _networkHistory.blockedHere();
+    final blockedHere = _networkHistory.blockedHere(now: _now());
     final suspects = {
       ..._suspectRoutes(contact.deviceId),
       for (final route in candidateRoutes)
@@ -30975,6 +31706,12 @@ class MessengerController extends ChangeNotifier {
         (envelope.kind == 'direct_message' ||
             envelope.kind == 'group_message')) {
       _noteHandedOff(contact.deviceId, envelope.messageId, result);
+    }
+    // A cold contact took it by a storing route: it was not awake for the
+    // direct ones.
+    if (_peerIsCold(contact.deviceId) &&
+        result.path == TransportPathKind.storeForward) {
+      _noteColdPeerAsleep(contact.deviceId);
     }
     final deliveredEndpoint = result.endpoint;
     if (deliveredEndpoint?.kind == PeerRouteKind.lan) {
@@ -32173,9 +32910,16 @@ class MessengerController extends ChangeNotifier {
     return _canUseIrohForContact(contact);
   }
 
-  bool _canUseIrohForContact(ContactRecord contact) {
+  /// [asleepOk]: Iroh stopped by cold mode counts (a call's signal wakes it
+  /// first); file and chunk decisions leave it out until it has started.
+  bool _canUseIrohForContact(ContactRecord contact, {bool asleepOk = false}) {
     final iroh = _transportRegistry?.adapterFor(TransportKind.iroh);
-    if (iroh == null || !contact.hasPinnedIrohIdentity) return false;
+    // Asleep in cold mode is not absent: it starts when something needs it.
+    if ((iroh == null &&
+            !(asleepOk && _cold.isCold(TransportKind.iroh.name))) ||
+        !contact.hasPinnedIrohIdentity) {
+      return false;
+    }
     final policy = _effectiveTransportPolicies(contact)[TransportKind.iroh];
     return policy == TransportPolicy.automatic ||
         policy == TransportPolicy.preferred;
@@ -35170,6 +35914,11 @@ class MessengerController extends ChangeNotifier {
     Duration(minutes: 5),
   ];
 
+  /// How long the fresh hello after a late answer waits, so it does not
+  /// overtake the answer on a faster route.
+  @visibleForTesting
+  Duration freshHelloDelay = const Duration(seconds: 3);
+
   /// Delivers a session-setup envelope over every allowed route, resting
   /// ones included. With [retry], a delivery that failed on all of them is
   /// tried again a few times: an answer or hello nobody retries leaves the
@@ -35209,12 +35958,20 @@ class MessengerController extends ChangeNotifier {
         _ratchetControlRetries.remove(retryKey);
         // An answer that got through late: a hello sent before it reached
         // the peer ahead of it and was dropped there (no session yet), so a
-        // fresh one follows now.
+        // fresh one follows. "Delivered" may only mean a relay took the
+        // answer while the hello can use a faster route, so it waits a
+        // moment first (and goes out over every route as hellos do).
         final helloKey = retryKey.replaceFirst('|bundle|answer', '|hello');
-        if (helloKey != retryKey &&
-            !_disposed &&
-            _ratchetControlGeneration.containsKey(helloKey)) {
-          unawaited(_sendRatchetHello(peer));
+        if (helloKey != retryKey && !_disposed) {
+          final freshKey = '$helloKey|fresh';
+          _ratchetControlRetries.remove(freshKey)?.cancel();
+          _ratchetControlRetries[freshKey] = Timer(freshHelloDelay, () {
+            _ratchetControlRetries.remove(freshKey);
+            if (_disposed) return;
+            final current = _ratchetPeer(peer.deviceId);
+            if (current == null || !current.canSendOutbound) return;
+            unawaited(_sendRatchetHello(current));
+          });
         }
       }
     } catch (error) {
@@ -35301,8 +36058,8 @@ class MessengerController extends ChangeNotifier {
   /// Sends a fresh session hello to [peer] (a new envelope each time, so it
   /// never counts as a copy of one the peer already handled or dropped).
   Future<void> _sendRatchetHello(ContactRecord peer) async {
-    final me = _requireIdentity();
     try {
+      final me = _requireIdentity();
       final hello = await _crypto.encryptPayloadEnvelope(
         kind: 'ratchet_hello',
         messageId: _randomId('rhello'),
@@ -41705,6 +42462,9 @@ class MessengerController extends ChangeNotifier {
               .where((message) => message.id == messageId && message.outbound)
               .firstOrNull
         : null;
+    final readKey = '$groupId|$recipientDeviceId';
+    if (readThrough != null) _noteReadThrough(readKey, readThrough.createdAt);
+    final delivered = state;
     final updatedMessages = conversations[conversationIndex].messages.map((
       message,
     ) {
@@ -41714,12 +42474,24 @@ class MessengerController extends ChangeNotifier {
               message.createdAt.isAfter(readThrough.createdAt))) {
         return message;
       }
+      // A delivery receipt after a read receipt for a later message.
+      final state =
+          delivered == DeliveryState.delivered &&
+              _readThroughCovers(readKey, message.createdAt)
+          ? DeliveryState.read
+          : delivered;
       final states = Map<String, DeliveryState>.from(message.recipientStates);
       final current = states[recipientDeviceId];
       if (current == null) {
         return message;
       }
       if (current == DeliveryState.read) {
+        return message;
+      }
+      // Read through: only what this member already confirmed (an earlier
+      // message that never reached them stays unconfirmed and keeps
+      // being retried).
+      if (message.id != messageId && current != DeliveryState.delivered) {
         return message;
       }
       if (current == DeliveryState.delivered &&
@@ -41786,6 +42558,49 @@ class MessengerController extends ChangeNotifier {
     return DeliveryState.pending;
   }
 
+  /// How far each chat's contact (and each group member, by "group|member")
+  /// has read what this device sent, as the newest message's time. A
+  /// delivery receipt that arrives after a read receipt for a later
+  /// message (they overtook each other) still ends as read.
+  final LinkedHashMap<String, DateTime> _readThroughAt = LinkedHashMap();
+
+  /// When (their clock) the read receipt that set each watermark was made.
+  final LinkedHashMap<String, DateTime> _readThroughSentAt = LinkedHashMap();
+
+  void _noteReadThrough(String key, DateTime at) {
+    final known = _readThroughAt.remove(key);
+    _readThroughAt[key] = known != null && known.isAfter(at) ? known : at;
+    final sent = _readReceiptSentAt;
+    if (sent != null) {
+      final old = _readThroughSentAt.remove(key);
+      _readThroughSentAt[key] = old != null && old.isAfter(sent) ? old : sent;
+      while (_readThroughSentAt.length > 1024) {
+        _readThroughSentAt.remove(_readThroughSentAt.keys.first);
+      }
+    }
+    while (_readThroughAt.length > 1024) {
+      _readThroughAt.remove(_readThroughAt.keys.first);
+    }
+  }
+
+  /// Time of the read receipt being handled (their clock).
+  DateTime? _readReceiptSentAt;
+
+  /// Whether a delivery receipt made at [receiptAt] was overtaken by a read
+  /// receipt for a later message: the message is older than the watermark
+  /// and was acknowledged before that read was made. A message that
+  /// arrived after the read stays delivered.
+  bool _readThroughCovers(String key, DateTime createdAt) {
+    final receiptAt = _readReceiptSentAt;
+    final at = _readThroughAt[key];
+    final readSentAt = _readThroughSentAt[key];
+    return at != null &&
+        readSentAt != null &&
+        receiptAt != null &&
+        !createdAt.isAfter(at) &&
+        !receiptAt.isAfter(readSentAt);
+  }
+
   void _markMessagesReadThroughMessage(String peerDeviceId, String messageId) {
     if (messageId.isEmpty) {
       return;
@@ -41810,6 +42625,7 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final cutoff = targetMessage.createdAt;
+    _noteReadThrough(peerDeviceId, cutoff);
     final updatedMessages = conversations[conversationIndex].messages.map((
       message,
     ) {
@@ -41819,6 +42635,12 @@ class MessengerController extends ChangeNotifier {
       if (message.state == DeliveryState.canceled ||
           message.state == DeliveryState.failed ||
           message.state == DeliveryState.read) {
+        return message;
+      }
+      // Reading one message says nothing about the ones before it that
+      // never arrived: only those the recipient already confirmed turn
+      // read. The others keep their state and keep being retried.
+      if (message.id != messageId && message.state != DeliveryState.delivered) {
         return message;
       }
       _clearOutboundAttempt(peerDeviceId, message.id);
@@ -42329,6 +43151,19 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _cold.dispose();
+    _peerCold.clear();
+    _peerColdGone.clear();
+    _coldDirectSkipUntil.clear();
+    _readThroughAt.clear();
+    _readThroughSentAt.clear();
+    _storedOn.clear();
+    _relayLiveHosts.clear();
+    _relayFetchedAt.clear();
+    _meshHeardAt.clear();
+    _transferMovedAt = null;
+    _coldRetryRound = 0;
+
     for (final timer in _blobLeaveTimers.values) {
       timer.cancel();
     }

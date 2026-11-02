@@ -43,6 +43,8 @@ import 'package:conest/src/ui/email_carrier_panel.dart';
 import 'package:conest/src/ui/group_call_screen.dart';
 import 'package:conest/src/ui/nostr_carrier_panel.dart';
 import 'package:conest/src/account/account_model.dart';
+import 'package:conest/src/cold_mode.dart';
+import 'package:conest/src/ui/cold_mode_ui.dart';
 import 'package:conest/src/energy_policy.dart';
 import 'package:conest/src/ui/devices_panel.dart';
 import 'package:conest/src/connection_map.dart';
@@ -1603,6 +1605,9 @@ class _InProcessIrohNetwork {
   /// arrives while the other way works).
   final droppedPairs = <(String, String)>{};
 
+  /// Every envelope send tried over this network, delivered or not.
+  final sendAttempts = <String, int>{};
+
   Future<TransportRegistry?> registry(IdentityRecord identity) async {
     final bridge = _InProcessIrohBridge(this, identity.irohEndpointId!);
     bridges[bridge.endpointId] = bridge;
@@ -1687,6 +1692,8 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
     required bool allowRelay,
     List<String> directAddresses = const [],
   }) async {
+    network.sendAttempts[endpointId] =
+        (network.sendAttempts[endpointId] ?? 0) + 1;
     if (!network.bridges.containsKey(endpointId)) {
       throw StateError('Sender offline');
     }
@@ -1746,6 +1753,88 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
 
   @override
   Future<void> close() => _inbound.close();
+}
+
+class _MutablePower implements PowerStateSource {
+  _MutablePower(this.state);
+  PowerState state;
+  @override
+  Future<PowerState> read() async => state;
+}
+
+/// A mailbox carrier for tests: takes every envelope, delivers none.
+class _KeepingAdapter implements TransportAdapter {
+  _KeepingAdapter({
+    this.kind = TransportKind.xmpp,
+    this.path = TransportPathKind.storeForward,
+  });
+
+  final stored = <String>[];
+
+  /// False: sends fail (the account is down).
+  bool accepting = true;
+
+  @override
+  final TransportKind kind;
+  final TransportPathKind path;
+
+  @override
+  TransportCapabilities get capabilities => const TransportCapabilities(
+    requiresPeerOnline: false,
+    supportsStoreForward: true,
+    duplex: false,
+    requiresUserAction: false,
+    supportsAttachmentStreaming: false,
+    reportsPath: false,
+  );
+
+  @override
+  Future<void> start() async {}
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Stream<RouteCandidate> get pathChanges => const Stream.empty();
+
+  @override
+  Stream<TransportInboundEnvelope> get inboundEnvelopes => const Stream.empty();
+
+  @override
+  Future<List<RouteCandidate>> discoverRoutes(TransportPeer peer) async => [
+    RouteCandidate(
+      transport: kind,
+      path: path,
+      routeId: '${kind.name}:${peer.deviceId}',
+      label: 'Keeper',
+      trust: TransportTrustState.verifiedContact,
+    ),
+  ];
+
+  @override
+  Future<DeliveryReceipt> sendEnvelope({
+    required TransportPeer peer,
+    required RouteCandidate route,
+    required TransportEnvelope envelope,
+  }) async {
+    if (!accepting) throw StateError('$kind is down');
+    stored.add(envelope.id);
+    return DeliveryReceipt(
+      state: DeliveryReceiptState.acceptedByTransport,
+      route: route,
+      at: DateTime.now().toUtc(),
+    );
+  }
+
+  @override
+  Future<DeliveryReceipt> sendAttachmentRange({
+    required TransportPeer peer,
+    required RouteCandidate route,
+    required AttachmentRange range,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<void> cancel(String operationId) async {}
 }
 
 Future<void> _waitForIroh(
@@ -12782,6 +12871,211 @@ void main() {
         }
       },
     );
+
+    test('a read receipt for a later message does not mark earlier ones that '
+        'never arrived as read, and they still arrive', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final bobId = bob.identity!.deviceId;
+      final aliceId = alice.identity!.deviceId;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'one');
+      await alice.sendMessage(contact: alice.contacts.single, body: 'two');
+      // The relay lost them (stored, never fetched).
+      for (final queue in relayClient._queues.values) {
+        queue.removeWhere((e) => e.kind == 'direct_message');
+      }
+      await alice.sendMessage(contact: alice.contacts.single, body: 'three');
+      await bob.pollNow();
+      await bob.markConversationReadThroughMessage(
+        aliceId,
+        bob.messagesFor(aliceId).singleWhere((m) => m.body == 'three'),
+      );
+      await alice.pollNow();
+      DeliveryState stateOf(String body) => alice
+          .messagesFor(bobId)
+          .singleWhere((m) => m.outbound && m.body == body)
+          .state;
+      expect(stateOf('three'), DeliveryState.read);
+      expect(stateOf('one').awaitsRecipientAck, isTrue);
+      expect(stateOf('two').awaitsRecipientAck, isTrue);
+      // They keep being retried and arrive.
+      await alice.retryUnacknowledgedMessagesNow();
+      await bob.pollNow();
+      await alice.pollNow();
+      expect(
+        bob.messagesFor(aliceId).where((m) => !m.outbound).map((m) => m.body),
+        containsAll(['one', 'two', 'three']),
+      );
+      // They arrived after the third was read: delivered, not read.
+      expect(stateOf('one'), DeliveryState.delivered);
+      expect(stateOf('two'), DeliveryState.delivered);
+    });
+
+    test('a read receipt that overtakes earlier delivery receipts still '
+        'ends as read', () async {
+      var hold = false;
+      final held = <RelayEnvelope>[];
+      final relayClient = _FakeRelayClient(
+        shouldBlackholeStore: (_, _, _, _, envelope) {
+          if (hold && envelope.kind == 'ack') {
+            held.add(envelope);
+            return true;
+          }
+          return false;
+        },
+      );
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final aliceId = alice.identity!.deviceId;
+      final bobId = bob.identity!.deviceId;
+      hold = true;
+      for (final body in ['one', 'two', 'three']) {
+        await alice.sendMessage(contact: alice.contacts.single, body: body);
+      }
+      await bob.pollNow();
+      await bob.markConversationReadThroughMessage(
+        aliceId,
+        bob.messagesFor(aliceId).singleWhere((m) => m.body == 'three'),
+      );
+      hold = false;
+      expect(held.length, greaterThanOrEqualTo(4));
+      // The read receipt (made last) gets there first.
+      await alice.processEnvelopesForTesting([
+        held.last,
+        ...held.take(held.length - 1),
+      ], route: MessageRoute.conestRelay);
+      for (final message in alice.messagesFor(bobId).where((m) => m.outbound)) {
+        expect(message.state, DeliveryState.read, reason: message.body);
+      }
+    });
+
+    test('in a group, a read receipt that overtakes earlier delivery '
+        'receipts still ends as read', () async {
+      var hold = false;
+      final held = <RelayEnvelope>[];
+      final relayClient = _FakeRelayClient(
+        shouldBlackholeStore: (_, _, _, _, envelope) {
+          if (hold && envelope.kind == 'ack') {
+            held.add(envelope);
+            return true;
+          }
+          return false;
+        },
+      );
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Overtaken',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      final bobId = bob.identity!.deviceId;
+      hold = true;
+      for (final body in ['one', 'two', 'three']) {
+        await alice.sendGroupMessage(groupId: group.groupId, body: body);
+      }
+      await bob.pollNow();
+      await bob.markGroupReadThroughMessage(
+        group.groupId,
+        bob
+            .messagesForGroup(group.groupId)
+            .singleWhere((m) => m.body == 'three'),
+      );
+      hold = false;
+      // Delivery receipts may travel batched (batchedAcksV1): at least one
+      // of them, then the read receipt, which goes last.
+      expect(held.length, greaterThanOrEqualTo(2));
+      await alice.processEnvelopesForTesting([
+        held.last,
+        ...held.take(held.length - 1),
+      ], route: MessageRoute.conestRelay);
+      for (final message
+          in alice.messagesForGroup(group.groupId).where((m) => m.outbound)) {
+        expect(
+          message.recipientStates[bobId],
+          DeliveryState.read,
+          reason: message.body,
+        );
+      }
+    });
+
+    test('in a group, a member reading a later message does not mark ones '
+        'that never reached them as read', () async {
+      final relayClient = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relayClient,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relayClient,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      final group = await alice.createGroup(
+        title: 'Lost ones',
+        members: alice.contacts,
+      );
+      await bob.pollNow();
+      final bobId = bob.identity!.deviceId;
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'one');
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'two');
+      for (final queue in relayClient._queues.values) {
+        queue.removeWhere((e) => e.kind == 'group_message');
+      }
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'three');
+      await bob.pollNow();
+      await bob.markGroupReadThroughMessage(
+        group.groupId,
+        bob
+            .messagesForGroup(group.groupId)
+            .singleWhere((m) => m.body == 'three'),
+      );
+      await alice.pollNow();
+      DeliveryState? stateOf(String body) => alice
+          .messagesForGroup(group.groupId)
+          .singleWhere((m) => m.outbound && m.body == body)
+          .recipientStates[bobId];
+      expect(stateOf('three'), DeliveryState.read);
+      expect(stateOf('one')!.awaitsRecipientAck, isTrue);
+      expect(stateOf('two')!.awaitsRecipientAck, isTrue);
+      await alice.retryUnacknowledgedMessagesNow();
+      await bob.pollNow();
+      await alice.pollNow();
+      expect(
+        bob.messagesForGroup(group.groupId).map((m) => m.body),
+        containsAll(['one', 'two', 'three']),
+      );
+    });
   });
 
   testWidgets('Courier navigation keeps private and lobby drafts separate', (
@@ -21053,6 +21347,819 @@ void main() {
             );
         return families(traces).length >= 2;
       }, reason: 'the group receipt did not name two routes');
+    });
+
+    group('Bluetooth mesh copies', () {
+      Future<
+        (
+          MessengerController,
+          MessengerController,
+          _KeepingAdapter,
+          _KeepingAdapter,
+        )
+      >
+      meshPair(DateTime Function() now) async {
+        final network = _InProcessIrohNetwork();
+        final relay = _FakeRelayClient();
+        final mesh = _KeepingAdapter(
+          kind: TransportKind.bitchat,
+          path: TransportPathKind.direct,
+        );
+        final mailbox = _KeepingAdapter();
+        Future<TransportRegistry?> withMesh(IdentityRecord identity) async {
+          final base = (await network.registry(identity))!;
+          return TransportRegistry([...base.adapters, mesh, mailbox]);
+        }
+
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          transportRegistryFactory: withMesh,
+          nowProvider: now,
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          transportRegistryFactory: network.registry,
+          nowProvider: now,
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobId = bob.identity!.deviceId;
+        // A first exchange: Bob answers, so a route works with him lately.
+        await alice.sendMessage(contact: alice.contacts.single, body: 'warm');
+        await _waitForIroh(
+          () => alice
+              .messagesFor(bobId)
+              .any((m) => m.body == 'warm' && !m.state.awaitsRecipientAck),
+          reason: 'the first message was never confirmed',
+        );
+        return (alice, bob, mesh, mailbox);
+      }
+
+      Future<String> sendAndWaitForCopies(
+        MessengerController alice,
+        String bobId,
+        String body,
+        _KeepingAdapter mailbox,
+      ) async {
+        await alice.sendMessage(contact: alice.contacts.single, body: body);
+        final id = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.body == body)
+            .id;
+        // The mailbox copy shows that the copies went out.
+        await _waitForIroh(
+          () => mailbox.stored.contains(id),
+          reason: 'no copy went out at all',
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        return id;
+      }
+
+      test('a contact not heard on the mesh gets no mesh copy while another '
+          'route works', () async {
+        final now = DateTime.now().toUtc();
+        final (alice, bob, mesh, mailbox) = await meshPair(() => now);
+        final id = await sendAndWaitForCopies(
+          alice,
+          bob.identity!.deviceId,
+          'far away',
+          mailbox,
+        );
+        expect(mesh.stored, isNot(contains(id)));
+      });
+
+      test('a contact heard on the mesh lately gets a mesh copy', () async {
+        final now = DateTime.now().toUtc();
+        final (alice, bob, mesh, mailbox) = await meshPair(() => now);
+        alice.noteMeshHeardForTesting(bob.identity!.deviceId);
+        final id = await sendAndWaitForCopies(
+          alice,
+          bob.identity!.deviceId,
+          'next door',
+          mailbox,
+        );
+        expect(mesh.stored, contains(id));
+      });
+
+      test('when no other route has worked lately the mesh gets a copy '
+          'too', () async {
+        var now = DateTime.now().toUtc();
+        final (alice, bob, mesh, mailbox) = await meshPair(() => now);
+        now = now.add(const Duration(minutes: 10));
+        final id = await sendAndWaitForCopies(
+          alice,
+          bob.identity!.deviceId,
+          'silence',
+          mailbox,
+        );
+        expect(mesh.stored, contains(id));
+      });
+    });
+
+    // A relay that stores a message has not delivered it. The message keeps
+    // going to the other routes, in every energy mode.
+    // Iroh plus a mailbox carrier that takes every message and keeps it
+    // from the contact (a server that stores, the contact never fetches).
+    Future<
+      (
+        MessengerController,
+        MessengerController,
+        _InProcessIrohNetwork,
+        _KeepingAdapter,
+        _KeepingAdapter,
+        _KeepingAdapter,
+      )
+    >
+    storeOnlyPair(EnergyMode mode, DateTime Function() now) async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      // The LAN and the relay are not ways to Bob here.
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.kind == 'direct_message';
+      final keeper = _KeepingAdapter();
+      // A second route, behind the first, that takes the message and
+      // loses it (a firewall dropping what arrives).
+      final swallower = _KeepingAdapter(
+        kind: TransportKind.tor,
+        path: TransportPathKind.manual,
+      );
+      final swallower2 = _KeepingAdapter(
+        kind: TransportKind.telegram,
+        path: TransportPathKind.manual,
+      );
+      Future<TransportRegistry?> withKeeper(IdentityRecord identity) async {
+        final base = (await network.registry(identity))!;
+        return TransportRegistry([
+          ...base.adapters,
+          keeper,
+          swallower,
+          swallower2,
+        ]);
+      }
+
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: withKeeper,
+        nowProvider: now,
+        energyPolicy: EnergyPolicy.fixed(
+          mode,
+          escalateInterval: const Duration(milliseconds: 100),
+        ),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      return (alice, bob, network, keeper, swallower, swallower2);
+    }
+
+    for (final (label, mode) in [
+      ('battery saver', EnergyMode.saver),
+      ('on battery', EnergyMode.limited),
+      ('on mains power', EnergyMode.unconstrained),
+    ]) {
+      test('a message stored on a relay still goes on to a route that was '
+          'failing ($label)', () async {
+        var now = DateTime.now().toUtc();
+        final (alice, bob, network, _, _, _) = await storeOnlyPair(
+          mode,
+          () => now,
+        );
+        final aliceId = alice.identity!.deviceId;
+        final bobId = bob.identity!.deviceId;
+        // Straight to Bob fails for now; the relay takes the message and
+        // keeps it from him.
+        network.blockedPairs.add((
+          alice.identity!.irohEndpointId!,
+          bob.identity!.irohEndpointId!,
+        ));
+        await alice.sendMessage(contact: alice.contacts.single, body: 'kept');
+        ChatMessage sent() =>
+            alice.messagesFor(bobId).singleWhere((m) => m.body == 'kept');
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await bob.pollNow();
+        expect(
+          bob.messagesFor(aliceId).where((m) => m.body == 'kept'),
+          isEmpty,
+        );
+        // Stored on a relay is not delivered: no tick.
+        expect(sent().state.awaitsRecipientAck, isTrue);
+
+        // The direct route works again. The next try must find it, though
+        // it just failed and the relay would take the message again.
+        network.blockedPairs.clear();
+        // Each pass goes on to a route not tried yet.
+        for (var pass = 0; pass < 3; pass++) {
+          now = now.add(const Duration(seconds: 20));
+          await alice.retryUnacknowledgedMessagesNow();
+          await bob.pollNow();
+          if (bob.messagesFor(aliceId).any((m) => m.body == 'kept')) break;
+        }
+        await _waitForIroh(() {
+          unawaited(bob.pollNow());
+          return bob.messagesFor(aliceId).any((m) => m.body == 'kept');
+        }, reason: 'the message stayed on the relay that held it');
+        await _waitForIroh(
+          () => {
+            DeliveryState.delivered,
+            DeliveryState.read,
+          }.contains(sent().state),
+          reason: 'no receipt came back',
+        );
+      });
+    }
+
+    test('a group message stored on a relay still goes on to a route that '
+        'was failing', () async {
+      var now = DateTime.now().toUtc();
+      final (alice, bob, network, _, _, _) = await storeOnlyPair(
+        EnergyMode.saver,
+        () => now,
+      );
+      final group = await alice.createGroup(
+        title: 'Kept',
+        members: alice.contacts,
+      );
+      await _waitForIroh(
+        () => bob.groups.any((g) => g.groupId == group.groupId),
+        reason: 'Bob did not join',
+      );
+      network.blockedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'kept');
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(
+        bob.messagesForGroup(group.groupId).where((m) => m.body == 'kept'),
+        isEmpty,
+      );
+      network.blockedPairs.clear();
+      for (var pass = 0; pass < 3; pass++) {
+        now = now.add(const Duration(seconds: 20));
+        await alice.retryUnacknowledgedMessagesNow();
+        await bob.pollNow();
+        if (bob.messagesForGroup(group.groupId).any((m) => m.body == 'kept')) {
+          break;
+        }
+      }
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob.messagesForGroup(group.groupId).any((m) => m.body == 'kept');
+      }, reason: 'the group message stayed on the relay that held it');
+    });
+
+    test('a stale store is stored again on its own, not every store at each '
+        'pass', () async {
+      var now = DateTime.now().toUtc();
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.kind == 'direct_message';
+      final first = _KeepingAdapter();
+      final second = _KeepingAdapter(kind: TransportKind.telegram);
+      Future<TransportRegistry?> withStores(IdentityRecord identity) async {
+        final base = (await network.registry(identity))!;
+        return TransportRegistry([...base.adapters, first, second]);
+      }
+
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: withStores,
+        nowProvider: () => now,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.saver),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      // Bob cannot be reached directly, only through the two stores.
+      network.blockedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      second.accepting = false;
+      await alice.sendMessage(contact: alice.contacts.single, body: 'stores');
+      final id = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.body == 'stores')
+          .id;
+      int stores(_KeepingAdapter a) => a.stored.where((e) => e == id).length;
+      Future<void> pass(Duration after) async {
+        now = now.add(after);
+        await alice.retryUnacknowledgedMessagesNow();
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+
+      await pass(const Duration(minutes: 1));
+      expect(stores(first), 1);
+      expect(stores(second), 0);
+      // The second store comes back 20 minutes on and takes it.
+      second.accepting = true;
+      await pass(const Duration(minutes: 20));
+      expect(stores(first), 1);
+      expect(stores(second), 1);
+      // 20 minutes later the first copy is stale, the second is not.
+      await pass(const Duration(minutes: 20));
+      expect(stores(first), 2);
+      expect(stores(second), 1);
+      await pass(const Duration(minutes: 1));
+      expect(stores(first), 2, reason: 'stored again too soon');
+      expect(stores(second), 1, reason: 'a fresh store was stored again');
+    });
+
+    for (final (label, mode) in [
+      ('on battery', EnergyMode.limited),
+      ('on mains power', EnergyMode.unconstrained),
+    ]) {
+      test('every route took the message and none delivered it: the routes '
+          'are tried over later ($label)', () async {
+        var now = DateTime.now().toUtc();
+        final (alice, bob, network, keeper, swallower, swallower2) =
+            await storeOnlyPair(mode, () => now);
+        final bobId = bob.identity!.deviceId;
+        // Straight to Bob nothing works; the mailbox keeps the message and
+        // the other route takes it and loses it.
+        network.blockedPairs.add((
+          alice.identity!.irohEndpointId!,
+          bob.identity!.irohEndpointId!,
+        ));
+        await alice.sendMessage(
+          contact: alice.contacts.single,
+          body: 'swallowed',
+        );
+        final id = alice
+            .messagesFor(bobId)
+            .singleWhere((m) => m.body == 'swallowed')
+            .id;
+        int triesOnLosingRoute() => [
+          swallower.stored.where((e) => e == id).length,
+          swallower2.stored.where((e) => e == id).length,
+        ].reduce(min);
+        await _waitForIroh(
+          () => triesOnLosingRoute() >= 1,
+          reason: 'the first pass never used the second route',
+        );
+        // Passes follow with backoff; after a while the routes that only
+        // took it are tried over (the mailbox that holds it is not).
+        final keptBefore = keeper.stored.where((e) => e == id).length;
+        for (var pass = 0; pass < 4; pass++) {
+          now = now.add(const Duration(minutes: 5));
+          await alice.retryUnacknowledgedMessagesNow();
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        }
+        expect(
+          triesOnLosingRoute(),
+          greaterThanOrEqualTo(2),
+          reason: 'a route that took the message was never tried again',
+        );
+        expect(
+          alice
+              .messagesFor(bobId)
+              .singleWhere((m) => m.id == id)
+              .state
+              .awaitsRecipientAck,
+          isTrue,
+        );
+        expect(keptBefore, greaterThanOrEqualTo(1));
+      });
+    }
+  });
+
+  group('Cold mode', () {
+    Future<(MessengerController, MessengerController, _InProcessIrohNetwork)>
+    coldPair() async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        transportRegistryFactory: network.registry,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      for (final controller in [alice, bob]) {
+        controller.coldModeForTesting
+          ..lingerAfterSend = const Duration(milliseconds: 400)
+          ..holdAfterWake = const Duration(milliseconds: 400);
+      }
+      return (alice, bob, network);
+    }
+
+    bool irohUp(MessengerController controller) =>
+        controller.coldTransports.any((t) => t.id == 'iroh' && t.up);
+
+    test(
+      'idle transports are stopped, the relay push is not among them',
+      () async {
+        final (alice, _, _) = await coldPair();
+        expect(alice.coldModeActive, isFalse);
+        expect(irohUp(alice), isTrue);
+        await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+        expect(alice.coldModeActive, isTrue);
+        // (Telling the contacts wakes a route briefly without a warm relay.)
+        await _waitForIroh(
+          () => !irohUp(alice),
+          timeout: const Duration(seconds: 6),
+        );
+        // The relay's live connection is not something cold mode can stop.
+        expect(
+          alice.coldTransports.map((t) => t.id),
+          everyElement(isNot(anyOf('conestRelay', 'telegram', 'discord'))),
+        );
+        await alice.setEnergyBudget(EnergyBudgetSetting.balanced);
+        expect(alice.coldModeActive, isFalse);
+        expect(irohUp(alice), isTrue);
+      },
+    );
+
+    test('a send wakes the routes it needs and they go cold after the '
+        'linger', () async {
+      final (alice, bob, _) = await coldPair();
+      await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+      await _waitForIroh(
+        () => !irohUp(alice),
+        timeout: const Duration(seconds: 6),
+      );
+      await alice.sendMessage(contact: alice.contacts.single, body: 'wake');
+      expect(irohUp(alice), isTrue);
+      await _waitForIroh(() {
+        unawaited(bob.pollNow());
+        return bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'wake');
+      }, reason: 'the message did not arrive');
+      await _waitForIroh(
+        () => !irohUp(alice),
+        reason: 'the route stayed up after the linger',
+        timeout: const Duration(seconds: 6),
+      );
+    });
+
+    test('a transport set to always on stays up', () async {
+      final (alice, _, _) = await coldPair();
+      final prefs = alice.identity!.connectivity.copyWith(
+        energyBudget: EnergyBudgetSetting.cold,
+        coldTransportModes: {'iroh': ColdTransportMode.alwaysOn},
+      );
+      await alice.updateGlobalConnectivity(prefs);
+      expect(alice.coldModeActive, isTrue);
+      expect(irohUp(alice), isTrue);
+    });
+
+    test(
+      'a refresh wakes the transports, polls, and stops them again',
+      () async {
+        final (alice, bob, _) = await coldPair();
+        await bob.setEnergyBudget(EnergyBudgetSetting.cold);
+        expect(bob.coldLastCheckedAt, isNotNull);
+        final before = bob.coldLastCheckedAt!;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await alice.sendMessage(contact: alice.contacts.single, body: 'later');
+        await bob.refreshNow();
+        expect(bob.coldLastCheckedAt!.isAfter(before), isTrue);
+        expect(
+          bob
+              .messagesFor(alice.identity!.deviceId)
+              .any((m) => m.body == 'later'),
+          isTrue,
+        );
+        await _waitForIroh(
+          () => !irohUp(bob),
+          reason: 'it stayed awake after the refresh',
+          timeout: const Duration(seconds: 6),
+        );
+      },
+    );
+
+    test('in the background a cold device keeps its relay connection: a '
+        'message and a call invite arrive at once', () async {
+      final relay = _FakeRelayClient();
+      final network = _InProcessIrohNetwork();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        platformBridge: _VoiceRecordingBridge(),
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        enableLongPoll: true,
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        platformBridge: _VoiceRecordingBridge(),
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await _waitForIroh(
+        () => bob.contacts.single.featureCapabilities.contains(
+          ApplicationCapability.voiceCallsV1,
+        ),
+      );
+      await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+      alice.setAppForegroundState(false);
+      // Nothing direct gets through: the relay carries both.
+      network.blockedPairs.add((
+        bob.identity!.irohEndpointId!,
+        alice.identity!.irohEndpointId!,
+      ));
+      expect(alice.coldModeActive, isTrue);
+      expect(alice.longPollRunningForTesting, isTrue);
+      final aliceId = alice.identity!.deviceId;
+      await bob.sendMessage(contact: bob.contacts.single, body: 'ring ring');
+      await _waitForIroh(
+        () => alice
+            .messagesFor(bob.identity!.deviceId)
+            .any((m) => m.body == 'ring ring'),
+        reason: 'the message waited for the next check',
+        timeout: const Duration(seconds: 6),
+      );
+      await bob.voiceCallService!.startOutgoing(alice.identity!.deviceId);
+      await _waitForIroh(
+        () => alice.voiceCallService!.active != null,
+        reason: 'the call invite waited for the next check',
+        timeout: const Duration(seconds: 6),
+      );
+      expect(aliceId, isNotEmpty);
+    });
+
+    test(
+      'with checks only on request, a failed message is still retried',
+      () async {
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        await alice.updateGlobalConnectivity(
+          alice.identity!.connectivity.copyWith(
+            energyBudget: EnergyBudgetSetting.cold,
+            coldWakeMinutes: 0,
+          ),
+        );
+        alice.coldModeForTesting.retryEvery = const Duration(milliseconds: 150);
+        relay.shouldFailStore = (_, _, _, _, _) => true;
+        await alice.sendMessage(
+          contact: alice.contacts.single,
+          body: 'retry me',
+        );
+        relay.shouldFailStore = null;
+        final aliceId = alice.identity!.deviceId;
+        await _waitForIroh(
+          () {
+            unawaited(bob.pollNow());
+            return bob.messagesFor(aliceId).any((m) => m.body == 'retry me');
+          },
+          reason: 'nothing retried it',
+          timeout: const Duration(seconds: 25),
+        );
+        // Each retry wake waits longer than the one before; a new message
+        // starts over.
+        expect(alice.coldRetryRoundForTesting, greaterThanOrEqualTo(1));
+        await alice.sendMessage(contact: alice.contacts.single, body: 'new');
+        expect(alice.coldRetryRoundForTesting, 0);
+      },
+    );
+
+    test('only a transfer that moved bytes lately holds a route', () async {
+      var now = DateTime.now().toUtc();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      expect(alice.coldInUseForTesting('iroh'), isFalse);
+      alice.noteTransferMovedForTesting();
+      expect(alice.coldInUseForTesting('iroh'), isTrue);
+      expect(alice.coldInUseForTesting('lan'), isTrue);
+      // Carriers are never held by a transfer.
+      expect(alice.coldInUseForTesting('nostr'), isFalse);
+      now = now.add(const Duration(seconds: 61));
+      expect(alice.coldInUseForTesting('iroh'), isFalse);
+    });
+
+    test('a call that cannot be made does not wake Iroh', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        platformBridge: _VoiceRecordingBridge(),
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      alice.coldModeForTesting.lingerAfterSend = const Duration(
+        milliseconds: 300,
+      );
+      await alice.updateExperimentalVoiceCallsEnabled(false);
+      await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+      // Telling the contacts wakes Iroh briefly (no warm relay here).
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      await _waitForIroh(
+        () => !alice.coldTransports.any((t) => t.id == 'iroh' && t.up),
+        timeout: const Duration(seconds: 6),
+      );
+      await expectLater(
+        alice.voiceCallService!.startOutgoing(bob.identity!.deviceId),
+        throwsA(anything),
+      );
+      expect(alice.coldTransports.any((t) => t.id == 'iroh' && t.up), isFalse);
+    });
+
+    test(
+      'a receipt wakes no route while the relay connection is warm',
+      () async {
+        final relay = _FakeRelayClient();
+        final network = _InProcessIrohNetwork();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          transportRegistryFactory: network.registry,
+          enableLongPoll: true,
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          transportRegistryFactory: network.registry,
+          energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+        await _waitForIroh(
+          () => !alice.coldTransports.any((t) => t.id == 'iroh' && t.up),
+          reason: 'iroh stayed up',
+          timeout: const Duration(seconds: 6),
+        );
+        expect(alice.longPollRunningForTesting, isTrue);
+        await bob.sendMessage(contact: bob.contacts.single, body: 'hi');
+        await _waitForIroh(
+          () => alice
+              .messagesFor(bob.identity!.deviceId)
+              .any((m) => m.body == 'hi'),
+          reason: 'hi never arrived',
+          timeout: const Duration(seconds: 6),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        expect(
+          alice.coldTransports.any((t) => t.id == 'iroh' && t.up),
+          isFalse,
+          reason: 'answering woke Iroh',
+        );
+      },
+    );
+
+    test('plugging a laptop in or out changes Automatic', () async {
+      final source = _MutablePower(
+        const PowerState(hasBattery: true, charging: false),
+      );
+      final policy = EnergyPolicy(source: source, isPhone: false);
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        energyPolicy: policy,
+      );
+      addTearDown(alice.dispose);
+      await alice.syncColdMode();
+      expect(alice.coldModeActive, isTrue);
+      source.state = const PowerState(hasBattery: true, charging: true);
+      await policy.refresh(force: true);
+      await _waitForIroh(() => !alice.coldModeActive);
+      source.state = const PowerState(hasBattery: true, charging: false);
+      await policy.refresh(force: true);
+      await _waitForIroh(() => alice.coldModeActive);
+    });
+
+    testWidgets('the chat list says when it last looked and offers a '
+        'refresh; the settings list the routes', (tester) async {
+      late MessengerController alice;
+      await tester.runAsync(() async {
+        final (a, _, _) = await coldPair();
+        alice = a;
+      });
+      DateTime now = DateTime.now();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                ColdModeBanner(controller: alice, now: () => now),
+                ColdModeSettings(controller: alice, busy: false),
+              ],
+            ),
+          ),
+        ),
+      );
+      expect(find.byKey(const ValueKey('cold-mode-banner')), findsNothing);
+      await tester.runAsync(() async {
+        await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pump();
+      expect(find.text('Cold mode · checked just now'), findsOneWidget);
+      now = now.add(const Duration(minutes: 3));
+      await tester.runAsync(() async {
+        await alice.refreshNow();
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+      });
+      await tester.pump();
+      expect(find.textContaining('Cold mode · checked'), findsOneWidget);
+      expect(find.byKey(const ValueKey('cold-mode-iroh')), findsOneWidget);
+      expect(find.byKey(const ValueKey('cold-wake-minutes')), findsOneWidget);
+    });
+
+    test('a contact told that this device is cold stops trying its direct '
+        'routes and uses a storing one', () async {
+      final (alice, bob, network) = await coldPair();
+      await bob.setEnergyBudget(EnergyBudgetSetting.cold);
+      final bobId = bob.identity!.deviceId;
+      await _waitForIroh(() {
+        unawaited(alice.pollNow());
+        return alice.peerIsColdForTesting(bobId);
+      }, reason: 'Alice was not told');
+      await _waitForIroh(
+        () => !irohUp(bob),
+        reason: 'Bob stayed awake',
+        timeout: const Duration(seconds: 6),
+      );
+      // The first message finds Bob asleep and goes by the relay.
+      await alice.sendMessage(contact: alice.contacts.single, body: 'one');
+      await _waitForIroh(
+        () => alice.coldDirectSkippedForTesting(bobId),
+        reason: 'the direct routes were still tried',
+      );
+      await _waitForIroh(() {
+        unawaited(bob.refreshNow());
+        return bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'one');
+      }, reason: 'the relay did not carry the first message');
+      final aliceEndpoint = alice.identity!.irohEndpointId!;
+      final attempts = network.sendAttempts[aliceEndpoint];
+      await alice.sendMessage(contact: alice.contacts.single, body: 'two');
+      await _waitForIroh(() {
+        unawaited(bob.refreshNow());
+        return bob
+            .messagesFor(alice.identity!.deviceId)
+            .any((m) => m.body == 'two');
+      }, reason: 'the relay did not carry the second message');
+      expect(
+        network.sendAttempts[aliceEndpoint],
+        attempts,
+        reason: 'a sleeping contact was dialed again',
+      );
     });
   });
 
@@ -31910,6 +33017,9 @@ void main() {
           const Duration(milliseconds: 40),
         );
       }
+      for (final controller in [alice, bob]) {
+        controller.freshHelloDelay = const Duration(milliseconds: 30);
+      }
       bool isAnswer(RelayEnvelope envelope) =>
           envelope.kind == 'ratchet_bundle' &&
           envelope.senderDeviceId == starter.identity!.deviceId;
@@ -31918,8 +33028,16 @@ void main() {
           : Duration.zero;
       final order = <String>[];
       DateTime? firstAnswerAt;
+      var offererBundles = 0;
       relay.shouldFailStore = (_, _, _, recipient, envelope) {
+        if (recipient == starter.identity!.deviceId &&
+            envelope.kind == 'ratchet_bundle') {
+          offererBundles++;
+        }
         if (recipient != offerer.identity!.deviceId) return false;
+        // Other early traffic from the starter would also fail to decrypt
+        // here (and rightly offer a reset); only the hello is under test.
+        if (envelope.kind == 'route_update') return true;
         final fails =
             isAnswer(envelope) &&
             DateTime.now().difference(firstAnswerAt ??= DateTime.now()) <
@@ -31947,6 +33065,9 @@ void main() {
       // The hello that went first was parked at the peer (it did not know
       // the sender yet) and is read when the answer arrives: a fresh hello
       // after the answer is no longer the only way for the session to open.
+      // The early hello is no failure: the offerer opens the session without
+      // sending a reset after its offer.
+      expect(offererBundles, 1);
     });
 
     test('ratchet peers switch to forward-secret envelopes', () async {

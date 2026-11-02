@@ -99,7 +99,7 @@ void main() {
     }
   });
 
-  test('the setting persists and old data loads as balanced', () {
+  test('the setting persists, and old data loads as automatic', () {
     final eco = const GlobalConnectivityPreferences().copyWith(
       energyBudget: EnergyBudgetSetting.eco,
     );
@@ -117,7 +117,76 @@ void main() {
       GlobalConnectivityPreferences.fromJson({
         'energyBudget': 'nonsense',
       }).energyBudget,
+      EnergyBudgetSetting.automatic,
+    );
+    // A chosen Balanced is stored as such; Automatic is the default.
+    final balanced = const GlobalConnectivityPreferences().copyWith(
+      energyBudget: EnergyBudgetSetting.balanced,
+    );
+    expect(
+      GlobalConnectivityPreferences.fromJson(balanced.toJson()).energyBudget,
       EnergyBudgetSetting.balanced,
     );
+    expect(balanced.toJson()['energyBudget'], 'balanced');
+  });
+
+  group('Automatic', () {
+    EnergyPolicy policy(PowerState power, {required bool phone}) {
+      final p = EnergyPolicy(source: _Source()..state = power, isPhone: phone)
+        ..setting = EnergyBudgetSetting.automatic;
+      return p;
+    }
+
+    test(
+      'is cold on phones, on laptops on battery, balanced on mains',
+      () async {
+        final phone = policy(
+          const PowerState(hasBattery: true, charging: true),
+          phone: true,
+        );
+        await phone.refresh();
+        expect(phone.isCold, isTrue);
+        final laptop = policy(
+          const PowerState(hasBattery: true, charging: false),
+          phone: false,
+        );
+        await laptop.refresh();
+        expect(laptop.isCold, isTrue);
+        expect(laptop.budgetFor(NetworkCostClass.unmetered).maxExtraCopies, 0);
+        final plugged = policy(
+          const PowerState(hasBattery: true, charging: true),
+          phone: false,
+        );
+        await plugged.refresh();
+        expect(plugged.isCold, isFalse);
+        expect(plugged.effectiveSetting, EnergyBudgetSetting.balanced);
+        final desktop = policy(
+          const PowerState(hasBattery: false),
+          phone: false,
+        );
+        await desktop.refresh();
+        expect(desktop.isCold, isFalse);
+      },
+    );
+
+    test('an explicit choice wins on every device', () async {
+      final phone = policy(
+        const PowerState(hasBattery: true, charging: false),
+        phone: true,
+      )..setting = EnergyBudgetSetting.balanced;
+      await phone.refresh();
+      expect(phone.isCold, isFalse);
+      phone.setting = EnergyBudgetSetting.cold;
+      expect(phone.isCold, isTrue);
+      final desktop = policy(const PowerState(hasBattery: false), phone: false)
+        ..setting = EnergyBudgetSetting.cold;
+      expect(desktop.isCold, isTrue);
+    });
+
+    test('a policy with a fixed mode (tests) never goes cold alone', () {
+      final fixed = EnergyPolicy.fixed(EnergyMode.limited);
+      expect(fixed.setting, EnergyBudgetSetting.automatic);
+      expect(fixed.isCold, isFalse);
+    });
   });
 }

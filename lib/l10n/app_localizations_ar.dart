@@ -125,6 +125,21 @@ class AppLocalizationsAr extends AppLocalizations {
   }
 
   @override
+  String messageTimeDelivered(String time) {
+    return 'سُلّمت $time';
+  }
+
+  @override
+  String messageTimeArrived(String time) {
+    return 'وصلت $time';
+  }
+
+  @override
+  String messageDeliveredToCount(int delivered, int total) {
+    return 'سُلّمت إلى $delivered من $total';
+  }
+
+  @override
   String messageReadAt(String time) {
     return 'قُرئت $time';
   }
@@ -5333,6 +5348,9 @@ class AppLocalizationsAr extends AppLocalizations {
   String get connectionsRouteFailing => 'يفشل';
 
   @override
+  String get connectionsRouteUnreliable => 'غير موثوق على هذه الشبكة';
+
+  @override
   String connectionsAsOf(String when) {
     return 'حتى $when';
   }
@@ -6682,6 +6700,63 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get energyBudgetFast => 'سريع';
+
+  @override
+  String get energyBudgetCold => 'بارد: متوقف حتى الحاجة';
+
+  @override
+  String get energyBudgetAutomatic => 'تلقائي (بارد على البطارية)';
+
+  @override
+  String coldBannerChecked(String ago) {
+    return 'الوضع البارد · فُحص $ago';
+  }
+
+  @override
+  String get coldBannerNeverChecked => 'الوضع البارد · لم يُفحص بعد';
+
+  @override
+  String get coldAgoJustNow => 'الآن';
+
+  @override
+  String coldAgoMinutes(int minutes) {
+    return 'قبل $minutes دقيقة';
+  }
+
+  @override
+  String coldAgoHours(int hours) {
+    return 'قبل $hours ساعة';
+  }
+
+  @override
+  String get coldRefresh => 'افحص الآن';
+
+  @override
+  String get coldWakeTitle => 'الوضع البارد: افحص كل';
+
+  @override
+  String get coldWakeManual => 'عند الطلب فقط';
+
+  @override
+  String coldWakeMinutes(int minutes) {
+    return '$minutes دقيقة';
+  }
+
+  @override
+  String get coldWakeNote =>
+      'يبقى أول مرحّل متصلاً، فتصل الرسائل والمكالمات عبره فوراً. تستيقظ المسارات الأخرى عند كل فحص وعند التحديث وللإرسال.';
+
+  @override
+  String get coldTransportsTitle => 'المسارات في الوضع البارد';
+
+  @override
+  String get coldTransportCold => 'بارد';
+
+  @override
+  String get coldTransportAlwaysOn => 'يعمل دائماً';
+
+  @override
+  String get coldTransportOff => 'متوقف';
 
   @override
   String airtimeBudgetUsed(int percent) {

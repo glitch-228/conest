@@ -43,6 +43,17 @@ RouteFailureKind routeFailureKindOf(String? error) {
   return RouteFailureKind.other;
 }
 
+/// One recent failure of a route. [peer] is a short digest of the contact
+/// it was for; null when the failure was not for one contact (a relay or
+/// account of this device's own).
+class RouteFailure {
+  const RouteFailure(this.at, this.kind, [this.peer]);
+
+  final DateTime at;
+  final RouteFailureKind kind;
+  final String? peer;
+}
+
 class RouteOutcome {
   RouteOutcome({
     this.lastWorked,
@@ -50,13 +61,20 @@ class RouteOutcome {
     this.ok = 0,
     this.fail = 0,
     Map<RouteFailureKind, int>? failures,
-  }) : failures = failures ?? {};
+    List<RouteFailure>? recent,
+  }) : failures = failures ?? {},
+       recent = recent ?? [];
 
   DateTime? lastWorked;
   DateTime? lastFailed;
   int ok;
   int fail;
   final Map<RouteFailureKind, int> failures;
+
+  /// The latest failures, oldest first (at most [maxRecent]): what the
+  /// verdict "blocked here" is judged on, over a recent window.
+  final List<RouteFailure> recent;
+  static const maxRecent = 24;
 
   /// The most recent thing that happened on this route.
   DateTime? get lastUsed => switch ((lastWorked, lastFailed)) {
@@ -72,6 +90,15 @@ class RouteOutcome {
     'fail': fail,
     if (failures.isNotEmpty)
       'kinds': {for (final e in failures.entries) e.key.name: e.value},
+    if (recent.isNotEmpty)
+      'recent': [
+        for (final failure in recent)
+          [
+            failure.at.toUtc().millisecondsSinceEpoch,
+            failure.kind.index,
+            if (failure.peer != null) failure.peer,
+          ],
+      ],
   };
 
   static RouteOutcome fromJson(Map<String, dynamic> json) => RouteOutcome(
@@ -85,6 +112,25 @@ class RouteOutcome {
         for (final kind in RouteFailureKind.values)
           if (kind.name == key && value is num) kind: value.toInt(),
     },
+    recent: [
+      for (final entry in (json['recent'] as List? ?? const []).take(maxRecent))
+        if (entry is List &&
+            entry.length >= 2 &&
+            entry[0] is num &&
+            entry[1] is num &&
+            (entry[1] as num).toInt() >= 0 &&
+            (entry[1] as num).toInt() < RouteFailureKind.values.length)
+          RouteFailure(
+            DateTime.fromMillisecondsSinceEpoch(
+              (entry[0] as num).toInt(),
+              isUtc: true,
+            ),
+            RouteFailureKind.values[(entry[1] as num).toInt()],
+            entry.length > 2 && entry[2] is String
+                ? (entry[2] as String).characters(16)
+                : null,
+          ),
+    ],
   );
 }
 
@@ -255,13 +301,35 @@ class NetworkHistory {
       ..lastWorked = now;
   }
 
-  void failed(String route, RouteFailureKind kind, DateTime now) {
+  /// [peer] is the contact the route was tried for, when there is one: a
+  /// route to one contact failing says little about the network.
+  void failed(
+    String route,
+    RouteFailureKind kind,
+    DateTime now, {
+    String? peer,
+  }) {
     final outcome = _outcome(route, now);
     if (outcome == null) return;
     outcome
       ..fail += 1
       ..lastFailed = now
-      ..failures[kind] = (outcome.failures[kind] ?? 0) + 1;
+      ..failures[kind] = (outcome.failures[kind] ?? 0) + 1
+      ..recent.add(
+        RouteFailure(
+          now,
+          kind,
+          peer == null || peer.isEmpty
+              ? null
+              : crypto.sha256
+                    .convert(utf8.encode('peer|$peer'))
+                    .toString()
+                    .substring(0, 8),
+        ),
+      );
+    while (outcome.recent.length > RouteOutcome.maxRecent) {
+      outcome.recent.removeAt(0);
+    }
   }
 
   RouteOutcome? _outcome(String route, DateTime now) {
@@ -283,26 +351,67 @@ class NetworkHistory {
     return routes.putIfAbsent(route.characters(160), RouteOutcome.new);
   }
 
+  /// Routes judged over this long: older failures and successes say
+  /// nothing about the network as it is now.
+  static const judgeWindow = Duration(hours: 24);
+
+  /// Routes between two devices (an offline contact fails them the same
+  /// way a block does): failures count against the network only when they
+  /// are for at least this many different contacts, or not for a contact
+  /// at all (the route's own infrastructure, such as Iroh's relay).
+  static const perPeerRoutes = {'iroh', 'tor', 'direct'};
+  static const _blockingFailuresNeeded = 3;
+  static const _peersNeeded = 2;
+
+  bool _workedWithin(RouteOutcome outcome, DateTime cutoff) =>
+      outcome.lastWorked != null && !outcome.lastWorked!.isBefore(cutoff);
+
+  /// Failures a network could have caused, in the window, enough of them
+  /// and spread over enough contacts to blame it.
+  bool _failsLikeABlock(String route, RouteOutcome outcome, DateTime cutoff) {
+    final recent = outcome.recent.where((f) => !f.at.isBefore(cutoff));
+    final blocking = recent.where((f) => _blockingKinds.contains(f.kind));
+    final count = blocking.length;
+    if (count < _blockingFailuresNeeded) return false;
+    if (count * 2 < recent.length) return false;
+    if (!perPeerRoutes.contains(route)) return true;
+    return blocking.any((f) => f.peer == null) ||
+        blocking.map((f) => f.peer).toSet().length >= _peersNeeded;
+  }
+
   /// Internet routes this network seems to block: failing again and again
-  /// in ways a network causes, never working since, while something else
-  /// does work here. LAN is never judged blocked (a person away looks the
-  /// same).
-  Set<String> blockedHere() {
+  /// in ways a network causes over the last [judgeWindow], with no success
+  /// in it, while something else does work here. LAN is never judged
+  /// blocked (a person away looks the same), and a route to individual
+  /// contacts (Iroh) needs failures for several of them: one offline contact
+  /// is not a block. [now] defaults to the last time anything happened here.
+  Set<String> blockedHere({DateTime? now}) {
     final network = current;
     if (network == null) return const {};
-    final anyWorks = network.routes.values.any((o) => o.lastWorked != null);
-    if (!anyWorks) return const {};
+    final cutoff = (now ?? network.lastSeen).subtract(judgeWindow);
+    if (!network.routes.values.any((o) => _workedWithin(o, cutoff))) {
+      return const {};
+    }
     return {
       for (final MapEntry(key: route, value: outcome) in network.routes.entries)
         if (route != 'lan' &&
-            outcome.fail >= 3 &&
-            (outcome.lastWorked == null ||
-                outcome.lastFailed!.isAfter(outcome.lastWorked!)) &&
-            outcome.failures.entries
-                        .where((e) => _blockingKinds.contains(e.key))
-                        .fold<int>(0, (sum, e) => sum + e.value) *
-                    2 >=
-                outcome.fail)
+            !_workedWithin(outcome, cutoff) &&
+            _failsLikeABlock(route, outcome, cutoff))
+          route,
+    };
+  }
+
+  /// Routes that work here some of the time and fail like a block at
+  /// others: not blocked, but not to be relied on.
+  Set<String> unreliableHere({DateTime? now}) {
+    final network = current;
+    if (network == null) return const {};
+    final cutoff = (now ?? network.lastSeen).subtract(judgeWindow);
+    return {
+      for (final MapEntry(key: route, value: outcome) in network.routes.entries)
+        if (route != 'lan' &&
+            _workedWithin(outcome, cutoff) &&
+            _failsLikeABlock(route, outcome, cutoff))
           route,
     };
   }

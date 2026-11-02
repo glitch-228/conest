@@ -153,6 +153,7 @@ class _NetworksSection extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final current = history.current;
     final blocked = history.blockedHere();
+    final unreliable = history.unreliableHere();
     return Column(
       key: const ValueKey('connections-networks'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -188,6 +189,9 @@ class _NetworksSection extends StatelessWidget {
                   trailing: Text(
                     identical(network, current) && blocked.contains(route)
                         ? strings.connectionsRouteBlocked
+                        : identical(network, current) &&
+                              unreliable.contains(route)
+                        ? strings.connectionsRouteUnreliable
                         : outcome.lastWorked != null &&
                               (outcome.lastFailed == null ||
                                   outcome.lastWorked!.isAfter(

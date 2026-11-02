@@ -8,10 +8,17 @@ enum EnergyBudgetSetting {
   eco,
 
   /// Treats battery like mains (battery saver still wins).
-  fast;
+  fast,
+
+  /// Everything not needed right now is stopped (see cold_mode.dart).
+  cold,
+
+  /// The default: cold on phones and on laptops running on battery,
+  /// balanced on mains power.
+  automatic;
 
   static EnergyBudgetSetting parse(Object? name) => values.firstWhere(
     (value) => value.name == name,
-    orElse: () => EnergyBudgetSetting.balanced,
+    orElse: () => EnergyBudgetSetting.automatic,
   );
 }
