@@ -133,7 +133,7 @@ class _NativeIrohBindings {
 /// expected by [IrohTransportAdapter]. Network calls run off the Flutter UI
 /// isolate; inbound delivery is a bounded non-blocking native queue.
 class FfiNativeIrohBridge
-    implements NativeIrohDatagramBridge, NativeIrohNetworkAware {
+    implements NativeIrohDatagramBridge, NativeIrohNetworkAware, IrohPollHold {
   FfiNativeIrohBridge._(this._libraryPath);
 
   // Matches the direct attachment range window: enough parallel QUIC streams
@@ -359,7 +359,8 @@ class FfiNativeIrohBridge
   }
 
   /// Keeps polling quick (a call is on: media may arrive any moment).
-  static bool holdActive = false;
+  @override
+  bool holdActive = false;
 
   void _scheduleNextPoll() {
     _poller?.cancel();

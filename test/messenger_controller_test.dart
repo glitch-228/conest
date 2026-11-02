@@ -12313,9 +12313,9 @@ void main() {
         bob.messagesFor(aliceId).where((m) => !m.outbound).map((m) => m.body),
         containsAll(['one', 'two', 'three']),
       );
-      // Read through the third: once confirmed they end as read.
-      expect(stateOf('one'), DeliveryState.read);
-      expect(stateOf('two'), DeliveryState.read);
+      // They arrived after the third was read: delivered, not read.
+      expect(stateOf('one'), DeliveryState.delivered);
+      expect(stateOf('two'), DeliveryState.delivered);
     });
 
     test('a read receipt that overtakes earlier delivery receipts still '
@@ -21344,10 +21344,72 @@ void main() {
             return bob.messagesFor(aliceId).any((m) => m.body == 'retry me');
           },
           reason: 'nothing retried it',
-          timeout: const Duration(seconds: 6),
+          timeout: const Duration(seconds: 25),
         );
+        // Each retry wake waits longer than the one before; a new message
+        // starts over.
+        expect(alice.coldRetryRoundForTesting, greaterThanOrEqualTo(1));
+        await alice.sendMessage(contact: alice.contacts.single, body: 'new');
+        expect(alice.coldRetryRoundForTesting, 0);
       },
     );
+
+    test('only a transfer that moved bytes lately holds a route', () async {
+      var now = DateTime.now().toUtc();
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        nowProvider: () => now,
+      );
+      addTearDown(alice.dispose);
+      expect(alice.coldInUseForTesting('iroh'), isFalse);
+      alice.noteTransferMovedForTesting();
+      expect(alice.coldInUseForTesting('iroh'), isTrue);
+      expect(alice.coldInUseForTesting('lan'), isTrue);
+      // Carriers are never held by a transfer.
+      expect(alice.coldInUseForTesting('nostr'), isFalse);
+      now = now.add(const Duration(seconds: 61));
+      expect(alice.coldInUseForTesting('iroh'), isFalse);
+    });
+
+    test('a call that cannot be made does not wake Iroh', () async {
+      final network = _InProcessIrohNetwork();
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        platformBridge: _VoiceRecordingBridge(),
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: network.registry,
+        ratchetEngine: FakeRatchetEngine(),
+        energyPolicy: EnergyPolicy.fixed(EnergyMode.unconstrained),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      alice.coldModeForTesting.lingerAfterSend = const Duration(
+        milliseconds: 300,
+      );
+      await alice.updateExperimentalVoiceCallsEnabled(false);
+      await alice.setEnergyBudget(EnergyBudgetSetting.cold);
+      // Telling the contacts wakes Iroh briefly (no warm relay here).
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      await _waitForIroh(
+        () => !alice.coldTransports.any((t) => t.id == 'iroh' && t.up),
+        timeout: const Duration(seconds: 6),
+      );
+      await expectLater(
+        alice.voiceCallService!.startOutgoing(bob.identity!.deviceId),
+        throwsA(anything),
+      );
+      expect(alice.coldTransports.any((t) => t.id == 'iroh' && t.up), isFalse);
+    });
 
     test(
       'a receipt wakes no route while the relay connection is warm',

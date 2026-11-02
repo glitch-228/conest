@@ -179,6 +179,37 @@ void main() {
     expect(log, isEmpty);
   });
 
+  test('a route in use with nothing moving is let go after the deferral '
+      'cap, and does not keep a timer going for ever', () async {
+    final cold = make();
+    cold.inUseRecheck = const Duration(milliseconds: 40);
+    cold.maxDeferral = const Duration(milliseconds: 200);
+    cold.inUse = (_) => true; // Stuck: reports in use for ever.
+    await cold.configure(active: true, wakeMinutes: 0);
+    await cold.wakeFor(['iroh']);
+    await settle(150); // Stay over; deferred.
+    expect(cold.upIds, contains('iroh'));
+    await settle(400);
+    expect(cold.upIds, isNot(contains('iroh')));
+    log.clear();
+    await settle(300);
+    expect(log, isEmpty, reason: 'it kept checking');
+  });
+
+  test('a retry wake runs the retry and holds no route', () async {
+    final cold = make();
+    cold.retryEvery = const Duration(milliseconds: 80);
+    var retries = 0;
+    cold.retryDue = () => DateTime.now();
+    cold.retryWake = () async => retries++;
+    await cold.configure(active: true, wakeMinutes: 0);
+    log.clear();
+    await settle(400);
+    expect(retries, greaterThanOrEqualTo(2));
+    expect(log, isEmpty, reason: 'a retry wake started routes: $log');
+    expect(cold.upIds, {'telegram'});
+  });
+
   test('wake minutes are normalized to the choices', () {
     expect(normalizeColdWakeMinutes(30), 30);
     expect(normalizeColdWakeMinutes(0), 0);

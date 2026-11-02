@@ -110,6 +110,18 @@ class ColdMode {
   /// does. Cold mode wakes for it between the timed checks.
   DateTime? Function()? retryDue;
 
+  /// Runs the retry pass when the timer fired for a retry rather than a
+  /// check: no route is held for it; sending wakes what it needs.
+  Future<void> Function()? retryWake;
+
+  /// The longest a route in use is kept up past its stay without a check
+  /// that it is still in use (a transfer stuck on an offline sender).
+  Duration maxDeferral = const Duration(minutes: 10);
+  final Map<String, DateTime> _deferredSince = {};
+
+  /// When the last wake (check or retry) happened.
+  DateTime? get lastWakeAt => _lastWakeAt;
+
   /// The least time between two wakes for retries.
   Duration retryEvery = const Duration(minutes: 1);
 
@@ -276,6 +288,15 @@ class ColdMode {
     final wait = due.difference(now);
     _timer = Timer(wait.isNegative ? Duration.zero : wait, () {
       _timer = null;
+      final check = _checkAt;
+      final checkDue = check != null && !_now().isBefore(check);
+      if (!checkDue && retryWake != null) {
+        _lastWakeAt = _now();
+        unawaited(
+          retryWake!().catchError((Object _) {}).whenComplete(_armTimer),
+        );
+        return;
+      }
       unawaited(refresh().catchError((Object _) {}));
     });
   }
@@ -353,7 +374,9 @@ class ColdMode {
         modeOf(handle.id) != ColdTransportMode.cold) {
       return;
     }
-    if (inUse?.call(handle.id) ?? false) {
+    final since = _deferredSince.putIfAbsent(handle.id, _now);
+    final capped = _now().difference(since) >= maxDeferral;
+    if (!capped && (inUse?.call(handle.id) ?? false)) {
       final until = _now().add(inUseRecheck);
       _sleepAt[handle.id] = until;
       _sleepTimers[handle.id] = Timer(
@@ -362,6 +385,7 @@ class ColdMode {
       );
       return;
     }
+    _deferredSince.remove(handle.id);
     unawaited(_sleepNow(handle).catchError((Object _) {}));
   }
 

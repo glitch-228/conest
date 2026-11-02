@@ -190,6 +190,12 @@ abstract interface class NativeIrohNetworkAware {
   Future<void> networkChanged();
 }
 
+/// A bridge whose polling of the native endpoint can be kept quick (a call
+/// is on: media may arrive any moment) instead of slowing down when idle.
+abstract interface class IrohPollHold {
+  set holdActive(bool value);
+}
+
 abstract interface class NativeIrohDatagramBridge implements NativeIrohBridge {
   Future<IrohBridgeReceipt> sendDatagram({
     required String remoteEndpointId,
@@ -219,6 +225,12 @@ class IrohTransportAdapter implements IrohCallMediaAdapter {
        _relayEnabled = relayEnabled;
 
   final NativeIrohBridge _bridge;
+
+  /// Keeps the bridge polling quickly while a call is on.
+  void holdFastPolling(bool hold) {
+    if (_bridge case final IrohPollHold bridge) bridge.holdActive = hold;
+  }
+
   final Uint8List _secretKeySeed;
   final bool _relayEnabled;
   final List<String> relayUrls;
