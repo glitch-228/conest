@@ -509,6 +509,39 @@ void main() {
       },
     );
 
+    test(
+      'a channel with waits of its own is given the seal to run last',
+      () async {
+        final lazy = _LazyChannel('npub-me|wss://relay.one');
+        final a = CarrierTransportAdapter(
+          kind: TransportKind.nostr,
+          sealer: sealer,
+          framing: CarrierFraming.nostr,
+        )..attach(lazy);
+        await a.start();
+        final route = (await a.discoverRoutes(peer)).single;
+        var seals = 0;
+        lazy.probe = () => seals;
+        await a.sendEnvelope(
+          peer: peer,
+          route: route,
+          envelope: TransportEnvelope(
+            id: 'z',
+            recipientDeviceId: 'dev-bob',
+            bytes: pattern(900),
+            seal: () async {
+              seals++;
+              return pattern(800);
+            },
+            createdAt: DateTime.utc(2026, 11, 2),
+          ),
+        );
+        expect(lazy.sealsSeenBeforeWait, 0);
+        expect(lazy.sealsSeenAfterWait, 1);
+        expect(seals, 1);
+      },
+    );
+
     test('routes tried for one send share one seal; a seal that failed is '
         'made again by the next route', () async {
       var calls = 0;
@@ -1366,6 +1399,32 @@ class _RecordingChannel implements CarrierChannel {
   @override
   Future<void> sendFrame(String address, Uint8List frame) async =>
       sent.add((address, frame));
+}
+
+/// A channel that waits on its own before it needs the frame.
+class _LazyChannel extends _RecordingChannel
+    implements LazyFrameCarrierChannel {
+  _LazyChannel(super.localAddress);
+
+  int Function()? probe;
+  int sealsSeenBeforeWait = -1;
+  int sealsSeenAfterWait = -1;
+  int calls = 0;
+
+  @override
+  Future<void> sendFrameLazy(
+    String address,
+    Future<Uint8List> Function() makeFrame,
+  ) async {
+    // (The adapter counts seals through the envelope; the test reads them
+    // via the frame being made only now.)
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    sealsSeenBeforeWait = probe?.call() ?? -1;
+    final frame = await makeFrame();
+    calls++;
+    sealsSeenAfterWait = calls;
+    sent.add((address, frame));
+  }
 }
 
 /// A channel that would take its own turn for each frame: it says whether

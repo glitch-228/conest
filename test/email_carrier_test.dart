@@ -108,6 +108,41 @@ void main() {
     },
   );
 
+  test(
+    'the frame is made after the SMTP login, not before the connection',
+    () async {
+      var connected = false;
+      final bob = EmailCarrierChannel(
+        config: account('bob'),
+        connector: (host, port, {required bool tls}) async {
+          if (port == 465) {
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+            connected = true;
+          }
+          return server.connect(host, port, tls: tls);
+        },
+        onFrame: (_, _) {},
+        pollInterval: const Duration(milliseconds: 200),
+      );
+      channels.add(bob);
+      final alice = channel(account('alice'), []);
+      bob.start();
+      alice.start();
+      var made = 0;
+      var connectedWhenMade = false;
+      final sending = bob.sendFrameLazy(alice.localAddress!, () async {
+        made++;
+        connectedWhenMade = connected;
+        return frame;
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(made, 0, reason: 'sealed before the connection was up');
+      await sending;
+      expect(made, 1);
+      expect(connectedWhenMade, isTrue);
+    },
+  );
+
   test('mails leave one account one by one, slower after a refusal', () async {
     // A chatmail relay answers "450 Too much mail" to an account that sends
     // fast and later cuts its connections (device lab, email only).

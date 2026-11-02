@@ -31136,7 +31136,9 @@ class MessengerController extends ChangeNotifier {
         _maxForwardEnvelopeBytes) {
       return null;
     }
-    // Sealed now, as a route would (see [RelayEnvelope.lazy]).
+    // Sealed now, as a route would (see [RelayEnvelope.lazy]). Carried for a
+    // while by a forwarder, so it cannot be kept fresh; recovery is the fresh
+    // retry and the receiver's stale-message rule.
     final inner = (await envelope.sealed()).toJson();
     final me = _requireIdentity();
     for (final forwarder in _forwardersFor(recipient).take(3)) {

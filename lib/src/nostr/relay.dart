@@ -218,7 +218,12 @@ class NostrRelay {
   /// Sends [event] and waits for the relay to accept it. A relay that
   /// requires authentication gets it first and the event once more. The
   /// connection must have been started; a stopped one refuses.
-  Future<void> publish(NostrEvent event) async {
+  Future<void> publish(NostrEvent event) => publishLazy(() async => event);
+
+  /// Like [publish], for an event made at the last moment: [make] is called
+  /// once the connection is up and this event's turn has come, so what it
+  /// seals does not wait for either.
+  Future<void> publishLazy(Future<NostrEvent> Function() make) async {
     if (!_running) throw StateError('Relay connection is stopped.');
     if (restRemaining > Duration.zero) {
       // Resting after a refusal: the caller uses another relay.
@@ -232,6 +237,7 @@ class NostrRelay {
     // Connected first: a turn is not spent while the connection opens.
     await _waitConnected(deadline);
     await _waitForSlot(deadline);
+    final event = await make();
     var (accepted, message) = await _send(event, deadline);
     if (!accepted && isAuthRequired(message)) {
       await _waitForAuth(deadline);

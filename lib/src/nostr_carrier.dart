@@ -204,7 +204,8 @@ bool isValidNostrAddress(String address) =>
 /// content is NIP-44 encrypted to the recipient and holds the sender's
 /// carrier key (the hint that picks the contact) and the frame, which the
 /// carrier seal authenticates.
-class NostrCarrierChannel implements ManagedCarrierChannel {
+class NostrCarrierChannel
+    implements ManagedCarrierChannel, LazyFrameCarrierChannel {
   NostrCarrierChannel({
     required Uint8List secretKey,
     required List<Uri> relays,
@@ -317,34 +318,47 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
   }
 
   @override
-  Future<void> sendFrame(String address, Uint8List frame) async {
+  Future<void> sendFrame(String address, Uint8List frame) =>
+      sendFrameLazy(address, () async => frame);
+
+  /// The event is made (and a session-encrypted frame sealed) by the first
+  /// relay that has its connection and its turn; the others reuse it.
+  @override
+  Future<void> sendFrameLazy(
+    String address,
+    Future<Uint8List> Function() makeFrame,
+  ) async {
     if (!_started) throw StateError('The Nostr carrier is stopped.');
     final to = NostrAddress.tryParse(
       address,
       allowLoopback: allowLoopbackRelays,
     );
     if (to == null) throw ArgumentError('Not a Nostr carrier address.');
-    final ephemeral = Secp256k1.generateSecretKey();
-    final plaintext = Uint8List.fromList([
-      _contentVersion,
-      ...hexDecode(_publicKey)!,
-      ...frame,
-    ]);
-    final content = Nip44.encrypt(
-      plaintext,
-      Nip44.conversationKey(ephemeral, hexDecode(to.publicKey)!),
-    );
-    final createdAt = _seconds(_now());
-    final event = NostrEvent.sign(
-      secretKey: ephemeral,
-      kind: NostrKind.giftWrap,
-      tags: [
-        ['p', to.publicKey],
-        ['expiration', '${createdAt + nostrCarrierExpiry.inSeconds}'],
-      ],
-      content: content,
-      createdAt: createdAt,
-    );
+    Future<NostrEvent>? made;
+    Future<NostrEvent> makeEvent() => made ??= () async {
+      final frame = await makeFrame();
+      final ephemeral = Secp256k1.generateSecretKey();
+      final plaintext = Uint8List.fromList([
+        _contentVersion,
+        ...hexDecode(_publicKey)!,
+        ...frame,
+      ]);
+      final content = Nip44.encrypt(
+        plaintext,
+        Nip44.conversationKey(ephemeral, hexDecode(to.publicKey)!),
+      );
+      final createdAt = _seconds(_now());
+      return NostrEvent.sign(
+        secretKey: ephemeral,
+        kind: NostrKind.giftWrap,
+        tags: [
+          ['p', to.publicKey],
+          ['expiration', '${createdAt + nostrCarrierExpiry.inSeconds}'],
+        ],
+        content: content,
+        createdAt: createdAt,
+      );
+    }();
     final errors = <Object>[];
     var stored = 0;
     // Where the event goes: the recipient reads every relay it lists, so one
@@ -361,7 +375,7 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
     Future<void> publishTo(Uri url) async {
       used.add(url);
       try {
-        await _relayFor(url).publish(event);
+        await _relayFor(url).publishLazy(makeEvent);
         stored++;
         if (!firstStored.isCompleted) firstStored.complete();
       } catch (error) {

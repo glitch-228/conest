@@ -303,6 +303,17 @@ abstract interface class CarrierChannel {
   Future<void> sendFrame(String address, Uint8List frame);
 }
 
+/// A channel that has waits of its own after the account's turn (a relay's
+/// connection and turn, an SMTP login): it asks for the frame itself at the
+/// last moment before the network, so a session-encrypted envelope is sealed
+/// there and not before those waits.
+abstract interface class LazyFrameCarrierChannel implements CarrierChannel {
+  Future<void> sendFrameLazy(
+    String address,
+    Future<Uint8List> Function() makeFrame,
+  );
+}
+
 /// A channel that can bring a first request to a would-be contact's inbox
 /// (the Bluetooth mesh), which recognises it without knowing the sender.
 abstract interface class InboxCarrierChannel implements CarrierChannel {
@@ -689,10 +700,7 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
           when !cancelledAt.isBefore(startedAt)) {
         throw TransportSendCancelled('${kind.label}: no longer needed.');
       }
-      // The turn has come: seal now, not before the wait.
-      return realize().then(
-        (_) => runZoned(send, zoneValues: {carrierSendZoneKey: sendId}),
-      );
+      return runZoned(send, zoneValues: {carrierSendZoneKey: sendId});
     };
     for (var index = 0; index < frames.length; index++) {
       if (index > 0 && frameSpacing > Duration.zero) {
@@ -710,7 +718,11 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
       }
       if (channel is AcknowledgingCarrierChannel) {
         final id = await _paced(
-          guarded(() => channel.sendTrackedFrame(address, frames[index])),
+          guarded(() async {
+            // The turn has come: seal now, not before the wait.
+            await realize();
+            return channel.sendTrackedFrame(address, frames[index]);
+          }),
           cost: airBytes(frames[index]),
           started: index > 0,
           timeLeft: timeLeft(),
@@ -736,18 +748,30 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
           cost: airBytes(frames[index]),
           started: index > 0,
           timeLeft: timeLeft(),
-          guarded(
-            () => (channel as InboxCarrierChannel).sendInboxFrame(
+          guarded(() async {
+            await realize();
+            return (channel as InboxCarrierChannel).sendInboxFrame(
               address,
               frames[index],
               inboxSender!,
               inboxKey!,
-            ),
-          ),
+            );
+          }),
         );
       } else {
         await _paced(
-          guarded(() => channel.sendFrame(address, frames[index])),
+          guarded(() async {
+            if (channel is LazyFrameCarrierChannel && !realFrames) {
+              // The channel seals after its own waits (connection, login).
+              final index0 = index;
+              return channel.sendFrameLazy(address, () async {
+                await realize();
+                return frames[index0];
+              });
+            }
+            await realize();
+            return channel.sendFrame(address, frames[index]);
+          }),
           cost: airBytes(frames[index]),
           started: index > 0,
           timeLeft: timeLeft(),

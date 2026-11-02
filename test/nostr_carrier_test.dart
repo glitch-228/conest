@@ -231,6 +231,40 @@ void main() {
     );
   });
 
+  test('the frame is made after the relay connection is up and the first '
+      'relay has its turn, and the other relays reuse the event', () async {
+    relays.relay('wss://l1.test');
+    relays.relay('wss://l2.test');
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel(['wss://l1.test', 'wss://l2.test'], bobGot)..start();
+    var open = false;
+    final alice = NostrCarrierChannel(
+      secretKey: Secp256k1.generateSecretKey(),
+      relays: [Uri.parse('wss://l1.test')],
+      connector: (url) async {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        open = true;
+        return relays.connect(url);
+      },
+      onFrame: (_, _) {},
+    );
+    channels.add(alice);
+    alice.start();
+    var made = 0;
+    var openWhenMade = false;
+    final sending = alice.sendFrameLazy(bob.localAddress!, () async {
+      made++;
+      openWhenMade = open;
+      return frame;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(made, 0, reason: 'sealed before the connection was up');
+    await sending;
+    expect(made, 1, reason: 'one event for every relay');
+    expect(openWhenMade, isTrue);
+    await until(() => bobGot.isNotEmpty);
+  });
+
   test('a relay that says OK and drops what it gets loses its rank, and '
       'every frame still arrives', () async {
     final bad = relays.relay('wss://bad.test')..discard = true;
