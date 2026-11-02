@@ -3,6 +3,8 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'carrier.dart';
 import 'nostr/event.dart';
 import 'nostr/nip44.dart';
@@ -391,12 +393,20 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
       );
     }
     final solo = used.length == 1;
-    _lastSend[address] = (
-      relays: [for (final url in used) url.toString()],
-      solo: solo,
+    // Kept by the send the frame belongs to (all its frames together), so a
+    // receipt credits the relays of the message it names, not the last one.
+    final sendKey = _sendKey(address);
+    final known = _sends.remove(sendKey);
+    _sends[sendKey] = (
+      relays: {...?known?.relays, for (final url in used) url.toString()},
+      solo: solo && (known?.solo ?? true),
     );
-    while (_lastSend.length > 256) {
-      _lastSend.remove(_lastSend.keys.first);
+    while (_sends.length > 512) {
+      _sends.remove(_sends.keys.first);
+    }
+    _lastRelays[address] = [for (final url in used) url.toString()];
+    while (_lastRelays.length > 256) {
+      _lastRelays.remove(_lastRelays.keys.first);
     }
     // Only a send through one relay says anything about that relay: with two,
     // a receipt could have come by either.
@@ -410,8 +420,15 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
     }
   }
 
-  /// Relays an event was last published to, by recipient address.
-  final Map<String, ({List<String> relays, bool solo})> _lastSend = {};
+  /// Relays each send went through (by send id, or by address when the
+  /// caller names none), and whether it was one relay alone.
+  final Map<String, ({Set<String> relays, bool solo})> _sends = {};
+
+  /// Relays the last event to a recipient went through.
+  final Map<String, List<String>> _lastRelays = {};
+
+  String _sendKey(String address) =>
+      (Zone.current[carrierSendZoneKey] as String?) ?? 'addr:$address';
 
   /// Sends per recipient (every few go through a single relay to test it).
   final Map<String, int> _sendCounts = {};
@@ -420,13 +437,19 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
   /// published there (a relay that says OK and drops them loses its rank).
   final Map<String, ({int sent, int delivered})> _scores = {};
 
+  @visibleForTesting
+  Map<String, int> get deliveredForTesting => {
+    for (final e in _scores.entries) e.key: e.value.delivered,
+  };
+
   /// Recipients heard from through this channel (bounded).
   final LinkedHashSet<String> _heardFrom = LinkedHashSet();
 
-  /// The recipient at [address] confirmed (a receipt came) what was sent
-  /// last: the relays it went through are credited.
-  void noteDelivered(String address) {
-    final last = _lastSend.remove(address);
+  /// The recipient at [address] confirmed (a receipt came) the send
+  /// [sendId] (or, with none named, what was sent last): the relays it went
+  /// through are credited, if it went through one alone.
+  void noteDelivered(String address, {String? sendId}) {
+    final last = _sends.remove(sendId ?? 'addr:$address');
     _heardFrom.remove(address);
     _heardFrom.add(address);
     while (_heardFrom.length > 256) {
@@ -459,7 +482,7 @@ class NostrCarrierChannel implements ManagedCarrierChannel {
     if (!_heardFrom.contains(address)) return awake.take(3).toList();
     // The previous send to this recipient has no receipt yet: other relays
     // first this time.
-    final lastRelays = _lastSend[address]?.relays ?? const <String>[];
+    final lastRelays = _lastRelays[address] ?? const <String>[];
     double rank(Uri url) {
       final score = _scores[url.toString()] ?? (sent: 0, delivered: 0);
       final base = (score.delivered + 1) / (score.sent + 2);

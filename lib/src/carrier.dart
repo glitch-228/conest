@@ -365,6 +365,10 @@ class _RadioEnvelope {
 
 /// What [CarrierTransportAdapter.cancel] takes: one envelope to one device
 /// (a group message goes to each member separately).
+/// Zone value naming the send a channel call belongs to (a string from
+/// [carrierSendId]), for channels that keep records per send.
+const Object carrierSendZoneKey = #conestCarrierSendId;
+
 String carrierSendId(String deviceId, String envelopeId) =>
     transportOperationId(deviceId, envelopeId);
 
@@ -686,7 +690,9 @@ class CarrierTransportAdapter implements TransportAdapter, RateLimited {
         throw TransportSendCancelled('${kind.label}: no longer needed.');
       }
       // The turn has come: seal now, not before the wait.
-      return realize().then((_) => send());
+      return realize().then(
+        (_) => runZoned(send, zoneValues: {carrierSendZoneKey: sendId}),
+      );
     };
     for (var index = 0; index < frames.length; index++) {
       if (index > 0 && frameSpacing > Duration.zero) {

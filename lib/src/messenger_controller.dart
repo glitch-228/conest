@@ -21968,7 +21968,12 @@ class MessengerController extends ChangeNotifier {
     // Came by Nostr: the relays it went through earn their rank.
     if (arrivedBy != null && arrivedBy.contains(MessageRoute.nostrCarrier)) {
       final address = contact.carrierAddress(TransportKind.nostr);
-      if (address != null) _nostrChannel?.noteDelivered(address);
+      if (address != null) {
+        _nostrChannel?.noteDelivered(
+          address,
+          sendId: carrierSendId(contact.deviceId, target),
+        );
+      }
     }
     final ackedAt = envelope.createdAt.toUtc().isAfter(_now().toUtc())
         ? _now().toUtc()

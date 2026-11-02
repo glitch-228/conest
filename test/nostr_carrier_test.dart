@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:conest/src/carrier.dart';
 import 'package:conest/src/nostr/event.dart';
 import 'package:conest/src/nostr/relay.dart';
 import 'package:conest/src/nostr/secp256k1.dart';
@@ -198,6 +199,36 @@ void main() {
       }
     }
     expect(perEvent.values.where((n) => n > 2), hasLength(1));
+  });
+
+  test('a receipt credits the relays of the message it names, not of the '
+      'last one sent', () async {
+    for (var i = 0; i < 3; i++) {
+      relays.relay('wss://q$i.test');
+    }
+    final bob = channel([for (var i = 0; i < 3; i++) 'wss://q$i.test'], [])
+      ..start();
+    final alice = channel(['wss://q0.test'], [])..start();
+    final address = bob.localAddress!;
+    Future<void> send(String id) => runZoned(
+      () => alice.sendFrame(address, Uint8List.fromList([1, ...frame])),
+      zoneValues: {carrierSendZoneKey: id},
+    );
+    await send('s0');
+    alice.noteDelivered(address, sendId: 's0');
+    // The fourth send after that goes through one relay alone.
+    for (var i = 1; i <= 4; i++) {
+      await send('s$i');
+    }
+    await send('later');
+    alice.noteDelivered(address, sendId: 'later');
+    expect(alice.deliveredForTesting.values.fold<int>(0, (a, b) => a + b), 0);
+    alice.noteDelivered(address, sendId: 's4');
+    expect(
+      alice.deliveredForTesting.values.fold<int>(0, (a, b) => a + b),
+      1,
+      reason: 'the receipt of the solo send was not credited',
+    );
   });
 
   test('a relay that says OK and drops what it gets loses its rank, and '
