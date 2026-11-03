@@ -24764,15 +24764,27 @@ void main() {
           reason: 'the laptop did not get the file',
           timeout: const Duration(seconds: 30),
         );
-        advance(const Duration(seconds: 20));
-        final id = await waitForFile(
-          phone,
-          bobId,
-          'to_laptop.bin',
-          alice,
-          phone,
-          bob,
+        // The laptop passes the message on to the phone after a wait on the
+        // devices' clock, counted from when the file was here (which can be
+        // a moment after it shows as here): the clock keeps going while the
+        // phone waits for it, not once before the pass-on is queued.
+        final clock = Timer.periodic(
+          const Duration(milliseconds: 100),
+          (_) => advance(const Duration(seconds: 1)),
         );
+        final String id;
+        try {
+          id = await waitForFile(
+            phone,
+            bobId,
+            'to_laptop.bin',
+            alice,
+            phone,
+            bob,
+          );
+        } finally {
+          clock.cancel();
+        }
         final copy = phone
             .messagesFor(bobId)
             .firstWhere((m) => m.attachment?.id == id);
