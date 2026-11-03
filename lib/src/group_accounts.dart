@@ -379,12 +379,22 @@ class DeviceListView {
   /// Offers a list whose signature the caller already checked against the
   /// key the group's signed record holds for the account. Returns whether
   /// the view changed.
-  bool offerVerified(AccountDeviceList list) {
+  bool offerVerified(AccountDeviceList list, {required String accountKey}) {
     if (!_accounts.containsKey(list.accountId) &&
         _accounts.length >= maxAccounts) {
       return false;
     }
-    final state = _state(list.accountId);
+    var state = _state(list.accountId);
+    if (state.key != null && state.key != accountKey) {
+      // The group admitted another key under this id: nothing carries over.
+      _accounts[list.accountId] = state = _AccountState();
+    }
+    state.key = accountKey;
+    for (final cert in list.devices) {
+      if (state.certs.length < 256 || state.certs.containsKey(cert.deviceId)) {
+        state.certs.putIfAbsent(cert.deviceId, () => cert);
+      }
+    }
     final digest = deviceListDigest(list);
     var changed = false;
     final facts = state.facts.withList(list);
@@ -406,7 +416,13 @@ class DeviceListView {
 
   /// Revocations pinned by the signed DAG count whether or not this view
   /// saw the list. Feeds the same facts.
-  bool absorbPinned(AccountDeviceList list) => offerVerified(list);
+  bool absorbPinned(AccountDeviceList list, {required String accountKey}) =>
+      offerVerified(list, accountKey: accountKey);
+
+  /// The certificate of [deviceId] in any verified list seen (also a revoked
+  /// device's, so its old events can still be checked up to its cutoff).
+  DeviceCert? certFor(String accountId, String deviceId) =>
+      _accounts[accountId]?.certs[deviceId];
 
   AccountDeviceList? current(String accountId) => _accounts[accountId]?.current;
   AccountFacts facts(String accountId) =>
@@ -495,9 +511,48 @@ class DeviceListView {
 }
 
 class _AccountState {
+  String? key;
+  final certs = <String, DeviceCert>{};
   AccountDeviceList? current;
   AccountFacts facts = AccountFacts.empty;
   final cutoffs = <String, AccountCutoff>{};
+}
+
+/// The group profile of a device as its certificate vouches for it; routes
+/// and capabilities come from [announced] when its keys are the certificate's.
+/// Null when the certificate's Iroh endpoint is not the hex of its signing key
+/// (a membership profile must pin both).
+GroupMemberProfile? profileFromCert(
+  DeviceCert cert, {
+  GroupMemberProfile? announced,
+}) {
+  final signingKey = cert.signingKeyBase64;
+  final iroh = cert.irohEndpointId ?? signingKeyHex(signingKey);
+  if (iroh != signingKeyHex(signingKey)) return null;
+  final base =
+      announced != null &&
+          announced.accountId == cert.accountId &&
+          announced.deviceId == cert.deviceId &&
+          announced.publicKeyBase64 == cert.encryptionKeyBase64 &&
+          announced.signingPublicKeyBase64 == signingKey
+      ? announced
+      : null;
+  return GroupMemberProfile(
+    accountId: cert.accountId,
+    deviceId: cert.deviceId,
+    displayName: base?.displayName ?? cert.name,
+    bio: base?.bio ?? '',
+    relayCapable: base?.relayCapable ?? true,
+    publicKeyBase64: cert.encryptionKeyBase64,
+    signingPublicKeyBase64: signingKey,
+    irohEndpointId: iroh,
+    routeHints: base?.routeHints ?? const [],
+    capabilities: base?.capabilities ?? const [],
+    featureCapabilities: base?.featureCapabilities ?? const [],
+    featureCapabilityVersion: base?.featureCapabilityVersion ?? 0,
+    carrierAddresses: base?.carrierAddresses ?? const {},
+    carrierAddressesKnown: base?.carrierAddressesKnown ?? false,
+  );
 }
 
 /// A group with the devices of its member accounts resolved.
@@ -588,37 +643,12 @@ GroupResolution resolveGroup(
         unverified.add(cert.deviceId);
         continue;
       }
-      final announced = announces[cert.deviceId];
-      final signingKey = cert.signingKeyBase64;
-      final iroh = cert.irohEndpointId ?? signingKeyHex(signingKey);
-      if (iroh != signingKeyHex(signingKey)) {
+      final profile = profileFromCert(cert, announced: announces[cert.deviceId]);
+      if (profile == null) {
         unverified.add(cert.deviceId);
         continue;
       }
-      final base = announced != null &&
-              announced.accountId == cert.accountId &&
-              announced.publicKeyBase64 == cert.encryptionKeyBase64 &&
-              announced.signingPublicKeyBase64 == signingKey
-          ? announced
-          : null;
-      siblings.add(
-        GroupMemberProfile(
-          accountId: cert.accountId,
-          deviceId: cert.deviceId,
-          displayName: base?.displayName ?? cert.name,
-          bio: base?.bio ?? '',
-          relayCapable: base?.relayCapable ?? true,
-          publicKeyBase64: cert.encryptionKeyBase64,
-          signingPublicKeyBase64: signingKey,
-          irohEndpointId: iroh,
-          routeHints: base?.routeHints ?? const [],
-          capabilities: base?.capabilities ?? const [],
-          featureCapabilities: base?.featureCapabilities ?? const [],
-          featureCapabilityVersion: base?.featureCapabilityVersion ?? 0,
-          carrierAddresses: base?.carrierAddresses ?? const {},
-          carrierAddressesKnown: base?.carrierAddressesKnown ?? false,
-        ),
-      );
+      siblings.add(profile);
     }
     if (signed.confirmNewDevices) {
       for (final cert in view.pendingCerts(entry)) {
