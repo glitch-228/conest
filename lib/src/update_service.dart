@@ -13,6 +13,7 @@ import 'package:pub_semver/pub_semver.dart';
 
 import 'build_info.dart';
 import 'platform_bridge.dart';
+import 'release_order.dart';
 
 enum UpdateTargetPlatform {
   android('android'),
@@ -81,7 +82,16 @@ class UpdateAvailability {
     required this.asset,
     required this.sha256Hex,
     this.releaseNotes,
+    this.epoch = 0,
   });
+
+  /// The update-channel choice this offer was made under (a counter that
+  /// moves on every switch): an offer from before a switch is not applied.
+  final int epoch;
+
+  /// The line the release is on (stable, nightly or canary).
+  ReleaseLine? get line =>
+      classifyRelease(release.tagName, prerelease: release.prerelease)?.line;
 
   final GithubReleaseInfo release;
   final GithubReleaseAsset asset;
@@ -98,7 +108,15 @@ typedef DesktopUpdaterLauncher =
 
 const _releaseManifestName = 'RELEASE-MANIFEST.json';
 const _releaseManifestSignatureName = 'RELEASE-MANIFEST.ed25519.sig';
+// Canary releases carry their own pair, so that relay supervisors and other
+// readers of the standard names (which know two channels) never see one.
+const _canaryManifestName = 'RELEASE-MANIFEST.canary.json';
+const _canaryManifestSignatureName = 'RELEASE-MANIFEST.canary.ed25519.sig';
 const int _maxMetadataBytes = 1024 * 1024;
+// A page of 40 real releases is about 1 MB (about 25 KB each, with their
+// assets and uploaders): the list has its own, larger cap.
+const int _maxReleaseListBytes = 4 * 1024 * 1024;
+const int _releaseListPageSize = 40;
 const int _maxManifestBytes = 512 * 1024;
 const int _maxManifestSignatureBytes = 4096;
 const int _maxUpdateAssetBytes = 1024 * 1024 * 1024;
@@ -175,6 +193,7 @@ class ReleaseManifest {
     this.releaseVersion,
     this.channel,
     this.minimumSupervisorVersion,
+    this.androidVersionCode,
   });
 
   final int version;
@@ -188,6 +207,9 @@ class ReleaseManifest {
   final String? releaseVersion;
   final String? channel;
   final String? minimumSupervisorVersion;
+
+  /// The Android `versionCode` the release's APK has (signed).
+  final int? androidVersionCode;
 
   factory ReleaseManifest.fromJson(Map<String, dynamic> json) {
     final version = json['version'] as int? ?? 0;
@@ -236,13 +258,21 @@ class ReleaseManifest {
         json['minimumSupervisorVersion'] as String?;
     if (version >= 2 &&
         ((releaseVersion?.isEmpty ?? true) ||
-            (channel != 'stable' && channel != 'nightly') ||
+            (channel != 'stable' &&
+                channel != 'nightly' &&
+                channel != 'canary') ||
             (minimumSupervisorVersion?.isEmpty ?? true))) {
       throw const FormatException(
         'Release manifest v2 metadata is incomplete.',
       );
     }
+    final rawCode = json['androidVersionCode'];
+    if (rawCode != null &&
+        (rawCode is! int || rawCode <= 0 || rawCode > 2100000000)) {
+      throw const FormatException('Release manifest Android code is invalid.');
+    }
     return ReleaseManifest(
+      androidVersionCode: rawCode as int?,
       version: version,
       tagName: tagName,
       assets: assets,
@@ -316,6 +346,21 @@ String? resolveReleaseNotes({
     return releaseBody;
   }
   return null;
+}
+
+/// What one check found; applied to the service only if still current.
+class _CheckOutcome {
+  const _CheckOutcome({
+    this.available,
+    this.status,
+    this.error,
+    this.waiting = false,
+  });
+
+  final UpdateAvailability? available;
+  final String? status;
+  final String? error;
+  final bool waiting;
 }
 
 class UpdateService extends ChangeNotifier {
@@ -398,27 +443,56 @@ class UpdateService extends ChangeNotifier {
   String? _statusMessage;
   String? _lastError;
   String? _dismissedPromptTagForSession;
-  bool? _receiveUnstableUpdates;
-  bool _preferencesLoaded = false;
+  UpdateChannel? _followed;
+  Future<void>? _preferencesLoad;
+  Future<void> _preferencesWrite = Future<void>.value();
+
+  /// Moves on every switch of the update channel. A check or an offer made
+  /// under an earlier value is dropped.
+  int _epoch = 0;
+  bool _disposed = false;
+  bool _recheckUserInitiated = false;
+  bool _waitingForNewer = false;
 
   static const String _preferencesFileName = 'update_preferences.json';
 
-  /// Whether nightly releases are offered besides stable ones. A newer
-  /// stable release is always offered, so a nightly install can always move
-  /// to stable. Nightly builds start with this on and stable builds off.
-  bool get receiveUnstableUpdates =>
-      _receiveUnstableUpdates ?? buildInfo.channel == UpdateChannel.nightly;
+  /// The line this install follows when nothing was chosen: its own.
+  UpdateChannel get _defaultChannel => switch (buildInfo.channel) {
+    UpdateChannel.canary => UpdateChannel.canary,
+    UpdateChannel.nightly => UpdateChannel.nightly,
+    _ => UpdateChannel.stable,
+  };
+
+  /// The line updates are taken from: stable, nightly or canary. A newer
+  /// line also takes the releases of the older ones, so a build can always
+  /// move on to a newer stable release.
+  UpdateChannel get updateChannel => _followed ?? _defaultChannel;
+
+  ReleaseLine get _followedLine => ReleaseLine.ofChannel(updateChannel)!;
+
+  /// Whether releases besides stable ones are offered.
+  bool get receiveUnstableUpdates => updateChannel != UpdateChannel.stable;
+
+  /// Set when the installed build is on a newer line than the one followed
+  /// and nothing newer than it has been released on the followed line: the
+  /// install waits (no downgrade) and the Settings says so.
+  bool get waitingForNewerThanInstalled => _waitingForNewer;
 
   /// The channels updates come from, for status lines.
-  String get offeredChannelsLabel =>
-      receiveUnstableUpdates ? 'stable or nightly' : 'stable';
+  String get offeredChannelsLabel => _labelFor(updateChannel);
 
-  /// Reads the saved choice once. The first time, the build's default is
-  /// saved, so a nightly install that moves to a stable release keeps
-  /// receiving nightlies until the switch is turned off.
-  Future<void> loadPreferences() async {
-    if (_preferencesLoaded) return;
-    _preferencesLoaded = true;
+  static String _labelFor(UpdateChannel channel) => switch (channel) {
+    UpdateChannel.canary => 'stable, nightly or canary',
+    UpdateChannel.nightly => 'stable or nightly',
+    _ => 'stable',
+  };
+
+  /// Reads the saved choice once (every caller shares the one read). The
+  /// first time, the build's default is saved, so a nightly install that
+  /// moves to a stable release keeps receiving nightlies until switched.
+  Future<void> loadPreferences() => _preferencesLoad ??= _loadPreferences();
+
+  Future<void> _loadPreferences() async {
     try {
       final file = File(
         p.join(
@@ -428,40 +502,93 @@ class UpdateService extends ChangeNotifier {
       );
       if (await file.exists()) {
         final decoded = jsonDecode(await file.readAsString());
-        if (decoded is Map<String, dynamic> &&
-            decoded['receiveUnstableUpdates'] is bool) {
-          _receiveUnstableUpdates = decoded['receiveUnstableUpdates'] as bool;
-          return;
+        if (decoded is Map<String, dynamic>) {
+          final saved = switch (decoded['channel']) {
+            'stable' => UpdateChannel.stable,
+            'nightly' => UpdateChannel.nightly,
+            'canary' => UpdateChannel.canary,
+            _ => null,
+          };
+          if (saved != null) {
+            _followed ??= saved;
+            return;
+          }
+          if (decoded['receiveUnstableUpdates'] is bool) {
+            // An older build's file: its on/off switch. A canary build is
+            // on the newest line whatever the old file says.
+            _followed ??= buildInfo.channel == UpdateChannel.canary
+                ? UpdateChannel.canary
+                : (decoded['receiveUnstableUpdates'] as bool)
+                ? UpdateChannel.nightly
+                : UpdateChannel.stable;
+            return;
+          }
         }
       }
-      await _savePreferences(receiveUnstableUpdates);
+      await _savePreferences(updateChannel);
     } catch (_) {
       // Without a readable file the build's default applies.
     }
   }
 
-  /// Turns nightly updates on or off and checks again.
-  Future<void> setReceiveUnstableUpdates(bool value) async {
+  /// Switches the line updates are taken from and checks again. Refused
+  /// while a download runs. A check already running is dropped when it
+  /// ends (its result belongs to the old choice) and a fresh one follows.
+  Future<void> setUpdateChannel(UpdateChannel channel) async {
+    if (channel == UpdateChannel.debug) return;
     await loadPreferences();
-    _receiveUnstableUpdates = value;
+    if (_disposed || _downloading || channel == updateChannel) return;
+    _followed = channel;
+    _epoch++;
     _availableUpdate = null;
+    _waitingForNewer = false;
+    _statusMessage = null;
+    _lastError = null;
+    _recheckUserInitiated = true;
     notifyListeners();
     try {
-      await _savePreferences(value);
+      await _savePreferences(channel);
     } catch (_) {
       // Kept for this session.
     }
     if (supportsUpdates) await checkForUpdate(userInitiated: true);
   }
 
-  Future<void> _savePreferences(bool receiveUnstable) async {
+  /// The old on/off switch: nightly (or canary on a canary build) or stable.
+  Future<void> setReceiveUnstableUpdates(bool value) => setUpdateChannel(
+    !value
+        ? UpdateChannel.stable
+        : buildInfo.channel == UpdateChannel.canary
+        ? UpdateChannel.canary
+        : UpdateChannel.nightly,
+  );
+
+  /// Writes are chained, so two quick switches land in order.
+  Future<void> _savePreferences(UpdateChannel channel) {
+    final next = _preferencesWrite.then((_) => _writePreferences(channel));
+    _preferencesWrite = next.then((_) {}, onError: (_) {});
+    return next;
+  }
+
+  Future<void> _writePreferences(UpdateChannel channel) async {
     final directory = await _applicationSupportDirectoryProvider();
     await directory.create(recursive: true);
     final file = File(p.join(directory.path, _preferencesFileName));
     await file.writeAsString(
-      jsonEncode({'receiveUnstableUpdates': receiveUnstable}),
+      jsonEncode({
+        'channel': channel.label,
+        // Kept for older builds that read this file after a downgrade.
+        'receiveUnstableUpdates': channel != UpdateChannel.stable,
+      }),
       flush: true,
     );
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    super.dispose();
   }
 
   bool get supportsUpdates {
@@ -526,67 +653,154 @@ class UpdateService extends ChangeNotifier {
   }
 
   Future<bool> checkForUpdate({bool userInitiated = false}) async {
-    if (!supportsUpdates || _checking) {
+    if (_disposed || !supportsUpdates || _checking) {
       return _availableUpdate != null;
     }
     _checking = true;
-    await loadPreferences();
-    if (userInitiated) {
-      _statusMessage = 'Checking for $offeredChannelsLabel updates...';
+    _recheckUserInitiated = false;
+    var stale = false;
+    try {
+      await loadPreferences();
+      // Taken after the saved choice is known: a switch from here on makes
+      // this check stale.
+      final epoch = _epoch;
+      final channel = updateChannel;
+      if (userInitiated) {
+        _statusMessage = 'Checking for ${_labelFor(channel)} updates...';
+      }
+      _lastError = null;
+      notifyListeners();
+      final outcome = await _evaluate(channel, epoch);
+      stale = _disposed || epoch != _epoch;
+      if (stale) return false;
+      _availableUpdate = outcome.available;
+      _waitingForNewer = outcome.waiting;
+      if (outcome.error != null) {
+        _lastError = outcome.error;
+        if (userInitiated) {
+          _statusMessage = 'Update check failed: ${outcome.error}';
+        }
+      } else {
+        _statusMessage = outcome.status;
+      }
+      return outcome.available != null;
+    } finally {
+      _checking = false;
+      if (!stale) _lastCheckedAt = _nowProvider().toUtc();
+      if (!_disposed) {
+        notifyListeners();
+        if (stale) {
+          // The choice moved while this ran: one fresh check, started after
+          // this one ended (not from inside it).
+          final again = userInitiated || _recheckUserInitiated;
+          _recheckUserInitiated = false;
+          scheduleMicrotask(() {
+            if (!_disposed) unawaited(checkForUpdate(userInitiated: again));
+          });
+        }
+      }
     }
-    _lastError = null;
-    notifyListeners();
+  }
+
+  /// What a check finds under [channel]; changes no state of the service,
+  /// so a stale one can simply be dropped.
+  Future<_CheckOutcome> _evaluate(UpdateChannel channel, int epoch) async {
+    final label = _labelFor(channel);
+    final line = ReleaseLine.ofChannel(channel)!;
+    final installedLine = ReleaseLine.ofChannel(buildInfo.channel);
+    // On a newer line than the one followed: wait for a release newer than
+    // this build rather than going back.
+    _CheckOutcome notNewer(String plain) {
+      final waits = installedLine != null && line.rank < installedLine.rank;
+      return _CheckOutcome(
+        waiting: waits,
+        status: waits
+            ? 'This is a ${installedLine.name} build. Staying on it until a '
+                  '$label release newer than this build is published.'
+            : plain,
+      );
+    }
+
     try {
       final releases = await _fetchReleases();
-      final selected = _selectRelease(releases);
-      if (selected == null) {
-        _availableUpdate = null;
-        _statusMessage = 'No $offeredChannelsLabel releases found.';
-        return false;
-      }
-      if (!_isNewerThanCurrentBuild(selected.tagName)) {
-        _availableUpdate = null;
-        _statusMessage = 'Already on the latest $offeredChannelsLabel build.';
-        return false;
+      final picked = chooseRelease<GithubReleaseInfo>(
+        releases,
+        line,
+        describe: (release) => ReleaseCandidate(
+          tagName: release.tagName,
+          prerelease: release.prerelease,
+          draft: release.draft,
+        ),
+      );
+      if (picked == null) return notNewer('No $label releases found.');
+      final selected = picked.$1;
+      final currentTag = buildInfo.buildTag;
+      final identity = currentTag != null && currentTag.trim().isNotEmpty
+          ? currentTag
+          : buildInfo.version;
+      if (!isNewerThanInstalled(picked.$2, identity)) {
+        return notNewer('Already on the latest $label build.');
       }
       final asset = _selectPlatformAsset(selected);
       if (asset == null) {
-        _availableUpdate = null;
-        _statusMessage =
-            'Latest $offeredChannelsLabel release has no ${_targetPlatform.label} app asset.';
-        return false;
+        return _CheckOutcome(
+          status:
+              'Latest $label release has no ${_targetPlatform.label} app asset.',
+        );
       }
-      final manifest = await _fetchVerifiedReleaseManifest(selected);
+      final manifest = await _fetchVerifiedReleaseManifest(
+        selected,
+        picked.$2.line,
+      );
       final manifestAsset = manifest.assetFor(asset);
-      final releaseNotes = _resolveReleaseNotes(
-        manifest: manifest,
-        release: selected,
-      );
-      _availableUpdate = UpdateAvailability(
-        release: selected,
-        asset: asset,
-        sha256Hex: manifestAsset.sha256Hex,
-        releaseNotes: releaseNotes,
-      );
-      _statusMessage =
-          'Update ${selected.tagName} is available for ${_targetPlatform.label}.';
-      return true;
-    } catch (error) {
-      _lastError = error.toString();
-      if (userInitiated) {
-        _statusMessage = 'Update check failed: $error';
+      // Android refuses an APK with a lower versionCode than the installed
+      // one: wait for a release that has a higher one.
+      final code = manifest.androidVersionCode;
+      final installedCode = int.tryParse(buildInfo.buildNumber);
+      if (_targetPlatform == UpdateTargetPlatform.android &&
+          code != null &&
+          installedCode != null &&
+          code < installedCode) {
+        return _CheckOutcome(
+          waiting: true,
+          status:
+              '${selected.tagName} cannot replace this build on Android. '
+              'Waiting for a newer release.',
+        );
       }
-      return false;
-    } finally {
-      _checking = false;
-      _lastCheckedAt = _nowProvider().toUtc();
-      notifyListeners();
+      return _CheckOutcome(
+        available: UpdateAvailability(
+          release: selected,
+          asset: asset,
+          sha256Hex: manifestAsset.sha256Hex,
+          releaseNotes: _resolveReleaseNotes(
+            manifest: manifest,
+            release: selected,
+          ),
+          epoch: epoch,
+        ),
+        status:
+            'Update ${selected.tagName} is available for ${_targetPlatform.label}.',
+      );
+    } catch (error) {
+      return _CheckOutcome(error: error.toString());
     }
   }
 
   Future<void> downloadAndApplyAvailableUpdate() async {
     final available = _availableUpdate;
-    if (available == null || _downloading) {
+    if (_disposed || available == null || _downloading) {
+      return;
+    }
+    // An offer made before a switch of the channel, or for a line the
+    // current choice does not take, is not applied.
+    final line = available.line;
+    if (available.epoch != _epoch ||
+        line == null ||
+        !_followedLine.offered.contains(line)) {
+      _availableUpdate = null;
+      _statusMessage = 'That update no longer matches your update channel.';
+      notifyListeners();
       return;
     }
     _downloading = true;
@@ -640,7 +854,10 @@ class UpdateService extends ChangeNotifier {
 
   Future<List<GithubReleaseInfo>> _fetchReleases() async {
     final response = await _requestJson(
-      _apiBaseUri.resolve('/repos/$_repositoryOwner/$_repositoryName/releases'),
+      _apiBaseUri
+          .resolve('/repos/$_repositoryOwner/$_repositoryName/releases')
+          .replace(queryParameters: {'per_page': '$_releaseListPageSize'}),
+      maxBytes: _maxReleaseListBytes,
     );
     final list = response as List<dynamic>;
     if (list.length > 128) {
@@ -702,28 +919,6 @@ class UpdateService extends ChangeNotifier {
     );
   }
 
-  GithubReleaseInfo? _selectRelease(List<GithubReleaseInfo> releases) {
-    final filtered = releases
-        .where((release) {
-          if (release.draft) {
-            return false;
-          }
-          if (buildInfo.channel == UpdateChannel.debug) return false;
-          // Stable releases always; nightlies when asked for.
-          return !release.prerelease ||
-              (receiveUnstableUpdates &&
-                  release.tagName.toLowerCase().contains('nightly'));
-        })
-        .where((release) => _versionForTag(release.tagName) != null)
-        .toList();
-    filtered.sort(
-      (left, right) => _versionForTag(
-        right.tagName,
-      )!.compareTo(_versionForTag(left.tagName)!),
-    );
-    return filtered.isEmpty ? null : filtered.first;
-  }
-
   GithubReleaseAsset? _selectPlatformAsset(GithubReleaseInfo release) {
     final assets = release.assets.where((asset) {
       final name = asset.name.toLowerCase();
@@ -761,31 +956,16 @@ class UpdateService extends ChangeNotifier {
     releaseBody: release.body,
   );
 
-  bool _isNewerThanCurrentBuild(String releaseTag) {
-    final currentTag = buildInfo.buildTag;
-    return isReleaseTagNewerThan(
-      releaseTag,
-      currentTag != null && currentTag.trim().isNotEmpty
-          ? currentTag
-          : buildInfo.version,
-    );
-  }
-
-  Version? _versionForTag(String value) {
-    try {
-      return Version.parse(_normalizeReleaseIdentity(value));
-    } catch (_) {
-      return null;
-    }
-  }
-
   String _normalizeReleaseIdentity(String value) {
     final trimmed = value.trim().toLowerCase();
     return trimmed.startsWith('v') ? trimmed.substring(1) : trimmed;
   }
 
-  Future<dynamic> _requestJson(Uri uri) async {
-    final text = await _downloadText(uri, maxBytes: _maxMetadataBytes);
+  Future<dynamic> _requestJson(
+    Uri uri, {
+    int maxBytes = _maxMetadataBytes,
+  }) async {
+    final text = await _downloadText(uri, maxBytes: maxBytes);
     return jsonDecode(text);
   }
 
@@ -837,6 +1017,7 @@ class UpdateService extends ChangeNotifier {
 
   Future<ReleaseManifest> _fetchVerifiedReleaseManifest(
     GithubReleaseInfo release,
+    ReleaseLine line,
   ) async {
     final publicKeyText = _releaseManifestPublicKeyBase64.trim();
     if (publicKeyText.isEmpty) {
@@ -844,10 +1025,31 @@ class UpdateService extends ChangeNotifier {
         'No release manifest public key is configured for update verification.',
       );
     }
-    final manifestAsset = _requiredReleaseAsset(release, _releaseManifestName);
+    // A canary release has its own pair of files and never the standard
+    // one; the others the standard pair and never the canary one.
+    final canary = line == ReleaseLine.canary;
+    final hasCanaryPair = release.assets.any(
+      (asset) =>
+          asset.name == _canaryManifestName ||
+          asset.name == _canaryManifestSignatureName,
+    );
+    final hasStandardPair = release.assets.any(
+      (asset) =>
+          asset.name == _releaseManifestName ||
+          asset.name == _releaseManifestSignatureName,
+    );
+    if (canary ? hasStandardPair : hasCanaryPair) {
+      throw StateError(
+        'Release ${release.tagName} carries the manifest files of another channel.',
+      );
+    }
+    final manifestAsset = _requiredReleaseAsset(
+      release,
+      canary ? _canaryManifestName : _releaseManifestName,
+    );
     final signatureAsset = _requiredReleaseAsset(
       release,
-      _releaseManifestSignatureName,
+      canary ? _canaryManifestSignatureName : _releaseManifestSignatureName,
     );
     if (manifestAsset.sizeBytes > _maxManifestBytes ||
         signatureAsset.sizeBytes > _maxManifestSignatureBytes) {
@@ -892,6 +1094,22 @@ class UpdateService extends ChangeNotifier {
         _normalizeReleaseIdentity(release.tagName)) {
       throw StateError(
         'Release manifest tag ${manifest.tagName} does not match ${release.tagName}.',
+      );
+    }
+    final releaseVersion = manifest.releaseVersion;
+    if (releaseVersion != null &&
+        _normalizeReleaseIdentity(releaseVersion) !=
+            _normalizeReleaseIdentity(release.tagName)) {
+      throw StateError(
+        'Release manifest version $releaseVersion does not match ${release.tagName}.',
+      );
+    }
+    // The signed channel must be the release's own line: a manifest cut
+    // for one channel is never accepted on another channel's release.
+    if (manifest.channel != line.name) {
+      throw StateError(
+        'Release manifest channel ${manifest.channel ?? 'none'} does not match '
+        '${line.name} release ${release.tagName}.',
       );
     }
     return manifest;

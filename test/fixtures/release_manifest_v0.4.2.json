@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "tagName": "v0.4.2",
+  "releaseVersion": "0.4.2",
+  "channel": "stable",
+  "minimumSupervisorVersion": "0.1.0",
+  "releaseNotes": "(notes trimmed in this fixture)",
+  "assets": [
+    {
+      "name": "conest-android-arm64-v0.4.2.apk",
+      "sha256": "2e567b6d3b91b02e58e030b1ccaa33d6a4fce180b271ffe298801a4ca1c57997",
+      "sizeBytes": 60578686,
+      "role": "app",
+      "platform": "android",
+      "architecture": "arm64"
+    },
+    {
+      "name": "conest-linux-x64-v0.4.2.zip",
+      "sha256": "f4ccb59f573eba294ae61c59637e6fb23f6bb109ab29e871c56d0dbcf7bbbeec",
+      "sizeBytes": 57333318,
+      "role": "app",
+      "platform": "linux",
+      "architecture": "x86_64"
+    },
+    {
+      "name": "conest-windows-x64-portable-v0.4.2.zip",
+      "sha256": "558b6a66b8e47ceef662fbab3ea7c1b21e6c43aa7a2647c0068bbf6ec23e436e",
+      "sizeBytes": 76492757,
+      "role": "app",
+      "platform": "windows",
+      "architecture": "x86_64"
+    },
+    {
+      "name": "conest_relay-linux-arm64-v0.4.2",
+      "sha256": "946741c4b65dbe66993fe130130540810d94d534858e77c7a8febb81b61d8a31",
+      "sizeBytes": 2438416,
+      "role": "relay",
+      "platform": "linux",
+      "architecture": "arm64"
+    },
+    {
+      "name": "conest_relay-linux-x64-v0.4.2",
+      "sha256": "a0488e50d6fe1e94db928d8261ac8c1d20ddc1263772f65f978217f3f817e269",
+      "sizeBytes": 2570440,
+      "role": "relay",
+      "platform": "linux",
+      "architecture": "x86_64"
+    },
+    {
+      "name": "conest_relay-windows-x64-v0.4.2.exe",
+      "sha256": "8430d84a6f708e47017c77e7ab4c5e6cefd63e098f61161d40a3e4c899e6ac47",
+      "sizeBytes": 2362880,
+      "role": "relay",
+      "platform": "windows",
+      "architecture": "x86_64"
+    },
+    {
+      "name": "conest_relay_supervisor-linux-arm64-v0.4.2",
+      "sha256": "ffea2a719a256dcfda860025dd04570ae5e2c9604b59c96e50cb1addbc194751",
+      "sizeBytes": 3454208,
+      "role": "relay-supervisor",
+      "platform": "linux",
+      "architecture": "arm64"
+    },
+    {
+      "name": "conest_relay_supervisor-linux-x64-v0.4.2",
+      "sha256": "276068ab4d26dd9613431b9c243550667ad36f0c3153b358df550675a980a5ce",
+      "sizeBytes": 3824216,
+      "role": "relay-supervisor",
+      "platform": "linux",
+      "architecture": "x86_64"
+    },
+    {
+      "name": "conest_relay_supervisor-windows-x64-v0.4.2.exe",
+      "sha256": "01e50c591902ad392216618768d38011b167038b2a8b5b5534933470f3f53514",
+      "sizeBytes": 3855872,
+      "role": "relay-supervisor",
+      "platform": "windows",
+      "architecture": "x86_64"
+    },
+    {
+      "name": "conest_updater-linux-x64-v0.4.2",
+      "sha256": "fe8449c332576ced42e71eb05c6674a3b3cb68729c730efeb22ff01bd9f6e523",
+      "sizeBytes": 485096,
+      "role": "app-updater",
+      "platform": "linux",
+      "architecture": "x86_64"
+    },
+    {
+      "name": "conest_updater-windows-x64-v0.4.2.exe",
+      "sha256": "a5024594d3e20c1dd8edd717110d25f98e726afd684492ffa879cbb1c0c587b8",
+      "sizeBytes": 297984,
+      "role": "app-updater",
+      "platform": "windows",
+      "architecture": "x86_64"
+    }
+  ]
+}

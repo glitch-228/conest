@@ -149,6 +149,38 @@ List<Map<String, dynamic>> _releaseTrustAssets({
   ];
 }
 
+List<Map<String, dynamic>> _trustAssetsFor(
+  String tag,
+  String? style,
+  String baseUrl,
+  _ManifestFiles files,
+) {
+  List<Map<String, dynamic>> pair(bool canary) => _releaseTrustAssets(
+    baseUrl: baseUrl,
+    files: files,
+    manifestPath: '/$tag-manifest.json',
+    signaturePath: '/$tag-manifest.sig',
+    canary: canary,
+  );
+  final own = tag.contains('-canary.');
+  final assets = switch (style) {
+    'canary' => pair(true),
+    'standard' => pair(false),
+    'both' => [...pair(true), ...pair(false)],
+    'no-signature' => [
+      for (final asset in pair(own))
+        if (!(asset['name'] as String).endsWith('.sig')) asset,
+    ],
+    _ => pair(own),
+  };
+  // The checksum file is the same in both pairs.
+  final seen = <String>{};
+  return [
+    for (final asset in assets)
+      if (seen.add(asset['name'] as String)) asset,
+  ];
+}
+
 /// Metadata of the last request to the fake release list.
 class _ReleaseServerLog {
   final List<String> listQueries = [];
@@ -205,6 +237,15 @@ Future<String> _serveReleases(
   List<(String tag, bool prerelease)> releases, {
   _ReleaseServerLog? log,
   Map<String, _ManifestFiles>? overrides,
+  // Per tag: which manifest file names the release carries instead of the
+  // right ones: 'canary', 'standard', 'both' or 'no-signature'.
+  Map<String, String> pairStyle = const {},
+  // Per tag: the Android versionCode signed into the manifest.
+  Map<String, int> androidCodes = const {},
+  // The release list is answered only once this completes.
+  Future<void>? listGate,
+  // Downloads of the app files are answered only once this completes.
+  Future<void>? downloadGate,
 }) async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   addTearDown(server.close);
@@ -215,8 +256,13 @@ Future<String> _serveReleases(
         overrides?[tag] ??
         await signer.sign(
           tagName: tag,
+          androidVersionCode: androidCodes[tag],
           assets: {
             'conest-linux-x64-$tag.zip': _ManifestAssetFixture(
+              sha256Hex: 'e' * 64,
+              sizeBytes: 10,
+            ),
+            'conest-android-arm64-$tag.apk': _ManifestAssetFixture(
               sha256Hex: 'e' * 64,
               sizeBytes: 10,
             ),
@@ -227,6 +273,7 @@ Future<String> _serveReleases(
     final path = request.uri.path;
     if (path == '/repos/glitch-228/conest/releases') {
       log?.listQueries.add(request.uri.query);
+      await listGate;
       final perPage =
           (int.tryParse(request.uri.queryParameters['per_page'] ?? '') ?? 30)
               .clamp(1, 100);
@@ -251,17 +298,21 @@ Future<String> _serveReleases(
                       path: '/$tag.zip',
                       size: 10,
                     ),
-                    ..._releaseTrustAssets(
+                    _assetJson(
+                      name: 'conest-android-arm64-$tag.apk',
                       baseUrl: baseUrl,
-                      files: files[tag]!,
-                      manifestPath: '/$tag-manifest.json',
-                      signaturePath: '/$tag-manifest.sig',
-                      canary: tag.contains('-canary.'),
+                      path: '/$tag.apk',
+                      size: 10,
+                    ),
+                    ..._trustAssetsFor(
+                      tag,
+                      pairStyle[tag],
+                      baseUrl,
+                      files[tag]!,
                     ),
                     // The rest of a real release.
                     for (final name in [
                       'conest-windows-x64-portable-$tag.zip',
-                      'conest-android-arm64-$tag.apk',
                       'conest_relay-linux-x64-$tag',
                       'conest_relay-linux-arm64-$tag',
                       'conest_relay-windows-x64-$tag.exe',
@@ -285,6 +336,9 @@ Future<String> _serveReleases(
               },
           ]),
         );
+    } else if (path.endsWith('.apk') || path.endsWith('.zip')) {
+      await downloadGate;
+      request.response.add(List<int>.filled(10, 1));
     } else if (path.endsWith('-manifest.json')) {
       request.response.add(
         files[path.substring(1, path.length - 14)]!.manifestBytes,
@@ -307,19 +361,22 @@ UpdateService _serviceFor({
   required UpdateChannel channel,
   required String buildTag,
   required Directory support,
+  UpdateTargetPlatform platform = UpdateTargetPlatform.linux,
+  String buildNumber = '1',
+  String? publicKey,
 }) => UpdateService(
   buildInfo: ConestBuildInfo(
     appName: 'Conest',
     packageName: 'dev.conest.conest',
     version: buildTag.substring(1).split('-').first,
-    buildNumber: '1',
+    buildNumber: buildNumber,
     channel: channel,
     isDebugBuild: false,
     buildTag: buildTag,
   ),
-  targetPlatform: UpdateTargetPlatform.linux,
+  targetPlatform: platform,
   apiBaseUri: Uri.parse(baseUrl),
-  releaseManifestPublicKeyBase64: signer.publicKeyBase64,
+  releaseManifestPublicKeyBase64: publicKey ?? signer.publicKeyBase64,
   applicationSupportDirectoryProvider: () async => support,
   tempDirectoryProvider: () async =>
       await Directory.systemTemp.createTemp('conest-updates-temp'),
@@ -1265,5 +1322,718 @@ void main() {
       isTrue,
     );
     expect(isReleaseTagNewerThan('not-a-version', 'v0.10.0'), isFalse);
+  });
+
+  group('release channels', () {
+    // Fixed tags and dates: nothing here reads the clock.
+    const stable042 = ('v0.4.2', false);
+    const nightlyA = ('v0.4.3-nightly.20261029.1', true);
+    const canaryA = ('v0.4.3-canary.20261030.1', true);
+    const canaryB = ('v0.4.3-canary.20261103.2', true);
+
+    Future<(UpdateService, Directory)> serviceOver(
+      List<(String, bool)> releases, {
+      required UpdateChannel channel,
+      required String buildTag,
+      UpdateChannel? follow,
+      Map<String, _ManifestFiles>? overrides,
+      Map<String, String> pairStyle = const {},
+      Map<String, int> androidCodes = const {},
+      Future<void>? listGate,
+      Future<void>? downloadGate,
+      _ReleaseServerLog? log,
+      String? publicKey,
+      UpdateTargetPlatform platform = UpdateTargetPlatform.linux,
+      String buildNumber = '1',
+      _ManifestSigner? signer,
+    }) async {
+      final usedSigner = signer ?? await _ManifestSigner.create();
+      final baseUrl = await _serveReleases(
+        usedSigner,
+        releases,
+        overrides: overrides,
+        pairStyle: pairStyle,
+        androidCodes: androidCodes,
+        listGate: listGate,
+        downloadGate: downloadGate,
+        log: log,
+      );
+      final support = await Directory.systemTemp.createTemp('conest-upd-');
+      addTearDown(() => support.delete(recursive: true));
+      if (follow != null) {
+        await File(
+          p.join(support.path, 'update_preferences.json'),
+        ).writeAsString(jsonEncode({'channel': follow.label}));
+      }
+      final service = _serviceFor(
+        baseUrl: baseUrl,
+        signer: usedSigner,
+        channel: channel,
+        buildTag: buildTag,
+        support: support,
+        publicKey: publicKey,
+        platform: platform,
+        buildNumber: buildNumber,
+      );
+      addTearDown(service.dispose);
+      return (service, support);
+    }
+
+    test('a canary install takes the newest canary', () async {
+      final (service, _) = await serviceOver(
+        [canaryB, canaryA, nightlyA, stable042],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261031.1',
+      );
+      expect(service.updateChannel, UpdateChannel.canary);
+      expect(await service.checkForUpdate(userInitiated: true), isTrue);
+      expect(service.availableUpdate?.release.tagName, canaryB.$1);
+    });
+
+    test(
+      'a canary install also takes a newer nightly, and a newer stable',
+      () async {
+        final (service, _) = await serviceOver(
+          [('v0.4.3-nightly.20261031.1', true), canaryA, stable042],
+          channel: UpdateChannel.canary,
+          buildTag: 'v0.4.3-canary.20261029.1',
+        );
+        expect(await service.checkForUpdate(), isTrue);
+        expect(
+          service.availableUpdate?.release.tagName,
+          'v0.4.3-nightly.20261031.1',
+        );
+        final (toStable, _) = await serviceOver(
+          [('v0.4.3', false), canaryB, nightlyA],
+          channel: UpdateChannel.canary,
+          buildTag: 'v0.4.3-canary.20261102.1',
+        );
+        expect(await toStable.checkForUpdate(), isTrue);
+        expect(toStable.availableUpdate?.release.tagName, 'v0.4.3');
+      },
+    );
+
+    test('same-day canary beats nightly; later nightly beats canary', () async {
+      final (sameDay, _) = await serviceOver(
+        [('v0.4.3-nightly.20261103.9', true), canaryB],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261030.1',
+      );
+      expect(await sameDay.checkForUpdate(), isTrue);
+      expect(sameDay.availableUpdate?.release.tagName, canaryB.$1);
+      // A canary user on today's canary moves to a nightly only when it is
+      // from a later date.
+      final (notYet, _) = await serviceOver(
+        [('v0.4.3-nightly.20261103.9', true), canaryB],
+        channel: UpdateChannel.canary,
+        buildTag: canaryB.$1,
+      );
+      expect(await notYet.checkForUpdate(), isFalse);
+    });
+
+    test('a nightly install never takes a canary', () async {
+      final (service, _) = await serviceOver(
+        [canaryB, canaryA, nightlyA, stable042],
+        channel: UpdateChannel.nightly,
+        buildTag: 'v0.4.3-nightly.20261028.1',
+      );
+      expect(await service.checkForUpdate(), isTrue);
+      expect(service.availableUpdate?.release.tagName, nightlyA.$1);
+      // Only a canary is newer: nothing is offered.
+      final (only, _) = await serviceOver(
+        [canaryB, canaryA, nightlyA],
+        channel: UpdateChannel.nightly,
+        buildTag: nightlyA.$1,
+      );
+      expect(await only.checkForUpdate(), isFalse);
+      expect(only.availableUpdate, isNull);
+      expect(only.waitingForNewerThanInstalled, isFalse);
+    });
+
+    test('a stable install takes only stable', () async {
+      final (service, _) = await serviceOver(
+        [canaryB, nightlyA, stable042],
+        channel: UpdateChannel.stable,
+        buildTag: 'v0.4.1',
+      );
+      expect(await service.checkForUpdate(), isTrue);
+      expect(service.availableUpdate?.release.tagName, 'v0.4.2');
+    });
+
+    test('switching up takes effect at once; the choice is kept', () async {
+      final (service, support) = await serviceOver(
+        [canaryB, nightlyA, stable042],
+        channel: UpdateChannel.nightly,
+        buildTag: 'v0.4.3-nightly.20261028.1',
+      );
+      expect(await service.checkForUpdate(), isTrue);
+      expect(service.availableUpdate?.release.tagName, nightlyA.$1);
+      await service.setUpdateChannel(UpdateChannel.canary);
+      expect(service.availableUpdate?.release.tagName, canaryB.$1);
+      final saved = jsonDecode(
+        await File(
+          p.join(support.path, 'update_preferences.json'),
+        ).readAsString(),
+      );
+      // Both keys: an older build reading the file still behaves.
+      expect(saved, {'channel': 'canary', 'receiveUnstableUpdates': true});
+    });
+
+    test(
+      'switching down waits for a release newer than the installed build',
+      () async {
+        final (service, _) = await serviceOver(
+          [canaryB, nightlyA, stable042],
+          channel: UpdateChannel.canary,
+          buildTag: canaryB.$1,
+        );
+        await service.setUpdateChannel(UpdateChannel.nightly);
+        expect(service.availableUpdate, isNull);
+        expect(service.waitingForNewerThanInstalled, isTrue);
+        expect(service.statusMessage, contains('Staying on it'));
+        await service.setUpdateChannel(UpdateChannel.stable);
+        expect(service.availableUpdate, isNull);
+        expect(service.waitingForNewerThanInstalled, isTrue);
+        // A nightly newer than the build arrives: it is offered.
+        final (later, _) = await serviceOver(
+          [('v0.4.3-nightly.20261104.1', true), canaryB, nightlyA],
+          channel: UpdateChannel.canary,
+          buildTag: canaryB.$1,
+          follow: UpdateChannel.nightly,
+        );
+        expect(await later.checkForUpdate(), isTrue);
+        expect(later.waitingForNewerThanInstalled, isFalse);
+        expect(
+          later.availableUpdate?.release.tagName,
+          'v0.4.3-nightly.20261104.1',
+        );
+        // A stable of the same core is newer than the canary too.
+        final (stableCame, _) = await serviceOver(
+          [('v0.4.3', false), canaryB],
+          channel: UpdateChannel.canary,
+          buildTag: canaryB.$1,
+          follow: UpdateChannel.stable,
+        );
+        expect(await stableCame.checkForUpdate(), isTrue);
+        expect(stableCame.availableUpdate?.release.tagName, 'v0.4.3');
+      },
+    );
+
+    test('no downgrade and no reinstall, whatever the choice', () async {
+      final (newer, _) = await serviceOver(
+        [canaryA, nightlyA, stable042, ('v0.4.0', false)],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.4-canary.20261105.1',
+      );
+      expect(await newer.checkForUpdate(), isFalse);
+      expect(newer.availableUpdate, isNull);
+      final (same, _) = await serviceOver(
+        [canaryA],
+        channel: UpdateChannel.canary,
+        buildTag: canaryA.$1,
+      );
+      expect(await same.checkForUpdate(), isFalse);
+      expect(same.statusMessage, contains('Already on the latest'));
+    });
+
+    test('an invalid canary tag or a wrong flag is never offered', () async {
+      final (service, _) = await serviceOver(
+        [
+          ('v0.4.3-canary.1', true),
+          ('v0.4.9-canary.20261105.1', false),
+          ('v0.4.9-canary.20261399.1', true),
+          ('v0.4.9-rc.1', true),
+        ],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261031.1',
+      );
+      expect(await service.checkForUpdate(), isFalse);
+      expect(service.availableUpdate, isNull);
+    });
+
+    Future<String?> refusal(UpdateService service) async {
+      expect(await service.checkForUpdate(userInitiated: true), isFalse);
+      expect(service.availableUpdate, isNull);
+      return service.lastError;
+    }
+
+    Future<_ManifestFiles> signed(
+      _ManifestSigner signer,
+      String tag, {
+      String? channel,
+      String? releaseVersion,
+      bool omitChannel = false,
+    }) => signer.sign(
+      tagName: tag,
+      channel: channel,
+      releaseVersion: releaseVersion,
+      omitChannel: omitChannel,
+      assets: {
+        'conest-linux-x64-$tag.zip': _ManifestAssetFixture(
+          sha256Hex: 'e' * 64,
+          sizeBytes: 10,
+        ),
+      },
+    );
+
+    test('a manifest of another channel is refused on every line', () async {
+      final signer = await _ManifestSigner.create();
+      // A nightly release carrying a canary-signed manifest, and the reverse.
+      final (nightly, _) = await serviceOver(
+        [nightlyA],
+        channel: UpdateChannel.nightly,
+        buildTag: 'v0.4.3-nightly.20261028.1',
+        signer: signer,
+        overrides: {
+          nightlyA.$1: await signed(signer, nightlyA.$1, channel: 'canary'),
+        },
+      );
+      expect(
+        await refusal(nightly),
+        contains('channel canary does not match nightly'),
+      );
+      final (canary, _) = await serviceOver(
+        [canaryA],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261029.1',
+        signer: signer,
+        overrides: {
+          canaryA.$1: await signed(signer, canaryA.$1, channel: 'nightly'),
+        },
+      );
+      expect(
+        await refusal(canary),
+        contains('channel nightly does not match canary'),
+      );
+      final (stable, _) = await serviceOver(
+        [stable042],
+        channel: UpdateChannel.stable,
+        buildTag: 'v0.4.1',
+        signer: signer,
+        overrides: {
+          stable042.$1: await signed(signer, 'v0.4.2', channel: 'nightly'),
+        },
+      );
+      expect(await refusal(stable), contains('does not match stable'));
+    });
+
+    test(
+      'a manifest without a channel, or for another version, is refused',
+      () async {
+        final signer = await _ManifestSigner.create();
+        final (noChannel, _) = await serviceOver(
+          [canaryA],
+          channel: UpdateChannel.canary,
+          buildTag: 'v0.4.3-canary.20261029.1',
+          signer: signer,
+          overrides: {
+            canaryA.$1: await signed(signer, canaryA.$1, omitChannel: true),
+          },
+        );
+        expect(await refusal(noChannel), contains('channel none'));
+        final (version, _) = await serviceOver(
+          [canaryB],
+          channel: UpdateChannel.canary,
+          buildTag: 'v0.4.3-canary.20261029.1',
+          signer: signer,
+          overrides: {
+            canaryB.$1: await signed(
+              signer,
+              canaryB.$1,
+              releaseVersion: '0.4.3-canary.20261030.1',
+            ),
+          },
+        );
+        expect(
+          await refusal(version),
+          contains('version 0.4.3-canary.20261030.1 does not match'),
+        );
+        final (tag, _) = await serviceOver(
+          [canaryB],
+          channel: UpdateChannel.canary,
+          buildTag: 'v0.4.3-canary.20261029.1',
+          signer: signer,
+          overrides: {canaryB.$1: await signed(signer, canaryA.$1)},
+        );
+        expect(await refusal(tag), contains('does not match'));
+      },
+    );
+
+    test(
+      'a canary release never carries the standard pair, nor the reverse',
+      () async {
+        for (final (releases, style, channel) in [
+          ([canaryA], 'standard', UpdateChannel.canary),
+          ([canaryA], 'both', UpdateChannel.canary),
+          ([nightlyA], 'canary', UpdateChannel.nightly),
+          ([nightlyA], 'both', UpdateChannel.nightly),
+        ]) {
+          final (service, _) = await serviceOver(
+            releases,
+            channel: channel,
+            buildTag: 'v0.4.3-${channel.label}.20261027.1',
+            pairStyle: {releases.first.$1: style},
+            follow: channel,
+          );
+          expect(await refusal(service), isNotNull, reason: '$style');
+        }
+      },
+    );
+
+    test('the signature is still required on every line', () async {
+      final signer = await _ManifestSigner.create();
+      // Tampered bytes under the right signature.
+      final good = await signed(signer, canaryA.$1, channel: 'canary');
+      final tampered = _ManifestFiles(
+        manifestBytes: utf8.encode(
+          utf8.decode(good.manifestBytes).replaceFirst('"canary"', '"stable"'),
+        ),
+        signatureText: good.signatureText,
+      );
+      final (tamper, _) = await serviceOver(
+        [canaryA],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261029.1',
+        signer: signer,
+        overrides: {canaryA.$1: tampered},
+      );
+      expect(await refusal(tamper), contains('signature verification failed'));
+      // Another key.
+      final other = await _ManifestSigner.create();
+      final (wrongKey, _) = await serviceOver(
+        [canaryA],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261029.1',
+        signer: signer,
+        publicKey: other.publicKeyBase64,
+      );
+      expect(
+        await refusal(wrongKey),
+        contains('signature verification failed'),
+      );
+      // No signature file.
+      final (missing, _) = await serviceOver(
+        [canaryA],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261029.1',
+        pairStyle: {canaryA.$1: 'no-signature'},
+      );
+      expect(await refusal(missing), contains('does not include'));
+    });
+
+    test('Android waits for a release with a higher versionCode', () async {
+      Future<UpdateService> over(int? code) async {
+        final (service, _) = await serviceOver(
+          [canaryB],
+          channel: UpdateChannel.canary,
+          buildTag: 'v0.4.3-canary.20261031.1',
+          platform: UpdateTargetPlatform.android,
+          buildNumber: '306100',
+          androidCodes: {if (code != null) canaryB.$1: code},
+        );
+        return service;
+      }
+
+      final low = await over(306050);
+      expect(await low.checkForUpdate(), isFalse);
+      expect(low.waitingForNewerThanInstalled, isTrue);
+      expect(await (await over(306100)).checkForUpdate(), isTrue);
+      expect(await (await over(306200)).checkForUpdate(), isTrue);
+      // Releases from before the field existed carry none.
+      expect(await (await over(null)).checkForUpdate(), isTrue);
+    });
+
+    test('the saved choice is read from every kind of file', () async {
+      Future<UpdateChannel> read(UpdateChannel build, String? content) async {
+        final support = await Directory.systemTemp.createTemp('conest-upd-');
+        addTearDown(() => support.delete(recursive: true));
+        if (content != null) {
+          await File(
+            p.join(support.path, 'update_preferences.json'),
+          ).writeAsString(content);
+        }
+        final service = _serviceFor(
+          baseUrl: 'http://127.0.0.1:1',
+          signer: await _ManifestSigner.create(),
+          channel: build,
+          buildTag: 'v0.4.3',
+          support: support,
+        );
+        addTearDown(service.dispose);
+        await service.loadPreferences();
+        return service.updateChannel;
+      }
+
+      // A legacy file (only the old switch).
+      expect(
+        await read(UpdateChannel.stable, '{"receiveUnstableUpdates":true}'),
+        UpdateChannel.nightly,
+      );
+      expect(
+        await read(UpdateChannel.stable, '{"receiveUnstableUpdates":false}'),
+        UpdateChannel.stable,
+      );
+      expect(
+        await read(UpdateChannel.nightly, '{"receiveUnstableUpdates":false}'),
+        UpdateChannel.stable,
+      );
+      // A canary build follows canary from a legacy file.
+      expect(
+        await read(UpdateChannel.canary, '{"receiveUnstableUpdates":false}'),
+        UpdateChannel.canary,
+      );
+      // The new key wins over the old one.
+      expect(
+        await read(
+          UpdateChannel.stable,
+          '{"channel":"canary","receiveUnstableUpdates":false}',
+        ),
+        UpdateChannel.canary,
+      );
+      expect(
+        await read(
+          UpdateChannel.canary,
+          '{"channel":"stable","receiveUnstableUpdates":false}',
+        ),
+        UpdateChannel.stable,
+      );
+      // An unknown name falls back to the old key, then the build's own.
+      expect(
+        await read(
+          UpdateChannel.stable,
+          '{"channel":"weekly","receiveUnstableUpdates":true}',
+        ),
+        UpdateChannel.nightly,
+      );
+      expect(
+        await read(UpdateChannel.nightly, '{"channel":"weekly"}'),
+        UpdateChannel.nightly,
+      );
+      expect(
+        await read(UpdateChannel.canary, '{"channel":7}'),
+        UpdateChannel.canary,
+      );
+      // Damaged, or none.
+      expect(
+        await read(UpdateChannel.nightly, 'not json'),
+        UpdateChannel.nightly,
+      );
+      expect(await read(UpdateChannel.stable, '[]'), UpdateChannel.stable);
+      expect(await read(UpdateChannel.canary, null), UpdateChannel.canary);
+    });
+
+    test('a check that starts during the load uses the saved choice', () async {
+      final (service, _) = await serviceOver(
+        [canaryB, stable042],
+        channel: UpdateChannel.stable,
+        buildTag: 'v0.4.1',
+        follow: UpdateChannel.canary,
+      );
+      final load = service.loadPreferences();
+      final check = service.checkForUpdate();
+      await load;
+      expect(await check, isTrue);
+      expect(service.availableUpdate?.release.tagName, canaryB.$1);
+      expect(
+        identical(service.loadPreferences(), service.loadPreferences()),
+        isTrue,
+      );
+    });
+
+    test('quick switches are saved in order', () async {
+      final (service, support) = await serviceOver(
+        [stable042],
+        channel: UpdateChannel.stable,
+        buildTag: 'v0.4.1',
+      );
+      await Future.wait([
+        service.setUpdateChannel(UpdateChannel.canary),
+        service.setUpdateChannel(UpdateChannel.nightly),
+      ]);
+      final saved = jsonDecode(
+        await File(
+          p.join(support.path, 'update_preferences.json'),
+        ).readAsString(),
+      );
+      expect(saved['channel'], service.updateChannel.label);
+    });
+
+    test(
+      'a check that a switch overtakes writes nothing, then re-checks',
+      () async {
+        final gate = Completer<void>();
+        final (service, _) = await serviceOver(
+          [canaryB, nightlyA, stable042],
+          channel: UpdateChannel.stable,
+          buildTag: 'v0.4.1',
+          listGate: gate.future,
+        );
+        final seen = <String?>[];
+        service.addListener(
+          () => seen.add(service.availableUpdate?.release.tagName),
+        );
+        final first = service.checkForUpdate(userInitiated: true);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(service.isChecking, isTrue);
+        // The user switches while the stable-line check waits for GitHub.
+        await service.setUpdateChannel(UpdateChannel.canary);
+        expect(service.availableUpdate, isNull);
+        gate.complete();
+        await first;
+        for (var i = 0; i < 100 && service.availableUpdate == null; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        // The stale stable result was never shown; the canary one was.
+        expect(seen, isNot(contains('v0.4.2')));
+        expect(service.availableUpdate?.release.tagName, canaryB.$1);
+        expect(service.statusMessage, contains('available'));
+      },
+    );
+
+    test('the channel cannot be switched while a download runs', () async {
+      final gate = Completer<void>();
+      final (service, _) = await serviceOver(
+        [canaryB, nightlyA],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261031.1',
+        downloadGate: gate.future,
+      );
+      expect(await service.checkForUpdate(), isTrue);
+      final download = service.downloadAndApplyAvailableUpdate();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(service.isDownloading, isTrue);
+      await service.setUpdateChannel(UpdateChannel.nightly);
+      expect(service.updateChannel, UpdateChannel.canary);
+      expect(service.availableUpdate?.release.tagName, canaryB.$1);
+      gate.complete();
+      await download;
+    });
+
+    test(
+      'a switch drops the offer, so nothing from the old line downloads',
+      () async {
+        final (service, _) = await serviceOver(
+          [canaryB, nightlyA],
+          channel: UpdateChannel.canary,
+          buildTag: 'v0.4.3-canary.20261031.1',
+        );
+        expect(await service.checkForUpdate(), isTrue);
+        await service.setUpdateChannel(UpdateChannel.nightly);
+        expect(service.availableUpdate, isNull);
+        await service.downloadAndApplyAvailableUpdate();
+        expect(service.isDownloading, isFalse);
+        expect(service.lastError, isNull);
+      },
+    );
+
+    test('a check that ends after dispose does nothing', () async {
+      final gate = Completer<void>();
+      final (service, _) = await serviceOver(
+        [canaryB],
+        channel: UpdateChannel.canary,
+        buildTag: 'v0.4.3-canary.20261031.1',
+        listGate: gate.future,
+      );
+      final check = service.checkForUpdate();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await service.setUpdateChannel(UpdateChannel.nightly);
+      service.dispose();
+      gate.complete();
+      await check;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      // No exception, and a call after dispose is a no-op.
+      expect(await service.checkForUpdate(), isFalse);
+    });
+
+    test('the release list is requested in pages that fit the cap', () async {
+      // Pruning keeps 10 canaries; old clients read the first 20 (relay
+      // supervisor, install script) or 30 (older apps) entries.
+      final releases = <(String, bool)>[
+        for (var day = 20; day > 10; day--)
+          ('v0.4.3-canary.202611$day.1', true),
+        ('v0.4.3-nightly.20261029.1', true),
+        ('v0.4.3-nightly.20261028.1', true),
+        stable042,
+        ('v0.4.2-nightly.20261020.1', true),
+        for (var i = 1; i <= 30; i++) ('v0.3.$i', false),
+      ];
+      for (final window in [20, 30]) {
+        final seen = releases.take(window).toList();
+        expect(
+          seen.any(
+            (r) => r.$1.contains('nightly') && r.$1.startsWith('v0.4.3'),
+          ),
+          isTrue,
+          reason: '$window',
+        );
+        expect(seen.any((r) => r.$1 == 'v0.4.2'), isTrue, reason: '$window');
+      }
+      final log = _ReleaseServerLog();
+      final (service, _) = await serviceOver(
+        releases,
+        channel: UpdateChannel.nightly,
+        buildTag: 'v0.4.3-nightly.20261027.1',
+        log: log,
+      );
+      expect(await service.checkForUpdate(), isTrue);
+      expect(
+        service.availableUpdate?.release.tagName,
+        'v0.4.3-nightly.20261029.1',
+      );
+      expect(log.listQueries, ['per_page=40']);
+      // A full page of such releases is larger than the 1 MB metadata cap,
+      // which is why the list has its own.
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      final base = await _serveReleases(await _ManifestSigner.create(), [
+        for (var i = 1; i <= 40; i++) ('v0.3.$i', false),
+      ]);
+      final client = HttpClient();
+      final request = await client.getUrl(
+        Uri.parse('$base/repos/glitch-228/conest/releases?per_page=40'),
+      );
+      final response = await request.close();
+      final size = (await response.fold<List<int>>(
+        [],
+        (a, b) => a..addAll(b),
+      )).length;
+      client.close();
+      expect(size, greaterThan(1024 * 1024));
+      expect(size, lessThan(4 * 1024 * 1024));
+    });
+
+    test('a real v0.4.2 manifest passes the new parsing', () {
+      final json =
+          jsonDecode(
+                File(
+                  'test/fixtures/release_manifest_v0.4.2.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final manifest = ReleaseManifest.fromJson(json);
+      expect(manifest.channel, 'stable');
+      expect(manifest.releaseVersion, '0.4.2');
+      expect(manifest.androidVersionCode, isNull);
+      expect(
+        ReleaseManifest.fromJson({
+          ...json,
+          'channel': 'canary',
+          'androidVersionCode': 306100,
+        }).androidVersionCode,
+        306100,
+      );
+      expect(
+        () => ReleaseManifest.fromJson({...json, 'androidVersionCode': -1}),
+        throwsFormatException,
+      );
+      expect(
+        () => ReleaseManifest.fromJson({
+          ...json,
+          'version': 2,
+          'channel': 'weekly',
+        }),
+        throwsFormatException,
+      );
+    });
   });
 }
