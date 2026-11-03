@@ -13009,6 +13009,8 @@ void main() {
             .messagesForGroup(group.groupId)
             .singleWhere((m) => m.body == 'three'),
       );
+      // Receipts leave through a queue: let the read receipt join them.
+      await Future<void>.delayed(const Duration(milliseconds: 500));
       hold = false;
       // Delivery receipts may travel batched (batchedAcksV1): at least one
       // of them, then the read receipt, which goes last.
@@ -13026,6 +13028,83 @@ void main() {
         );
       }
     });
+
+    for (final inGroup in [false, true]) {
+      test('${inGroup ? 'in a group, a' : 'A'} delivery receipt made after the '
+          'read receipt, for a message that arrived before it, ends as read',
+          () async {
+        var hold = false;
+        final held = <RelayEnvelope>[];
+        final relayClient = _FakeRelayClient(
+          shouldBlackholeStore: (_, _, _, _, envelope) {
+            if (hold && envelope.kind == 'ack') {
+              held.add(envelope);
+              return true;
+            }
+            return false;
+          },
+        );
+        final alice = await _createController(
+          relayClient: relayClient,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relayClient,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final bobId = bob.identity!.deviceId;
+        final aliceId = alice.identity!.deviceId;
+        final group = inGroup
+            ? await alice.createGroup(title: 'Late', members: alice.contacts)
+            : null;
+        await bob.pollNow();
+        hold = true;
+        for (final body in ['one', 'two']) {
+          if (group != null) {
+            await alice.sendGroupMessage(groupId: group.groupId, body: body);
+          } else {
+            await alice.sendMessage(contact: alice.contacts.single, body: body);
+          }
+        }
+        await bob.pollNow();
+        // Their delivery receipts are lost; the read receipt is not.
+        held.clear();
+        final last = group != null
+            ? bob.messagesForGroup(group.groupId).singleWhere((m) => m.body == 'two')
+            : bob.messagesFor(aliceId).singleWhere((m) => m.body == 'two');
+        if (group != null) {
+          await bob.markGroupReadThroughMessage(group.groupId, last);
+        } else {
+          await bob.markConversationReadThroughMessage(aliceId, last);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        hold = false;
+        // Only the read receipt reaches Alice (the newest held one).
+        await alice.processEnvelopesForTesting([
+          held.last,
+        ], route: MessageRoute.conestRelay);
+        // Then Alice's retry brings a copy Bob answers again, now, with a
+        // delivery receipt made after the read receipt.
+        ChatMessage one() => (group != null
+                ? alice.messagesForGroup(group.groupId)
+                : alice.messagesFor(bobId))
+            .singleWhere((m) => m.outbound && m.body == 'one');
+        DeliveryState stateOfOne() => group != null
+            ? one().recipientStates[bobId]!
+            : one().state;
+        expect(stateOfOne().awaitsRecipientAck, isTrue);
+        for (var i = 0; i < 40 && stateOfOne().awaitsRecipientAck; i++) {
+          await alice.retryUnacknowledgedMessagesNow();
+          await bob.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          await alice.pollNow();
+        }
+        expect(stateOfOne(), DeliveryState.read);
+      });
+    }
 
     test('in a group, a member reading a later message does not mark ones '
         'that never reached them as read', () async {

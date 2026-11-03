@@ -12563,6 +12563,7 @@ class MessengerController extends ChangeNotifier {
     _readThroughAt.clear();
     _readThroughSentAt.clear();
     _storedOn.clear();
+    _deliveriesInFlight.clear();
     _relayLiveHosts.clear();
     _relayFetchedAt.clear();
     _meshHeardAt.clear();
@@ -22000,6 +22001,7 @@ class MessengerController extends ChangeNotifier {
       }
     }
     final routesById = decoded['routesById'];
+    final arrivedAtById = decoded['arrivedAtById'];
     var applied = false;
     for (final id in targets) {
       // The routes copies of it arrived by (newer apps name them).
@@ -22021,6 +22023,10 @@ class MessengerController extends ChangeNotifier {
         receipt: receipt!,
         target: id,
         arrivedBy: MessageRoute.namedInReceipt(namedRoutes),
+        arrivedAt: _receiptArrivedAt(
+          id == target ? decoded['arrivedAt'] : null,
+          arrivedAtById is Map ? arrivedAtById[id] : null,
+        ),
       )) {
         applied = true;
       }
@@ -22034,6 +22040,25 @@ class MessengerController extends ChangeNotifier {
       contact.deviceId,
       at: sentAt.isAfter(now) ? now : sentAt,
     );
+  }
+
+  /// The arrival time a delivery receipt names (their clock), if sane.
+  DateTime? _receiptArrivedAt(Object? single, Object? byId) {
+    final value = single ?? byId;
+    if (value is! String || value.length > 40) return null;
+    final at = DateTime.tryParse(value)?.toUtc();
+    if (at == null) return null;
+    final now = _now().toUtc();
+    return at.isAfter(now) ? now : at;
+  }
+
+  /// When [id] reached this device (what a delivery receipt names).
+  String? _arrivedAtOf(ContactRecord contact, String conversationId, String id) {
+    final group = _groupById(conversationId);
+    final message = group == null
+        ? _messageById(_chatIdFor(contact), id)
+        : _groupMessageById(group.groupId, id);
+    return message?.receivedAt?.toUtc().toIso8601String();
   }
 
   /// Most messages one receipt may name.
@@ -22068,6 +22093,7 @@ class MessengerController extends ChangeNotifier {
     required String receipt,
     required String target,
     required Set<MessageRoute>? arrivedBy,
+    DateTime? arrivedAt,
   }) {
     _noteConfirmed(contact.deviceId, target, arrivedBy: arrivedBy);
     // Came by Nostr: the relays it went through earn their rank.
@@ -22093,7 +22119,11 @@ class MessengerController extends ChangeNotifier {
         group: group,
       );
     }
-    _readReceiptSentAt = envelope.createdAt.toUtc();
+    // A delivery receipt is judged by when the message reached them (it may
+    // be made and sent later, batched); a read receipt by when it was made.
+    _readReceiptSentAt = receipt == 'delivered' && arrivedAt != null
+        ? arrivedAt
+        : envelope.createdAt.toUtc();
     try {
       if (group != null) {
         if (!group.hasActiveMember(contact.deviceId)) return false;
@@ -28000,6 +28030,7 @@ class MessengerController extends ChangeNotifier {
         'receipt': 'delivered',
         'acknowledgedMessageId': first,
         'routes': ?firstRoutes,
+        'arrivedAt': ?_arrivedAtOf(contact, conversationId, first),
       };
       if (entries.length > 1) {
         plaintext['acknowledgedMessageIds'] = [
@@ -28010,6 +28041,15 @@ class MessengerController extends ChangeNotifier {
             entry.acknowledgedMessageId: routesOf(entry.acknowledgedMessageId),
         }..removeWhere((_, named) => named == null);
         if (routes.isNotEmpty) plaintext['routesById'] = routes;
+        final arrived = <String, String>{
+          for (final entry in entries.skip(1))
+            entry.acknowledgedMessageId: ?_arrivedAtOf(
+              contact,
+              conversationId,
+              entry.acknowledgedMessageId,
+            ),
+        };
+        if (arrived.isNotEmpty) plaintext['arrivedAtById'] = arrived;
       }
       final ack = await _crypto.encryptPayloadEnvelope(
         kind: 'ack',
@@ -29467,6 +29507,33 @@ class MessengerController extends ChangeNotifier {
     required bool background,
   }) async {
     final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
+    // One delivery pass per message at a time: passes that overlap (a send,
+    // a flush and a retry together) would each store it again before the
+    // first one has noted where it went. A later one waits for the earlier
+    // and then sees what it did.
+    final previous = _deliveriesInFlight[key];
+    final done = Completer<void>();
+    _deliveriesInFlight[key] = done.future;
+    try {
+      if (previous != null) await previous.catchError((Object _) {});
+      return await _deliverRetryPass(contact, envelope, background, key);
+    } finally {
+      done.complete();
+      if (identical(_deliveriesInFlight[key], done.future)) {
+        _deliveriesInFlight.remove(key);
+      }
+    }
+  }
+
+  /// The delivery pass running for each message (by [_outboundAttemptKey]).
+  final Map<String, Future<void>> _deliveriesInFlight = {};
+
+  Future<_DeliveryRoute?> _deliverRetryPass(
+    ContactRecord contact,
+    RelayEnvelope envelope,
+    bool background,
+    String key,
+  ) async {
     final stored = _storedOn[key];
     if (stored != null && stored.isNotEmpty) {
       try {
@@ -43158,6 +43225,7 @@ class MessengerController extends ChangeNotifier {
     _readThroughAt.clear();
     _readThroughSentAt.clear();
     _storedOn.clear();
+    _deliveriesInFlight.clear();
     _relayLiveHosts.clear();
     _relayFetchedAt.clear();
     _meshHeardAt.clear();
