@@ -1675,7 +1675,7 @@ void main() {
             pairStyle: {releases.first.$1: style},
             follow: channel,
           );
-          expect(await refusal(service), isNotNull, reason: '$style');
+          expect(await refusal(service), isNotNull, reason: style);
         }
       },
     );
@@ -1729,7 +1729,7 @@ void main() {
           buildTag: 'v0.4.3-canary.20261031.1',
           platform: UpdateTargetPlatform.android,
           buildNumber: '306100',
-          androidCodes: {if (code != null) canaryB.$1: code},
+          androidCodes: {canaryB.$1: ?code},
         );
         return service;
       }
