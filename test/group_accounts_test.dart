@@ -1,3 +1,4 @@
+import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/group_account_member.dart';
 import 'package:conest/src/group_accounts.dart';
 import 'package:conest/src/group_history_event.dart';
@@ -311,6 +312,519 @@ void main() {
       final incapable = await build(carolCapable: false);
       expect(incapable.current!.group.ownerDeviceId, 'alice1');
       expect(old.id, 'old');
+    });
+  });
+
+  Future<void> importAll(
+    GroupMembershipHistory history,
+    List<GroupMembershipRecord> records,
+  ) async {
+    var pending = [...records];
+    while (pending.isNotEmpty) {
+      final next = <GroupMembershipRecord>[];
+      for (final record in pending) {
+        final result = await history.import(record);
+        if (result == GroupMembershipImport.missingParents ||
+            result == GroupMembershipImport.missingDeviceLists) {
+          next.add(record);
+        }
+      }
+      if (next.length == pending.length) break;
+      pending = next;
+    }
+  }
+
+  Future<GroupMembershipRecord> pinBob(
+    GroupMembershipRecord parent,
+    AccountDeviceList list,
+    List<TestDevice> projected, {
+    TestDevice? author,
+    List<String> approved = const [],
+    List<String> excluded = const [],
+    bool confirm = false,
+    List<String> admins = const [],
+  }) => fx.record(
+    owner: alice,
+    author: author ?? alice,
+    parents: [parent],
+    deviceOnly: [carol],
+    admins: admins,
+    confirmNewDevices: confirm,
+    accounts: [
+      AccountSpec(
+        bobAcc,
+        list,
+        projected,
+        approved: approved,
+        excluded: excluded,
+      ),
+    ],
+  );
+
+  group('forks, forgeries and rollbacks', () {
+    test('two lists that revoke each other make the account non-effective '
+        'and its key can never come back', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final r2 = await pinBob(r1, l1, [bob1, bob2]);
+      final honest = await bobAcc.list(2, [bob1], revoked: ['bob2']);
+      final thief = await bobAcc.list(2, [bob2, bob3], revoked: ['bob1']);
+      final ra = await pinBob(r2, honest, [bob1]);
+      final rb = await pinBob(r2, thief, [bob2]);
+      final history = fx.history(owner: alice);
+      await importAll(history, [r1, r2, ra, rb]);
+      expect(history.hasConflict, isTrue);
+      // Resolving the fork: projecting any device is refused.
+      final bad = await pinBob(ra, honest, [bob1]);
+      final merged = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [ra, rb],
+        deviceOnly: [carol],
+        accounts: [AccountSpec(bobAcc, honest, [bob1])],
+      );
+      expect(() => history.import(merged), throwsFormatException);
+      final resolved = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [ra, rb],
+        deviceOnly: [carol],
+        accounts: [AccountSpec(bobAcc, honest, const [])],
+      );
+      expect(await history.import(resolved), GroupMembershipImport.accepted);
+      expect(bad.parents, [ra.id]);
+      // The account is removed, and the compromised key cannot rejoin.
+      final removed = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [resolved],
+        deviceOnly: [carol],
+      );
+      expect(await history.import(removed), GroupMembershipImport.accepted);
+      final rejoin = await pinBob(removed, honest, const []);
+      expect(() => history.import(rejoin), throwsFormatException);
+      // The view agrees for message events.
+      final view = DeviceListView(groupId: fx.groupId);
+      for (final list in [l1, honest, thief]) {
+        view.offerVerified(list, accountKey: bobAcc.keys.publicKeyBase64);
+      }
+      expect(view.compromised('acc-bob'), isTrue);
+      expect(
+        view.effectiveCerts(
+          resolved.group.memberAccounts.single,
+          confirmNewDevices: false,
+        ),
+        isEmpty,
+      );
+    });
+
+    test('the view is the same whatever order lists arrive in', () async {
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final l2 = await bobAcc.list(2, [bob1], revoked: ['bob2']);
+      final l3 = await bobAcc.list(3, [bob1, bob3], revoked: ['bob2']);
+      String show(DeviceListView v) =>
+          '${v.current('acc-bob')?.version} ${v.revoked('acc-bob').toList()..sort()} ${v.compromised('acc-bob')}';
+      final shown = <String>{};
+      for (final order in [
+        [l1, l2, l3],
+        [l3, l2, l1],
+        [l2, l1, l3],
+        [l3, l1, l2],
+      ]) {
+        final view = DeviceListView(groupId: fx.groupId);
+        for (final l in order) {
+          view.offerVerified(l, accountKey: bobAcc.keys.publicKeyBase64);
+        }
+        shown.add(show(view));
+      }
+      expect(shown, hasLength(1));
+      expect(shown.single, startsWith('3 [bob2] false'));
+    });
+
+    test('forged lists are refused whole: wrong key, other account, '
+        'rollback by an admin', () async {
+      final r1 = await fx.record(
+        owner: alice,
+        author: alice,
+        deviceOnly: [carol],
+        admins: ['carol'],
+      );
+      final stranger = await TestAccount.create('acc-bob');
+      final l2 = await bobAcc.list(2, [bob1]);
+      final wrongKey = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        admins: ['carol'],
+        accounts: [
+          AccountSpec(
+            bobAcc,
+            l2,
+            [bob1],
+            keyOverride: stranger.keys.publicKeyBase64,
+          ),
+        ],
+      );
+      final history = fx.history(owner: alice);
+      await history.import(r1);
+      expect(() => history.import(wrongKey), throwsFormatException);
+      final otherAccount = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        admins: ['carol'],
+        accounts: [AccountSpec(bobAcc, await danAcc.list(2, [dan1]), [])],
+      );
+      expect(() => history.import(otherAccount), throwsFormatException);
+      final r2 = await pinBob(r1, l2, [bob1], admins: ['carol']);
+      expect(await history.import(r2), GroupMembershipImport.accepted);
+      // An admin pins the older list again: refused. The owner may.
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final rollback = await pinBob(
+        r2,
+        l1,
+        [bob1],
+        author: carol,
+        admins: ['carol'],
+      );
+      expect(() => history.import(rollback), throwsFormatException);
+    });
+
+    test('a certificate cannot take a device id another identity pinned',
+        () async {
+      final r1 = await root(members: [carol, eve]);
+      final fakeEve = await TestDevice.create('eve', 'acc-bob');
+      final l1 = await bobAcc.list(1, [bob1, fakeEve]);
+      // eve left the group, but its id stays pinned in the ancestry.
+      final r2 = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        accounts: [AccountSpec(bobAcc, l1, [bob1])],
+      );
+      final history = fx.history(owner: alice);
+      await history.import(r1);
+      expect(
+        () => history.import(r2),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('pinned identity'),
+          ),
+        ),
+      );
+    });
+
+    test('an admin adds an account only as a member', () async {
+      final r1 = await fx.record(
+        owner: alice,
+        author: alice,
+        deviceOnly: [carol],
+        admins: ['carol'],
+      );
+      final l1 = await bobAcc.list(1, [bob1]);
+      Future<GroupMembershipRecord> add(GroupAccountRole role) => fx.record(
+        owner: alice,
+        author: carol,
+        parents: [r1],
+        deviceOnly: [carol],
+        admins: ['carol'],
+        accounts: [AccountSpec(bobAcc, l1, const [], role: role)],
+      );
+      final history = fx.history(owner: alice);
+      await history.import(r1);
+      expect(
+        () async => history.import(await add(GroupAccountRole.admin)),
+        throwsFormatException,
+      );
+      expect(
+        await history.import(await add(GroupAccountRole.member)),
+        GroupMembershipImport.accepted,
+      );
+    });
+
+    test('accounts mode needs an owner and admins that know accounts',
+        () async {
+      final r1 = await fx.record(
+        owner: alice,
+        author: alice,
+        deviceOnly: [carol],
+        profileOverrides: {'alice': alice.profile(capable: false)},
+      );
+      final l1 = await bobAcc.list(1, [bob1]);
+      final r2 = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        profileOverrides: {'alice': alice.profile(capable: false)},
+        accounts: [AccountSpec(bobAcc, l1, [bob1])],
+      );
+      final history = fx.history(owner: alice);
+      await history.import(r1);
+      expect(() => history.import(r2), throwsFormatException);
+    });
+  });
+
+  group('folding a device-only member into an account', () {
+    Future<GroupMembershipRecord> fold(
+      GroupMembershipRecord parent,
+      TestAccount account,
+      TestDevice device,
+      List<TestDevice> projected, {
+      AccountUpgrade? upgrade,
+      TestAccount? signer,
+    }) async => fx.record(
+      owner: alice,
+      author: alice,
+      parents: [parent],
+      deviceOnly: [carol],
+      accounts: [
+        AccountSpec(
+          account,
+          await account.list(1, projected),
+          projected,
+          upgrade: upgrade ?? await (signer ?? account).upgrade(device),
+          admission: parent.admissions[device.id],
+        ),
+      ],
+    );
+
+    test('needs the member own proof for this account key', () async {
+      final r1 = await root(members: [carol, dan1]);
+      final history = fx.history(owner: alice);
+      await history.import(r1);
+      final good = await fold(r1, danAcc, dan1, [dan1, dan2]);
+      expect(await history.import(good), GroupMembershipImport.accepted);
+      expect(good.group.memberAccounts.single.upgrade, isNotNull);
+      // A proof by another account key does not fold the member.
+      final other = await TestAccount.create('acc-dan');
+      final h2 = fx.history(owner: alice);
+      await h2.import(r1);
+      final forged = await fold(
+        r1,
+        danAcc,
+        dan1,
+        [dan1],
+        upgrade: await other.upgrade(dan1),
+      );
+      expect(() => h2.import(forged), throwsFormatException);
+      // Neither does one without it.
+      final bare = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        accounts: [
+          AccountSpec(
+            danAcc,
+            await danAcc.list(1, [dan1]),
+            [dan1],
+            admission: r1.admissions['dan1'],
+          ),
+        ],
+      );
+      expect(() => h2.import(bare), throwsFormatException);
+    });
+  });
+
+  group('confirming new devices', () {
+    test('a new device waits for approval; switching it on approves all '
+        'current devices', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1]);
+      final r2 = await pinBob(r1, l1, [bob1]);
+      final history = fx.history(owner: alice);
+      await importAll(history, [r1, r2]);
+      // Not approving the current device in the same record is refused.
+      final noApproval = await pinBob(r2, l1, [bob1], confirm: true);
+      expect(() => history.import(noApproval), throwsFormatException);
+      final on = await pinBob(
+        r2,
+        l1,
+        [bob1],
+        confirm: true,
+        approved: ['bob1'],
+      );
+      expect(await history.import(on), GroupMembershipImport.accepted);
+      // A new device bob2 in a newer list is not projected until approved.
+      final l2 = await bobAcc.list(2, [bob1, bob2]);
+      final unapproved = await pinBob(
+        on,
+        l2,
+        [bob1, bob2],
+        confirm: true,
+        approved: ['bob1'],
+      );
+      expect(() => history.import(unapproved), throwsFormatException);
+      final approved = await pinBob(
+        on,
+        l2,
+        [bob1, bob2],
+        confirm: true,
+        approved: ['bob1', 'bob2'],
+      );
+      expect(await history.import(approved), GroupMembershipImport.accepted);
+      // For message events the sibling stays pending until approved.
+      final view = DeviceListView(groupId: fx.groupId)
+        ..offerVerified(l2, accountKey: bobAcc.keys.publicKeyBase64);
+      final pendingHistory = fx.history(owner: alice, view: view);
+      await importAll(pendingHistory, [r1, r2, on]);
+      final entry = on.group.memberAccounts.single;
+      expect(
+        view.effectiveCerts(entry, confirmNewDevices: true).map((c) => c.deviceId),
+        ['bob1'],
+      );
+      expect(
+        view.pendingCerts(entry).map((c) => c.deviceId),
+        ['bob2'],
+      );
+    });
+  });
+
+  group('message events of sibling devices', () {
+    test('a second device posts and receives; strangers and pending devices '
+        'do not; a new account sees history only from its admission',
+        () async {
+      final r1 = await fx.record(
+        owner: alice,
+        author: alice,
+        deviceOnly: [carol],
+        visibility: GroupHistoryVisibility.sinceAdmission,
+      );
+      final before = await fx.message(r1, carol);
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final r2 = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        accounts: [AccountSpec(bobAcc, l1, [bob1])],
+        checkpoints: {
+          'carol': GroupHistoryCheckpoint(
+            sequence: before.sequence,
+            eventId: before.eventId,
+          ),
+        },
+      );
+      final view = DeviceListView(groupId: fx.groupId)
+        ..offerVerified(l1, accountKey: bobAcc.keys.publicKeyBase64);
+      final history = fx.history(owner: alice, view: view);
+      await importAll(history, [r1, r2]);
+      final fromSibling = await fx.message(r2, bob2);
+      final after = await fx.message(r2, carol);
+      expect(
+        await history.canReceive(fromSibling, recipientDeviceId: 'carol'),
+        isTrue,
+      );
+      expect(
+        await history.canReceive(after, recipientDeviceId: 'bob2'),
+        isTrue,
+      );
+      // History from before the account was admitted stays closed, for the
+      // sibling as for the projected device.
+      expect(
+        await history.canReceive(before, recipientDeviceId: 'bob2'),
+        isFalse,
+      );
+      expect(
+        await history.canReceive(before, recipientDeviceId: 'bob1'),
+        isFalse,
+      );
+      // A device the list does not know is not a member.
+      final stranger = await fx.message(r2, bob3);
+      expect(
+        await history.canReceive(stranger, recipientDeviceId: 'carol'),
+        isFalse,
+      );
+      expect(
+        await history.canReceive(after, recipientDeviceId: 'bob3'),
+        isFalse,
+      );
+    });
+  });
+
+  group('limits', () {
+    test('a byte cap on the list store never refuses a record that is '
+        'rebuilt from retained lists', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1]);
+      final l2 = await bobAcc.list(2, [bob1, bob2]);
+      final r2 = await pinBob(r1, l1, [bob1]);
+      final r3 = await pinBob(r2, l2, [bob1, bob2]);
+      // Junk fills the store far over its cap.
+      for (var i = 3; i < 60; i++) {
+        fx.lists.put(await bobAcc.list(i, [bob1, bob2, bob3]));
+      }
+      final history = fx.history(owner: alice);
+      await importAll(history, [r1, r2, r3]);
+      final referenced = history.referencedListDigests();
+      expect(referenced, hasLength(2));
+      final dropped = fx.lists.evictUnreferenced(
+        referenced,
+        maxUnreferencedBytes: 0,
+      );
+      expect(dropped, greaterThan(50));
+      for (final digest in referenced) {
+        expect(fx.lists.get(digest), isNotNull);
+      }
+      // A fresh index over the same store (a restart) accepts everything.
+      final rebuilt = fx.history(owner: alice);
+      await importAll(rebuilt, [r1, r2, r3]);
+      expect(rebuilt.current!.id, r3.id);
+    });
+  });
+
+  group('resolved group', () {
+    test('siblings join, revoked projected devices leave, a fork empties '
+        'the account, pending devices are listed', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final r2 = await pinBob(r1, l1, [bob1]);
+      final signed = r2.group;
+      final view = DeviceListView(groupId: fx.groupId);
+      // Nothing known yet: the signed projection stands.
+      expect(
+        resolveGroup(signed, view).group.activeMemberDeviceIds,
+        containsAll(['alice', 'carol', 'bob1']),
+      );
+      view.offerVerified(l1, accountKey: bobAcc.keys.publicKeyBase64);
+      var resolved = resolveGroup(signed, view);
+      expect(resolved.group.hasActiveMember('bob2'), isTrue);
+      expect(resolved.group.roleFor('bob2'), GroupMemberRole.member);
+      expect(signed.hasActiveMember('bob2'), isFalse);
+      expect(resolved.group.toJson().containsKey('siblingProfiles'), isFalse);
+      // A device id this device knows with other keys is ignored.
+      resolved = resolveGroup(
+        signed,
+        view,
+        conflictsWithKnownIdentity: (id, cert) => id == 'bob2',
+      );
+      expect(resolved.group.hasActiveMember('bob2'), isFalse);
+      expect(resolved.unverifiedDeviceIds, ['bob2']);
+      // bob1 is revoked: it leaves, though the record still projects it.
+      view.offerVerified(
+        await bobAcc.list(2, [bob2], revoked: ['bob1']),
+        accountKey: bobAcc.keys.publicKeyBase64,
+      );
+      resolved = resolveGroup(signed, view);
+      expect(resolved.group.hasActiveMember('bob1'), isFalse);
+      expect(resolved.group.hasActiveMember('bob2'), isTrue);
+      // A fork leaves nobody.
+      view.offerVerified(
+        await bobAcc.list(3, [bob1, bob3], revoked: ['bob2']),
+        accountKey: bobAcc.keys.publicKeyBase64,
+      );
+      resolved = resolveGroup(signed, view);
+      expect(resolved.compromisedAccountIds, ['acc-bob']);
+      for (final id in ['bob1', 'bob2', 'bob3']) {
+        expect(resolved.group.hasActiveMember(id), isFalse);
+      }
+      expect(resolved.group.hasActiveMember('carol'), isTrue);
     });
   });
 }
