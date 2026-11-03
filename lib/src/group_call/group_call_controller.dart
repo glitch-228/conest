@@ -320,7 +320,14 @@ extension GroupCallController on MessengerController {
         'ratchet_hello',
         'ratchet_bulk_key',
       }.contains(kind)
-      ? _boundedLogValue(error.toString(), 180)
+      ? _boundedLogValue(
+          // A FormatException's toString carries a piece of its source,
+          // which can be decrypted message content.
+          error is FormatException
+              ? 'FormatException: ${error.message}'
+              : error.toString(),
+          180,
+        )
       : _debugBuildId != null
       ? 'Invalid forward-secret control: '
             '${_boundedLogValue(error.toString(), 180)}'

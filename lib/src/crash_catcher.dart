@@ -93,6 +93,9 @@ class CrashCatcher {
   /// What earlier runs left behind.
   CrashReport get previousRun => _previous;
 
+  /// What this run has recorded so far (at most 32, the newest).
+  List<CrashRecord> get thisRun => List.unmodifiable(_thisRun);
+
   Directory? get directory => _directory;
 
   /// Catches uncaught errors from Flutter, the platform dispatcher and this
