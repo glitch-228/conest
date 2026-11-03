@@ -411,6 +411,10 @@ class GroupHistoryCoordinator {
     return proof;
   });
 
+  /// The current signed membership record of [id], if any.
+  Future<GroupMembershipRecord?> currentMembership(String id) =>
+      _write(id, () async => (await _replica(id)).membership.current);
+
   /// [deviceLists]: the lists the record pins (they travel beside the proof).
   /// Missing lists are not an error: the caller parks the record.
   Future<GroupMembershipImport> importMembership(

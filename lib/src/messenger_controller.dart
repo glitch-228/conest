@@ -155,8 +155,11 @@ import 'transfer/own_device_sync_policy.dart';
 import 'transfer/relay_blobs.dart';
 import 'transfer/route_striper.dart';
 import 'content_routing.dart';
+import 'group_account_member.dart';
+import 'group_accounts.dart';
 
 part 'delta_attachments_controller.dart';
+part 'group_accounts_controller.dart';
 part 'group_call/group_call_controller.dart';
 part 'voice_settings_controller.dart';
 
@@ -4586,6 +4589,19 @@ class MessengerController extends ChangeNotifier {
 
   /// Members a group's next announcement must reach (another member asked
   /// for them), besides the usual ones.
+  // Groups by account (M29): see group_accounts_controller.dart.
+  PinnedListStore _pinnedLists = PinnedListStore();
+  final Map<String, DeviceListView> _deviceListViews = {};
+  final Map<String, Map<String, GroupMemberProfile>> _siblingAnnounces = {};
+  final Map<String, Map<String, (AccountUpgrade, AccountDeviceList)>>
+  _pendingUpgrades = {};
+  final Map<String, GroupResolution> _groupResolutions = {};
+  final Map<String, DateTime> _lastOwnerRecordAt = {};
+  final Map<String, Timer> _groupWriterTimers = {};
+  final Set<String> _announcing = {};
+  Map<String, DateTime> get _deviceFirstSeen => _deviceFirstSeenStore;
+  final Map<String, DateTime> _deviceFirstSeenStore = {};
+
   final Map<String, Set<String>> _groupPassOnTargets = {};
 
   /// When this device last told each member of each group, by
@@ -4704,7 +4720,22 @@ class MessengerController extends ChangeNotifier {
     final decoded = jsonDecode(
       await _crypto.decryptMessage(contact: sender, envelope: envelope),
     );
+    // Membership may have changed while the envelope was decrypted: nothing
+    // below acts on the group as it was before.
+    final now = _groupById(envelope.conversationId);
+    if (now == null ||
+        now.localRemovedAt != null ||
+        !now.hasActiveMember(me.deviceId) ||
+        !now.hasActiveMember(envelope.senderDeviceId)) {
+      return;
+    }
     if (decoded is Map<String, dynamic>) {
+      if (decoded['version'] == 1 &&
+          decoded['groupId'] == group.groupId &&
+          decoded['type'] == 'devices') {
+        await _handleGroupDevices(now, sender, decoded);
+        return;
+      }
       if (decoded['version'] == 1 &&
           decoded['groupId'] == group.groupId &&
           decoded['type'] == 'changed') {
@@ -4884,6 +4915,7 @@ class MessengerController extends ChangeNotifier {
   Future<void> initialize() async {
     try {
       _snapshot = await _vaultStore.load();
+      _loadGroupAccountState();
       _networkHistory = NetworkHistory.fromJson(_snapshot.networkHistory);
       _loadReportedLinks();
       await _openErrorHistory();
@@ -4892,6 +4924,8 @@ class MessengerController extends ChangeNotifier {
       // their signed dates: that list came only from this device or its
       // link.
       _reconcileOwnDevices(vouchAll: true);
+      await _rebuildDeviceListViews();
+      _rearmOwnerWriters();
       await _openRatchetSessions();
       _createMatrixTransport();
       unawaited(_restoreMatrixClient());
@@ -18651,6 +18685,8 @@ class MessengerController extends ChangeNotifier {
       'reason': reason,
       'group': _groupForWire(profiledGroup),
       'historyProof': ?historyProof,
+      if (profiledGroup.memberAccounts.isNotEmpty)
+        'lists': _listsPayloadFor(profiledGroup),
     });
     final now = _now();
     for (final deviceId in targetDeviceIds.toSet()) {
@@ -18832,6 +18868,8 @@ class MessengerController extends ChangeNotifier {
         'reason': entry.reason,
         'group': _groupForWire(profiledGroup),
         'historyProof': ?historyProof,
+        if (profiledGroup.memberAccounts.isNotEmpty)
+          'lists': _listsPayloadFor(profiledGroup),
       });
       final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'group_membership',
@@ -26311,11 +26349,62 @@ class MessengerController extends ChangeNotifier {
     if (me == null) {
       return;
     }
+    // Groups by account: the signed record decides. The wire copy must say
+    // the same as the proof beside it, and this device may be one of an
+    // account's devices that the projection does not name.
+    final accountsMode =
+        incoming.memberAccounts.isNotEmpty ||
+        (_groupById(incoming.groupId)?.memberAccounts.isNotEmpty ?? false);
+    var sentLists = const <AccountDeviceList>[];
+    var meListed = false;
+    if (accountsMode) {
+      final proofText = payload['historyProof'];
+      if (proofText is! String) return;
+      sentLists = _parseLists(payload['lists']);
+      try {
+        final proofGroup = GroupMembershipRecord.fromEvent(
+          GroupHistoryEvent.decode(proofText),
+        ).group;
+        if (!_sameSignedMembership(incoming, proofGroup)) return;
+      } catch (_) {
+        return;
+      }
+      meListed = await _isEffectiveSibling(incoming, sentLists);
+    }
     if (!incoming.memberDeviceIds.contains(me.deviceId) &&
-        !incoming.removedDeviceIds.contains(me.deviceId)) {
+        !incoming.removedDeviceIds.contains(me.deviceId) &&
+        !meListed) {
       return;
     }
     final existing = _groupById(incoming.groupId);
+    if (accountsMode && existing != null) {
+      // The history decides before anything is stored; a record that needs
+      // lists or earlier records waits for the next catch-up.
+      try {
+        final result = await _groupHistory.importMembership(
+          incoming.groupId,
+          payload['historyProof'] as String,
+          deviceLists: sentLists,
+        );
+        if (result == GroupMembershipImport.missingDeviceLists) {
+          _scheduleGroupHistorySync(
+            incoming.groupId,
+            sender.deviceId,
+            passOn: false,
+          );
+          return;
+        }
+      } catch (error) {
+        appendDebugLog('Group membership not accepted: $error');
+        _scheduleGroupHistorySync(
+          incoming.groupId,
+          sender.deviceId,
+          passOn: false,
+        );
+        return;
+      }
+      if (_groupById(incoming.groupId) == null) return;
+    }
     if (existing == null) {
       final senderRole = incoming.roleFor(envelope.senderDeviceId);
       if (incoming.ownerDeviceId != envelope.senderDeviceId &&
@@ -26366,6 +26455,7 @@ class MessengerController extends ChangeNotifier {
         return;
       }
       if (!profileUpdate &&
+          !accountsMode &&
           !_isAuthorizedGroupMembershipUpdate(
             existing: existing,
             incoming: incoming,
@@ -26425,12 +26515,29 @@ class MessengerController extends ChangeNotifier {
     await _persist('Updated group ${enriched.title}.');
     if (payload['historyProof'] is String) {
       try {
-        await _groupHistory.importMembership(
+        final result = await _groupHistory.importMembership(
           merged.groupId,
           payload['historyProof'] as String,
+          deviceLists: sentLists,
         );
+        if (accountsMode &&
+            existing == null &&
+            result == GroupMembershipImport.missingDeviceLists) {
+          await _dropProvisionalGroup(merged.groupId);
+          return;
+        }
       } catch (error) {
         appendDebugLog('Group history membership needs catch-up: $error');
+        // A new group in accounts mode is believed only through its proof.
+        if (accountsMode && existing == null) {
+          await _dropProvisionalGroup(merged.groupId);
+          return;
+        }
+      }
+      if (accountsMode) {
+        _persistPinnedLists();
+        _announceOwnDeviceList(onlyGroup: merged.groupId);
+        _scheduleOwnerWriter(merged.groupId);
       }
       _scheduleGroupHistorySync(merged.groupId, sender.deviceId, passOn: false);
     }
@@ -26537,6 +26644,13 @@ class MessengerController extends ChangeNotifier {
       contact: sender,
       envelope: envelope,
     );
+    // The sender may have been removed, or revoked, while this was decrypted.
+    final stillMembers = _groupById(envelope.conversationId);
+    if (stillMembers == null ||
+        !stillMembers.hasActiveMember(_snapshot.identity!.deviceId) ||
+        !stillMembers.hasActiveMember(envelope.senderDeviceId)) {
+      return;
+    }
     final payload = _crypto.decodeGroupMessagePayload(decoded);
     final historySupported =
         (jsonDecode(decoded) as Map)['groupHistoryVersion'] == 1;
@@ -35504,7 +35618,9 @@ class MessengerController extends ChangeNotifier {
     _snapshot = _snapshot.copyWith(conversations: conversations);
   }
 
-  void _upsertGroup(GroupRecord group) {
+  void _upsertGroup(GroupRecord given) {
+    // Member accounts' effective devices are resolved on every update.
+    final group = _resolveAccountsIn(given);
     final groups = List<GroupRecord>.from(_snapshot.groups);
     final index = groups.indexWhere(
       (candidate) => candidate.groupId == group.groupId,
@@ -36712,6 +36828,8 @@ class MessengerController extends ChangeNotifier {
     );
     await _saveSnapshotSilently(notify: true);
     _advertiseProfileToContacts();
+    // Groups this device is a member of learn that it is an account now.
+    _announceOwnDeviceList();
   }
 
   /// Signs a new device list ([change] edits the devices and revocations)
@@ -36745,6 +36863,7 @@ class MessengerController extends ChangeNotifier {
     _reconcileOwnDevices();
     await _saveSnapshotSilently(notify: true);
     _advertiseProfileToContacts();
+    _announceOwnDeviceList();
     return list;
   }
 
@@ -38698,6 +38817,7 @@ class MessengerController extends ChangeNotifier {
       // Contacts follow each step, so a later list stays within their step
       // limit.
       _advertiseProfileToContacts();
+      _announceOwnDeviceList();
       return;
     }
     // Only what adds something is merged (a higher version alone, or a
@@ -41534,6 +41654,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.groupFileRelayV1,
       ApplicationCapability.multiRouteBlocksV1,
       ApplicationCapability.ownDeviceFilesV1,
+      ApplicationCapability.groupAccountsV1,
       ApplicationCapability.xmppCarrierV1,
       ApplicationCapability.telegramCarrierV1,
       ApplicationCapability.discordCarrierV1,
@@ -43210,6 +43331,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _clearGroupAccountState();
     _cold.dispose();
     _peerCold.clear();
     _peerColdGone.clear();
