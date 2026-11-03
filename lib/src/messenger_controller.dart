@@ -12563,7 +12563,6 @@ class MessengerController extends ChangeNotifier {
     _readThroughAt.clear();
     _readThroughSentAt.clear();
     _storedOn.clear();
-    _deliveriesInFlight.clear();
     _relayLiveHosts.clear();
     _relayFetchedAt.clear();
     _meshHeardAt.clear();
@@ -15574,25 +15573,12 @@ class MessengerController extends ChangeNotifier {
     return false;
   }
 
-  final Set<String> _droppedCapabilitiesForTesting = {};
-
-  bool _takesBatchedAcks(ContactRecord contact) =>
-      contact.featureCapabilities.contains(
-        ApplicationCapability.batchedAcksV1,
-      ) &&
-      !_droppedCapabilitiesForTesting.contains(
-        '${contact.deviceId}|${ApplicationCapability.batchedAcksV1.name}',
-      );
-
   /// Makes [contactDeviceId] look like a build without [capability].
   @visibleForTesting
   void dropContactCapabilityForTesting(
     String contactDeviceId,
     ApplicationCapability capability,
   ) {
-    // Kept dropped when the contact's profile arrives again (a test of an
-    // old peer must not turn into one of a new peer by a route update).
-    _droppedCapabilitiesForTesting.add('$contactDeviceId|${capability.name}');
     final contact = _contactByDeviceId(contactDeviceId);
     if (contact == null) return;
     _replaceContactRecord(
@@ -27902,12 +27888,18 @@ class MessengerController extends ChangeNotifier {
       final List<PendingAckDelivery> unit;
       if (urgent.isNotEmpty) {
         unit =
-            urgent.length > 1 && _takesBatchedAcks(contact)
+            urgent.length > 1 &&
+                contact.featureCapabilities.contains(
+                  ApplicationCapability.batchedAcksV1,
+                )
             ? urgent.take(receiptBatchLimit).toList(growable: false)
             : [urgent.first];
       } else if (readEntries.isNotEmpty) {
         unit = [readEntries.first];
-      } else if (delivered.length > 1 && _takesBatchedAcks(contact)) {
+      } else if (delivered.length > 1 &&
+          contact.featureCapabilities.contains(
+            ApplicationCapability.batchedAcksV1,
+          )) {
         unit = delivered.take(receiptBatchLimit).toList(growable: false);
       } else if (delivered.isNotEmpty) {
         unit = [delivered.first];
@@ -29514,26 +29506,8 @@ class MessengerController extends ChangeNotifier {
     required bool background,
   }) async {
     final key = _outboundAttemptKey(contact.deviceId, envelope.messageId);
-    // One delivery pass per message at a time: passes that overlap (a send,
-    // a flush and a retry together) would each store it again before the
-    // first one has noted where it went. A later one waits for the earlier
-    // and then sees what it did.
-    final previous = _deliveriesInFlight[key];
-    final done = Completer<void>();
-    _deliveriesInFlight[key] = done.future;
-    try {
-      if (previous != null) await previous.catchError((Object _) {});
-      return await _deliverRetryPass(contact, envelope, background, key);
-    } finally {
-      done.complete();
-      if (identical(_deliveriesInFlight[key], done.future)) {
-        _deliveriesInFlight.remove(key);
-      }
-    }
+    return _deliverRetryPass(contact, envelope, background, key);
   }
-
-  /// The delivery pass running for each message (by [_outboundAttemptKey]).
-  final Map<String, Future<void>> _deliveriesInFlight = {};
 
   Future<_DeliveryRoute?> _deliverRetryPass(
     ContactRecord contact,
@@ -31475,7 +31449,9 @@ class MessengerController extends ChangeNotifier {
     }
     // Cold mode: the routes this needs come up first, and stay up a while
     // for the receipt.
-    await _wakeColdRoutesFor(contact, envelope);
+    // (Not awaited when cold mode is off: an await would give up a turn on
+    // every send for nothing.)
+    if (_cold.active) await _wakeColdRoutesFor(contact, envelope);
     // A cold contact that was found asleep is left to its storing routes
     // for a while, when it has any.
     if (_skipDirectToColdPeer(contact.deviceId) && !ignoreRouteBackoff) {
@@ -43232,7 +43208,6 @@ class MessengerController extends ChangeNotifier {
     _readThroughAt.clear();
     _readThroughSentAt.clear();
     _storedOn.clear();
-    _deliveriesInFlight.clear();
     _relayLiveHosts.clear();
     _relayFetchedAt.clear();
     _meshHeardAt.clear();
