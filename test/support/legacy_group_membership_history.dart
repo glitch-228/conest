@@ -1,0 +1,446 @@
+// A frozen copy of the membership validator as it was before accounts (M29),
+// kept so a test can prove that every record a new app produces is still
+// accepted by an app that has never heard of accounts. Do not "fix" it.
+import 'package:conest/src/group_history_event.dart';
+import 'package:conest/src/group_membership_history.dart';
+import 'package:conest/src/models.dart';
+
+/// The pre-accounts shape checks of `GroupMembershipRecord.fromEvent`.
+void legacyShapeCheck(GroupMembershipRecord record) {
+  final group = record.group;
+  final active = group.activeMemberDeviceIds.toSet();
+  final data = record.proof.payload;
+  final parents = record.parents;
+  if (data.length != 5 ||
+      parents.length > 16 ||
+      parents.toSet().length != parents.length ||
+      record.checkpoints.length > 256 ||
+      group.groupId != record.proof.groupId ||
+      group.membershipVersion < 1 ||
+      group.activeMemberDeviceIds.length > 16 ||
+      group.memberProfiles.length > 256 ||
+      group.localRemovedAt != null ||
+      record.admissions.length != active.length ||
+      !active.every(record.admissions.containsKey)) {
+    throw const FormatException('Invalid membership snapshot.');
+  }
+  for (final device in active) {
+    final member = group.memberProfileFor(device);
+    if (member == null ||
+        member.signingPublicKeyBase64 == null ||
+        member.irohEndpointId == null) {
+      throw const FormatException(
+        'Membership requires pinned signing and transport identities.',
+      );
+    }
+  }
+}
+
+/// Authenticated membership DAG. Missing dependencies are retriable; competing
+/// heads freeze history serving until the owner of their common ancestor signs
+/// a resolution. An ordinary carrier cannot grant itself membership.
+///
+/// Persist proofs in the journal before advertising them as durable. Rebuild
+/// this index by importing retained proofs in dependency order on restart.
+class LegacyGroupMembershipHistory {
+  LegacyGroupMembershipHistory({required this.groupId, required this.trustedOwner});
+
+  final String groupId;
+  final GroupMemberProfile trustedOwner;
+  final _records = <String, GroupMembershipRecord>{};
+  final _heads = <String>{};
+  final _identities = <String, GroupMemberProfile>{};
+  // A record's parents must be imported before it and never change, so its
+  // ancestor set and departures are fixed once computed. canReceive runs per
+  // history event, so these avoid re-walking the DAG and re-decoding groups.
+  final _ancestorCache = <String, Set<String>>{};
+  final _departureCache = <String, Map<String, List<String>>>{};
+  final _activeCache = <String, Set<String>>{};
+  final _departureCheckpointCache = <String, GroupHistoryCheckpoint?>{};
+  Future<void> _tail = Future.value();
+
+  bool get hasConflict => _heads.length > 1;
+  List<String> get heads => _heads.toList()..sort();
+  GroupMembershipRecord? get current =>
+      _heads.length == 1 ? _records[_heads.single] : null;
+  GroupMembershipRecord? record(String id) => _records[id];
+
+  /// A candidate index can be validated before its proof is flushed, then
+  /// published only after the journal append succeeds.
+  LegacyGroupMembershipHistory fork() {
+    final copy = LegacyGroupMembershipHistory(
+      groupId: groupId,
+      trustedOwner: trustedOwner,
+    );
+    copy._records.addAll(_records);
+    copy._heads.addAll(_heads);
+    copy._identities.addAll(_identities);
+    return copy;
+  }
+
+  Future<GroupMembershipImport> import(GroupMembershipRecord record) {
+    final result = _tail.then((_) => _import(record));
+    _tail = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
+  }
+
+  Future<GroupMembershipImport> _import(GroupMembershipRecord incoming) async {
+    if (incoming.proof.groupId != groupId) {
+      throw const FormatException('Membership belongs to another group.');
+    }
+    if (_records.containsKey(incoming.id)) {
+      return GroupMembershipImport.duplicate;
+    }
+    final group = incoming.group;
+    if (incoming.parents.any((id) => !_records.containsKey(id))) {
+      return GroupMembershipImport.missingParents;
+    }
+    final parents = incoming.parents.map((id) => _records[id]!).toList();
+    GroupMemberProfile? actor;
+    if (parents.isEmpty) {
+      if (_records.isNotEmpty ||
+          group.ownerDeviceId != trustedOwner.deviceId ||
+          group.isDissolved ||
+          incoming.proof.membershipId !=
+              GroupMembershipRecord.rootReference(
+                groupId,
+                trustedOwner.signingPublicKeyBase64 ?? '',
+              )) {
+        throw const FormatException(
+          'Membership root is not anchored to the approved owner.',
+        );
+      }
+      actor = trustedOwner;
+    } else {
+      if (incoming.proof.membershipId != incoming.parents.first ||
+          parents.any(
+            (parent) => parent.proof.lamport >= incoming.proof.lamport,
+          ) ||
+          parents.any((parent) => parent.group.isDissolved) ||
+          group.membershipVersion !=
+              parents
+                      .map((parent) => parent.group.membershipVersion)
+                      .reduce((a, b) => a > b ? a : b) +
+                  1) {
+        throw const FormatException('Invalid membership parent/version.');
+      }
+      final authority = parents.length == 1
+          ? parents.single
+          : _resolutionAuthority(parents);
+      actor = authority.group.memberProfileFor(incoming.proof.authorDeviceId);
+      final ownerAction =
+          incoming.proof.authorDeviceId == authority.group.ownerDeviceId;
+      if (parents.length > 1 && !ownerAction) {
+        throw const FormatException(
+          'Conflicting membership requires an owner-signed resolution.',
+        );
+      }
+      if (!ownerAction && !_adminUpdateAllowed(authority, incoming)) {
+        throw const FormatException('Unauthorized membership change.');
+      }
+      if (group.ownerDeviceId != authority.group.ownerDeviceId &&
+          !parents.any(
+            (parent) => parent.group.hasActiveMember(group.ownerDeviceId),
+          )) {
+        throw const FormatException(
+          'Ownership may only pass to an existing member.',
+        );
+      }
+      // A resolution must merge genuinely competing branches, not list an
+      // ancestor next to its descendant to circumvent normal admin rules.
+      for (final parent in parents) {
+        if (parents.any(
+          (other) => other.id != parent.id && _isAncestor(parent.id, other.id),
+        )) {
+          throw const FormatException(
+            'Redundant membership resolution parent.',
+          );
+        }
+      }
+    }
+    if (actor == null ||
+        actor.signingPublicKeyBase64 == null ||
+        !await incoming.proof.verify(
+          expectedGroupId: groupId,
+          expectedAccountId: actor.accountId,
+          expectedDeviceId: actor.deviceId,
+          expectedSigningKeyBase64: actor.signingPublicKeyBase64!,
+        )) {
+      throw const FormatException('Invalid membership author signature.');
+    }
+    for (final device in group.activeMemberDeviceIds) {
+      final profile = group.memberProfileFor(device)!;
+      final pinned = device == trustedOwner.deviceId
+          ? trustedOwner
+          : _identities[device];
+      if (pinned != null && !_sameIdentity(pinned, profile)) {
+        throw const FormatException(
+          'Membership cannot replace a pinned identity.',
+        );
+      }
+      final priorAdmissions = parents
+          .map((parent) => parent.admissions[device])
+          .toSet();
+      final continuouslyAdmitted =
+          parents.isNotEmpty &&
+          !priorAdmissions.contains(null) &&
+          priorAdmissions.length == 1;
+      final expectedAdmission = continuouslyAdmitted
+          ? priorAdmissions.single
+          : incoming.id;
+      if (incoming.admissions[device] != expectedAdmission) {
+        throw const FormatException(
+          'An admission boundary cannot change for an existing member.',
+        );
+      }
+    }
+    _records[incoming.id] = incoming;
+    _heads.removeAll(incoming.parents);
+    _heads.add(incoming.id);
+    for (final device in group.activeMemberDeviceIds) {
+      _identities[device] = group.memberProfileFor(device)!;
+    }
+    return GroupMembershipImport.accepted;
+  }
+
+  bool _adminUpdateAllowed(
+    GroupMembershipRecord before,
+    GroupMembershipRecord after,
+  ) {
+    final previous = before.group;
+    final next = after.group;
+    if (previous.roleFor(after.proof.authorDeviceId) != GroupMemberRole.admin ||
+        next.ownerDeviceId != previous.ownerDeviceId ||
+        next.title != previous.title ||
+        next.isDissolved ||
+        after.historyVisibility != before.historyVisibility) {
+      return false;
+    }
+    for (final device in previous.activeMemberDeviceIds) {
+      if (!next.hasActiveMember(device)) {
+        if (!previous.canRemoveMember(
+          actorDeviceId: after.proof.authorDeviceId,
+          memberDeviceId: device,
+        )) {
+          return false;
+        }
+      } else if (previous.roleFor(device) != next.roleFor(device)) {
+        return false;
+      }
+    }
+    return next.activeMemberDeviceIds.every(
+      (device) =>
+          previous.hasActiveMember(device) ||
+          next.roleFor(device) == GroupMemberRole.member,
+    );
+  }
+
+  GroupMembershipRecord _resolutionAuthority(
+    List<GroupMembershipRecord> parents,
+  ) {
+    var common = _ancestors(parents.first.id);
+    for (final parent in parents.skip(1)) {
+      common = common.intersection(_ancestors(parent.id));
+    }
+    final newest = common
+        .where(
+          (id) => !common.any((other) => other != id && _isAncestor(id, other)),
+        )
+        .toList();
+    if (newest.length != 1) {
+      throw const FormatException('Ambiguous membership resolution authority.');
+    }
+    return _records[newest.single]!;
+  }
+
+  Set<String> _ancestors(String id) {
+    final cached = _ancestorCache[id];
+    if (cached != null) return cached;
+    final result = <String>{};
+    final pending = [id];
+    while (pending.isNotEmpty) {
+      final next = pending.removeLast();
+      if (result.add(next)) pending.addAll(_records[next]?.parents ?? const []);
+    }
+    // Unknown IDs may still arrive later with parents; only cache records.
+    if (!_records.containsKey(id)) return result;
+    return _ancestorCache[id] = Set.unmodifiable(result);
+  }
+
+  /// Devices active in some parent but not in [recordId], each mapped to the
+  /// parents in which it was still active.
+  Map<String, List<String>> _departures(String recordId) =>
+      _departureCache.putIfAbsent(recordId, () {
+        final remaining = _active(recordId);
+        final result = <String, List<String>>{};
+        for (final parentId in _records[recordId]!.parents) {
+          for (final device in _active(parentId)) {
+            if (!remaining.contains(device)) {
+              (result[device] ??= <String>[]).add(parentId);
+            }
+          }
+        }
+        return result;
+      });
+
+  Set<String> _active(String recordId) => _activeCache.putIfAbsent(
+    recordId,
+    () => Set.unmodifiable(_records[recordId]!.group.activeMemberDeviceIds),
+  );
+
+  /// The signed cutoff for [author]'s departure at [removalId], as seen from
+  /// [headId]. Removal records created before departure checkpoints existed
+  /// carry none; for those, the earliest later record signed while [author]
+  /// stayed departed supplies it. Admission records already capture every
+  /// author's journal head, and owners sign a dedicated record otherwise, so
+  /// authentic pre-removal history stays retrievable while anything signed
+  /// past the cutoff is still rejected.
+  GroupHistoryCheckpoint? _departureCheckpoint(
+    String removalId,
+    String author,
+    String headId,
+  ) {
+    final direct = _records[removalId]!.checkpoints[author];
+    if (direct != null) return direct;
+    final key = '$headId\n$removalId\n$author';
+    if (_departureCheckpointCache.containsKey(key)) {
+      return _departureCheckpointCache[key];
+    }
+    GroupHistoryCheckpoint? earliest;
+    for (final id in _ancestors(headId)) {
+      if (id == removalId || !_isAncestor(removalId, id)) continue;
+      final attested = _records[id]!.checkpoints[author];
+      if (attested == null ||
+          (earliest != null && attested.sequence >= earliest.sequence)) {
+        continue;
+      }
+      // A cutoff signed after a readmission could cover the later epoch.
+      if (_staysDeparted(removalId, author, id)) earliest = attested;
+    }
+    return _departureCheckpointCache[key] = earliest;
+  }
+
+  /// Whether [author] is inactive in every record from [removalId] through
+  /// [recordId].
+  bool _staysDeparted(String removalId, String author, String recordId) =>
+      !_ancestors(recordId).any(
+        (id) =>
+            id != removalId &&
+            _isAncestor(removalId, id) &&
+            _active(id).contains(author),
+      );
+
+  /// Departed authors whose removal has no signed cutoff from the current
+  /// head, and who stayed departed so a new record can still supply one.
+  /// Their history from before removal stays rejected until a record carries
+  /// a cutoff; group owners sign that record from their own journal.
+  Set<String> departuresMissingCheckpoints() {
+    final head = current;
+    if (head == null) return const <String>{};
+    final missing = <String>{};
+    for (final recordId in _ancestors(head.id)) {
+      for (final author in _departures(recordId).keys) {
+        if (_staysDeparted(recordId, author, head.id) &&
+            _departureCheckpoint(recordId, author, head.id) == null) {
+          missing.add(author);
+        }
+      }
+    }
+    return missing;
+  }
+
+  bool _isBeforeRemovalFences(
+    GroupHistoryEvent event,
+    GroupMembershipRecord head,
+  ) {
+    final ancestors = _ancestors(head.id);
+    for (final recordId in ancestors) {
+      final departedFrom = _departures(recordId)[event.authorDeviceId];
+      if (departedFrom != null &&
+          _isAncestor(event.membershipId, recordId) &&
+          departedFrom.any(
+            (parentId) => _isAncestor(event.membershipId, parentId),
+          )) {
+        final checkpoint = _departureCheckpoint(
+          recordId,
+          event.authorDeviceId,
+          head.id,
+        );
+        // Without any signed cutoff, reject new-carried events at the removal
+        // boundary rather than guessing from time.
+        if (checkpoint == null || event.sequence > checkpoint.sequence) {
+          return false;
+        }
+        if (event.sequence == checkpoint.sequence &&
+            event.eventId != checkpoint.eventId) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  bool _isAncestor(String ancestor, String descendant) =>
+      _ancestors(descendant).contains(ancestor);
+
+  /// Current membership gates the recipient; the referenced historical record
+  /// gates the original author. This permits legitimate older membership epochs
+  /// without letting removed recipients request further history. Payload rules
+  /// such as edit ownership and receipt recipients belong to the projection
+  /// layer; this check establishes membership and authorship only.
+  Future<bool> canReceive(
+    GroupHistoryEvent event, {
+    required String recipientDeviceId,
+  }) async {
+    final head = current;
+    final membership = _records[event.membershipId];
+    if (head == null ||
+        membership == null ||
+        event.kind == GroupEventKind.membership ||
+        !head.group.hasActiveMember(recipientDeviceId) ||
+        !_isAncestor(membership.id, head.id) ||
+        !membership.group.hasActiveMember(event.authorDeviceId)) {
+      return false;
+    }
+    final author = membership.group.memberProfileFor(event.authorDeviceId)!;
+    final admission = _records[head.admissions[recipientDeviceId]];
+    if (admission == null) return false;
+    if (!_isBeforeRemovalFences(event, head)) return false;
+    if (admission.historyVisibility == GroupHistoryVisibility.sinceAdmission) {
+      if (!_isAncestor(admission.id, membership.id) ||
+          event.sequence <=
+              (admission.checkpoints[event.authorDeviceId]?.sequence ?? 0)) {
+        return false;
+      }
+    }
+    final verified = await event.verify(
+      expectedGroupId: groupId,
+      expectedAccountId: author.accountId,
+      expectedDeviceId: author.deviceId,
+      expectedSigningKeyBase64: author.signingPublicKeyBase64!,
+    );
+    // A removal or conflict may arrive while signature verification yields.
+    return verified && current?.id == head.id;
+  }
+
+  /// A carrier needs current group authorization too. This permission never
+  /// authorizes a private conversation with either endpoint.
+  Future<bool> canForward(
+    GroupHistoryEvent event, {
+    required String carrierDeviceId,
+    required String recipientDeviceId,
+  }) async {
+    final head = current;
+    return head?.group.hasActiveMember(carrierDeviceId) == true &&
+        await canReceive(event, recipientDeviceId: carrierDeviceId) &&
+        await canReceive(event, recipientDeviceId: recipientDeviceId) &&
+        current?.id == head!.id;
+  }
+}
+
+bool _sameIdentity(GroupMemberProfile a, GroupMemberProfile b) =>
+    a.accountId == b.accountId &&
+    a.deviceId == b.deviceId &&
+    a.publicKeyBase64 == b.publicKeyBase64 &&
+    a.signingPublicKeyBase64 == b.signingPublicKeyBase64 &&
+    a.irohEndpointId == b.irohEndpointId;

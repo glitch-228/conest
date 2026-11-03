@@ -877,9 +877,6 @@ class GroupMembershipHistory {
             'An account with a forked device list cannot rejoin.',
           );
         }
-        if (limited && entry.role != GroupAccountRole.member) {
-          throw const FormatException('A new account joins as a member.');
-        }
         // A device-only member of the previous record that this account
         // takes over: the fold. It needs the account's proof.
         final folded = [
@@ -888,6 +885,11 @@ class GroupMembershipHistory {
         ];
         if (folded.length > 1) {
           throw const FormatException('Only one member folds into an account.');
+        }
+        if (limited &&
+            folded.isEmpty &&
+            entry.role != GroupAccountRole.member) {
+          throw const FormatException('A new account joins as a member.');
         }
         if (folded.length == 1) {
           await _checkFold(entry, list, folded.single, prev, next, authority);
