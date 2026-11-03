@@ -762,14 +762,11 @@ void main() {
       }
       final history = fx.history(owner: alice);
       await importAll(history, [r1, r2, r3]);
-      final referenced = history.referencedListDigests();
-      expect(referenced, hasLength(2));
-      final dropped = fx.lists.evictUnreferenced(
-        referenced,
-        maxUnreferencedBytes: 0,
-      );
+      final pinned = fx.lists.pinnedDigests;
+      expect(pinned, hasLength(2));
+      final dropped = fx.lists.evictUnpinned(maxUnpinnedBytes: 0);
       expect(dropped, greaterThan(50));
-      for (final digest in referenced) {
+      for (final digest in pinned) {
         expect(fx.lists.get(digest), isNotNull);
       }
       // A fresh index over the same store (a restart) accepts everything.

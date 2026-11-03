@@ -135,24 +135,28 @@ class AccountFacts {
   }
 }
 
-/// Lists by content digest. Lists referenced by retained membership records
-/// are kept unconditionally: a local byte cap must never be the reason a
-/// signed record cannot be rebuilt or accepted (it would split this member
-/// off). The cap evicts only unreferenced lists, oldest first.
+/// Lists by content digest. A list becomes *pinned* when an accepted
+/// membership record names its digest; pinned lists are kept unconditionally:
+/// a local byte cap must never be the reason a signed record cannot be
+/// rebuilt or accepted (it would split this member off). The cap evicts only
+/// lists no accepted record pins (offered but never used), oldest first.
 class PinnedListStore {
   PinnedListStore();
 
   final _lists = <String, AccountDeviceList>{};
   final _sizes = <String, int>{};
+  final _pinned = <String>{};
   final _verified = <String>{};
   int _bytes = 0;
 
-  /// Bounds the size of unreferenced lists kept (referenced ones are exempt).
-  static const int defaultMaxUnreferencedBytes = 1024 * 1024;
+  /// Bounds what unpinned lists may take (pinned ones are exempt).
+  static const int defaultMaxUnpinnedBytes = 1024 * 1024;
 
   int get bytes => _bytes;
   int get length => _lists.length;
   Iterable<String> get digests => _lists.keys;
+  Set<String> get pinnedDigests => Set.unmodifiable(_pinned);
+  bool isPinned(String digest) => _pinned.contains(digest);
 
   AccountDeviceList? get(String digest) => _lists[digest];
 
@@ -168,6 +172,11 @@ class PinnedListStore {
     return digest;
   }
 
+  /// Keeps the list at [digest] for good: an accepted record pins it.
+  void markPinned(String digest) {
+    if (_lists.containsKey(digest)) _pinned.add(digest);
+  }
+
   /// Whether the list at [digest] was checked against [accountKeyBase64].
   bool isVerified(String digest, String accountKeyBase64) =>
       _verified.contains('$digest|$accountKeyBase64');
@@ -177,21 +186,18 @@ class PinnedListStore {
     _verified.add('$digest|$accountKeyBase64');
   }
 
-  /// Drops unreferenced lists, oldest first, until the unreferenced ones
-  /// fit [maxUnreferencedBytes]. Referenced lists are never touched.
-  int evictUnreferenced(
-    Set<String> referenced, {
-    int maxUnreferencedBytes = defaultMaxUnreferencedBytes,
-  }) {
-    var unreferenced = 0;
+  /// Drops unpinned lists, oldest first, until they fit
+  /// [maxUnpinnedBytes]. Pinned lists are never touched.
+  int evictUnpinned({int maxUnpinnedBytes = defaultMaxUnpinnedBytes}) {
+    var unpinned = 0;
     for (final entry in _sizes.entries) {
-      if (!referenced.contains(entry.key)) unreferenced += entry.value;
+      if (!_pinned.contains(entry.key)) unpinned += entry.value;
     }
     var dropped = 0;
     for (final digest in _lists.keys.toList()) {
-      if (unreferenced <= maxUnreferencedBytes) break;
-      if (referenced.contains(digest)) continue;
-      unreferenced -= _sizes[digest]!;
+      if (unpinned <= maxUnpinnedBytes) break;
+      if (_pinned.contains(digest)) continue;
+      unpinned -= _sizes[digest]!;
       _bytes -= _sizes[digest]!;
       _lists.remove(digest);
       _sizes.remove(digest);
@@ -203,20 +209,25 @@ class PinnedListStore {
   void clear() {
     _lists.clear();
     _sizes.clear();
+    _pinned.clear();
     _verified.clear();
     _bytes = 0;
   }
 
   List<Map<String, Object?>> toJson() => [
-    for (final list in _lists.values) list.toJson(),
+    for (final entry in _lists.entries)
+      {'list': entry.value.toJson(), if (_pinned.contains(entry.key)) 'pinned': true},
   ];
 
   static PinnedListStore fromJson(Object? json) {
     final store = PinnedListStore();
     if (json is List) {
       for (final raw in json) {
-        final list = AccountDeviceList.fromJson(raw);
-        if (list != null) store.put(list);
+        if (raw is! Map) continue;
+        final list = AccountDeviceList.fromJson(raw['list']);
+        if (list == null) continue;
+        final digest = store.put(list);
+        if (raw['pinned'] == true) store.markPinned(digest);
       }
     }
     return store;

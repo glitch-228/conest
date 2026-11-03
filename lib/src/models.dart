@@ -5529,6 +5529,8 @@ class VaultSnapshot {
     this.pinnedRelayIdentityKeys = const <String, String>{},
     this.relayTokens = const <String, String>{},
     this.pendingAckDeliveries = const <PendingAckDelivery>[],
+    this.pinnedDeviceLists = const <Map<String, dynamic>>[],
+    this.groupDeviceFirstSeen = const <String, String>{},
     this.pendingForwards = const <PendingForward>[],
     this.seenMessageDigests = const <String, String>{},
     this.defaultRelayRouteKeys = const <String>{},
@@ -5605,6 +5607,14 @@ class VaultSnapshot {
   /// their target yet. Drained by the controller's periodic retry loop
   /// with backoff; persisted so retries survive process restarts.
   final List<PendingAckDelivery> pendingAckDeliveries;
+
+  /// Account device lists by digest (M29), as the group membership records
+  /// pin them. Kept while a record references them.
+  final List<Map<String, dynamic>> pinnedDeviceLists;
+
+  /// When the owner's app first saw a device of an account in a group
+  /// ("groupId|deviceId" -> time): admin powers follow 24 hours later.
+  final Map<String, String> groupDeviceFirstSeen;
 
   /// Messages this device carries for a contact, to devices that contact
   /// could not reach. Persisted so they survive restarts; dropped after a
@@ -5749,6 +5759,8 @@ class VaultSnapshot {
           const <PendingGroupMembershipDelivery>[],
       pinnedRelayIdentityKeys: const <String, String>{},
       pendingAckDeliveries: const <PendingAckDelivery>[],
+      pinnedDeviceLists: const <Map<String, dynamic>>[],
+      groupDeviceFirstSeen: const <String, String>{},
       pendingForwards: const <PendingForward>[],
       seenMessageDigests: const <String, String>{},
       defaultRelayRouteKeys: const <String>{},
@@ -5779,6 +5791,8 @@ class VaultSnapshot {
     Map<String, String>? pinnedRelayIdentityKeys,
     Map<String, String>? relayTokens,
     List<PendingAckDelivery>? pendingAckDeliveries,
+    List<Map<String, dynamic>>? pinnedDeviceLists,
+    Map<String, String>? groupDeviceFirstSeen,
     List<PendingForward>? pendingForwards,
     Map<String, String>? seenMessageDigests,
     Set<String>? defaultRelayRouteKeys,
@@ -5838,6 +5852,8 @@ class VaultSnapshot {
           pinnedRelayIdentityKeys ?? this.pinnedRelayIdentityKeys,
       relayTokens: relayTokens ?? this.relayTokens,
       pendingAckDeliveries: pendingAckDeliveries ?? this.pendingAckDeliveries,
+      pinnedDeviceLists: pinnedDeviceLists ?? this.pinnedDeviceLists,
+      groupDeviceFirstSeen: groupDeviceFirstSeen ?? this.groupDeviceFirstSeen,
       pendingForwards: pendingForwards ?? this.pendingForwards,
       seenMessageDigests: seenMessageDigests ?? this.seenMessageDigests,
       defaultRelayRouteKeys:
@@ -5912,6 +5928,9 @@ class VaultSnapshot {
       'pendingAckDeliveries': pendingAckDeliveries
           .map((entry) => entry.toJson())
           .toList(),
+      if (pinnedDeviceLists.isNotEmpty) 'pinnedDeviceLists': pinnedDeviceLists,
+      if (groupDeviceFirstSeen.isNotEmpty)
+        'groupDeviceFirstSeen': groupDeviceFirstSeen,
       if (pendingForwards.isNotEmpty)
         'pendingForwards': pendingForwards
             .map((entry) => entry.toJson())
@@ -6123,6 +6142,16 @@ class VaultSnapshot {
               .cast<Map<String, dynamic>>()
               .map(PendingAckDelivery.fromJson)
               .toList(),
+      pinnedDeviceLists: [
+        for (final entry in json['pinnedDeviceLists'] as List<dynamic>? ?? const [])
+          if (entry is Map<String, dynamic>) entry,
+      ],
+      groupDeviceFirstSeen: {
+        if (json['groupDeviceFirstSeen'] is Map)
+          for (final entry in (json['groupDeviceFirstSeen'] as Map).entries)
+            if (entry.key is String && entry.value is String)
+              entry.key as String: entry.value as String,
+      },
       pendingForwards: [
         for (final entry
             in json['pendingForwards'] as List<dynamic>? ?? const [])

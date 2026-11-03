@@ -238,13 +238,6 @@ class GroupMembershipHistory {
   GroupRecord groupOf(GroupMembershipRecord record) =>
       _groups[record.id] ?? record.group;
 
-  /// Digests of device lists any imported record pins: these are kept
-  /// unconditionally by the list store.
-  Set<String> referencedListDigests() => {
-    for (final record in _records.values)
-      for (final entry in groupOf(record).memberAccounts) entry.listDigest,
-  };
-
   /// What the ancestry of [recordId] says about the account with key
   /// [accountKeyBase64]: the lists pinned by that record or any ancestor.
   AccountFacts accountFacts(String recordId, String accountKeyBase64) =>
@@ -431,6 +424,9 @@ class GroupMembershipHistory {
           'An admission boundary cannot change for an existing member.',
         );
       }
+    }
+    for (final entry in group.memberAccounts) {
+      lists.markPinned(entry.listDigest);
     }
     _records[incoming.id] = incoming;
     _groups[incoming.id] = group;
