@@ -1,3 +1,4 @@
+import 'group_account_member.dart';
 import 'dart:convert';
 import 'dart:math';
 
@@ -3677,6 +3678,10 @@ class GroupRecord {
     this.localRemovedAt,
     this.dissolvedAt,
     this.mirroredVia,
+    this.memberAccounts = const <GroupAccountMember>[],
+    this.confirmNewDevices = false,
+    List<GroupMemberProfile> siblingProfiles = const <GroupMemberProfile>[],
+    List<String> suppressedDeviceIds = const <String>[],
   }) : adminDeviceIds = _normalizedGroupRoleIds(
          ownerDeviceId: ownerDeviceId,
          memberDeviceIds: memberDeviceIds,
@@ -3699,7 +3704,9 @@ class GroupRecord {
        removedDeviceIds = _dedupeIds(
          removedDeviceIds,
        ).where((deviceId) => deviceId != ownerDeviceId).toList(),
-       memberProfiles = _dedupeMemberProfiles(memberProfiles);
+       memberProfiles = _dedupeMemberProfiles(memberProfiles),
+       siblingProfiles = _dedupeMemberProfiles(siblingProfiles),
+       suppressedDeviceIds = List.unmodifiable(suppressedDeviceIds);
 
   final String groupId;
   final String title;
@@ -3738,11 +3745,34 @@ class GroupRecord {
 
   bool get isDissolved => dissolvedAt != null;
 
+  /// Account members (M29): signed, with a device list pinned by digest.
+  /// The device fields above hold their *projection*, which is what apps
+  /// without groupAccountsV1 read. Empty for every group made before.
+  final List<GroupAccountMember> memberAccounts;
+
+  /// Owner-set: a new device of a member account waits for approval.
+  final bool confirmNewDevices;
+
+  /// Local only, never serialized and never on the wire: devices of member
+  /// accounts that act in this group without being in the projection, and
+  /// projected devices that are revoked or unusable here. Rebuilt by
+  /// `resolveGroup` from the signed record and the device lists.
+  final List<GroupMemberProfile> siblingProfiles;
+  final List<String> suppressedDeviceIds;
+
   List<String> get activeMemberDeviceIds => isDissolved
       ? const <String>[]
-      : memberDeviceIds
-            .where((deviceId) => !removedDeviceIds.contains(deviceId))
-            .toList(growable: false);
+      : [
+          for (final deviceId in memberDeviceIds)
+            if (!removedDeviceIds.contains(deviceId) &&
+                !suppressedDeviceIds.contains(deviceId))
+              deviceId,
+          for (final profile in siblingProfiles)
+            if (!removedDeviceIds.contains(profile.deviceId) &&
+                !suppressedDeviceIds.contains(profile.deviceId) &&
+                !memberDeviceIds.contains(profile.deviceId))
+              profile.deviceId,
+        ];
 
   bool hasActiveMember(String deviceId) =>
       activeMemberDeviceIds.contains(deviceId);
@@ -3799,6 +3829,22 @@ class GroupRecord {
         return profile;
       }
     }
+    for (final profile in siblingProfiles) {
+      if (profile.deviceId == deviceId) {
+        return profile;
+      }
+    }
+    return null;
+  }
+
+  /// The member account [deviceId] belongs to, if it is one of a member
+  /// account's devices (projected or not).
+  GroupAccountMember? accountOf(String deviceId) {
+    final accountId = memberProfileFor(deviceId)?.accountId;
+    if (accountId == null) return null;
+    for (final entry in memberAccounts) {
+      if (entry.accountId == accountId) return entry;
+    }
     return null;
   }
 
@@ -3817,8 +3863,16 @@ class GroupRecord {
     DateTime? dissolvedAt,
     bool clearLocalRemovedAt = false,
     String? mirroredVia,
+    List<GroupAccountMember>? memberAccounts,
+    bool? confirmNewDevices,
+    List<GroupMemberProfile>? siblingProfiles,
+    List<String>? suppressedDeviceIds,
   }) {
     return GroupRecord(
+      memberAccounts: memberAccounts ?? this.memberAccounts,
+      confirmNewDevices: confirmNewDevices ?? this.confirmNewDevices,
+      siblingProfiles: siblingProfiles ?? this.siblingProfiles,
+      suppressedDeviceIds: suppressedDeviceIds ?? this.suppressedDeviceIds,
       groupId: groupId,
       title: title ?? this.title,
       ownerDeviceId: ownerDeviceId ?? this.ownerDeviceId,
@@ -3858,12 +3912,25 @@ class GroupRecord {
       'localRemovedAt': localRemovedAt?.toIso8601String(),
       'dissolvedAt': dissolvedAt?.toIso8601String(),
       if (mirroredVia != null) 'mirroredVia': mirroredVia,
+      if (memberAccounts.isNotEmpty)
+        'memberAccounts': [for (final entry in memberAccounts) entry.toJson()],
+      if (confirmNewDevices) 'confirmNewDevices': true,
     };
   }
 
   factory GroupRecord.fromJson(Map<String, dynamic> json) {
     final createdAt = DateTime.parse(json['createdAt'] as String);
     return GroupRecord(
+      // Lenient here (a bad entry is dropped); the membership history parses
+      // the same field strictly before it believes a signed record.
+      memberAccounts: [
+        if (json['memberAccounts'] is List)
+          for (final raw in (json['memberAccounts'] as List).take(
+            maxGroupAccounts,
+          ))
+            if (GroupAccountMember.tryParse(raw) case final entry?) entry,
+      ],
+      confirmNewDevices: json['confirmNewDevices'] == true,
       groupId: json['groupId'] as String,
       title: json['title'] as String,
       ownerDeviceId: json['ownerDeviceId'] as String,
