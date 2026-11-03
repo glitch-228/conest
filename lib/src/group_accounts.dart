@@ -504,6 +504,12 @@ class DeviceListView {
   AccountCutoff? cutoffFor(String accountId, String deviceId) =>
       _accounts[accountId]?.cutoffs[deviceId];
 
+  Iterable<AccountCutoff> get allCutoffs sync* {
+    for (final state in _accounts.values) {
+      yield* state.cutoffs.values;
+    }
+  }
+
   void clear() {
     _accounts.clear();
     epoch++;

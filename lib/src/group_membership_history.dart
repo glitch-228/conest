@@ -1242,6 +1242,40 @@ class GroupMembershipHistory {
   bool _isAncestor(String ancestor, String descendant) =>
       _ancestors(descendant).contains(ancestor);
 
+  /// Revoked authors whose old events count only along their own chain, with
+  /// the cutoff event to start the walk from: from the signed records that
+  /// removed them, and from the cutoffs siblings signed for devices no
+  /// record ever projected. History sync fetches these chains by id.
+  Map<String, GroupHistoryCheckpoint> chainTargets() {
+    final head = current;
+    if (head == null) return const {};
+    final targets = <String, GroupHistoryCheckpoint>{};
+    for (final recordId in _ancestors(head.id)) {
+      for (final author in _departures(recordId).keys) {
+        final profile = _records[recordId]!.parents
+            .map((id) => groupOf(_records[id]!).memberProfileFor(author))
+            .nonNulls
+            .firstOrNull;
+        if (profile == null ||
+            !_revokedByDag(head, profile.accountId, author)) {
+          continue;
+        }
+        final checkpoint = _departureCheckpoint(recordId, author, head.id);
+        if (checkpoint != null) targets[author] = checkpoint;
+      }
+    }
+    for (final cutoff in view?.allCutoffs ?? const <AccountCutoff>[]) {
+      targets.putIfAbsent(
+        cutoff.deviceId,
+        () => GroupHistoryCheckpoint(
+          sequence: cutoff.sequence,
+          eventId: cutoff.eventId,
+        ),
+      );
+    }
+    return targets;
+  }
+
   /// A device acting for a member account without being in the signed
   /// projection: effective in the account's newest list. Message events
   /// only; the signed projection never depends on this.

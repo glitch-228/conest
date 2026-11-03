@@ -4,6 +4,8 @@ import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
 
+import 'group_accounts.dart';
+import 'account/account_model.dart';
 import 'group_history_event.dart';
 import 'group_file_manifest.dart';
 import 'group_history_journal.dart';
@@ -25,7 +27,15 @@ class GroupHistoryCoordinator {
     required this.onMessage,
     required this.retainedMessages,
     this.onAttachment,
+    this.lists,
+    this.viewFor,
   });
+
+  /// Device lists by digest (accounts mode), shared by every group, and the
+  /// per group view of the lists seen. Both belong to the controller, which
+  /// keeps them in the vault.
+  final PinnedListStore? lists;
+  final DeviceListView Function(String groupId)? viewFor;
 
   final VaultStore vault;
   final IdentityRecord Function() identity;
@@ -223,6 +233,8 @@ class GroupHistoryCoordinator {
       groupId: id,
       localDeviceId: identity().deviceId,
       trustedOwner: owner!,
+      lists: lists,
+      view: viewFor?.call(id),
     );
   }
 
@@ -281,9 +293,12 @@ class GroupHistoryCoordinator {
   }
 
   Future<GroupHistoryEvent?> prepareMembership(
-    GroupRecord snapshot, {
+    GroupRecord given, {
     GroupHistoryVisibility? visibility,
-  }) => _write(snapshot.groupId, () async {
+  }) => _write(given.groupId, () async {
+    // What is signed is the record as members hold it, never this device's
+    // resolved view with its effective siblings.
+    final snapshot = given.signedView;
     final replica = await _replica(snapshot.groupId);
     final history = replica.membership;
     final current = history.current;
@@ -301,14 +316,27 @@ class GroupHistoryCoordinator {
     if (current == null && snapshot.ownerDeviceId != me.deviceId) return null;
     final parents = history.heads;
     final checkpoints = <String, GroupHistoryCheckpoint>{};
-    final needsAdmissionBoundary = snapshot.activeMemberDeviceIds.any(
-      (device) => current?.admissions[device] == null,
-    );
+    final needsAdmissionBoundary =
+        snapshot.activeMemberDeviceIds.any(
+          (device) => current?.admissions[device] == null,
+        ) ||
+        snapshot.memberAccounts.any(
+          (entry) =>
+              entry.admission == null &&
+              !(current?.group.memberAccounts.any(
+                    (held) => held.accountId == entry.accountId,
+                  ) ??
+                  false),
+        );
     final departedMembers = current == null
         ? const <String>{}
-        : current.group.activeMemberDeviceIds.toSet().difference(
-            snapshot.activeMemberDeviceIds.toSet(),
-          );
+        : {
+            ...current.group.activeMemberDeviceIds.toSet().difference(
+              snapshot.activeMemberDeviceIds.toSet(),
+            ),
+            // Every author of an account that left, projected or not.
+            ...await _authorsOfDepartedAccounts(replica, current.group, snapshot),
+          };
     // Admission and departure fences use signed author-sequence checkpoints,
     // never wall clocks. New admissions need a boundary for every author;
     // removals need at least the departing author's last retained event.
@@ -383,15 +411,53 @@ class GroupHistoryCoordinator {
     return proof;
   });
 
-  Future<void> importMembership(String id, String encoded) =>
-      _write(id, () async {
-        final proof = GroupHistoryEvent.decode(encoded);
-        final replica = await _replica(id);
-        if (await replica.importMembership(proof) ==
-            GroupMembershipImport.missingParents) {
-          throw StateError('Group history needs earlier membership records.');
+  /// [deviceLists]: the lists the record pins (they travel beside the proof).
+  /// Missing lists are not an error: the caller parks the record.
+  Future<GroupMembershipImport> importMembership(
+    String id,
+    String encoded, {
+    List<AccountDeviceList> deviceLists = const [],
+  }) => _write(id, () async {
+    final proof = GroupHistoryEvent.decode(encoded);
+    final replica = await _replica(id);
+    for (final list in deviceLists.take(16)) {
+      replica.lists.put(list);
+    }
+    final result = await replica.importMembership(proof);
+    if (result == GroupMembershipImport.missingParents) {
+      throw StateError('Group history needs earlier membership records.');
+    }
+    return result;
+  });
+
+  Future<Set<String>> _authorsOfDepartedAccounts(
+    GroupHistoryReplica replica,
+    GroupRecord before,
+    GroupRecord after,
+  ) async {
+    final gone = {
+      for (final entry in before.memberAccounts)
+        if (!after.memberAccounts.any(
+          (held) => held.accountId == entry.accountId,
+        ))
+          entry.accountId,
+    };
+    if (gone.isEmpty) return const {};
+    final result = <String>{};
+    String? cursor;
+    while (true) {
+      final authors = await replica.journal.authors(after: cursor);
+      if (authors.isEmpty) break;
+      for (final author in authors) {
+        final head = await replica.journal.authorHead(author);
+        if (head != null && gone.contains(head.authorAccountId)) {
+          result.add(author);
         }
-      });
+      }
+      cursor = authors.last;
+    }
+    return result;
+  }
 
   /// [seenLamport]: the highest place this device has seen in the group
   /// from live messages not yet in its journal; the new event goes after

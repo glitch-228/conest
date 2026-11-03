@@ -3745,6 +3745,13 @@ class GroupRecord {
 
   bool get isDissolved => dissolvedAt != null;
 
+  /// This record as members sign and hold it: without the local, resolved
+  /// view of effective siblings.
+  GroupRecord get signedView =>
+      siblingProfiles.isEmpty && suppressedDeviceIds.isEmpty
+      ? this
+      : copyWith(siblingProfiles: const [], suppressedDeviceIds: const []);
+
   /// Account members (M29): signed, with a device list pinned by digest.
   /// The device fields above hold their *projection*, which is what apps
   /// without groupAccountsV1 read. Empty for every group made before.

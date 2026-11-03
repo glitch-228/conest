@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'account/account_model.dart';
 import 'group_history_event.dart';
 import 'group_history_sync.dart';
 
@@ -177,6 +178,22 @@ class GroupHistoryWire {
           response['payload'] = {
             'events': events.map((event) => event.toJson()).toList(),
           };
+        case 'lists':
+          final digests = arguments['digests'];
+          if (exchange is! DeviceListExchange ||
+              digests is! List ||
+              digests.isEmpty ||
+              digests.length > 16 ||
+              !digests.every((id) => id is String && _eventId(id))) {
+            throw const FormatException('Invalid device list request.');
+          }
+          final lists = await (exchange as DeviceListExchange).deviceLists(
+            authenticatedPeer,
+            digests.cast<String>(),
+          );
+          response['payload'] = {
+            'lists': lists.map((list) => list.toJson()).toList(),
+          };
         default:
           response['error'] = 'unsupported operation';
       }
@@ -218,7 +235,7 @@ class _PendingHistoryRequest {
   final result = Completer<Map<String, Object?>>();
 }
 
-class _RemoteGroupHistory implements GroupHistoryExchange {
+class _RemoteGroupHistory implements GroupHistoryExchange, DeviceListExchange {
   _RemoteGroupHistory(this.wire, this.peer);
   final GroupHistoryWire wire;
   final String peer;
@@ -230,6 +247,23 @@ class _RemoteGroupHistory implements GroupHistoryExchange {
   }) async => _decodeEvents(
     await wire._request(peer, 'memberships', {'afterEventId': afterEventId}),
   );
+
+  @override
+  Future<List<AccountDeviceList>> deviceLists(
+    String requesterDeviceId,
+    List<String> digests,
+  ) async {
+    final payload = await wire._request(peer, 'lists', {'digests': digests});
+    final raw = payload['lists'];
+    if (raw is! List || raw.length > 16) {
+      throw const FormatException('Invalid device lists.');
+    }
+    return [
+      for (final entry in raw)
+        AccountDeviceList.fromJson(entry) ??
+            (throw const FormatException('Invalid device list.')),
+    ];
+  }
 
   @override
   Future<GroupSyncInventory> inventory(

@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'group_history_event.dart';
 import 'group_history_journal.dart';
+import 'account/account_model.dart';
+import 'group_accounts.dart';
 import 'group_membership_history.dart';
 import 'models.dart';
 
@@ -54,6 +56,15 @@ abstract interface class GroupHistoryExchange {
   );
 }
 
+/// Optional: a peer that also serves the device lists a membership record
+/// pins by digest (accounts mode). A peer without it is asked for nothing.
+abstract interface class DeviceListExchange {
+  Future<List<AccountDeviceList>> deviceLists(
+    String requesterDeviceId,
+    List<String> digests,
+  );
+}
+
 /// Durable, transport-independent catch-up. Journal contents are the persisted
 /// progress: an interrupted exchange restarts metadata paging but requests only
 /// missing events. A carrier need not be the author or the group owner.
@@ -61,7 +72,7 @@ abstract interface class GroupHistoryExchange {
 /// The controller still owns local group-removal state and payload projection
 /// (edit ownership, receipt targets, etc.). Construct this only for an approved
 /// group, and stop using it when the local group is explicitly removed.
-class GroupHistoryReplica implements GroupHistoryExchange {
+class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
   GroupHistoryReplica._(this.journal, this.localDeviceId, this._membership);
 
   final GroupHistoryJournal journal;
@@ -75,18 +86,27 @@ class GroupHistoryReplica implements GroupHistoryExchange {
     required String groupId,
     required String localDeviceId,
     required GroupMemberProfile trustedOwner,
+    PinnedListStore? lists,
+    DeviceListView? view,
   }) async {
+    final walker = _ChainWalker(journal);
     final membership = GroupMembershipHistory(
       groupId: groupId,
       trustedOwner: trustedOwner,
+      lists: lists,
+      view: view,
+      chainAdmits: walker.admits,
     );
     String? cursor;
     while (true) {
       final page = await journal.readMembershipPage(afterEventId: cursor);
       if (page.isEmpty) break;
       for (final proof in page) {
-        if (await membership.import(GroupMembershipRecord.fromEvent(proof)) ==
-            GroupMembershipImport.missingParents) {
+        final result = await membership.import(
+          GroupMembershipRecord.fromEvent(proof),
+        );
+        if (result == GroupMembershipImport.missingParents ||
+            result == GroupMembershipImport.missingDeviceLists) {
           throw const FormatException(
             'Journal is missing a membership dependency.',
           );
@@ -96,6 +116,10 @@ class GroupHistoryReplica implements GroupHistoryExchange {
     }
     return GroupHistoryReplica._(journal, localDeviceId, membership);
   }
+
+  /// Device lists the record named by digest are fetched with the proofs
+  /// (the caller puts them into the list store before importing).
+  PinnedListStore get lists => _membership.lists;
 
   Future<T> _serialize<T>(Future<T> Function() work) {
     final result = _tail.then((_) => work());
@@ -164,6 +188,49 @@ class GroupHistoryReplica implements GroupHistoryExchange {
       throw StateError('Membership changed during history request.');
     }
     return page;
+  }
+
+  @override
+  Future<List<AccountDeviceList>> deviceLists(
+    String requesterDeviceId,
+    List<String> digests,
+  ) async {
+    final heads = _membership.heads;
+    if (digests.isEmpty ||
+        digests.length > 16 ||
+        heads.isEmpty ||
+        !heads.every((id) {
+          final group = _membership.record(id)!.group;
+          return group.hasActiveMember(requesterDeviceId) &&
+              group.hasActiveMember(localDeviceId);
+        })) {
+      throw StateError('Unauthorized device list request.');
+    }
+    return [
+      for (final digest in digests.toSet())
+        if (_membership.lists.get(digest) case final list?) list,
+    ];
+  }
+
+  /// Fetches the lists [proof]'s record pins that are not held, from [peer].
+  /// The digest is recomputed from the content, so a peer cannot slip in a
+  /// different list under a wanted digest.
+  Future<void> _fetchLists(GroupHistoryExchange peer, GroupHistoryEvent proof) async {
+    if (peer is! DeviceListExchange) return;
+    final wanted = _membership
+        .missingListDigests(GroupMembershipRecord.fromEvent(proof))
+        .toSet();
+    if (wanted.isEmpty || wanted.length > 16) return;
+    final received = await (peer as DeviceListExchange).deviceLists(
+      localDeviceId,
+      wanted.toList(),
+    );
+    if (received.length > 16) {
+      throw const FormatException('Oversized device list response.');
+    }
+    for (final list in received) {
+      if (wanted.contains(deviceListDigest(list))) _membership.lists.put(list);
+    }
   }
 
   @override
@@ -260,6 +327,54 @@ class GroupHistoryReplica implements GroupHistoryExchange {
     return result;
   }
 
+  /// A revoked author's events count only along its own chain below the
+  /// cutoff (see [GroupMembershipHistory.chainTargets]). Ascending inventory
+  /// would offer the early ones before their successors are held, so fetch
+  /// the cutoff event by id first and walk back by `previousEventId`.
+  Future<int> _backfillChains(
+    GroupHistoryExchange peer,
+    String carrierDeviceId,
+  ) async {
+    var imported = 0;
+    var budget = 1024;
+    for (final target in _membership.chainTargets().entries) {
+      final author = target.key;
+      var wanted = target.value.eventId;
+      while (budget > 0) {
+        final held = await journal.readEvents([wanted]);
+        if (held.isNotEmpty) {
+          final previous = held.single.previousEventId;
+          if (previous == null) break;
+          wanted = previous;
+          budget--;
+          continue;
+        }
+        final received = await peer.events(localDeviceId, [wanted]);
+        if (received.length != 1 ||
+            received.single.eventId != wanted ||
+            received.single.authorDeviceId != author) {
+          break;
+        }
+        try {
+          if (await importEvent(
+            received.single,
+            carrierDeviceId: carrierDeviceId,
+          )) {
+            imported++;
+          }
+        } on FormatException {
+          // Not on the chain after all: leave it, the inventory decides.
+          break;
+        }
+        budget--;
+        final previous = received.single.previousEventId;
+        if (previous == null) break;
+        wanted = previous;
+      }
+    }
+    return imported;
+  }
+
   /// Returns the number of newly durable ordinary events. Batches can be
   /// interrupted safely: the next invocation derives missing IDs from disk.
   Future<int> pullFrom(
@@ -314,8 +429,13 @@ class GroupHistoryReplica implements GroupHistoryExchange {
         break;
       }
       for (final proof in page) {
-        if (await importMembership(proof) ==
-            GroupMembershipImport.missingParents) {
+        var result = await importMembership(proof);
+        if (result == GroupMembershipImport.missingDeviceLists) {
+          await _fetchLists(peer, proof);
+          result = await importMembership(proof);
+        }
+        if (result == GroupMembershipImport.missingParents ||
+            result == GroupMembershipImport.missingDeviceLists) {
           throw const FormatException('Peer omitted a membership dependency.');
         }
       }
@@ -330,7 +450,7 @@ class GroupHistoryReplica implements GroupHistoryExchange {
     if (beforeHead != _membership.current?.id) cursor = null;
     await saveProgress();
     _requirePeer(carrierDeviceId);
-    var imported = 0;
+    var imported = await _backfillChains(peer, carrierDeviceId);
     do {
       if (++pages > maxPages) {
         throw StateError('History exchange work budget reached; resume later.');
@@ -402,4 +522,52 @@ class GroupHistoryReplica implements GroupHistoryExchange {
     await journal.saveSyncProgress(carrierDeviceId, {});
     return imported;
   }
+}
+
+/// Walks a revoked author's chain back from its cutoff event through the
+/// journal, so that an event counts only if the cutoff event reaches it by
+/// `previousEventId` (a sequence number below the cutoff is not enough).
+class _ChainWalker {
+  _ChainWalker(this.journal);
+
+  final GroupHistoryJournal journal;
+  final _walks = <String, _Walk>{};
+  static const int _maxWalks = 64;
+
+  Future<bool> admits(
+    GroupHistoryEvent event,
+    GroupHistoryCheckpoint cutoff,
+  ) async {
+    final key = '${event.authorDeviceId}|${cutoff.eventId}';
+    var walk = _walks[key];
+    if (walk == null) {
+      while (_walks.length >= _maxWalks) {
+        _walks.remove(_walks.keys.first);
+      }
+      walk = _walks[key] = _Walk(cutoff.eventId);
+    }
+    var steps = 0;
+    while (!walk.ids.contains(event.eventId) &&
+        walk.next != null &&
+        steps++ < 4096) {
+      final held = await journal.readEvents([walk.next!]);
+      if (held.isEmpty ||
+          held.single.authorDeviceId != event.authorDeviceId) {
+        break;
+      }
+      final previous = held.single.previousEventId;
+      walk.next = previous;
+      if (previous != null) walk.ids.add(previous);
+    }
+    return walk.ids.contains(event.eventId);
+  }
+}
+
+class _Walk {
+  _Walk(String cutoffEventId) : next = cutoffEventId {
+    ids.add(cutoffEventId);
+  }
+
+  final ids = <String>{};
+  String? next;
 }
