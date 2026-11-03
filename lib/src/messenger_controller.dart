@@ -15574,12 +15574,25 @@ class MessengerController extends ChangeNotifier {
     return false;
   }
 
+  final Set<String> _droppedCapabilitiesForTesting = {};
+
+  bool _takesBatchedAcks(ContactRecord contact) =>
+      contact.featureCapabilities.contains(
+        ApplicationCapability.batchedAcksV1,
+      ) &&
+      !_droppedCapabilitiesForTesting.contains(
+        '${contact.deviceId}|${ApplicationCapability.batchedAcksV1.name}',
+      );
+
   /// Makes [contactDeviceId] look like a build without [capability].
   @visibleForTesting
   void dropContactCapabilityForTesting(
     String contactDeviceId,
     ApplicationCapability capability,
   ) {
+    // Kept dropped when the contact's profile arrives again (a test of an
+    // old peer must not turn into one of a new peer by a route update).
+    _droppedCapabilitiesForTesting.add('$contactDeviceId|${capability.name}');
     final contact = _contactByDeviceId(contactDeviceId);
     if (contact == null) return;
     _replaceContactRecord(
@@ -27889,18 +27902,12 @@ class MessengerController extends ChangeNotifier {
       final List<PendingAckDelivery> unit;
       if (urgent.isNotEmpty) {
         unit =
-            urgent.length > 1 &&
-                contact.featureCapabilities.contains(
-                  ApplicationCapability.batchedAcksV1,
-                )
+            urgent.length > 1 && _takesBatchedAcks(contact)
             ? urgent.take(receiptBatchLimit).toList(growable: false)
             : [urgent.first];
       } else if (readEntries.isNotEmpty) {
         unit = [readEntries.first];
-      } else if (delivered.length > 1 &&
-          contact.featureCapabilities.contains(
-            ApplicationCapability.batchedAcksV1,
-          )) {
+      } else if (delivered.length > 1 && _takesBatchedAcks(contact)) {
         unit = delivered.take(receiptBatchLimit).toList(growable: false);
       } else if (delivered.isNotEmpty) {
         unit = [delivered.first];
