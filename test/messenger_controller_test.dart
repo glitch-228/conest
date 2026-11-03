@@ -32680,8 +32680,9 @@ void main() {
     RelayEnvelope garbagePreKey(
       MessengerController to,
       MessengerController from,
-      String id,
-    ) => RelayEnvelope(
+      String id, {
+      DateTime? at,
+    }) => RelayEnvelope(
       protocolVersion: 3,
       kind: 'ratchet_hello',
       messageId: id,
@@ -32689,7 +32690,7 @@ void main() {
       senderAccountId: from.identity!.accountId,
       senderDeviceId: from.identity!.deviceId,
       recipientDeviceId: to.identity!.deviceId,
-      createdAt: DateTime.now().toUtc(),
+      createdAt: at ?? DateTime.now().toUtc(),
       ciphertextBase64: base64Encode(utf8.encode('x')),
       ratchetType: 0,
     );
@@ -32747,7 +32748,9 @@ void main() {
       addTearDown(bob.dispose);
       relay.shouldFailStore = (_, _, _, _, e) => e.kind == 'ratchet_bundle';
       await _pairControllers(alice, bob);
-      await alice.processEnvelopesForTesting([garbagePreKey(alice, bob, 'h1')]);
+      await alice.processEnvelopesForTesting([
+        garbagePreKey(alice, bob, 'h1', at: clock),
+      ]);
       final first = alice.firstParkedAtForTesting;
       expect(first, isNotNull);
       for (var i = 0; i < 2; i++) {
@@ -32762,7 +32765,9 @@ void main() {
       await alice.settleReplaysForTesting();
       expect(alice.parkedUnreadableCountForTesting, 0, reason: 'no cap');
       // Old ones go on load.
-      await alice.processEnvelopesForTesting([garbagePreKey(alice, bob, 'h2')]);
+      await alice.processEnvelopesForTesting([
+        garbagePreKey(alice, bob, 'h2', at: clock),
+      ]);
       expect(alice.parkedUnreadableCountForTesting, 1);
       alice.dispose();
       clock = clock.add(const Duration(hours: 25));
