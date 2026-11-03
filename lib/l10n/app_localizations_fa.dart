@@ -6639,4 +6639,65 @@ class AppLocalizationsFa extends AppLocalizations {
   String airtimeBudgetUsed(int percent) {
     return 'زمان پخش مصرف‌شده در دقیقهٔ گذشته: $percent٪';
   }
+
+  @override
+  String get updateChannelTitle => 'کانال به‌روزرسانی';
+
+  @override
+  String get updateChannelStable => 'پایدار';
+
+  @override
+  String get updateChannelStableHelp =>
+      'نسخه‌هایی که همهٔ آزمون‌ها را گذرانده‌اند. امن‌ترین گزینه.';
+
+  @override
+  String get updateChannelNightly => 'شبانه';
+
+  @override
+  String get updateChannelNightlyHelp =>
+      'ویژگی‌های جدیدتر که در آزمایشگاه ما آزموده شده‌اند اما کمتر جاافتاده‌اند. نسخه‌های پایدار را هم می‌گیرد.';
+
+  @override
+  String get updateChannelCanary => 'کاناری';
+
+  @override
+  String get updateChannelCanaryHelp =>
+      'هر ویژگی و رفع اشکال تازه به‌محض ساخته‌شدن، با آزمون اندک. ممکن است خراب شود. نسخه‌های شبانه و پایدار را هم می‌گیرد.';
+
+  @override
+  String get canaryBanner => 'کاناری: ویژگی‌های جدید، ممکن است خراب شود';
+
+  @override
+  String get canaryConfirmTitle => 'به کاناری تغییر می‌دهید؟';
+
+  @override
+  String get canaryConfirmBody =>
+      'نسخه‌های کاناری زودتر از همه می‌آیند و ممکن است خراب شوند. بازگشت بعدی به شبانه یا پایدار منتظر نسخه‌ای جدیدتر از نسخهٔ فعلی می‌ماند؛ Conest به نسخهٔ قدیمی‌تر برنمی‌گردد.';
+
+  @override
+  String get updateChannelWaiting =>
+      'این نسخه از کانالی که انتخاب کرده‌اید جدیدتر است. Conest تا انتشار نسخه‌ای جدیدتر از آن در آن کانال، روی همین نسخه می‌ماند.';
+
+  @override
+  String get releaseCanary => 'کاناری';
+
+  @override
+  String get reportProblemTitle => 'گزارش مشکل';
+
+  @override
+  String get reportProblemSubtitle =>
+      'فایلی با نسخه، خطاها و گزارش‌های خرابی بسازید تا برای توسعه‌دهندگان بفرستید. Conest چیزی ارسال نمی‌کند.';
+
+  @override
+  String get reportProblemNote =>
+      'پیش از اشتراک‌گذاری آن را بخوانید. پیام و کلیدی در آن نیست و نام‌ها جایگزین می‌شوند، اما ممکن است یک خط خطا چیزی را که شناخته نشده ذکر کند.';
+
+  @override
+  String get reportProblemBuilding => 'در حال آماده‌سازی گزارش…';
+
+  @override
+  String get reportProblemCopied => 'گزارش کپی شد.';
+
+  @override
+  String get reportProblemSaveTitle => 'ذخیرهٔ گزارش';
 }

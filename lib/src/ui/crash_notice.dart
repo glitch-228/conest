@@ -10,6 +10,7 @@ void showCrashNotice({
   required ScaffoldMessengerState messenger,
   required CrashCatcher crashes,
   required BuildContext? Function() dialogContext,
+  void Function(BuildContext context)? onReport,
 }) {
   final report = crashes.previousRun;
   if (!report.crashed) return;
@@ -32,7 +33,8 @@ void showCrashNotice({
             if (context == null) return;
             showDialog<void>(
               context: context,
-              builder: (context) => CrashReportDialog(report: report),
+              builder: (context) =>
+                  CrashReportDialog(report: report, onReport: onReport),
             );
           },
           child: Builder(
@@ -51,9 +53,12 @@ void showCrashNotice({
 }
 
 class CrashReportDialog extends StatelessWidget {
-  const CrashReportDialog({super.key, required this.report});
+  const CrashReportDialog({super.key, required this.report, this.onReport});
 
   final CrashReport report;
+
+  /// Opens "Report a problem"; no button without it.
+  final void Function(BuildContext context)? onReport;
 
   @override
   Widget build(BuildContext context) {
@@ -70,6 +75,12 @@ class CrashReportDialog extends StatelessWidget {
         ),
       ),
       actions: [
+        if (onReport != null)
+          TextButton(
+            key: const ValueKey('crash-report-problem'),
+            onPressed: () => onReport!(context),
+            child: Text(l10nOf(context).reportProblemTitle),
+          ),
         TextButton(
           onPressed: () => Clipboard.setData(ClipboardData(text: text)),
           child: Text(l10nOf(context).crashReportCopy),

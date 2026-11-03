@@ -6634,4 +6634,65 @@ class AppLocalizationsId extends AppLocalizations {
   String airtimeBudgetUsed(int percent) {
     return 'Airtime terpakai dalam semenit terakhir: $percent%';
   }
+
+  @override
+  String get updateChannelTitle => 'Saluran pembaruan';
+
+  @override
+  String get updateChannelStable => 'Stabil';
+
+  @override
+  String get updateChannelStableHelp =>
+      'Rilis yang lolos semua pengujian. Pilihan paling aman.';
+
+  @override
+  String get updateChannelNightly => 'Nightly';
+
+  @override
+  String get updateChannelNightlyHelp =>
+      'Fitur lebih baru, diuji di lab kami tetapi kurang mapan. Juga menerima rilis stabil.';
+
+  @override
+  String get updateChannelCanary => 'Canary';
+
+  @override
+  String get updateChannelCanaryHelp =>
+      'Setiap fitur dan perbaikan baru begitu dibuat, dengan sedikit pengujian. Bisa rusak. Juga menerima rilis nightly dan stabil.';
+
+  @override
+  String get canaryBanner => 'Canary: fitur baru, bisa rusak';
+
+  @override
+  String get canaryConfirmTitle => 'Beralih ke canary?';
+
+  @override
+  String get canaryConfirmBody =>
+      'Build canary datang lebih dulu dan bisa rusak. Kembali ke Nightly atau Stabil nanti menunggu rilis yang lebih baru dari build Anda; Conest tidak kembali ke build yang lebih lama.';
+
+  @override
+  String get updateChannelWaiting =>
+      'Build ini lebih baru daripada saluran yang Anda pilih. Conest tetap di build ini sampai rilis yang lebih baru dari build ini terbit di sana.';
+
+  @override
+  String get releaseCanary => 'canary';
+
+  @override
+  String get reportProblemTitle => 'Laporkan masalah';
+
+  @override
+  String get reportProblemSubtitle =>
+      'Buat berkas berisi versi, galat, dan catatan crash untuk dikirim ke pengembang. Conest tidak mengirim apa pun.';
+
+  @override
+  String get reportProblemNote =>
+      'Baca sebelum Anda membagikannya. Tidak berisi pesan maupun kunci, dan nama diganti, tetapi baris galat masih bisa menyebut sesuatu yang tidak dikenali.';
+
+  @override
+  String get reportProblemBuilding => 'Menyiapkan laporan…';
+
+  @override
+  String get reportProblemCopied => 'Laporan disalin.';
+
+  @override
+  String get reportProblemSaveTitle => 'Simpan laporan';
 }

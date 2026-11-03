@@ -6637,4 +6637,65 @@ class AppLocalizationsEn extends AppLocalizations {
   String airtimeBudgetUsed(int percent) {
     return 'Airtime used in the last minute: $percent%';
   }
+
+  @override
+  String get updateChannelTitle => 'Update channel';
+
+  @override
+  String get updateChannelStable => 'Stable';
+
+  @override
+  String get updateChannelStableHelp =>
+      'Releases that passed the full tests. The safest choice.';
+
+  @override
+  String get updateChannelNightly => 'Nightly';
+
+  @override
+  String get updateChannelNightlyHelp =>
+      'Newer features, tested in our lab but less settled. Also takes stable releases.';
+
+  @override
+  String get updateChannelCanary => 'Canary';
+
+  @override
+  String get updateChannelCanaryHelp =>
+      'Every new feature and fix as soon as it is built, with little testing. May break. Also takes nightly and stable releases.';
+
+  @override
+  String get canaryBanner => 'Canary: new features, may break';
+
+  @override
+  String get canaryConfirmTitle => 'Switch to canary?';
+
+  @override
+  String get canaryConfirmBody =>
+      'Canary builds come first and may break. Going back to Nightly or Stable later waits for a release newer than the build you have; Conest does not go back to an older build.';
+
+  @override
+  String get updateChannelWaiting =>
+      'This build is newer than the line you chose. Conest stays on it until a release newer than this build is published there.';
+
+  @override
+  String get releaseCanary => 'canary';
+
+  @override
+  String get reportProblemTitle => 'Report a problem';
+
+  @override
+  String get reportProblemSubtitle =>
+      'Make a file with the version, errors and crash records to send to the developers. Conest sends nothing.';
+
+  @override
+  String get reportProblemNote =>
+      'Read it before you share it. It holds no messages and no keys, and names are replaced, but an error line may still mention something that was not recognised.';
+
+  @override
+  String get reportProblemBuilding => 'Preparing the report…';
+
+  @override
+  String get reportProblemCopied => 'Copied the report.';
+
+  @override
+  String get reportProblemSaveTitle => 'Save the report';
 }

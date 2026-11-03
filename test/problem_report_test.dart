@@ -143,7 +143,7 @@ void main() {
       final watch = Stopwatch()..start();
       final text = List.filled(
         40,
-        'a' * 1000 + '@' + 'b' * 500 + ' ' + '1.' * 500,
+        '${'a' * 1000}@${'b' * 500} ${'1.' * 500}',
       ).join('\n');
       r(text);
       expect(watch.elapsedMilliseconds, lessThan(5000));
