@@ -40,10 +40,22 @@ class _ManifestSigner {
   Future<_ManifestFiles> sign({
     required String tagName,
     required Map<String, _ManifestAssetFixture> assets,
+    // What the real release tool signs: the channel and the release version
+    // (derived from the tag unless a test wants a wrong one).
+    String? channel,
+    String? releaseVersion,
+    bool omitChannel = false,
+    int? androidVersionCode,
   }) async {
     final manifest = jsonEncode({
       'version': 1,
       'tagName': tagName,
+      'releaseVersion':
+          releaseVersion ??
+          (tagName.startsWith('v') ? tagName.substring(1) : tagName),
+      if (!omitChannel) 'channel': channel ?? _channelOfTag(tagName),
+      'minimumSupervisorVersion': '0.1.0',
+      'androidVersionCode': ?androidVersionCode,
       'assets': [
         for (final entry in assets.entries)
           {
@@ -61,6 +73,12 @@ class _ManifestSigner {
     );
   }
 }
+
+String _channelOfTag(String tag) => tag.contains('-canary.')
+    ? 'canary'
+    : tag.contains('nightly')
+    ? 'nightly'
+    : 'stable';
 
 class _ManifestAssetFixture {
   const _ManifestAssetFixture({
@@ -104,6 +122,8 @@ List<Map<String, dynamic>> _releaseTrustAssets({
   required _ManifestFiles files,
   String manifestPath = '/RELEASE-MANIFEST.json',
   String signaturePath = '/RELEASE-MANIFEST.ed25519.sig',
+  // Canary releases carry their own pair of names, and not the standard one.
+  bool canary = false,
 }) {
   return [
     _assetJson(
@@ -113,13 +133,15 @@ List<Map<String, dynamic>> _releaseTrustAssets({
       size: 128,
     ),
     _assetJson(
-      name: 'RELEASE-MANIFEST.json',
+      name: canary ? 'RELEASE-MANIFEST.canary.json' : 'RELEASE-MANIFEST.json',
       baseUrl: baseUrl,
       path: manifestPath,
       size: files.manifestBytes.length,
     ),
     _assetJson(
-      name: 'RELEASE-MANIFEST.ed25519.sig',
+      name: canary
+          ? 'RELEASE-MANIFEST.canary.ed25519.sig'
+          : 'RELEASE-MANIFEST.ed25519.sig',
       baseUrl: baseUrl,
       path: signaturePath,
       size: files.signatureText.length,
@@ -127,34 +149,93 @@ List<Map<String, dynamic>> _releaseTrustAssets({
   ];
 }
 
+/// Metadata of the last request to the fake release list.
+class _ReleaseServerLog {
+  final List<String> listQueries = [];
+}
+
+/// A GitHub-style release object as the real API sends it: each asset with
+/// its uploader and counters, so a release is about 25 KB like the real
+/// ones (a list of 100 would exceed the updater's metadata cap).
+Map<String, dynamic> _realisticAsset(Map<String, dynamic> asset, int id) => {
+  ...asset,
+  'url': 'https://api.example.invalid/repos/glitch-228/conest/assets/$id',
+  'id': id,
+  'node_id': 'RA_kwDOExampleExampleExample$id',
+  'label': null,
+  'uploader': {
+    for (final key in [
+      'login',
+      'node_id',
+      'avatar_url',
+      'gravatar_id',
+      'url',
+      'html_url',
+      'followers_url',
+      'following_url',
+      'gists_url',
+      'starred_url',
+      'subscriptions_url',
+      'organizations_url',
+      'repos_url',
+      'events_url',
+      'received_events_url',
+    ])
+      key: 'https://api.example.invalid/users/github-actions%5Bbot%5D/$key',
+    'id': 41898282,
+    'type': 'Bot',
+    'site_admin': false,
+  },
+  'content_type': 'application/octet-stream',
+  'state': 'uploaded',
+  'download_count': 1234,
+  'created_at': '2026-10-06T10:00:00Z',
+  'updated_at': '2026-10-06T10:00:00Z',
+};
+
 /// Serves signed GitHub-style releases for Linux; returns the API base URL.
+///
+/// As strict as GitHub where the updater depends on it: the list is newest
+/// first (the order given), pages hold `per_page` entries (default 30, at
+/// most 100), canary releases carry only the `.canary.` manifest pair and
+/// the others only the standard pair, and every release object has
+/// realistic size.
 Future<String> _serveReleases(
   _ManifestSigner signer,
-  List<(String tag, bool prerelease)> releases,
-) async {
+  List<(String tag, bool prerelease)> releases, {
+  _ReleaseServerLog? log,
+  Map<String, _ManifestFiles>? overrides,
+}) async {
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   addTearDown(server.close);
   final baseUrl = 'http://${server.address.host}:${server.port}';
   final files = <String, _ManifestFiles>{};
   for (final (tag, _) in releases) {
-    files[tag] = await signer.sign(
-      tagName: tag,
-      assets: {
-        'conest-linux-x64-$tag.zip': _ManifestAssetFixture(
-          sha256Hex: 'e' * 64,
-          sizeBytes: 10,
-        ),
-      },
-    );
+    files[tag] =
+        overrides?[tag] ??
+        await signer.sign(
+          tagName: tag,
+          assets: {
+            'conest-linux-x64-$tag.zip': _ManifestAssetFixture(
+              sha256Hex: 'e' * 64,
+              sizeBytes: 10,
+            ),
+          },
+        );
   }
   server.listen((request) async {
     final path = request.uri.path;
     if (path == '/repos/glitch-228/conest/releases') {
+      log?.listQueries.add(request.uri.query);
+      final perPage =
+          (int.tryParse(request.uri.queryParameters['per_page'] ?? '') ?? 30)
+              .clamp(1, 100);
+      var nextId = 1;
       request.response
         ..headers.contentType = ContentType.json
         ..write(
           jsonEncode([
-            for (final (tag, prerelease) in releases)
+            for (final (tag, prerelease) in releases.take(perPage))
               {
                 'tag_name': tag,
                 'name': tag,
@@ -163,19 +244,44 @@ Future<String> _serveReleases(
                 'prerelease': prerelease,
                 'draft': false,
                 'assets': [
-                  _assetJson(
-                    name: 'conest-linux-x64-$tag.zip',
-                    baseUrl: baseUrl,
-                    path: '/$tag.zip',
-                    size: 10,
-                  ),
-                  ..._releaseTrustAssets(
-                    baseUrl: baseUrl,
-                    files: files[tag]!,
-                    manifestPath: '/$tag-manifest.json',
-                    signaturePath: '/$tag-manifest.sig',
-                  ),
+                  for (final asset in [
+                    _assetJson(
+                      name: 'conest-linux-x64-$tag.zip',
+                      baseUrl: baseUrl,
+                      path: '/$tag.zip',
+                      size: 10,
+                    ),
+                    ..._releaseTrustAssets(
+                      baseUrl: baseUrl,
+                      files: files[tag]!,
+                      manifestPath: '/$tag-manifest.json',
+                      signaturePath: '/$tag-manifest.sig',
+                      canary: tag.contains('-canary.'),
+                    ),
+                    // The rest of a real release.
+                    for (final name in [
+                      'conest-windows-x64-portable-$tag.zip',
+                      'conest-android-arm64-$tag.apk',
+                      'conest_relay-linux-x64-$tag',
+                      'conest_relay-linux-arm64-$tag',
+                      'conest_relay-windows-x64-$tag.exe',
+                      'conest_updater-linux-x64-$tag',
+                      'conest_updater-windows-x64-$tag.exe',
+                      'conest_relay_supervisor-linux-x64-$tag',
+                      'conest_relay_supervisor-linux-arm64-$tag',
+                      'conest_relay_supervisor-windows-x64-$tag.exe',
+                      'install-relay.sh',
+                    ])
+                      _assetJson(
+                        name: name,
+                        baseUrl: baseUrl,
+                        path: '/other/$name',
+                        size: 12345,
+                      ),
+                  ])
+                    _realisticAsset(asset, nextId++),
                 ],
+                'body': 'Changes since the last release.\n' * 4,
               },
           ]),
         );
