@@ -21991,6 +21991,43 @@ void main() {
       expect(aliceId, isNotEmpty);
     });
 
+    test('a fresh phone with the Automatic default creates its identity and '
+        'is cold afterwards', () async {
+      final policy = EnergyPolicy(
+        source: _MutablePower(
+          const PowerState(hasBattery: true, charging: false),
+        ),
+        isPhone: true,
+      );
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Phone',
+        energyPolicy: policy,
+        localRelayNode: LocalRelayNode(),
+        lanDirectChannel: HttpLanDirectChannel(),
+        transportRegistryFactory: _InProcessIrohNetwork().registry,
+        enableLongPoll: true,
+      ).timeout(const Duration(seconds: 20));
+      addTearDown(alice.dispose);
+      expect(alice.hasIdentity, isTrue);
+      // While the new identity is still choosing how the app looks, nothing
+      // is stopped under the setup.
+      expect(alice.needsUserModeChoice, isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(alice.coldModeActive, isFalse);
+      await alice.setUserMode(UserMode.advanced);
+      await _waitForIroh(
+        () => alice.coldModeActive,
+        reason: 'cold mode did not start',
+        timeout: const Duration(seconds: 6),
+      );
+      // What a lab run does next: an invite for the other devices.
+      final invite = await alice.buildInvite().timeout(
+        const Duration(seconds: 20),
+      );
+      expect(invite.encodePayload(), isNotEmpty);
+    });
+
     test(
       'with checks only on request, a failed message is still retried',
       () async {
@@ -22151,6 +22188,7 @@ void main() {
         energyPolicy: policy,
       );
       addTearDown(alice.dispose);
+      await alice.setUserMode(UserMode.advanced);
       await alice.syncColdMode();
       expect(alice.coldModeActive, isTrue);
       source.state = const PowerState(hasBattery: true, charging: true);

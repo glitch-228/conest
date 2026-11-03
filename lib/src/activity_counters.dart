@@ -129,7 +129,13 @@ class ActivityCounters {
     bool periodic,
   ) {
     // One-shot and periodic timers of one line are told apart.
-    final origin = '${_originOfCaller()}${periodic ? '' : ' (once)'}';
+    // Short one-shots (a `Future.delayed`, a poll step) are too many to look
+    // up where each came from: reading the stack costs a few hundred
+    // microseconds each, many times that on a phone's debug build, and they
+    // are not what keeps an idle app awake. They count together.
+    final origin = !periodic && duration < const Duration(seconds: 1)
+        ? 'short one-shots (under 1 s)'
+        : '${_originOfCaller()}${periodic ? '' : ' (once)'}';
     final stat = _timers.putIfAbsent(
       _timers.length >= maxOrigins && !_timers.containsKey(origin)
           ? 'other'

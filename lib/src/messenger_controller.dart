@@ -7172,6 +7172,8 @@ class MessengerController extends ChangeNotifier {
   Future<void> setUserMode(UserMode mode) async {
     _snapshot = _snapshot.copyWith(userMode: mode, userModeChosen: true);
     await _saveSnapshotSilently(notify: true);
+    // Setting up is over: Automatic may go cold now.
+    unawaited(syncColdMode().catchError((Object _) {}));
   }
 
   Future<void> setRandomizesFileNames(bool value) async {
@@ -30336,7 +30338,14 @@ class MessengerController extends ChangeNotifier {
       if (_disposed) return;
       final me = _snapshot.identity;
       await _energyPolicy.refresh();
-      final wanted = me != null && conestActive && _energyPolicy.isCold;
+      // Automatic does not go cold while the user is still choosing how the
+      // app looks (a new identity): setting up is done on the normal
+      // footing. An explicit Cold is kept.
+      final settingUp =
+          needsUserModeChoice &&
+          _energyPolicy.setting == EnergyBudgetSetting.automatic;
+      final wanted =
+          me != null && conestActive && !settingUp && _energyPolicy.isCold;
       final was = _cold.active;
       _cold.setHandles(_coldHandles());
       await _cold.configure(
