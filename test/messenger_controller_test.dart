@@ -4373,6 +4373,20 @@ void main() {
         );
       }
       await _pairControllers(alice, bob);
+      // Each side knows the other's LAN endpoint. (They learn it from a
+      // route update, which a heartbeat sends only when no receipt has
+      // shown the contact reachable lately; with receipts off the processing
+      // path that no longer happens during pairing.)
+      alice.cachePeerLanDirectHintForTesting(bob.identity!.deviceId, {
+        'senderLanDirectPort': bobLan.localPort,
+        'senderLanAddresses': ['192.168.63.11'],
+        'senderLanBinaryVersion': 1,
+      });
+      bob.cachePeerLanDirectHintForTesting(alice.identity!.deviceId, {
+        'senderLanDirectPort': aliceLan.localPort,
+        'senderLanAddresses': ['192.168.63.10'],
+        'senderLanBinaryVersion': 1,
+      });
       final group = await alice.createGroup(
         title: 'Striped',
         members: [alice.contacts.single],
