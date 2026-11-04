@@ -27774,6 +27774,15 @@ class MessengerController extends ChangeNotifier {
   static const Duration _receiptPassTime = Duration(seconds: 15);
   static const Duration _receiptFailureRest = Duration(seconds: 60);
 
+  /// How long the limiter said the last refused receipt has to wait.
+  Duration? _lastReceiptRefusal;
+
+  void _noteReceiptFailure(Object error) {
+    _lastReceiptRefusal = error is LimiterRefused
+        ? (error.retryIn ?? const Duration(seconds: 5))
+        : null;
+  }
+
   /// Receipt envelopes sent (a batched one counts once).
   @visibleForTesting
   int receiptEnvelopesSent = 0;
@@ -27972,8 +27981,20 @@ class MessengerController extends ChangeNotifier {
         }
       }
       if (!sent) {
-        // Its route is dead or slow: the rest waits for the retry loop.
-        _receiptFailedAt[targetDeviceId] = _now();
+        // Its route is dead or slow: the rest waits for the retry loop. A
+        // limiter's "not yet" rests only until its turn (a minute at most).
+        final rest = _lastReceiptRefusal;
+        _lastReceiptRefusal = null;
+        _receiptFailedAt[targetDeviceId] = rest == null
+            ? _now()
+            : _now().subtract(
+                _receiptFailureRest -
+                    (rest < const Duration(seconds: 1)
+                        ? const Duration(seconds: 1)
+                        : rest > _receiptFailureRest
+                        ? _receiptFailureRest
+                        : rest),
+              );
         while (_receiptFailedAt.length > 256) {
           _receiptFailedAt.remove(_receiptFailedAt.keys.first);
         }
@@ -28115,8 +28136,9 @@ class MessengerController extends ChangeNotifier {
         );
       }
       return true;
-    } catch (_) {
+    } catch (error) {
       // Stays queued (attempts counted); the retry loop will pick it up.
+      _noteReceiptFailure(error);
       return false;
     }
   }
@@ -28138,8 +28160,9 @@ class MessengerController extends ChangeNotifier {
       );
       receiptEnvelopesSent++;
       return true;
-    } catch (_) {
+    } catch (error) {
       // Stays queued; the retry loop will pick it up.
+      _noteReceiptFailure(error);
       return false;
     }
   }
@@ -29654,6 +29677,11 @@ class MessengerController extends ChangeNotifier {
     } on TransportSendCancelled {
       return true; // Its receipt came meanwhile.
     } catch (error) {
+      // An account's limiter holding it back is a wait: the attempt does not
+      // count towards the retry back-off.
+      if (error is LimiterRefused) {
+        _forgetOutboundAttempt(contact.deviceId, message.id);
+      }
       _lastRelayStatus = 'delivery queued';
       _statusMessage = 'Delivery retry pending: $error';
       notifyListeners();
@@ -29750,6 +29778,9 @@ class MessengerController extends ChangeNotifier {
     } on TransportSendCancelled {
       return true; // Their receipt came meanwhile.
     } catch (error) {
+      if (error is LimiterRefused) {
+        _forgetOutboundAttempt(contact.deviceId, message.id);
+      }
       _lastRelayStatus = 'group delivery queued';
       _statusMessage = 'Group delivery retry pending: $error';
       notifyListeners();
@@ -31321,6 +31352,18 @@ class MessengerController extends ChangeNotifier {
     final key = _outboundAttemptKey(peerDeviceId, messageId);
     _outboundAttemptedAt[key] = DateTime.now().toUtc();
     _outboundAttemptCount[key] = (_outboundAttemptCount[key] ?? 0) + 1;
+  }
+
+  @visibleForTesting
+  int outboundAttemptsForTesting(String peerDeviceId, String messageId) =>
+      _outboundAttemptCount[_outboundAttemptKey(peerDeviceId, messageId)] ?? 0;
+
+  /// Takes back the count of the last attempt (the limiter, not the route,
+  /// held it back).
+  void _forgetOutboundAttempt(String peerDeviceId, String messageId) {
+    final key = _outboundAttemptKey(peerDeviceId, messageId);
+    final count = _outboundAttemptCount[key];
+    if (count != null && count > 1) _outboundAttemptCount[key] = count - 1;
   }
 
   void _clearOutboundAttempt(String peerDeviceId, String messageId) {

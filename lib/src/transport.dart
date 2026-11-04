@@ -485,6 +485,19 @@ class TransportRegistry {
         );
       }
     }
+    // Every route said "not now" (an account's limiter): that is a wait, not
+    // a failed delivery, and the caller must be able to tell.
+    final failures = attempts.map((attempt) => attempt.error).nonNulls.toList();
+    if (routes.isNotEmpty &&
+        failures.isNotEmpty &&
+        failures.every((error) => error is LimiterRefused)) {
+      Duration? soonest;
+      for (final error in failures.cast<LimiterRefused>()) {
+        final wait = error.retryIn;
+        if (wait != null && (soonest == null || wait < soonest)) soonest = wait;
+      }
+      throw LimiterRefused(LimiterRefusal.wouldWait, retryIn: soonest);
+    }
     throw StateError(
       routes.isEmpty
           ? 'No eligible transport route.'

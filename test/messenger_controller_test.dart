@@ -7071,6 +7071,83 @@ void main() {
     );
   });
 
+  group('a limiter that holds a send back is a wait', () {
+    test(
+      'refused attempts do not make the next retry later',
+      () async {
+        final server = await FakeHomeserver.start();
+        addTearDown(server.close);
+        final hub = FakeMatrixHub();
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          matrixCarrierEnabled: true,
+          matrixNativeApi: FakeMatrixNative(hub),
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          matrixCarrierEnabled: true,
+          matrixNativeApi: FakeMatrixNative(hub),
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        // One send a minute, and none may wait: the rest are refused.
+        alice.limiterBudgetForTesting = (kind, budget) =>
+            kind == TransportKind.matrix
+            ? const LimiterBudget(
+                name: 'Matrix',
+                gap: Duration(minutes: 1),
+                burst: 1,
+                maxWait: Duration(milliseconds: 100),
+              )
+            : budget;
+        await _pairControllers(alice, bob);
+        await alice.signInToMatrix(
+          homeserver: server.url.toString(),
+          user: 'alice',
+          password: 'unused',
+        );
+        await bob.signInToMatrix(
+          homeserver: server.url.toString(),
+          user: 'bob',
+          password: 'unused',
+        );
+        for (var i = 0; i < 6; i++) {
+          await alice.retryUnacknowledgedMessagesNow();
+          await bob.retryUnacknowledgedMessagesNow();
+          await alice.pollNow();
+          await bob.pollNow();
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        relay.shouldFailStore = (_, _, _, _, _) => true;
+        final bobId = bob.identity!.deviceId;
+        for (var i = 0; i < 3; i++) {
+          await alice.sendMessage(contact: alice.contacts.single, body: 'm$i');
+        }
+        for (var i = 0; i < 5; i++) {
+          await alice.retryUnacknowledgedMessagesNow();
+        }
+        final refused = alice
+            .messagesFor(bobId)
+            .where(
+              (m) => m.body.startsWith('m') && m.state == DeliveryState.pending,
+            )
+            .toList();
+        expect(refused, isNotEmpty, reason: 'nothing was held back');
+        for (final message in refused) {
+          expect(
+            alice.outboundAttemptsForTesting(bobId, message.id),
+            lessThanOrEqualTo(1),
+            reason: 'a refusal counted as a failed attempt',
+          );
+        }
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+  });
+
   group('receipts are sent off the processing path', () {
     Future<(MessengerController, MessengerController, _FakeRelayClient)>
     pairOnRelay({_MemoryVaultStore? bobVault, bool disposeBob = true}) async {

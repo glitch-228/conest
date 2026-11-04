@@ -785,6 +785,21 @@ void main() {
       expect(direct.sent, 0);
     });
 
+    test('when every route is held back by a limiter the send is a wait, not '
+        'a failure', () async {
+      final only = _Adapter(TransportKind.matrix, TransportPathKind.relayed)
+        ..refuse = true;
+      final registry = TransportRegistry([only]);
+      await expectLater(
+        registry.deliverEnvelope(
+          peer: peer,
+          envelope: _envelope(),
+          policies: const {},
+        ),
+        throwsA(isA<LimiterRefused>()),
+      );
+    });
+
     test(
       'a send the limiter held back does not mark the route failed',
       () async {
