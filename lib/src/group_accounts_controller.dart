@@ -105,6 +105,9 @@ extension GroupAccountsController on MessengerController {
 
   void _persistPinnedLists() {
     _expireGroupAccountState();
+    // Lists named by a retained membership record stay pinned: the journal
+    // keeps old records, and a restart rebuilds the history from them. The
+    // pinned set grows with the records (re-pins are rate limited).
     _pinnedLists.evictUnpinned();
     // Times of devices of groups that are gone are dropped; the rest is
     // bounded.
@@ -161,6 +164,23 @@ extension GroupAccountsController on MessengerController {
       announces: _siblingAnnounces[signed.groupId] ?? const {},
     );
     _groupResolutions[signed.groupId] = resolution;
+    // The owner's app notes when it first saw each listed device (the 24 hour
+    // admin delay counts from there), however the list reached it: a message,
+    // a record, a sync, or its own account.
+    if (me != null && signed.ownerDeviceId == me.deviceId) {
+      final now = _now().toUtc();
+      for (final entry in signed.memberAccounts) {
+        for (final cert in view.effectiveCerts(
+          entry,
+          confirmNewDevices: signed.confirmNewDevices,
+        )) {
+          _deviceFirstSeenStore.putIfAbsent(
+            '${signed.groupId}|${cert.deviceId}',
+            () => now,
+          );
+        }
+      }
+    }
     return resolution.group;
   }
 

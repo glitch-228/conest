@@ -26677,20 +26677,20 @@ class MessengerController extends ChangeNotifier {
       await _accountLeft(current, envelope.senderDeviceId, envelope.createdAt);
       return;
     }
-    final updated = existing.copyWith(
-      adminDeviceIds: existing.adminDeviceIds
+    final updated = current.copyWith(
+      adminDeviceIds: current.adminDeviceIds
           .where((deviceId) => deviceId != envelope.senderDeviceId)
           .toList(growable: false),
-      moderatorDeviceIds: existing.moderatorDeviceIds
+      moderatorDeviceIds: current.moderatorDeviceIds
           .where((deviceId) => deviceId != envelope.senderDeviceId)
           .toList(growable: false),
-      memberDeviceIds: existing.memberDeviceIds
+      memberDeviceIds: current.memberDeviceIds
           .where((deviceId) => deviceId != envelope.senderDeviceId)
           .toList(growable: false),
-      removedDeviceIds: [...existing.removedDeviceIds, envelope.senderDeviceId],
+      removedDeviceIds: [...current.removedDeviceIds, envelope.senderDeviceId],
       membershipVersion: max(
-        existing.membershipVersion + 1,
-        payload['membershipVersion'] as int? ?? existing.membershipVersion + 1,
+        current.membershipVersion + 1,
+        payload['membershipVersion'] as int? ?? current.membershipVersion + 1,
       ),
       updatedAt: envelope.createdAt,
     );
@@ -31315,7 +31315,12 @@ class MessengerController extends ChangeNotifier {
     if (message == null || message.deleted) return false;
     // Once any device of a member account has read it, nothing more goes to
     // that member's other devices; the read reaches them by own-device sync.
-    if (accountHasRead(group, deviceId, message.recipientStates)) return false;
+    // Only where the others get it by history too (until devices pass
+    // messages on, a live-only message must still reach every device).
+    if (message.groupHistoryEventId != null &&
+        accountHasRead(group, deviceId, message.recipientStates)) {
+      return false;
+    }
     return message.recipientStates[deviceId]?.awaitsRecipientAck ?? true;
   }
 
