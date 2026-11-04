@@ -26599,10 +26599,19 @@ class MessengerController extends ChangeNotifier {
     if (groupId == null || groupId.isEmpty || groupId != existing.groupId) {
       return;
     }
+    // Membership may have changed while this was decrypted.
+    final current = _groupById(envelope.conversationId);
+    if (current == null) return;
     // Only members follow leaves; a device showing the group through
     // another of this account's devices takes membership from there.
-    if (!existing.activeMemberDeviceIds.contains(envelope.senderDeviceId) ||
-        !existing.hasActiveMember(me.deviceId)) {
+    if (!current.activeMemberDeviceIds.contains(envelope.senderDeviceId) ||
+        !current.hasActiveMember(me.deviceId)) {
+      return;
+    }
+    // A member account leaves as a whole, through a signed record by the
+    // owner's app; other members wait for that record.
+    if (current.accountOf(envelope.senderDeviceId) != null) {
+      await _accountLeft(current, envelope.senderDeviceId, envelope.createdAt);
       return;
     }
     final updated = existing.copyWith(

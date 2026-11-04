@@ -839,6 +839,48 @@ extension GroupAccountsController on MessengerController {
         ],
       );
 
+  /// A device of a member account left: the account leaves with all its
+  /// devices. Only the owner's app writes the record (removal is a signed
+  /// membership change); the owner's own account cannot leave this way.
+  Future<void> _accountLeft(
+    GroupRecord group,
+    String deviceId,
+    DateTime at,
+  ) async {
+    final me = _snapshot.identity;
+    final entry = group.accountOf(deviceId);
+    if (me == null ||
+        entry == null ||
+        group.ownerDeviceId != me.deviceId ||
+        entry.role == GroupAccountRole.owner) {
+      return;
+    }
+    final signed = group.signedView;
+    final gone = {
+      for (final p in signed.memberProfiles)
+        if (p.accountId == entry.accountId) p.deviceId,
+    };
+    final next = _withoutDevices(signed, gone).copyWith(
+      memberAccounts: [
+        for (final held in signed.memberAccounts)
+          if (held.accountId != entry.accountId) held,
+      ],
+      removedDeviceIds: [...signed.removedDeviceIds, ...gone],
+      membershipVersion: signed.membershipVersion + 1,
+      updatedAt: at,
+    );
+    _upsertGroup(next);
+    await _persist('${entry.accountId} left ${next.title}.');
+    await _sendGroupMembershipUpdate(
+      _groupById(group.groupId)!,
+      targetDeviceIds: [
+        ...next.activeMemberDeviceIds.where((id) => id != me.deviceId),
+        ...gone,
+      ],
+      reason: 'member_left',
+    );
+  }
+
   /// Accounts mode needs an owner and admins that know accounts.
   bool _groupAcceptsAccounts(GroupRecord group) {
     bool capable(String id) =>

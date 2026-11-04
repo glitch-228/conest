@@ -196,5 +196,27 @@ void _groupAccountsControllerTests() {
         );
       }
     });
+
+    test('when one device of a member account leaves, the whole account '
+        'leaves, through a record by the owner', timeout: const Timeout(Duration(minutes: 3)), () async {
+      final t = await joinedPhone();
+      final all = [t.alice, t.bob, t.carol, t.phone];
+      final bobId = t.bob.identity!.deviceId;
+      final phoneId = t.phone.identity!.deviceId;
+      GroupRecord of(MessengerController c) =>
+          c.groups.firstWhere((g) => g.groupId == t.groupId);
+      await t.phone.leaveGroup(t.groupId);
+      await settle(
+        all,
+        until: () =>
+            of(t.alice).memberAccounts.isEmpty &&
+            !of(t.carol).hasActiveMember(bobId),
+      );
+      expect(of(t.alice).memberAccounts, isEmpty);
+      for (final c in [t.alice, t.carol]) {
+        expect(of(c).hasActiveMember(bobId), isFalse);
+        expect(of(c).hasActiveMember(phoneId), isFalse);
+      }
+    });
   });
 }
