@@ -30,7 +30,12 @@ class GroupHistoryCoordinator {
     this.lists,
     this.viewFor,
     this.persistLists,
+    this.onEventImported,
   });
+
+  /// Told of each event that became durable in a group's journal.
+  final void Function(String groupId, GroupHistoryEvent event)?
+  onEventImported;
 
   /// Saves the device lists durably (called before a membership record that
   /// pins them is appended to the journal).
@@ -263,6 +268,9 @@ class GroupHistoryCoordinator {
       lists: lists,
       view: viewFor?.call(id),
       beforeAppend: persistLists,
+      onImported: onEventImported == null
+          ? null
+          : (event) => onEventImported!(id, event),
     );
   }
 
@@ -460,6 +468,10 @@ class GroupHistoryCoordinator {
     await replica.importMembership(proof);
     return proof;
   });
+
+  /// Which of [ids] the journal of [id] holds.
+  Future<Set<String>> retainedIdsOf(String id, List<String> ids) async =>
+      ids.isEmpty ? <String>{} : (await _replica(id)).journal.retainedIds(ids);
 
   /// The last event of [deviceId] this device holds in the history of [id]:
   /// where a cutoff for a revoked device of this account can end.

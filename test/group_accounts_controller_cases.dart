@@ -630,5 +630,28 @@ void _groupAccountsControllerTests() {
         expect(of(t.alice).membershipVersion, greaterThan(3));
       },
     );
+
+    test(
+      'on slow routes one device of an account gets a message and passes it '
+      'on to the other',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone();
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        t.carol.setGatewayGraceForTesting(
+          const Duration(days: 1),
+          allSlow: true,
+        );
+        for (final c in all) {
+          c.setPassOnStepForTesting(Duration.zero);
+        }
+        await t.carol.sendGroupMessage(groupId: t.groupId, body: 'via gateway');
+        bool got(MessengerController c) =>
+            c.messagesForGroup(t.groupId).any((m) => m.body == 'via gateway');
+        await settle(all, until: () => got(t.bob) && got(t.phone), rounds: 300);
+        expect(got(t.bob), isTrue);
+        expect(got(t.phone), isTrue);
+      },
+    );
   });
 }

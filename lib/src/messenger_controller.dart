@@ -2842,6 +2842,7 @@ class MessengerController extends ChangeNotifier {
         lists: _pinnedLists,
         viewFor: _viewOf,
         persistLists: _savePinnedListsNow,
+        onEventImported: _noteEventImported,
         send: (groupId, peer, payload) async {
           final group = _requireGroupOrPending(groupId);
           final me = _requireIdentity();
@@ -4617,6 +4618,15 @@ class MessengerController extends ChangeNotifier {
   final Map<String, DateTime> _lastOwnerRecordAt = {};
   final Map<String, Timer> _groupWriterTimers = {};
   final Set<String> _announcing = {};
+  final Map<String, Set<String>> _passOnQueue = {};
+  final Map<String, Timer> _passOnTimers = {};
+  final Map<String, Set<String>> _haveQueue = {};
+  final Map<String, Timer> _haveTimers = {};
+  final Map<String, Set<String>> _haveFrom = {};
+  final Set<String> _catchUpNeeded = {};
+  Duration _gatewayGrace = const Duration(seconds: 30);
+  bool _assumeSlowRoutes = false;
+  Duration _passOnStep = const Duration(seconds: 2);
   final Map<String, Timer> _groupDeputyTimers = {};
   Duration _deputyDelay = const Duration(minutes: 10);
   final Set<String> _replayingSiblings = {};
@@ -4757,6 +4767,14 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     if (decoded is Map<String, dynamic>) {
+      if (decoded['version'] == 1 &&
+          decoded['groupId'] == group.groupId &&
+          (decoded['type'] == 'poke' ||
+              decoded['type'] == 'have' ||
+              decoded['type'] == 'catchup')) {
+        await _handlePassOnMessage(now, sender, decoded);
+        return;
+      }
       if (decoded['version'] == 1 &&
           decoded['groupId'] == group.groupId &&
           decoded['type'] == 'devices') {
@@ -29841,6 +29859,8 @@ class MessengerController extends ChangeNotifier {
     }
     // Still being signed: the send that follows carries its place.
     if (_groupMessagesBeingRecorded.contains(message.id)) return false;
+    // One device per member account gets it first (see _deferForGateway).
+    if (_deferForGateway(group, contact, message)) return true;
     _noteOutboundAttempt(contact.deviceId, message.id);
     // As stored now: its place in the signed history was added after the
     // caller took its copy.

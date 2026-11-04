@@ -446,10 +446,7 @@ extension GroupAccountsController on MessengerController {
 
   List<AccountDeviceList> _parseLists(Object? raw) {
     if (raw is! List || raw.length > _maxListsPerMessage) return const [];
-    return [
-      for (final entry in raw)
-        ?AccountDeviceList.fromJson(entry),
-    ];
+    return [for (final entry in raw) ?AccountDeviceList.fromJson(entry)];
   }
 
   /// Whether this device is one of the effective devices of an account the
@@ -552,8 +549,8 @@ extension GroupAccountsController on MessengerController {
               canonicalGroupJson(held[profile.deviceId]?.toJson()) !=
                   canonicalGroupJson(profile.toJson())) {
             held[profile.deviceId] = profile;
-            _siblingAnnounceAt['${group.groupId}|${profile.deviceId}'] =
-                _now().toUtc();
+            _siblingAnnounceAt['${group.groupId}|${profile.deviceId}'] = _now()
+                .toUtc();
             changed = true;
             announcedIds.add(profile.deviceId);
           }
@@ -579,8 +576,8 @@ extension GroupAccountsController on MessengerController {
           final merged = profileFromCert(cert, announced: profile);
           if (merged != null && merged.routeHints.isNotEmpty) {
             held[profile.deviceId] = merged;
-            _siblingAnnounceAt['${group.groupId}|${profile.deviceId}'] =
-                _now().toUtc();
+            _siblingAnnounceAt['${group.groupId}|${profile.deviceId}'] = _now()
+                .toUtc();
             changed = true;
             announcedIds.add(profile.deviceId);
           }
@@ -810,13 +807,15 @@ extension GroupAccountsController on MessengerController {
           profile,
     ];
     final merged = GroupRecord.fromJson({
-      ...signed.copyWith(
-        memberProfiles: profiles,
-        profileRevision: max(
-          signed.profileRevision,
-          stored.profileRevision,
-        ),
-      ).toJson(),
+      ...signed
+          .copyWith(
+            memberProfiles: profiles,
+            profileRevision: max(
+              signed.profileRevision,
+              stored.profileRevision,
+            ),
+          )
+          .toJson(),
       'localRemovedAt': stored.localRemovedAt?.toIso8601String(),
     });
     for (final entry in merged.memberAccounts) {
@@ -847,6 +846,242 @@ extension GroupAccountsController on MessengerController {
     if (_announcedFor[group.groupId] == key) return;
     _announcedFor[group.groupId] = key;
     _announceOwnDeviceList(onlyGroup: group.groupId);
+  }
+
+  // ---- Passing events on between the devices of an account ---------------
+
+  static const int _maxPokeIds = 16;
+  static const int _maxPassOnQueues = 64;
+  static const int _maxHaveIds = 256;
+  static const Duration _haveDelay = Duration(milliseconds: 300);
+
+  void setGatewayGraceForTesting(Duration grace, {bool allSlow = false}) {
+    _gatewayGrace = grace;
+    _assumeSlowRoutes = allSlow;
+  }
+
+  void setPassOnStepForTesting(Duration step) => _passOnStep = step;
+
+  /// The other effective devices of this device's own member account.
+  List<String> _siblingsInGroup(GroupRecord group) {
+    final me = _snapshot.identity;
+    if (me == null ||
+        !group.memberAccounts.any((e) => e.accountId == me.accountId)) {
+      return const [];
+    }
+    return [
+      for (final id in group.activeMemberDeviceIds)
+        if (id != me.deviceId &&
+            group.memberProfileFor(id)?.accountId == me.accountId)
+          id,
+    ];
+  }
+
+  /// An event became durable in a group's journal. The account's other
+  /// devices are told it is there (a small poke with the event ids, no
+  /// content): they pull it through the authenticated history sync if they
+  /// lack it. Pokes wait their turn by rank, so the best placed device pokes
+  /// first, and a sibling that says it has the events (`have`) is not poked.
+  void _noteEventImported(String groupId, GroupHistoryEvent event) {
+    final me = _snapshot.identity;
+    final group = _groupById(groupId);
+    if (_disposed ||
+        me == null ||
+        group == null ||
+        event.kind == GroupEventKind.membership) {
+      return;
+    }
+    final siblings = _siblingsInGroup(group);
+    if (siblings.isEmpty) return;
+    final own = event.authorAccountId == me.accountId;
+    final delay = own
+        ? _haveDelay
+        : _passOnStep * _passOnPlace(groupId, group, event);
+    for (final sibling in siblings) {
+      final key = '$groupId|$sibling';
+      final queue = _passOnQueue[key];
+      if (queue == null && _passOnQueue.length >= _maxPassOnQueues) {
+        _catchUpNeeded.add(key);
+        continue;
+      }
+      final ids = queue ?? (_passOnQueue[key] = <String>{});
+      if (ids.length >= _maxPokeIds) {
+        // More than a poke carries: the sibling is asked to catch up.
+        _catchUpNeeded.add(key);
+      } else {
+        ids.add(event.eventId);
+      }
+      _passOnTimers[key]?.cancel();
+      _passOnTimers[key] = Timer(delay + _haveDelay, () => _flushPassOn(key));
+    }
+    // Tell the siblings this device has what it was told of, so they do not
+    // poke it.
+    if (!own) _queueHave(groupId, siblings, event.eventId);
+  }
+
+  /// This device's place among the account's devices for passing on an event
+  /// of someone else: 0 for the best placed. Uses reach (who heard the
+  /// author lately) and the same ranking as the gateway.
+  int _passOnPlace(String groupId, GroupRecord group, GroupHistoryEvent event) {
+    final me = _snapshot.identity;
+    if (me == null) return 0;
+    final now = _now().toUtc();
+    final scores = <String, RouteScore>{
+      me.deviceId: _routeScoreFor(me.deviceId, now),
+      for (final id in _siblingsInGroup(group)) id: _routeScoreFor(id, now),
+    };
+    final ranked = rankGateways('$groupId|${event.authorDeviceId}', scores);
+    final index = ranked.indexOf(me.deviceId);
+    return index < 0 ? ranked.length : index;
+  }
+
+  RouteScore _routeScoreFor(String deviceId, DateTime now) {
+    final record = _reachability.recordByDeviceId(deviceId);
+    final heard = record?.lastAnySignalAt;
+    final twoWay = record?.lastTwoWaySuccessAt;
+    return RouteScore(
+      heardAgo: heard == null ? null : now.difference(heard.toUtc()),
+      direct:
+          twoWay != null &&
+          now.difference(twoWay.toUtc()) < const Duration(minutes: 2),
+    );
+  }
+
+  void _queueHave(String groupId, List<String> siblings, String eventId) {
+    for (final sibling in siblings) {
+      final key = '$groupId|$sibling';
+      final pending = _haveQueue.putIfAbsent(key, () => <String>{});
+      if (pending.length < _maxPokeIds) pending.add(eventId);
+      _haveTimers[key]?.cancel();
+      _haveTimers[key] = Timer(_haveDelay, () => _flushHave(key));
+    }
+  }
+
+  Future<void> _flushHave(String key) async {
+    _haveTimers.remove(key);
+    final ids = _haveQueue.remove(key);
+    if (_disposed || ids == null || ids.isEmpty) return;
+    final parts = key.split('|');
+    try {
+      await _groupHistory.send(parts.first, parts.last, {
+        'version': 1,
+        'groupId': parts.first,
+        'type': 'have',
+        'ids': ids.toList(),
+      });
+    } catch (_) {
+      // Only a hint: the sibling pokes anyway, and the poke is harmless.
+    }
+  }
+
+  Future<void> _flushPassOn(String key) async {
+    _passOnTimers.remove(key);
+    final ids = _passOnQueue.remove(key);
+    final catchUp = _catchUpNeeded.remove(key);
+    if (_disposed) return;
+    final parts = key.split('|');
+    final groupId = parts.first;
+    final sibling = parts.last;
+    final group = _groupById(groupId);
+    if (group == null || !group.hasActiveMember(sibling)) return;
+    final theyHave = _haveFrom[key] ?? const <String>{};
+    final wanted = [
+      for (final id in ids ?? const <String>{})
+        if (!theyHave.contains(id)) id,
+    ];
+    _haveFrom.remove(key);
+    if (wanted.isEmpty && !catchUp) return;
+    try {
+      await _groupHistory.send(groupId, sibling, {
+        'version': 1,
+        'groupId': groupId,
+        'type': catchUp ? 'catchup' : 'poke',
+        if (!catchUp) 'ids': wanted,
+      });
+    } catch (_) {
+      // Dropped: the sibling is asked to catch up the next time it can be
+      // reached (no timer: the next event for it, or its own start).
+      _catchUpNeeded.add(key);
+    }
+  }
+
+  /// A `poke`, `have` or `catchup` from a device of this account.
+  Future<void> _handlePassOnMessage(
+    GroupRecord group,
+    ContactRecord sender,
+    Map<String, dynamic> message,
+  ) async {
+    final me = _snapshot.identity;
+    if (me == null ||
+        group.memberProfileFor(sender.deviceId)?.accountId != me.accountId ||
+        !group.memberAccounts.any((e) => e.accountId == me.accountId)) {
+      return;
+    }
+    final type = message['type'];
+    final raw = message['ids'];
+    final ids = <String>[
+      if (raw is List)
+        for (final id in raw.take(_maxPokeIds))
+          if (id is String && RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) id,
+    ];
+    final key = '${group.groupId}|${sender.deviceId}';
+    switch (type) {
+      case 'have':
+        if (_haveFrom.length >= _maxPassOnQueues &&
+            !_haveFrom.containsKey(key)) {
+          return;
+        }
+        final held = _haveFrom.putIfAbsent(key, () => <String>{});
+        for (final id in ids) {
+          if (held.length < _maxHaveIds) held.add(id);
+        }
+      case 'poke':
+        if (ids.isEmpty) return;
+        final retained = await _groupHistory.retainedIdsOf(group.groupId, ids);
+        if (ids.every(retained.contains)) return;
+        _scheduleGroupHistorySync(
+          group.groupId,
+          sender.deviceId,
+          passOn: false,
+        );
+      case 'catchup':
+        _scheduleGroupHistorySync(
+          group.groupId,
+          sender.deviceId,
+          passOn: false,
+        );
+    }
+  }
+
+  // ---- The gateway of an account (slow routes) ---------------------------
+
+  /// Whether a group message to [contact] waits for another device of the
+  /// same member account: on routes that are not free, one device per account
+  /// (the gateway, elected by reach) gets the message and passes it on; a
+  /// device that can be reached directly now, or one whose turn comes
+  /// because the grace is over, gets it from the sender.
+  bool _deferForGateway(
+    GroupRecord group,
+    ContactRecord contact,
+    ChatMessage message,
+  ) {
+    final entry = group.accountOf(contact.deviceId);
+    if (entry == null) return false;
+    final devices = [
+      for (final id in group.activeMemberDeviceIds)
+        if (group.memberProfileFor(id)?.accountId == entry.accountId) id,
+    ];
+    if (devices.length < 2) return false;
+    final now = _now().toUtc();
+    if (now.difference(message.createdAt.toUtc()) >= _gatewayGrace) {
+      return false;
+    }
+    final score = _routeScoreFor(contact.deviceId, now);
+    if (score.direct && !_assumeSlowRoutes) return false;
+    final gateway = electGateway('${group.groupId}|${entry.accountId}', {
+      for (final id in devices) id: _routeScoreFor(id, now),
+    });
+    return gateway != null && gateway != contact.deviceId;
   }
 
   // ---- A sibling stands in when the owner's app is away -----------------
@@ -952,10 +1187,7 @@ extension GroupAccountsController on MessengerController {
       memberAccounts: [
         for (final held in signed.memberAccounts)
           held.accountId == entry.accountId
-              ? held.copyWith(
-                  listVersion: current.version,
-                  listDigest: digest,
-                )
+              ? held.copyWith(listVersion: current.version, listDigest: digest)
               : held,
       ],
       membershipVersion: signed.membershipVersion + 1,
@@ -996,9 +1228,9 @@ extension GroupAccountsController on MessengerController {
       _scheduleDeputy(group.groupId);
       if (!_announcing.add(group.groupId)) continue;
       unawaited(
-        _announceDeviceListNow(group.groupId).whenComplete(
-          () => _announcing.remove(group.groupId),
-        ),
+        _announceDeviceListNow(
+          group.groupId,
+        ).whenComplete(() => _announcing.remove(group.groupId)),
       );
     }
   }
@@ -1149,7 +1381,9 @@ extension GroupAccountsController on MessengerController {
         final x = signed.memberProfileFor(entry.key);
         if (x == null ||
             !signed.hasActiveMember(entry.key) ||
-            signed.memberAccounts.any((a) => a.accountId == upgrade.accountId) ||
+            signed.memberAccounts.any(
+              (a) => a.accountId == upgrade.accountId,
+            ) ||
             x.accountId != upgrade.accountId ||
             x.signingPublicKeyBase64 == null ||
             !await upgrade.verify(
@@ -1399,8 +1633,8 @@ extension GroupAccountsController on MessengerController {
     };
     for (final other in signed.memberAccounts) {
       if (other.accountId == exceptAccountId) continue;
-      final list = view.current(other.accountId) ??
-          _pinnedLists.get(other.listDigest);
+      final list =
+          view.current(other.accountId) ?? _pinnedLists.get(other.listDigest);
       if (list != null) taken.addAll(list.devices.map((c) => c.deviceId));
     }
     return taken;
@@ -1512,7 +1746,8 @@ extension GroupAccountsController on MessengerController {
     final signed = group.signedView;
     final devices = {
       for (final p in signed.memberProfiles)
-        if (p.accountId == entry.accountId && signed.hasActiveMember(p.deviceId))
+        if (p.accountId == entry.accountId &&
+            signed.hasActiveMember(p.deviceId))
           p.deviceId,
     };
     final next = signed.copyWith(
@@ -1625,6 +1860,15 @@ extension GroupAccountsController on MessengerController {
       timer.cancel();
     }
     _groupDeputyTimers.clear();
+    for (final timer in [..._passOnTimers.values, ..._haveTimers.values]) {
+      timer.cancel();
+    }
+    _passOnTimers.clear();
+    _haveTimers.clear();
+    _passOnQueue.clear();
+    _haveQueue.clear();
+    _haveFrom.clear();
+    _catchUpNeeded.clear();
     _deviceListViews.clear();
     _siblingAnnounces.clear();
     _pendingUpgrades.clear();

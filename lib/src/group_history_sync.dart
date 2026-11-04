@@ -78,8 +78,13 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
     this.localDeviceId,
     this._membership, {
     this.beforeAppend,
+    this.onImported,
     this.missingLists = const [],
   });
+
+  /// Told of every event that became durable here (once each): the account's
+  /// other devices hear of it.
+  final void Function(GroupHistoryEvent event)? onImported;
 
   /// Called before a membership record is appended to the journal: the
   /// device lists it pins must be durable first, or a restart could not
@@ -107,6 +112,7 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
     PinnedListStore? lists,
     DeviceListView? view,
     Future<void> Function()? beforeAppend,
+    void Function(GroupHistoryEvent event)? onImported,
   }) async {
     final walker = _ChainWalker(journal);
     final membership = GroupMembershipHistory(
@@ -144,6 +150,7 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
       localDeviceId,
       membership,
       beforeAppend: beforeAppend,
+      onImported: onImported,
       missingLists: missing,
     );
   }
@@ -185,7 +192,9 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
     )) {
       throw const FormatException('Unauthorized group history event.');
     }
-    return journal.append(event);
+    final added = await journal.append(event);
+    if (added) onImported?.call(event);
+    return added;
   });
 
   void _requirePeer(String peer) {
