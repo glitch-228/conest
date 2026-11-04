@@ -4617,6 +4617,8 @@ class MessengerController extends ChangeNotifier {
   final Map<String, DateTime> _lastOwnerRecordAt = {};
   final Map<String, Timer> _groupWriterTimers = {};
   final Set<String> _announcing = {};
+  final Map<String, Timer> _groupDeputyTimers = {};
+  Duration _deputyDelay = const Duration(minutes: 10);
   final Set<String> _replayingSiblings = {};
   final Set<String> _joining = {};
   final Map<String, ({GroupRecord group, String sender, DateTime at})>

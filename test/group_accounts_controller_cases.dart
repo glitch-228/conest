@@ -89,6 +89,7 @@ void _groupAccountsControllerTests() {
       DateTime Function()? aliceClock,
       bool settled = true,
       bool ownerWrites = true,
+      Duration? deputyDelay,
     }) async {
       final network = _InProcessIrohNetwork();
       final relay = _FakeRelayClient();
@@ -107,6 +108,10 @@ void _groupAccountsControllerTests() {
       final phone = await make('Bob phone');
       for (final c in [alice, bob, carol, phone]) {
         addTearDown(c.dispose);
+      }
+      if (deputyDelay != null) {
+        bob.setDeputyDelayForTesting(deputyDelay);
+        phone.setDeputyDelayForTesting(deputyDelay);
       }
       alice.setOwnerWriterDelayForTesting(const Duration(milliseconds: 50));
       await _pairControllers(alice, bob);
@@ -594,6 +599,35 @@ void _groupAccountsControllerTests() {
         expect(of(t.alice).memberAccounts, isEmpty);
         expect(of(t.alice).hasActiveMember(bobId), isFalse);
         expect(of(t.alice).hasActiveMember(phoneId), isFalse);
+      },
+    );
+
+    test(
+      'a sibling pins the revocation of its own account when the owner is '
+      'away',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(
+          deputyDelay: const Duration(milliseconds: 50),
+        );
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        final phoneId = t.phone.identity!.deviceId;
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        expect(of(t.alice).memberDeviceIds, contains(phoneId));
+        // The owner's app writes nothing from here; the laptop steps in.
+        t.alice.setOwnerWriterDelayForTesting(const Duration(days: 1));
+        await t.bob.revokeAccountDevice(phoneId);
+        await settle(
+          all,
+          until: () =>
+              !of(t.alice).memberDeviceIds.contains(phoneId) &&
+              !of(t.carol).memberDeviceIds.contains(phoneId),
+          rounds: 200,
+        );
+        expect(of(t.alice).memberDeviceIds, isNot(contains(phoneId)));
+        expect(of(t.carol).hasActiveMember(phoneId), isFalse);
+        expect(of(t.alice).membershipVersion, greaterThan(3));
       },
     );
   });

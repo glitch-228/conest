@@ -849,6 +849,131 @@ extension GroupAccountsController on MessengerController {
     _announceOwnDeviceList(onlyGroup: group.groupId);
   }
 
+  // ---- A sibling stands in when the owner's app is away -----------------
+
+  void setDeputyDelayForTesting(Duration delay) => _deputyDelay = delay;
+
+  /// A device of a member account, in a group where every member knows
+  /// accounts, writes two records when the owner's app has not (after a
+  /// delay): the revocation pin for its own account (so a stolen sibling
+  /// loses its seat), and the handoff of ownership when the owner's device
+  /// was revoked by its own account and this is the smallest remaining admin
+  /// device. Both are checked by the signed history like any record.
+  void _scheduleDeputy(String groupId) {
+    final me = _snapshot.identity;
+    final group = _groupById(groupId);
+    if (_disposed ||
+        me == null ||
+        group == null ||
+        group.ownerDeviceId == me.deviceId ||
+        !group.memberDeviceIds.contains(me.deviceId) ||
+        !group.memberAccounts.any((e) => e.accountId == me.accountId)) {
+      return;
+    }
+    if (_groupDeputyTimers.containsKey(groupId)) return;
+    _groupDeputyTimers[groupId] = Timer(_deputyDelay, () {
+      _groupDeputyTimers.remove(groupId);
+      if (_disposed) return;
+      unawaited(
+        _runDeputy(groupId).catchError((Object error) {
+          appendDebugLog('Deputy record not written: $error');
+        }),
+      );
+    });
+  }
+
+  Future<void> _runDeputy(String groupId) async {
+    final me = _snapshot.identity;
+    final group = _groupById(groupId);
+    if (me == null ||
+        group == null ||
+        group.localRemovedAt != null ||
+        group.isDissolved ||
+        group.ownerDeviceId == me.deviceId ||
+        await _groupHistory.isBehind(groupId)) {
+      return;
+    }
+    final signed = group.signedView;
+    final entry = signed.memberAccounts
+        .where((e) => e.accountId == me.accountId)
+        .firstOrNull;
+    final view = _viewOf(groupId);
+    final current = view.current(me.accountId);
+    if (entry == null ||
+        current == null ||
+        view.factsFor(entry).compromised ||
+        !signed.memberDeviceIds.contains(me.deviceId) ||
+        !signed.activeMemberDeviceIds.every(
+          (id) =>
+              signed
+                  .memberProfileFor(id)
+                  ?.featureCapabilities
+                  .contains(ApplicationCapability.groupAccountsV1) ==
+              true,
+        )) {
+      return;
+    }
+    final revoked = view.revoked(me.accountId);
+    if (revoked.contains(me.deviceId)) return;
+    final mine = {
+      for (final p in signed.memberProfiles)
+        if (p.accountId == me.accountId && signed.hasActiveMember(p.deviceId))
+          p.deviceId,
+    };
+    final ownerRevoked =
+        entry.role == GroupAccountRole.owner &&
+        revoked.contains(signed.ownerDeviceId);
+    final drop = mine.intersection(revoked);
+    if (drop.isEmpty) return;
+    final digest = _pinnedLists.put(current);
+    final now = _now().toUtc();
+    GroupRecord next;
+    if (ownerRevoked) {
+      final eligible = [
+        for (final id in mine)
+          if (id != signed.ownerDeviceId &&
+              signed.roleFor(id) == GroupMemberRole.admin &&
+              !revoked.contains(id) &&
+              !entry.excludedDeviceIds.contains(id))
+            id,
+      ]..sort();
+      if (eligible.isEmpty || eligible.first != me.deviceId) return;
+      next = _withoutDevices(signed, drop).copyWith(
+        ownerDeviceId: me.deviceId,
+        adminDeviceIds: [
+          for (final id in signed.adminDeviceIds)
+            if (id != me.deviceId && !drop.contains(id)) id,
+        ],
+      );
+    } else {
+      next = _withoutDevices(signed, drop);
+    }
+    next = next.copyWith(
+      memberAccounts: [
+        for (final held in signed.memberAccounts)
+          held.accountId == entry.accountId
+              ? held.copyWith(
+                  listVersion: current.version,
+                  listDigest: digest,
+                )
+              : held,
+      ],
+      membershipVersion: signed.membershipVersion + 1,
+      updatedAt: now,
+    );
+    _persistPinnedLists();
+    await _commitGroupChange(next);
+    await _persist('Updated the devices of ${next.title}.');
+    await _sendGroupMembershipUpdate(
+      _groupById(groupId)!,
+      targetDeviceIds: {
+        ...next.activeMemberDeviceIds,
+        ...signed.activeMemberDeviceIds,
+      }.where((id) => id != me.deviceId).toList(),
+      reason: ownerRevoked ? 'transfer_ownership' : 'devices',
+    );
+  }
+
   // ---- Announcing this account's list ---------------------------------
 
   /// Tells the groups this account is a member of its current device list
@@ -866,6 +991,9 @@ extension GroupAccountsController on MessengerController {
       final deviceOnly = !mine && group.hasActiveMember(me.deviceId);
       // A device-only member that became an account offers its upgrade.
       if (!mine && !(deviceOnly && me.accountUpgrade != null)) continue;
+      // This account's list changed: the group follows it at once here.
+      if (mine) _upsertGroup(group);
+      _scheduleDeputy(group.groupId);
       if (!_announcing.add(group.groupId)) continue;
       unawaited(
         _announceDeviceListNow(group.groupId).whenComplete(
@@ -895,6 +1023,7 @@ extension GroupAccountsController on MessengerController {
             _groupProfileForContact(device).toJson(),
         ],
         if (!mine && me.accountUpgrade != null) 'upgrade': me.accountUpgrade,
+        if (mine) 'cutoffs': await _cutoffsFor(group, me, list),
       };
       for (final device in group.activeMemberDeviceIds.take(64)) {
         if (_disposed || device == me.deviceId) continue;
@@ -915,6 +1044,41 @@ extension GroupAccountsController on MessengerController {
     } catch (error) {
       appendDebugLog('Device list announcement failed: $error');
     }
+  }
+
+  /// Where each device this account revoked ends, as far as this device's
+  /// copy of the group's history shows it: signed with this device's key, for
+  /// devices no signed record ever listed. At most [_maxCutoffsPerMessage].
+  Future<List<Map<String, Object?>>> _cutoffsFor(
+    GroupRecord group,
+    IdentityRecord me,
+    AccountDeviceList list,
+  ) async {
+    final privateKey = me.signingPrivateKeyBase64;
+    final publicKey = me.signingPublicKeyBase64;
+    if (privateKey == null ||
+        publicKey == null ||
+        list.revoked.containsKey(me.deviceId)) {
+      return const [];
+    }
+    final result = <Map<String, Object?>>[];
+    for (final revoked in list.revoked.keys.take(_maxCutoffsPerMessage)) {
+      if (group.memberDeviceIds.contains(revoked)) continue;
+      final head = await _groupHistory.authorHeadOf(group.groupId, revoked);
+      if (head == null || head.authorAccountId != me.accountId) continue;
+      final cutoff = await AccountCutoff.sign(
+        groupId: group.groupId,
+        accountId: me.accountId,
+        deviceId: revoked,
+        sequence: head.sequence,
+        eventId: head.eventId,
+        signerDeviceId: me.deviceId,
+        signerPublicKeyBase64: publicKey,
+        signerPrivateKeyBase64: privateKey,
+      );
+      result.add(cutoff.toJson());
+    }
+    return result;
   }
 
   // ---- The owner's automatic records ----------------------------------
@@ -1457,6 +1621,10 @@ extension GroupAccountsController on MessengerController {
       timer.cancel();
     }
     _groupWriterTimers.clear();
+    for (final timer in _groupDeputyTimers.values) {
+      timer.cancel();
+    }
+    _groupDeputyTimers.clear();
     _deviceListViews.clear();
     _siblingAnnounces.clear();
     _pendingUpgrades.clear();

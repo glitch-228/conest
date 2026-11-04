@@ -1057,4 +1057,69 @@ void main() {
       },
     );
   });
+
+  group('cutoffs of devices no record ever listed', () {
+    test(
+      'a sibling signs where the revoked device ends; the lowest from a '
+      'non-revoked sibling counts; a forged or revoked signer does not',
+      () async {
+        final r1 = await root();
+        final l1 = await bobAcc.list(1, [bob1, bob2, bob3]);
+        // bob3 is a sibling the signed projection never named.
+        final r2 = await pinBob(r1, l1, [bob1]);
+        final e1 = await fx.message(r2, bob3);
+        final e2 = await fx.message(r2, bob3);
+        final e3 = await fx.message(r2, bob3);
+        final l2 = await bobAcc.list(2, [bob1, bob2], revoked: ['bob3']);
+        final view = DeviceListView(groupId: fx.groupId)
+          ..offerVerified(l1, accountKey: bobAcc.keys.publicKeyBase64)
+          ..offerVerified(l2, accountKey: bobAcc.keys.publicKeyBase64);
+        final chain = {e1.eventId, e2.eventId};
+        final history = fx.history(
+          owner: alice,
+          view: view,
+          chain: (event, cutoff) async => chain.contains(event.eventId),
+        );
+        await importAll(history, [r1, r2]);
+        Future<bool> counts(GroupHistoryEvent e) =>
+            history.canReceive(e, recipientDeviceId: 'carol');
+        // No cutoff yet: fail closed.
+        expect(await counts(e1), isFalse);
+        Future<AccountCutoff> cutoff(TestDevice by, GroupHistoryEvent at) =>
+            AccountCutoff.sign(
+              groupId: fx.groupId,
+              accountId: 'acc-bob',
+              deviceId: 'bob3',
+              sequence: at.sequence,
+              eventId: at.eventId,
+              signerDeviceId: by.id,
+              signerPublicKeyBase64: by.signingPublicKey,
+              signerPrivateKeyBase64: by.signingPrivateKey,
+            );
+        expect(await view.offerCutoff(await cutoff(bob1, e3)), isTrue);
+        expect(await counts(e3), isTrue);
+        expect(await counts(e1), isTrue);
+        // A lower cutoff from another sibling replaces it.
+        expect(await view.offerCutoff(await cutoff(bob2, e2)), isTrue);
+        expect(await counts(e3), isFalse);
+        expect(await counts(e2), isTrue);
+        expect(await counts(e1), isTrue);
+        // The revoked device cannot sign its own cutoff; a stranger's
+        // signature does not count; a higher one changes nothing.
+        expect(await view.offerCutoff(await cutoff(bob3, e3)), isFalse);
+        final forged = await cutoff(bob1, e1);
+        final bad = AccountCutoff(
+          groupId: forged.groupId,
+          accountId: forged.accountId,
+          deviceId: forged.deviceId,
+          sequence: forged.sequence,
+          eventId: forged.eventId,
+          signerDeviceId: 'bob2',
+          signatureBase64: forged.signatureBase64,
+        );
+        expect(await view.offerCutoff(bad), isFalse);
+        expect(await view.offerCutoff(await cutoff(bob1, e3)), isFalse);
+      },
+    );
+  });
 }

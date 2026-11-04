@@ -461,6 +461,11 @@ class GroupHistoryCoordinator {
     return proof;
   });
 
+  /// The last event of [deviceId] this device holds in the history of [id]:
+  /// where a cutoff for a revoked device of this account can end.
+  Future<GroupHistoryEvent?> authorHeadOf(String id, String deviceId) async =>
+      (await _replica(id)).journal.authorHead(deviceId);
+
   /// Whether the history of [id] lacks device lists its records pin (a
   /// restart after a crash): a catch-up must fetch them before anything is
   /// signed.
