@@ -7009,6 +7009,68 @@ void main() {
     expect((await fetch()).envelopes, isEmpty);
   });
 
+  group('nothing in incoming processing waits for a carrier', () {
+    test(
+      'answering a group history request does not hold the batch',
+      () async {
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        final group = await alice.createGroup(
+          title: 'G',
+          members: alice.contacts,
+        );
+        await _waitForIroh(() {
+          unawaited(bob.pollNow());
+          return bob.groups.any((g) => g.groupId == group.groupId);
+        });
+        for (var i = 0; i < 3; i++) {
+          await alice.sendGroupMessage(groupId: group.groupId, body: 'g$i');
+        }
+        final aliceId = alice.identity!.deviceId;
+        final bobId = bob.identity!.deviceId;
+        relay.fetchDelay = const Duration(hours: 1);
+        RelayEnvelope? request;
+        for (var i = 0; i < 30 && request == null; i++) {
+          unawaited(bob.pollNow());
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+          request = relay.storedEnvelopes
+              .where(
+                (e) =>
+                    e.kind == 'group_history' &&
+                    e.senderDeviceId == bobId &&
+                    e.recipientDeviceId == aliceId,
+              )
+              .firstOrNull;
+        }
+        expect(request, isNotNull, reason: 'Bob never asked for the history');
+        // A carrier's turn for the answer takes seconds.
+        relay.storeDelayFor = (e) => e.kind == 'group_history'
+            ? const Duration(seconds: 3)
+            : Duration.zero;
+        final watch = Stopwatch()..start();
+        await alice.processEnvelopesForTesting([
+          request!,
+        ], settleReceipts: false);
+        expect(
+          watch.elapsed,
+          lessThan(const Duration(seconds: 1)),
+          reason: 'processing waited for the answer to go out',
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+  });
+
   group('receipts are sent off the processing path', () {
     Future<(MessengerController, MessengerController, _FakeRelayClient)>
     pairOnRelay({_MemoryVaultStore? bobVault, bool disposeBob = true}) async {

@@ -2850,32 +2850,59 @@ class MessengerController extends ChangeNotifier {
               payload['passTo'] == null &&
               payload['asked'] != true;
           if (payload['type'] == 'changed') groupNoticesSent++;
-          final envelope = await _crypto.encryptPayloadEnvelope(
-            kind: 'group_history',
-            messageId: _randomId('ghist'),
-            conversationId: groupId,
-            senderAccountId: me.accountId,
-            senderDeviceId: me.deviceId,
-            recipientDeviceId: peer,
-            contact: contact,
-            plaintext: jsonEncode(payload),
-            createdAt: _now().toUtc(),
-          );
-          await _deliverToContact(
-            contact: contact,
-            recipientDeviceId: peer,
-            envelope: envelope,
-            skipLegacyKinds: notice
-                ? const {PeerRouteKind.relay}
-                : const <PeerRouteKind>{},
-            allowedUnifiedKinds: notice ? const {TransportKind.iroh} : null,
-            allowForwarding: !notice,
-          );
+          Future<void> deliver() async {
+            final envelope = await _crypto.encryptPayloadEnvelope(
+              kind: 'group_history',
+              messageId: _randomId('ghist'),
+              conversationId: groupId,
+              senderAccountId: me.accountId,
+              senderDeviceId: me.deviceId,
+              recipientDeviceId: peer,
+              contact: contact,
+              plaintext: jsonEncode(payload),
+              createdAt: _now().toUtc(),
+            );
+            await _deliverToContact(
+              contact: contact,
+              recipientDeviceId: peer,
+              envelope: envelope,
+              skipLegacyKinds: notice
+                  ? const {PeerRouteKind.relay}
+                  : const <PeerRouteKind>{},
+              allowedUnifiedKinds: notice ? const {TransportKind.iroh} : null,
+              allowForwarding: !notice,
+            );
+          }
+
+          // An answer is sent by the handler of the request: it must not wait
+          // for a carrier's turn (seconds under a burst) inside the
+          // processing of incoming messages. The asker has its own timeout
+          // and asks again; at most 32 answers wait at once.
+          if (payload['type'] == 'response') {
+            if (_groupHistoryAnswersPending >= 32) {
+              throw StateError('Group history answers are backed up.');
+            }
+            _groupHistoryAnswersPending++;
+            unawaited(
+              deliver()
+                  .catchError((Object error) {
+                    if (!_disposed) {
+                      appendDebugLog('Group history answer not sent: $error');
+                    }
+                  })
+                  .whenComplete(() => _groupHistoryAnswersPending--),
+            );
+            return;
+          }
+          await deliver();
         },
         onMessage: _projectGroupHistoryMessage,
         onAttachment: _projectGroupFile,
         retainedMessages: (id) => _groupConversation(id).messages,
       );
+
+  /// Group history answers being sent (bounded; see the coordinator's send).
+  int _groupHistoryAnswersPending = 0;
 
   Future<GroupFileService>? _groupFileService;
   final _groupFileSessions = <String, GroupFileSession>{};
