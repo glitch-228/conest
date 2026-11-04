@@ -30,6 +30,9 @@ WIN_ON=1
 : "${LINUX_BUNDLE:?the unpacked Linux debug bundle}"
 RELAY=${RELAY:-}
 RUN=${RUN:-all}
+# The power setting each lab app runs with (the gate measures warm devices;
+# POWER=cold or automatic tests cold mode itself).
+POWER=${POWER:-balanced}
 WAIT=${WAIT:-20}
 # How long each device stays online after its own tests, for the others.
 LINGER=${LINGER:-600}
@@ -89,6 +92,10 @@ win() {
   [ "$WIN_ON" = 1 ] || return 0
   sshpass -e ssh -o StrictHostKeyChecking=accept-new "$WINDOWS" "$@"
 }
+# wait_for runs its probe in a child shell (with a time limit), which needs
+# these.
+export -f win
+export WIN_ON WINDOWS
 
 # ANDROID2=SERIAL: a second phone (adb serial) joins as lab-android2: every
 # device then has three contacts, and phone-to-phone routes (the Bluetooth
@@ -158,7 +165,13 @@ restore_phone() {
   fi
   true
 }
-trap restore_phone EXIT
+# On any exit, also stop the energy samplers this run started (a run that
+# failed early used to leave them polling the phone and Windows).
+stop_energy() {
+  [ "${ENERGY:-0}" = 1 ] && [ -f "$out/.energy-on" ] && "$(dirname "$0")/energy.sh" stop "$out" >/dev/null 2>&1
+  true
+}
+trap 'restore_phone; stop_energy' EXIT
 
 tunnel_pid=""
 tunnel_ports=$(echo $MATRIX_TUNNEL $TUNNELS)
@@ -174,12 +187,14 @@ if [ -n "$tunnel_ports" ]; then
       -N "${forwards[@]}" "$WINDOWS" 2>/dev/null &
     tunnel_pid=$!
   fi
-  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; for port in $tunnel_ports; do adb reverse --remove "tcp:$port" 2>/dev/null; [ -n "$ANDROID2" ] && adb -s "$ANDROID2" reverse --remove "tcp:$port" 2>/dev/null; done; restore_phone' EXIT
+  trap '[ -n "$tunnel_pid" ] && kill "$tunnel_pid" 2>/dev/null; for port in $tunnel_ports; do adb reverse --remove "tcp:$port" 2>/dev/null; [ -n "$ANDROID2" ] && adb -s "$ANDROID2" reverse --remove "tcp:$port" 2>/dev/null; done; restore_phone; stop_energy' EXIT
 fi
 
 wait_for() { # description, command that succeeds when ready, tries
   for _ in $(seq 1 "${3:-120}"); do
-    if eval "$2" >/dev/null 2>&1; then return 0; fi
+    # Each probe has a hard limit: a hung adb or ssh call once held a run
+    # for 11 hours.
+    if timeout 30 bash -c "$2" >/dev/null 2>&1; then return 0; fi
     sleep 2
   done
   echo "Timed out waiting for $1" >&2
@@ -237,7 +252,7 @@ start_phone() { # serial ("" = adb's default), name, group title or "", invites�
     ANDROID_SERIAL=${serial:-${ANDROID_SERIAL:-}} adb_root "pm grant $PACKAGE android.permission.$permission" || true
   done
   "${adb[@]}" shell run-as "$PACKAGE" rm -f "$android_report" "$android_report.invite" || true
-  local args="--debug-run=$RUN --debug-name=$name --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-deadline=$DEADLINE --debug-idle=$IDLE --debug-serve=600 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args "$name")"
+  local args="--debug-run=$RUN --debug-name=$name --debug-power=$POWER --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-deadline=$DEADLINE --debug-idle=$IDLE --debug-serve=600 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args "$name")"
   if [ -n "$group" ]; then args="$args --debug-group=$group"; else args="$args --debug-expect-group=lab-all"; fi
   for invite in "$@"; do args="$args --debug-accept-invite=$invite"; done
   "${adb[@]}" shell am start -n "$PACKAGE/dev.conest.conest.MainActivity" \
@@ -266,7 +281,7 @@ start_linux() { # group title or "", invites…
   if [ -n "$group" ]; then args+=("--debug-group=$group"); else args+=("--debug-expect-group=lab-all"); fi
   for invite in "$@"; do args+=("--debug-accept-invite=$invite"); done
   "$LINUX_BUNDLE/conest" --debug-run="$RUN" --debug-name=lab-linux \
-    "${args[@]}" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-idle="$IDLE" --debug-serve=540 --debug-expect-contacts="$contacts_each" \
+    "${args[@]}" --debug-power="$POWER" --debug-approve --debug-no-reserve --debug-linger="$LINGER" --debug-idle="$IDLE" --debug-serve=540 --debug-expect-contacts="$contacts_each" \
     --debug-wait="$WAIT" --debug-deadline="$DEADLINE" "${relay_arg[@]}" $(carrier_args lab-linux) --debug-report="$linux_report" \
     --debug-exit >"$out/linux.log" 2>&1 &
   linux_pid=$!
@@ -286,7 +301,7 @@ start_windows() { # group title or "", invites…
   for invite in "$@"; do extra="$extra \"--debug-accept-invite=$(cmd_escape "$invite")\""; done
   cat >"$out/start-windows.cmd" <<EOF
 @echo off
-"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows $extra --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-deadline=$DEADLINE --debug-idle=$IDLE --debug-serve=540 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
+"$WINDOWS_DIR\\conest.exe" --debug-run=$RUN --debug-name=lab-windows --debug-power=$POWER $extra --debug-approve --debug-no-reserve --debug-linger=$LINGER --debug-deadline=$DEADLINE --debug-idle=$IDLE --debug-serve=540 --debug-expect-contacts=$contacts_each --debug-wait=$WAIT ${relay_arg[*]:-} $(carrier_args lab-windows) --debug-report="$win_report" --debug-exit
 EOF
   sshpass -e scp -q "$out/start-windows.cmd" "$WINDOWS:conest-lab/start-lab.cmd"
   # LAN tests need inbound connections to the lab exe (only it, and only
