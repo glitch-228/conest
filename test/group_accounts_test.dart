@@ -2,6 +2,7 @@ import 'package:conest/src/account/account_model.dart';
 import 'package:conest/src/group_account_member.dart';
 import 'package:conest/src/group_accounts.dart';
 import 'package:conest/src/group_history_event.dart';
+import 'package:conest/src/group_message_projection.dart';
 import 'package:conest/src/group_membership_history.dart';
 import 'package:conest/src/models.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -872,6 +873,66 @@ void main() {
         GroupRecord.fromJson(resolved.toJson()).hasActiveMember('bob2'),
         isFalse,
       );
+    });
+  });
+
+  group('messages of a member account', () {
+    test('any device of the account changes and reacts for it; a name '
+        'someone else chose never merges devices', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final r2 = await pinBob(r1, l1, [bob1, bob2]);
+      final original = await fx.message(r2, bob1);
+      final payloadOriginal = GroupHistoryEvent.decode(
+        original.encode(),
+      );
+      // The projection needs a body.
+      final text = await fx.sign(
+        author: bob1,
+        membershipId: r2.id,
+        kind: GroupEventKind.message,
+        payload: {'messageId': 'm1', 'body': 'hi'},
+      );
+      Future<GroupHistoryEvent> mutate(
+        TestDevice by,
+        GroupEventKind kind,
+        Map<String, Object?> extra,
+      ) => fx.sign(
+        author: by,
+        membershipId: r2.id,
+        kind: kind,
+        payload: {
+          'targetEventId': text.eventId,
+          'changedAt': fixtureEpoch.toIso8601String(),
+          ...extra,
+        },
+      );
+      final edit = await mutate(bob2, GroupEventKind.edit, {'body': 'edited'});
+      final react1 = await mutate(bob1, GroupEventKind.reaction, {
+        'emoji': '+',
+        'active': true,
+      });
+      final react2 = await mutate(bob2, GroupEventKind.reaction, {
+        'emoji': '+',
+        'active': true,
+      });
+      expect(payloadOriginal.eventId, original.eventId);
+      // As account: the sibling's edit counts, and two devices react once.
+      final asAccount = GroupMessageProjection.reduce(
+        text,
+        [edit, react1, react2],
+        accountIds: {'acc-bob'},
+      )!;
+      expect(asAccount.body, 'edited');
+      expect(asAccount.reactions['+'], hasLength(1));
+      // As two separate members (no signed account): neither merges.
+      final asDevices = GroupMessageProjection.reduce(text, [
+        edit,
+        react1,
+        react2,
+      ])!;
+      expect(asDevices.body, 'hi');
+      expect(asDevices.reactions['+'], hasLength(2));
     });
   });
 }

@@ -23,10 +23,15 @@ class GroupMessageProjection {
       ? null
       : DateTime.parse(edit!.payload['changedAt'] as String);
 
+  /// [accountIds]: the member accounts of the group (signed, key-anchored).
+  /// An edit or deletion by any device of the author's account counts, and a
+  /// reaction counts once per account. An account id of a device-only member
+  /// is only a name its owner chose, so it never merges devices.
   static GroupMessageProjection? reduce(
     GroupHistoryEvent original,
-    Iterable<GroupHistoryEvent> mutations,
-  ) {
+    Iterable<GroupHistoryEvent> mutations, {
+    Set<String> accountIds = const {},
+  }) {
     if (original.kind != GroupEventKind.message ||
         original.payload['body'] is! String) {
       return null;
@@ -38,7 +43,10 @@ class GroupMessageProjection {
       if (event.kind == GroupEventKind.reaction) {
         if (!isMutation(event) || !canReact(original, event)) continue;
         final emoji = event.payload['emoji'] as String;
-        final key = '${event.authorDeviceId}\u0000$emoji';
+        final who = accountIds.contains(event.authorAccountId)
+            ? 'account:${event.authorAccountId}'
+            : event.authorDeviceId;
+        final key = '$who\u0000$emoji';
         final previous = latestReactions[key];
         if (previous == null ||
             GroupHistoryEvent.compare(event, previous) > 0) {
@@ -46,7 +54,7 @@ class GroupMessageProjection {
         }
         continue;
       }
-      if (!canMutate(original, event)) continue;
+      if (!canMutate(original, event, accountIds: accountIds)) continue;
       if (event.kind == GroupEventKind.deletion) {
         if (deletion == null ||
             GroupHistoryEvent.compare(event, deletion) > 0) {
@@ -83,15 +91,24 @@ class GroupMessageProjection {
     );
   }
 
-  static bool canMutate(GroupHistoryEvent original, GroupHistoryEvent event) =>
+  static bool canMutate(
+    GroupHistoryEvent original,
+    GroupHistoryEvent event, {
+    Set<String> accountIds = const {},
+  }) =>
       original.kind == GroupEventKind.message &&
       isMutation(event) &&
       event.payload['targetEventId'] == original.eventId &&
       event.groupId == original.groupId &&
       event.authorAccountId == original.authorAccountId &&
-      event.authorDeviceId == original.authorDeviceId &&
-      event.signingPublicKeyBase64 == original.signingPublicKeyBase64 &&
-      event.sequence > original.sequence &&
+      (accountIds.contains(original.authorAccountId) ||
+          (event.authorDeviceId == original.authorDeviceId &&
+              event.signingPublicKeyBase64 ==
+                  original.signingPublicKeyBase64)) &&
+      // A sibling's edit follows the original in the log of its own author,
+      // so only the lamport orders it after the original.
+      (accountIds.contains(original.authorAccountId) ||
+          event.sequence > original.sequence) &&
       event.lamport > original.lamport;
 
   static bool canReact(GroupHistoryEvent original, GroupHistoryEvent event) =>

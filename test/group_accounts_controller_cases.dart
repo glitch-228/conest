@@ -417,5 +417,90 @@ void _groupAccountsControllerTests() {
         expect(t.alice.groups, isEmpty);
       },
     );
+
+    test(
+      'any device of an account edits, deletes and reacts for the account',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone();
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        ChatMessage? find(MessengerController c, String body) => c
+            .messagesForGroup(t.groupId)
+            .where((m) => m.body == body)
+            .firstOrNull;
+        await t.bob.sendGroupMessage(groupId: t.groupId, body: 'hello');
+        await settle(
+          all,
+          until: () =>
+              find(t.phone, 'hello') != null && find(t.carol, 'hello') != null,
+        );
+        final onPhone = find(t.phone, 'hello')!;
+        // The phone edits what the laptop wrote (once its signed copy is
+        // here).
+        for (var attempt = 0; attempt < 20; attempt++) {
+          try {
+            await t.phone.changeGroupMessage(
+              groupId: t.groupId,
+              messageId: onPhone.id,
+              body: 'edited on the phone',
+            );
+            break;
+          } on StateError {
+            await settle(all, rounds: 3);
+          }
+        }
+        await settle(
+          all,
+          until: () => find(t.carol, 'edited on the phone') != null,
+        );
+        expect(find(t.carol, 'edited on the phone'), isNotNull);
+        expect(find(t.bob, 'edited on the phone'), isNotNull);
+        // Reactions count once per account: the phone sets it, the laptop's
+        // toggle takes it back.
+        final id = find(t.carol, 'edited on the phone')!.id;
+        await t.phone.toggleGroupReaction(
+          groupId: t.groupId,
+          messageId: id,
+          emoji: '+',
+        );
+        await settle(
+          all,
+          until: () =>
+              find(t.carol, 'edited on the phone')!.reactions['+']?.length == 1,
+          rounds: 250,
+        );
+        expect(
+          find(t.carol, 'edited on the phone')!.reactions['+'],
+          hasLength(1),
+        );
+        await t.bob.toggleGroupReaction(
+          groupId: t.groupId,
+          messageId: id,
+          emoji: '+',
+        );
+        await settle(
+          all,
+          until: () =>
+              (find(t.carol, 'edited on the phone')!.reactions['+'] ?? {})
+                  .isEmpty,
+        );
+        expect(
+          find(t.carol, 'edited on the phone')!.reactions['+'] ?? {},
+          isEmpty,
+        );
+        // And deletes.
+        await t.phone.changeGroupMessage(
+          groupId: t.groupId,
+          messageId: onPhone.id,
+          delete: true,
+        );
+        await settle(
+          all,
+          until: () => find(t.carol, 'edited on the phone') == null,
+          rounds: 250,
+        );
+        expect(find(t.carol, 'edited on the phone'), isNull);
+      },
+    );
   });
 }

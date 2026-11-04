@@ -610,6 +610,38 @@ class GroupHistoryCoordinator {
     ),
   );
 
+  /// The mutations to weigh for [original]: every author's latest for a
+  /// message of a member account (any of its devices may change it), else the
+  /// author's own.
+  Future<List<GroupHistoryEvent>> _mutationsFor(
+    GroupHistoryReplica replica,
+    GroupRecord snapshot,
+    GroupHistoryEvent original,
+  ) => _accountIdsOf(snapshot).contains(original.authorAccountId)
+      ? replica.journal.targetMutations(original.eventId)
+      : replica.journal.messageMutations(original);
+
+  /// The other devices of the member account that [deviceId] belongs to.
+  Set<String> _siblingIds(GroupRecord snapshot, String deviceId) {
+    final accountId = snapshot.memberProfileFor(deviceId)?.accountId;
+    if (accountId == null ||
+        !snapshot.memberAccounts.any((e) => e.accountId == accountId)) {
+      return const {};
+    }
+    return {
+      for (final id in snapshot.activeMemberDeviceIds)
+        if (snapshot.memberProfileFor(id)?.accountId == accountId) id,
+    };
+  }
+
+  bool _ownAccountSibling(GroupRecord snapshot, String senderDeviceId) =>
+      senderDeviceId != identity().deviceId &&
+      _siblingIds(snapshot, identity().deviceId).contains(senderDeviceId);
+
+  Set<String> _accountIdsOf(GroupRecord snapshot) => {
+    for (final entry in snapshot.memberAccounts) entry.accountId,
+  };
+
   Future<void> mutateMessage(
     GroupRecord snapshot,
     ChatMessage message, {
@@ -619,8 +651,8 @@ class GroupHistoryCoordinator {
     if (snapshot.localRemovedAt != null ||
         !snapshot.hasActiveMember(identity().deviceId) ||
         message.conversationId != snapshot.groupId ||
-        message.senderDeviceId != identity().deviceId ||
-        !message.outbound ||
+        !(message.outbound && message.senderDeviceId == identity().deviceId ||
+            _ownAccountSibling(snapshot, message.senderDeviceId)) ||
         message.hasAttachment ||
         message.groupFile != null ||
         message.deleted) {
@@ -632,7 +664,9 @@ class GroupHistoryCoordinator {
       throw ArgumentError('The edited message cannot be empty.');
     }
     // Only the original author may sign retained pre-upgrade outgoing text.
-    await recordOutgoing(snapshot, message);
+    if (message.senderDeviceId == identity().deviceId) {
+      await recordOutgoing(snapshot, message);
+    }
     await _write(snapshot.groupId, () async {
       final current = group(snapshot.groupId);
       if (current.localRemovedAt != null ||
@@ -650,7 +684,8 @@ class GroupHistoryCoordinator {
       }
       final projected = GroupMessageProjection.reduce(
         original,
-        await replica.journal.messageMutations(original),
+        await _mutationsFor(replica, current, original),
+        accountIds: _accountIdsOf(current),
       );
       if (projected == null || projected.deleted) {
         throw StateError('This message has already been deleted.');
@@ -706,10 +741,15 @@ class GroupHistoryCoordinator {
       final projection = GroupMessageProjection.reduce(
         original,
         await replica.journal.messageMutations(original),
+        accountIds: _accountIdsOf(current),
       );
+      // One reaction per account: it is mine if any of my devices set it.
+      final mine = {
+        identity().deviceId,
+        ..._siblingIds(current, identity().deviceId),
+      };
       final active =
-          projection?.reactions[trimmed]?.contains(identity().deviceId) ??
-          false;
+          projection?.reactions[trimmed]?.any(mine.contains) ?? false;
       final reaction = await _sign(
         replica.journal,
         groupId: snapshot.groupId,
@@ -900,7 +940,7 @@ class GroupHistoryCoordinator {
     GroupHistoryEvent original, {
     bool requireMutation = false,
   }) async {
-    final mutations = await replica.journal.messageMutations(original);
+    final mutations = await _mutationsFor(replica, group(id), original);
     if (requireMutation && mutations.isEmpty) return;
     if (!await replica.membership.canReceive(
       original,
@@ -919,7 +959,11 @@ class GroupHistoryCoordinator {
     }
     // Recheck local removal after asynchronous journal/authorization reads.
     if (_closed || group(id).localRemovedAt != null) return;
-    final projection = GroupMessageProjection.reduce(original, permitted);
+    final projection = GroupMessageProjection.reduce(
+      original,
+      permitted,
+      accountIds: _accountIdsOf(group(id)),
+    );
     if (projection != null) {
       onMessage(id, projection);
     }

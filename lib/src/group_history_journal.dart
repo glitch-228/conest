@@ -188,6 +188,12 @@ class GroupHistoryJournal {
               as List)
           .cast<GroupHistoryEvent>();
 
+  /// The latest mutation of each author (and kind, and emoji) of [target]:
+  /// for messages of member accounts, whose devices may all change them.
+  Future<List<GroupHistoryEvent>> targetMutations(String target) async =>
+      (await _request('targetMutations', [target]) as List)
+          .cast<GroupHistoryEvent>();
+
   Future<GroupHistoryEvent?> sourceMessage(
     String author,
     String messageId,
@@ -629,6 +635,14 @@ class _JournalWorker {
                               entry.event.signingPublicKeyBase64 ==
                                   signingKey)),
                 )
+                .toList()
+              ..sort();
+        return _read(entries, 128);
+      case 'targetMutations':
+        final wanted = args[0] as String;
+        final entries =
+            _messageMutations.values
+                .where((entry) => entry.event.payload['targetEventId'] == wanted)
                 .toList()
               ..sort();
         return _read(entries, 128);
