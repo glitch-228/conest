@@ -18,6 +18,7 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
 import 'package:conest/src/group_account_member.dart';
+import 'support/group_accounts_fixture.dart';
 import 'package:conest/main.dart' as app;
 import 'package:conest/l10n/app_localizations.dart';
 import 'package:conest/src/ui/internet_transports.dart';

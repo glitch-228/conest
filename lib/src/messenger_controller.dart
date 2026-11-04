@@ -595,6 +595,12 @@ class DebugAttachmentTestSpec {
   }
 }
 
+/// Thrown inside envelope processing: the sender is a device of a member
+/// account that its list has not introduced yet (see `_isUnknownSibling`).
+class _SiblingNotKnownYet implements Exception {
+  const _SiblingNotKnownYet();
+}
+
 class MessengerController extends ChangeNotifier {
   MessengerController({
     required VaultStore vaultStore,
@@ -3490,6 +3496,13 @@ class MessengerController extends ChangeNotifier {
     } catch (_) {
       return;
     }
+    // Revoked or removed while this was decrypted: nothing is kept.
+    final stillThere = _groupById(envelope.conversationId);
+    if (stillThere == null ||
+        !stillThere.hasActiveMember(me.deviceId) ||
+        !stillThere.hasActiveMember(envelope.senderDeviceId)) {
+      return;
+    }
     final frameId = payload['frame'];
     final part = payload['part'];
     final parts = payload['parts'];
@@ -4596,12 +4609,14 @@ class MessengerController extends ChangeNotifier {
   PinnedListStore _pinnedLists = PinnedListStore();
   final Map<String, DeviceListView> _deviceListViews = {};
   final Map<String, Map<String, GroupMemberProfile>> _siblingAnnounces = {};
-  final Map<String, Map<String, (AccountUpgrade, AccountDeviceList)>>
+  final Map<String, Map<String, (AccountUpgrade, AccountDeviceList, DateTime)>>
   _pendingUpgrades = {};
+  final Map<String, DateTime> _siblingAnnounceAt = {};
   final Map<String, GroupResolution> _groupResolutions = {};
   final Map<String, DateTime> _lastOwnerRecordAt = {};
   final Map<String, Timer> _groupWriterTimers = {};
   final Set<String> _announcing = {};
+  final Set<String> _replayingSiblings = {};
   final Map<String, String> _announcedFor = {};
   Duration _ownerWriterDelay = const Duration(seconds: 2);
   Duration _ownerRecordWindow = const Duration(seconds: 30);
@@ -12631,6 +12646,9 @@ class MessengerController extends ChangeNotifier {
     _groupProjectionRestores.clear();
     await _groupHistoryService?.close();
     _groupHistoryService = null;
+    // Device lists, resolutions, parked sibling envelopes and the owner's
+    // timers belong to the identity that is going away.
+    _clearGroupAccountState();
     _stopLongPoll();
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -21398,6 +21416,9 @@ class MessengerController extends ChangeNotifier {
           continue;
         }
 
+        // A device of a member account that its list has not introduced yet.
+        if (_isUnknownSibling(envelope)) throw const _SiblingNotKnownYet();
+
         if (envelope.kind == 'group_call_signal') {
           await _handleGroupCallSignal(envelope);
           _markSeen(envelope.messageId);
@@ -21621,7 +21642,11 @@ class MessengerController extends ChangeNotifier {
         // fetched again; the sender's session reset sends it afresh. Held,
         // it kept its relay lease for good: fetched and failed every
         // minute, and each time a reason to offer another session.
-        if (_canBecomeReadable(error)) {
+        if (error is _SiblingNotKnownYet) {
+          // Kept on this device (the lease goes) and read again when the
+          // account's list arrives.
+          if (_parkSiblingEnvelope(envelope)) parked++;
+        } else if (_canBecomeReadable(error)) {
           // A pre-key message ahead of its bundle, or one from a peer we hold
           // no session with: kept here, not on the relay's lease, and read
           // again when the peer's bundle arrives (see [_replayParked]).
@@ -21632,14 +21657,16 @@ class MessengerController extends ChangeNotifier {
         } else {
           failed++;
         }
-        recordError(
-          'receive',
-          'Dropped ${_boundedLogValue(envelope.kind)} '
-              '${_boundedLogValue(envelope.messageId)} from '
-              '${_shortId(envelope.senderDeviceId)}: '
-              '${_envelopeProcessingError(envelope.kind, error)}',
-          subject: envelope.senderDeviceId,
-        );
+        if (error is! _SiblingNotKnownYet) {
+          recordError(
+            'receive',
+            'Dropped ${_boundedLogValue(envelope.kind)} '
+                '${_boundedLogValue(envelope.messageId)} from '
+                '${_shortId(envelope.senderDeviceId)}: '
+                '${_envelopeProcessingError(envelope.kind, error)}',
+            subject: envelope.senderDeviceId,
+          );
+        }
       } finally {
         _inFlightEnvelopeIds.remove(envelope.messageId);
         final copies = _overlappingCopies.remove(envelope.messageId);
@@ -35670,6 +35697,9 @@ class MessengerController extends ChangeNotifier {
     }
     _snapshot = _snapshot.copyWith(groups: groups);
     if (group.memberAccounts.isNotEmpty) _announceOnGroupChange(group);
+    if (_snapshot.parkedSiblingEnvelopes.isNotEmpty) {
+      _replaySiblingParked(group.groupId);
+    }
   }
 
   /// [gone] left the group (removed, or left): this device's messages no

@@ -70,7 +70,33 @@ extension GroupAccountsController on MessengerController {
     () => DeviceListView(groupId: groupId),
   );
 
+  static const Duration _pendingLifetime = Duration(days: 7);
+
+  /// Pending upgrades and announced profiles expire; what is still true is
+  /// announced again by the devices themselves.
+  void _expireGroupAccountState() {
+    final cutoff = _now().toUtc().subtract(_pendingLifetime);
+    for (final pending in _pendingUpgrades.values) {
+      pending.removeWhere((_, value) => value.$3.isBefore(cutoff));
+    }
+    _pendingUpgrades.removeWhere((_, value) => value.isEmpty);
+    for (final entry in _siblingAnnounceAt.entries.toList()) {
+      if (entry.value.isAfter(cutoff)) continue;
+      _siblingAnnounceAt.remove(entry.key);
+      final parts = entry.key.split('|');
+      _siblingAnnounces[parts.first]?.remove(parts.last);
+    }
+    _siblingAnnounces.removeWhere((_, value) => value.isEmpty);
+    final groups = {for (final g in _snapshot.groups) g.groupId};
+    _pendingUpgrades.removeWhere((id, _) => !groups.contains(id));
+    _siblingAnnounces.removeWhere((id, _) => !groups.contains(id));
+    _siblingAnnounceAt.removeWhere(
+      (key, _) => !groups.contains(key.split('|').first),
+    );
+  }
+
   void _persistPinnedLists() {
+    _expireGroupAccountState();
     _pinnedLists.evictUnpinned();
     // Times of devices of groups that are gone are dropped; the rest is
     // bounded.
@@ -150,6 +176,173 @@ extension GroupAccountsController on MessengerController {
     return contact.publicKeyBase64 != cert.encryptionKeyBase64 ||
         (contact.signingPublicKeyBase64 != null &&
             contact.signingPublicKeyBase64 != cert.signingKeyBase64);
+  }
+
+  // ---- Envelopes from devices not introduced yet ----------------------
+
+  static const int _siblingParkEnvelopeBytes = 64 * 1024;
+  static const int _siblingParkGroupBytes = 128 * 1024;
+  static const int _siblingParkTotalBytes = 512 * 1024;
+  static const int _siblingParkGroupCount = 32;
+  static const Duration _siblingParkLifetime = Duration(hours: 24);
+  static const Set<String> _siblingGatedKinds = {
+    'group_message',
+    'group_history',
+    'group_file_part',
+    'group_call_signal',
+  };
+
+  /// A group envelope from a device that is not a member yet, in a group with
+  /// member accounts: it may be a sibling whose list is on its way.
+  bool _isUnknownSibling(RelayEnvelope envelope) {
+    if (!_siblingGatedKinds.contains(envelope.kind)) return false;
+    final group = _groupById(envelope.conversationId);
+    final me = _snapshot.identity;
+    return group != null &&
+        me != null &&
+        group.memberAccounts.isNotEmpty &&
+        group.localRemovedAt == null &&
+        group.hasActiveMember(me.deviceId) &&
+        !group.hasActiveMember(envelope.senderDeviceId) &&
+        !group.removedDeviceIds.contains(envelope.senderDeviceId);
+  }
+
+  /// Keeps [envelope] on this device (bounded: per group and in all, oldest
+  /// first, with a lifetime). Whether it was kept.
+  bool _parkSiblingEnvelope(RelayEnvelope envelope) {
+    final encoded = jsonEncode(envelope.toJson());
+    final size = utf8.encode(encoded).length;
+    if (size > _siblingParkEnvelopeBytes) return false;
+    final now = _now().toUtc();
+    final cutoff = now.subtract(_siblingParkLifetime);
+    final kept = [
+      for (final entry in _snapshot.parkedSiblingEnvelopes)
+        if (entry.receivedAt.isAfter(cutoff) && entry.envelopeJson != encoded)
+          entry,
+      HeldEnvelope(
+        senderDeviceId: envelope.senderDeviceId,
+        conversationId: envelope.conversationId,
+        envelopeJson: encoded,
+        receivedAt: now,
+      ),
+    ];
+    int bytes(Iterable<HeldEnvelope> entries) =>
+        entries.fold(0, (sum, entry) => sum + entry.envelopeJson.length);
+    Iterable<HeldEnvelope> ofGroup() =>
+        kept.where((e) => e.conversationId == envelope.conversationId);
+    while (ofGroup().length > _siblingParkGroupCount ||
+        bytes(ofGroup()) > _siblingParkGroupBytes) {
+      kept.remove(ofGroup().first);
+    }
+    while (kept.length > 1 && bytes(kept) > _siblingParkTotalBytes) {
+      kept.removeAt(0);
+    }
+    _snapshot = _snapshot.copyWith(parkedSiblingEnvelopes: kept);
+    return true;
+  }
+
+  @visibleForTesting
+  bool isUnknownSiblingForTesting(RelayEnvelope envelope) =>
+      _isUnknownSibling(envelope);
+
+  @visibleForTesting
+  bool parkSiblingEnvelopeForTesting(RelayEnvelope envelope) =>
+      _parkSiblingEnvelope(envelope);
+
+  @visibleForTesting
+  List<HeldEnvelope> get parkedSiblingEnvelopesForTesting =>
+      _snapshot.parkedSiblingEnvelopes;
+
+  @visibleForTesting
+  int get groupAccountStateSizeForTesting =>
+      _pendingUpgrades.length +
+      _siblingAnnounces.length +
+      _siblingAnnounceAt.length +
+      _deviceListViews.length +
+      _announcedFor.length;
+
+  @visibleForTesting
+  void replaySiblingParkedForTesting(String groupId) =>
+      _replaySiblingParked(groupId);
+
+  @visibleForTesting
+  Future<void> settleSiblingReplaysForTesting() async {
+    while (_replayingSiblings.isNotEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  @visibleForTesting
+  int pendingUpgradeCountForTesting(String groupId) =>
+      _pendingUpgrades[groupId]?.length ?? 0;
+
+  @visibleForTesting
+  void notePendingUpgradeForTesting(
+    String groupId,
+    AccountUpgrade upgrade,
+    AccountDeviceList list,
+    DateTime at,
+  ) {
+    _pendingUpgrades.putIfAbsent(groupId, () => {})[upgrade.deviceId] = (
+      upgrade,
+      list,
+      at,
+    );
+  }
+
+  @visibleForTesting
+  void expireGroupAccountStateForTesting() => _expireGroupAccountState();
+
+  @visibleForTesting
+  void noteSiblingAnnounceForTesting(
+    String groupId,
+    GroupMemberProfile profile,
+    DateTime at,
+  ) {
+    _siblingAnnounces.putIfAbsent(groupId, () => {})[profile.deviceId] =
+        profile;
+    _siblingAnnounceAt['$groupId|${profile.deviceId}'] = at;
+  }
+
+  /// A group's devices changed: parked envelopes whose sender is a member
+  /// now are read again (one run at a time per group).
+  void _replaySiblingParked(String groupId) {
+    if (_disposed || !_replayingSiblings.add(groupId)) return;
+    final group = _groupById(groupId);
+    final now = _now().toUtc();
+    final due = <HeldEnvelope>[];
+    final rest = <HeldEnvelope>[];
+    for (final entry in _snapshot.parkedSiblingEnvelopes) {
+      final expired = now.difference(entry.receivedAt) >= _siblingParkLifetime;
+      if (expired) continue;
+      if (entry.conversationId == groupId &&
+          group != null &&
+          group.hasActiveMember(entry.senderDeviceId)) {
+        due.add(entry);
+      } else {
+        rest.add(entry);
+      }
+    }
+    if (due.isEmpty) {
+      _replayingSiblings.remove(groupId);
+      return;
+    }
+    _snapshot = _snapshot.copyWith(parkedSiblingEnvelopes: rest);
+    unawaited(() async {
+      try {
+        for (final entry in due) {
+          try {
+            final envelope = RelayEnvelope.fromJson(
+              jsonDecode(entry.envelopeJson) as Map<String, dynamic>,
+            );
+            await _processEnvelopes([envelope]);
+          } catch (_) {}
+        }
+      } finally {
+        _replayingSiblings.remove(groupId);
+        if (!_disposed) await _saveSnapshotSilently(notify: false);
+      }
+    }());
   }
 
   // ---- Wire -----------------------------------------------------------
@@ -327,6 +520,8 @@ extension GroupAccountsController on MessengerController {
               canonicalGroupJson(held[profile.deviceId]?.toJson()) !=
                   canonicalGroupJson(profile.toJson())) {
             held[profile.deviceId] = profile;
+            _siblingAnnounceAt['${group.groupId}|${profile.deviceId}'] =
+                _now().toUtc();
             changed = true;
             announcedIds.add(profile.deviceId);
           }
@@ -352,6 +547,8 @@ extension GroupAccountsController on MessengerController {
           final merged = profileFromCert(cert, announced: profile);
           if (merged != null && merged.routeHints.isNotEmpty) {
             held[profile.deviceId] = merged;
+            _siblingAnnounceAt['${group.groupId}|${profile.deviceId}'] =
+                _now().toUtc();
             changed = true;
             announcedIds.add(profile.deviceId);
           }
@@ -364,7 +561,7 @@ extension GroupAccountsController on MessengerController {
       final list = lists.where((l) => l.accountId == upgrade.accountId);
       if ((pending.length < 16 || pending.containsKey(upgrade.deviceId)) &&
           list.isNotEmpty) {
-        pending[upgrade.deviceId] = (upgrade, list.first);
+        pending[upgrade.deviceId] = (upgrade, list.first, _now().toUtc());
         changed = true;
       }
     }
@@ -374,6 +571,7 @@ extension GroupAccountsController on MessengerController {
     _upsertGroup(fresh);
     _persistPinnedLists();
     await _persist('Updated the devices of ${fresh.title}.');
+    _replaySiblingParked(group.groupId);
     // My own account's new device learns the group from me.
     final me = _snapshot.identity;
     final mine = [
@@ -607,7 +805,7 @@ extension GroupAccountsController on MessengerController {
     final folds = <String>[];
     if (capable && !signed.confirmNewDevices) {
       for (final entry in (_pendingUpgrades[groupId] ?? const {}).entries) {
-        final (upgrade, list) = entry.value;
+        final (upgrade, list, _) = entry.value;
         final x = signed.memberProfileFor(entry.key);
         if (x == null ||
             !signed.hasActiveMember(entry.key) ||
@@ -923,6 +1121,8 @@ extension GroupAccountsController on MessengerController {
     _lastOwnerRecordAt.clear();
     _announcing.clear();
     _announcedFor.clear();
+    _replayingSiblings.clear();
+    _siblingAnnounceAt.clear();
     _deviceFirstSeenStore.clear();
     _pinnedLists.clear();
   }

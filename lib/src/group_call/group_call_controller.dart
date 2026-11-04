@@ -370,6 +370,14 @@ extension GroupCallController on MessengerController {
       final signal = GroupCallSignal.decode(
         await _crypto.decryptMessage(contact: sender, envelope: envelope),
       );
+      // Revoked or removed while this was decrypted: no signal is taken.
+      final nowGroup = _groupById(envelope.conversationId);
+      if (nowGroup == null ||
+          nowGroup.localRemovedAt != null ||
+          !nowGroup.hasActiveMember(me.deviceId) ||
+          !nowGroup.hasActiveMember(envelope.senderDeviceId)) {
+        return;
+      }
       if (signal.groupId != group.groupId ||
           signal.senderDeviceId != sender.deviceId ||
           (signal.action == 'key' && envelope.protocolVersion != 3)) {

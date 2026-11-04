@@ -5539,6 +5539,7 @@ class VaultSnapshot {
     this.customRelaySources = const <CustomRelaySource>[],
     this.heldUnverifiedEnvelopes = const <HeldEnvelope>[],
     this.parkedUnreadable = const <HeldEnvelope>[],
+    this.parkedSiblingEnvelopes = const <HeldEnvelope>[],
     this.pendingContactRequests = const <PendingContactRequest>[],
     this.contactRemovalTombstones = const <String, ContactRemovalTombstone>{},
     this.transferSessions = const <TransferSession>[],
@@ -5663,6 +5664,10 @@ class VaultSnapshot {
   /// quarantine above, bounded in bytes, dropped after a day.
   final List<HeldEnvelope> parkedUnreadable;
 
+  /// Group envelopes from a device of a member account whose device list
+  /// has not arrived yet (M29); read again when it does.
+  final List<HeldEnvelope> parkedSiblingEnvelopes;
+
   /// Bootstrap contact exchanges from unknown devices awaiting an explicit
   /// local approval decision.
   final List<PendingContactRequest> pendingContactRequests;
@@ -5769,6 +5774,7 @@ class VaultSnapshot {
       customRelaySources: const <CustomRelaySource>[],
       heldUnverifiedEnvelopes: const <HeldEnvelope>[],
       parkedUnreadable: const <HeldEnvelope>[],
+      parkedSiblingEnvelopes: const <HeldEnvelope>[],
       pendingContactRequests: const <PendingContactRequest>[],
       transferSessions: const <TransferSession>[],
       attachmentCacheReferences: const <AttachmentCacheReference>[],
@@ -5802,6 +5808,7 @@ class VaultSnapshot {
     List<CustomRelaySource>? customRelaySources,
     List<HeldEnvelope>? heldUnverifiedEnvelopes,
     List<HeldEnvelope>? parkedUnreadable,
+    List<HeldEnvelope>? parkedSiblingEnvelopes,
     List<PendingContactRequest>? pendingContactRequests,
     Map<String, ContactRemovalTombstone>? contactRemovalTombstones,
     List<TransferSession>? transferSessions,
@@ -5866,6 +5873,8 @@ class VaultSnapshot {
       heldUnverifiedEnvelopes:
           heldUnverifiedEnvelopes ?? this.heldUnverifiedEnvelopes,
       parkedUnreadable: parkedUnreadable ?? this.parkedUnreadable,
+      parkedSiblingEnvelopes:
+          parkedSiblingEnvelopes ?? this.parkedSiblingEnvelopes,
       pendingContactRequests:
           pendingContactRequests ?? this.pendingContactRequests,
       contactRemovalTombstones:
@@ -5950,6 +5959,10 @@ class VaultSnapshot {
           .toList(),
       if (parkedUnreadable.isNotEmpty)
         'parkedUnreadable': parkedUnreadable
+            .map((entry) => entry.toJson())
+            .toList(),
+      if (parkedSiblingEnvelopes.isNotEmpty)
+        'parkedSiblingEnvelopes': parkedSiblingEnvelopes
             .map((entry) => entry.toJson())
             .toList(),
       'pendingContactRequests': pendingContactRequests
@@ -6189,6 +6202,11 @@ class VaultSnapshot {
           .cast<Map<String, dynamic>>()
           .map(HeldEnvelope.fromJson)
           .toList(),
+      parkedSiblingEnvelopes:
+          (json['parkedSiblingEnvelopes'] as List<dynamic>? ?? const [])
+              .cast<Map<String, dynamic>>()
+              .map(HeldEnvelope.fromJson)
+              .toList(),
       pendingContactRequests:
           (json['pendingContactRequests'] as List<dynamic>? ?? const [])
               .cast<Map<String, dynamic>>()
