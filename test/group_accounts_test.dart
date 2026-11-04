@@ -853,4 +853,25 @@ void main() {
       expect(foldAccountDeliveryStates(plain, states), same(states));
     });
   });
+
+  group('compatibility', () {
+    test('a group without accounts serializes as before', () async {
+      final r1 = await root();
+      final json = r1.group.toJson();
+      expect(json.containsKey('memberAccounts'), isFalse);
+      expect(json.containsKey('confirmNewDevices'), isFalse);
+      expect(json.containsKey('siblingProfiles'), isFalse);
+      // The local resolved view never reaches the wire either.
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final r2 = await pinBob(r1, l1, [bob1]);
+      final view = DeviceListView(groupId: fx.groupId)
+        ..offerVerified(l1, accountKey: bobAcc.keys.publicKeyBase64);
+      final resolved = resolveGroup(r2.group, view).group;
+      expect(resolved.hasActiveMember('bob2'), isTrue);
+      expect(
+        GroupRecord.fromJson(resolved.toJson()).hasActiveMember('bob2'),
+        isFalse,
+      );
+    });
+  });
 }
