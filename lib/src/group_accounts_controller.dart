@@ -197,6 +197,22 @@ extension GroupAccountsController on MessengerController {
     return a.memberProfiles.length == b.memberProfiles.length;
   }
 
+  /// The wire copy of a group carries the account entries exactly as the
+  /// signed proof beside it has them (the proof's admission boundaries, no
+  /// fold proof once folded).
+  GroupRecord _withProofAccounts(GroupRecord group, String? historyProof) {
+    if (group.memberAccounts.isEmpty || historyProof == null) return group;
+    try {
+      return group.copyWith(
+        memberAccounts: GroupMembershipRecord.fromEvent(
+          GroupHistoryEvent.decode(historyProof),
+        ).group.memberAccounts,
+      );
+    } catch (_) {
+      return group;
+    }
+  }
+
   /// The pinned lists of [group], to travel beside its signed record.
   List<Map<String, Object?>> _listsPayloadFor(GroupRecord group) => [
     for (final entry in group.memberAccounts.take(maxGroupAccounts))

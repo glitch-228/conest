@@ -18689,7 +18689,7 @@ class MessengerController extends ChangeNotifier {
     final payload = jsonEncode({
       'version': 1,
       'reason': reason,
-      'group': _groupForWire(profiledGroup),
+      'group': _groupForWire(_withProofAccounts(profiledGroup, historyProof)),
       'historyProof': ?historyProof,
       if (profiledGroup.memberAccounts.isNotEmpty)
         'lists': _listsPayloadFor(profiledGroup),
@@ -18874,7 +18874,7 @@ class MessengerController extends ChangeNotifier {
       final payload = jsonEncode({
         'version': 1,
         'reason': entry.reason,
-        'group': _groupForWire(profiledGroup),
+        'group': _groupForWire(_withProofAccounts(profiledGroup, historyProof)),
         'historyProof': ?historyProof,
         if (profiledGroup.memberAccounts.isNotEmpty)
           'lists': _listsPayloadFor(profiledGroup),

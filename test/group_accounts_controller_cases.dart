@@ -136,12 +136,6 @@ void _groupAccountsControllerTests() {
             of(carol).hasActiveMember(phoneId) &&
             of(phone).memberDeviceIds.contains(phoneId),
       );
-      // ignore: avoid_print
-      print('TIMING joined alice=${of(alice).memberDeviceIds.contains(phoneId)} carol=${of(carol).hasActiveMember(phoneId)} phone=${of(phone).memberDeviceIds.contains(phoneId)} phoneActive=${of(phone).hasActiveMember(phoneId)} phoneV=${of(phone).membershipVersion} aliceV=${of(alice).membershipVersion}');
-      for (final c in [phone, alice]) {
-        // ignore: avoid_print
-        print('LOG ${c.identity!.displayName} ${c.identity!.deviceId} laptop=${bob.identity!.deviceId} phone=${phone.identity!.deviceId}: ${c.recentDebugLog.where((l) => !l.contains('nnounce')).toList()}');
-      }
       return (
         alice: alice,
         bob: bob,
@@ -179,10 +173,7 @@ void _groupAccountsControllerTests() {
       final phoneId = t.phone.identity!.deviceId;
       GroupRecord of(MessengerController c) =>
           c.groups.firstWhere((g) => g.groupId == t.groupId);
-      final watch = Stopwatch()..start();
       await t.bob.revokeAccountDevice(phoneId);
-      // ignore: avoid_print
-      print('TIMING revoke call ${watch.elapsedMilliseconds}');
       await settle(
         all,
         until: () =>
@@ -190,8 +181,6 @@ void _groupAccountsControllerTests() {
             !of(t.carol).hasActiveMember(phoneId) &&
             !of(t.alice).memberDeviceIds.contains(phoneId),
       );
-      // ignore: avoid_print
-      print('TIMING settled ${watch.elapsedMilliseconds} aliceActive=${of(t.alice).hasActiveMember(phoneId)} proj=${of(t.alice).memberDeviceIds.contains(phoneId)}');
       expect(of(t.alice).hasActiveMember(phoneId), isFalse);
       expect(of(t.carol).hasActiveMember(phoneId), isFalse);
       // The owner's app pinned the revocation and dropped the device.
@@ -199,7 +188,7 @@ void _groupAccountsControllerTests() {
       try {
         await t.phone.sendGroupMessage(groupId: t.groupId, body: 'after');
       } catch (_) {}
-      await settle(all, rounds: 15);
+      await settle(all, rounds: 8);
       for (final c in [t.alice, t.carol]) {
         expect(
           c.messagesForGroup(t.groupId).any((m) => m.body == 'after'),
