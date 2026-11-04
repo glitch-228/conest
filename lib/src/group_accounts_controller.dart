@@ -70,6 +70,14 @@ extension GroupAccountsController on MessengerController {
     () => DeviceListView(groupId: groupId),
   );
 
+  /// The lists a membership record pins reach the vault before the record
+  /// reaches the journal: a restart then always finds them.
+  Future<void> _savePinnedListsNow() async {
+    if (_disposed) return;
+    _persistPinnedLists();
+    await _saveSnapshotSilently(notify: false);
+  }
+
   static const Duration _pendingLifetime = Duration(days: 7);
 
   /// Pending upgrades and announced profiles expire; what is still true is

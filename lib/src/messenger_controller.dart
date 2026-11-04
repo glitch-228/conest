@@ -2841,6 +2841,7 @@ class MessengerController extends ChangeNotifier {
         group: _requireGroupOrPending,
         lists: _pinnedLists,
         viewFor: _viewOf,
+        persistLists: _savePinnedListsNow,
         send: (groupId, peer, payload) async {
           final group = _requireGroupOrPending(groupId);
           final me = _requireIdentity();

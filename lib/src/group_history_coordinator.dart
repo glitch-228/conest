@@ -29,7 +29,12 @@ class GroupHistoryCoordinator {
     this.onAttachment,
     this.lists,
     this.viewFor,
+    this.persistLists,
   });
+
+  /// Saves the device lists durably (called before a membership record that
+  /// pins them is appended to the journal).
+  final Future<void> Function()? persistLists;
 
   /// Device lists by digest (accounts mode), shared by every group, and the
   /// per group view of the lists seen. Both belong to the controller, which
@@ -257,6 +262,7 @@ class GroupHistoryCoordinator {
       trustedOwner: owner!,
       lists: lists,
       view: viewFor?.call(id),
+      beforeAppend: persistLists,
     );
   }
 
@@ -322,6 +328,9 @@ class GroupHistoryCoordinator {
     // resolved view with its effective siblings.
     final base = given.signedView;
     final replica = await _replica(base.groupId);
+    if (replica.behind) {
+      throw StateError('Waiting for the device lists of this group.');
+    }
     final history = replica.membership;
     final current = history.current;
     // An account that the previous record already holds is written with the

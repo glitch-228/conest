@@ -73,7 +73,25 @@ abstract interface class DeviceListExchange {
 /// (edit ownership, receipt targets, etc.). Construct this only for an approved
 /// group, and stop using it when the local group is explicitly removed.
 class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
-  GroupHistoryReplica._(this.journal, this.localDeviceId, this._membership);
+  GroupHistoryReplica._(
+    this.journal,
+    this.localDeviceId,
+    this._membership, {
+    this.beforeAppend,
+    this.missingLists = const [],
+  });
+
+  /// Called before a membership record is appended to the journal: the
+  /// device lists it pins must be durable first, or a restart could not
+  /// rebuild the history.
+  final Future<void> Function()? beforeAppend;
+
+  /// Digests of device lists the retained records pin that are not held
+  /// (after a crash between the append and the save of the lists). The
+  /// replica is behind until a catch-up fetches them; nothing is signed
+  /// meanwhile.
+  List<String> missingLists;
+  bool get behind => missingLists.isNotEmpty;
 
   final GroupHistoryJournal journal;
   final String localDeviceId;
@@ -88,6 +106,7 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
     required GroupMemberProfile trustedOwner,
     PinnedListStore? lists,
     DeviceListView? view,
+    Future<void> Function()? beforeAppend,
   }) async {
     final walker = _ChainWalker(journal);
     final membership = GroupMembershipHistory(
@@ -98,15 +117,21 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
       chainAdmits: walker.admits,
     );
     String? cursor;
+    var missing = const <String>[];
+    scan:
     while (true) {
       final page = await journal.readMembershipPage(afterEventId: cursor);
       if (page.isEmpty) break;
       for (final proof in page) {
-        final result = await membership.import(
-          GroupMembershipRecord.fromEvent(proof),
-        );
-        if (result == GroupMembershipImport.missingParents ||
-            result == GroupMembershipImport.missingDeviceLists) {
+        final record = GroupMembershipRecord.fromEvent(proof);
+        final result = await membership.import(record);
+        if (result == GroupMembershipImport.missingDeviceLists) {
+          // The records are durable but a list they pin is not: stop here
+          // and let a catch-up fetch it by digest. Nothing is thrown away.
+          missing = membership.missingListDigests(record);
+          break scan;
+        }
+        if (result == GroupMembershipImport.missingParents) {
           throw const FormatException(
             'Journal is missing a membership dependency.',
           );
@@ -114,7 +139,13 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
       }
       cursor = page.last.eventId;
     }
-    return GroupHistoryReplica._(journal, localDeviceId, membership);
+    return GroupHistoryReplica._(
+      journal,
+      localDeviceId,
+      membership,
+      beforeAppend: beforeAppend,
+      missingLists: missing,
+    );
   }
 
   /// Device lists the record named by digest are fetched with the proofs
@@ -134,6 +165,7 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
           GroupMembershipRecord.fromEvent(proof),
         );
         if (result == GroupMembershipImport.accepted) {
+          await beforeAppend?.call();
           await journal.append(proof);
           _membership = candidate;
         }
@@ -438,6 +470,8 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
       await saveProgress();
     }
     membershipCursor = null;
+    // Every retained record imports again: the lists were fetched.
+    missingLists = const [];
     if (beforeHead != _membership.current?.id) cursor = null;
     await saveProgress();
     _requirePeer(carrierDeviceId);
