@@ -90,6 +90,7 @@ void _groupAccountsControllerTests() {
       bool settled = true,
       bool ownerWrites = true,
       Duration? deputyDelay,
+      bool confirmFirst = false,
     }) async {
       final network = _InProcessIrohNetwork();
       final relay = _FakeRelayClient();
@@ -133,6 +134,14 @@ void _groupAccountsControllerTests() {
             of(alice).memberAccounts.isNotEmpty &&
             of(carol).memberAccounts.isNotEmpty,
       );
+      if (confirmFirst) {
+        await alice.setConfirmNewDevices(group.groupId, true);
+        await settle(
+          [alice, bob, carol],
+          until: () => of(carol).confirmNewDevices && of(bob).confirmNewDevices,
+          rounds: 100,
+        );
+      }
       // From here the owner's app writes nothing more (a sibling stays one).
       if (!ownerWrites) {
         alice.setOwnerWriterDelayForTesting(const Duration(days: 1));
@@ -148,6 +157,25 @@ void _groupAccountsControllerTests() {
       await bob.confirmLinkCode();
       await _waitForIroh(() => phone.linkState == LinkState.linked);
       final phoneId = phone.identity!.deviceId;
+      if (confirmFirst) {
+        await settle(
+          [alice, bob, carol, phone],
+          until: () => alice
+              .groupAccountStatus(group.groupId)!
+              .pendingDeviceIds
+              .contains(phoneId),
+          rounds: 150,
+        );
+        return (
+          alice: alice,
+          bob: bob,
+          carol: carol,
+          phone: phone,
+          groupId: group.groupId,
+          relay: relay,
+          network: network,
+        );
+      }
       if (!settled) {
         return (
           alice: alice,
@@ -651,6 +679,67 @@ void _groupAccountsControllerTests() {
         await settle(all, until: () => got(t.bob) && got(t.phone), rounds: 300);
         expect(got(t.bob), isTrue);
         expect(got(t.phone), isTrue);
+      },
+    );
+
+    test(
+      'in a group that confirms new devices a new device waits, and an admin '
+      'decides',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(confirmFirst: true);
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        final phoneId = t.phone.identity!.deviceId;
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        expect(of(t.alice).hasActiveMember(phoneId), isFalse);
+        expect(of(t.carol).hasActiveMember(phoneId), isFalse);
+        expect(
+          t.alice.groupAccountStatus(t.groupId)!.pendingDeviceIds,
+          contains(phoneId),
+        );
+        await t.alice.decideAccountDevice(
+          groupId: t.groupId,
+          deviceId: phoneId,
+          approve: true,
+        );
+        await settle(
+          all,
+          until: () =>
+              of(t.carol).hasActiveMember(phoneId) &&
+              of(t.phone).memberDeviceIds.contains(phoneId),
+          rounds: 200,
+        );
+        expect(of(t.carol).hasActiveMember(phoneId), isTrue);
+        expect(of(t.alice).memberDeviceIds, contains(phoneId));
+        expect(
+          of(t.alice).memberAccounts.single.approvedDeviceIds,
+          contains(phoneId),
+        );
+      },
+    );
+
+    test(
+      'a refused new device stays out',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(confirmFirst: true);
+        final phoneId = t.phone.identity!.deviceId;
+        await t.alice.decideAccountDevice(
+          groupId: t.groupId,
+          deviceId: phoneId,
+          approve: false,
+        );
+        final group = t.alice.groups.firstWhere((g) => g.groupId == t.groupId);
+        expect(
+          group.memberAccounts.single.excludedDeviceIds,
+          contains(phoneId),
+        );
+        expect(group.hasActiveMember(phoneId), isFalse);
+        expect(
+          t.alice.groupAccountStatus(t.groupId)!.pendingDeviceIds,
+          isNot(contains(phoneId)),
+        );
       },
     );
   });

@@ -249,6 +249,55 @@ class GroupMembershipHistory {
       if (lists.get(entry.listDigest) == null) entry.listDigest,
   ];
 
+  String? _admittedByRevokedKey;
+  Set<String> _admittedByRevokedCache = const {};
+
+  /// Devices of the current head that were first admitted by a record whose
+  /// author is revoked (or in a compromised account) in the local view: no
+  /// new message is delivered to them until the owner's record answers. A
+  /// local rule, not consensus.
+  Set<String> admittedByRevokedAuthors() {
+    final head = current;
+    final lists = view;
+    if (head == null || lists == null) return const {};
+    final key = '${head.id}|${lists.epoch}';
+    if (_admittedByRevokedKey == key) return _admittedByRevokedCache;
+    final result = <String>{};
+    final headGroup = groupOf(head);
+    bool revokedAuthor(String authorDeviceId, GroupRecord at) {
+      final profile = at.memberProfileFor(authorDeviceId);
+      if (profile == null) return false;
+      for (final entry in at.memberAccounts) {
+        if (entry.accountId != profile.accountId) continue;
+        final facts = lists.factsFor(entry);
+        return facts.compromised || facts.revoked.contains(authorDeviceId);
+      }
+      return false;
+    }
+
+    if (headGroup.memberAccounts.isNotEmpty) {
+      final ordered = _ancestors(head.id).map((id) => _records[id]!).toList()
+        ..sort((a, b) => a.proof.lamport.compareTo(b.proof.lamport));
+      final seen = <String>{};
+      GroupRecord? previous;
+      for (final record in ordered) {
+        final group = groupOf(record);
+        for (final device in group.activeMemberDeviceIds) {
+          if (!seen.add(device)) continue;
+          final authority = previous ?? group;
+          if (revokedAuthor(record.proof.authorDeviceId, authority) &&
+              headGroup.hasActiveMember(device) &&
+              device != headGroup.ownerDeviceId) {
+            result.add(device);
+          }
+        }
+        previous = group;
+      }
+    }
+    _admittedByRevokedKey = key;
+    return _admittedByRevokedCache = result;
+  }
+
   /// Whether [deviceId] takes part in the current membership: a member
   /// device of the head, or an effective sibling of a member account.
   bool isActiveOrSibling(String deviceId) {

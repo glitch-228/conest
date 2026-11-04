@@ -104,6 +104,9 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
   Future<void> _tail = Future.value();
   GroupMembershipHistory get membership => _membership.fork();
 
+  /// See [GroupMembershipHistory.admittedByRevokedAuthors] (cached).
+  Set<String> admittedByRevoked() => _membership.admittedByRevokedAuthors();
+
   static Future<GroupHistoryReplica> restore({
     required GroupHistoryJournal journal,
     required String groupId,

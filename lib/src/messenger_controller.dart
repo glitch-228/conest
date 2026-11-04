@@ -29861,6 +29861,14 @@ class MessengerController extends ChangeNotifier {
     if (_groupMessagesBeingRecorded.contains(message.id)) return false;
     // One device per member account gets it first (see _deferForGateway).
     if (_deferForGateway(group, contact, message)) return true;
+    // Admitted by a record whose author was revoked since: nothing new goes
+    // there until the owner's record answers.
+    if (group.memberAccounts.isNotEmpty &&
+        (await _groupHistory.devicesAdmittedByRevoked(
+          group.groupId,
+        )).contains(contact.deviceId)) {
+      return true;
+    }
     _noteOutboundAttempt(contact.deviceId, message.id);
     // As stored now: its place in the signed history was added after the
     // caller took its copy.

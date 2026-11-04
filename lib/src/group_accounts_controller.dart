@@ -161,6 +161,18 @@ extension GroupAccountsController on MessengerController {
       signed,
       view,
       conflictsWithKnownIdentity: _deviceIdentityConflicts,
+      accountKeyConflicts: (entry) {
+        // An account id is a name anyone can claim: if a contact has this id
+        // with another account key, the entry is not that contact.
+        for (final contact in _snapshot.contacts) {
+          if (contact.accountId == entry.accountId &&
+              contact.accountKeyBase64 != null &&
+              contact.accountKeyBase64 != entry.accountKeyBase64) {
+            return true;
+          }
+        }
+        return false;
+      },
       announces: _siblingAnnounces[signed.groupId] ?? const {},
     );
     _groupResolutions[signed.groupId] = resolution;
@@ -1687,6 +1699,147 @@ extension GroupAccountsController on MessengerController {
             if (!drop.contains(id)) id,
         ],
       );
+
+  /// An admin (or the owner) approves or refuses a new device of a member
+  /// account in a group that confirms new devices. Approval projects the
+  /// device with the account's role (only the owner may do that for an admin
+  /// account) and pins the account's newest list; refusal excludes it.
+  Future<void> decideAccountDevice({
+    required String groupId,
+    required String deviceId,
+    required bool approve,
+  }) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    if (!group.confirmNewDevices || !group.canAddMembers(me.deviceId)) {
+      throw ArgumentError('Only an admin can decide on new devices.');
+    }
+    final view = _viewOf(groupId);
+    GroupAccountMember? entry;
+    DeviceCert? cert;
+    for (final candidate in group.memberAccounts) {
+      for (final pending in view.pendingCerts(candidate)) {
+        if (pending.deviceId == deviceId) {
+          entry = candidate;
+          cert = pending;
+        }
+      }
+    }
+    if (entry == null || cert == null) {
+      throw ArgumentError('That device is not waiting for approval.');
+    }
+    if (entry.role != GroupAccountRole.member &&
+        group.ownerDeviceId != me.deviceId) {
+      throw ArgumentError('Only the owner decides on an admin account.');
+    }
+    final signed = group.signedView;
+    final current = view.current(entry.accountId)!;
+    var next = signed;
+    GroupAccountMember updated;
+    if (approve) {
+      final profile = profileFromCert(
+        cert,
+        announced: _siblingAnnounces[groupId]?[deviceId],
+      );
+      if (profile == null || signed.activeMemberDeviceIds.length >= 16) {
+        throw StateError('This device cannot be added to the group.');
+      }
+      final admin =
+          entry.role == GroupAccountRole.admin ||
+          entry.role == GroupAccountRole.owner;
+      next = next.copyWith(
+        memberDeviceIds: [...next.memberDeviceIds, deviceId],
+        memberProfiles: [...next.memberProfiles, profile],
+        adminDeviceIds: [if (admin) deviceId, ...next.adminDeviceIds],
+        moderatorDeviceIds: [
+          if (entry.role == GroupAccountRole.moderator) deviceId,
+          ...next.moderatorDeviceIds,
+        ],
+      );
+      updated = entry.copyWith(
+        listVersion: current.version,
+        listDigest: _pinnedLists.put(current),
+        approvedDeviceIds: [...entry.approvedDeviceIds, deviceId],
+      );
+    } else {
+      updated = entry.copyWith(
+        listVersion: current.version,
+        listDigest: _pinnedLists.put(current),
+        excludedDeviceIds: [...entry.excludedDeviceIds, deviceId],
+      );
+    }
+    next = next.copyWith(
+      memberAccounts: [
+        for (final held in next.memberAccounts)
+          held.accountId == entry.accountId ? updated : held,
+      ],
+      membershipVersion: signed.membershipVersion + 1,
+      updatedAt: _now(),
+    );
+    _persistPinnedLists();
+    await _commitGroupChange(next);
+    await _persist('Decided on a new device in ${next.title}.');
+    await _sendGroupMembershipUpdate(
+      _groupById(groupId)!,
+      targetDeviceIds: [
+        ...next.activeMemberDeviceIds.where((id) => id != me.deviceId),
+        deviceId,
+      ],
+      reason: 'devices',
+    );
+  }
+
+  /// The owner turns device confirmation on or off. Turning it on approves
+  /// every device that is effective now.
+  Future<void> setConfirmNewDevices(String groupId, bool on) async {
+    final me = _requireIdentity();
+    final group = _requireGroup(groupId);
+    if (group.ownerDeviceId != me.deviceId) {
+      throw ArgumentError('Only the group owner changes this.');
+    }
+    if (group.confirmNewDevices == on) return;
+    final signed = group.signedView;
+    final view = _viewOf(groupId);
+    final entries = <GroupAccountMember>[];
+    for (final entry in signed.memberAccounts) {
+      final current = view.current(entry.accountId);
+      if (!on || current == null) {
+        entries.add(entry.copyWith(approvedDeviceIds: const []));
+        continue;
+      }
+      entries.add(
+        entry.copyWith(
+          listVersion: current.version,
+          listDigest: _pinnedLists.put(current),
+          approvedDeviceIds: [
+            for (final cert in current.devices)
+              if (!view.revoked(entry.accountId).contains(cert.deviceId) &&
+                  !entry.excludedDeviceIds.contains(cert.deviceId))
+                cert.deviceId,
+          ],
+        ),
+      );
+    }
+    // Devices not projected yet are approved with the switch; they join the
+    // projection through the owner's next record.
+    final next = signed.copyWith(
+      confirmNewDevices: on,
+      memberAccounts: entries,
+      membershipVersion: signed.membershipVersion + 1,
+      updatedAt: _now(),
+    );
+    _persistPinnedLists();
+    await _commitGroupChange(next);
+    await _persist('Changed device confirmation in ${next.title}.');
+    await _sendGroupMembershipUpdate(
+      _groupById(groupId)!,
+      targetDeviceIds: next.activeMemberDeviceIds
+          .where((id) => id != me.deviceId)
+          .toList(growable: false),
+      reason: 'devices',
+    );
+    _scheduleOwnerWriter(groupId);
+  }
 
   /// An admin or the owner removes a member account (all its devices).
   Future<void> _removeAccountMember(GroupRecord group, String deviceId) async {

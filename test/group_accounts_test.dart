@@ -1122,4 +1122,63 @@ void main() {
       },
     );
   });
+
+  group('local rules', () {
+    test('devices admitted by a revoked author get nothing new', () async {
+      final admAcc = await TestAccount.create('acc-adm');
+      final adm1 = await TestDevice.create('adm1', 'acc-adm');
+      final adm2 = await TestDevice.create('adm2', 'acc-adm');
+      final r1 = await root();
+      final al1 = await admAcc.list(1, [adm1, adm2]);
+      final r2 = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        accounts: [
+          AccountSpec(admAcc, al1, [adm1], role: GroupAccountRole.admin),
+        ],
+      );
+      final bl1 = await bobAcc.list(1, [bob1]);
+      // The admin device admits Bob's account.
+      final r3 = await fx.record(
+        owner: alice,
+        author: adm1,
+        parents: [r2],
+        deviceOnly: [carol],
+        accounts: [
+          AccountSpec(admAcc, al1, [adm1], role: GroupAccountRole.admin),
+          AccountSpec(bobAcc, bl1, [bob1]),
+        ],
+      );
+      final view = DeviceListView(groupId: fx.groupId)
+        ..offerVerified(al1, accountKey: admAcc.keys.publicKeyBase64)
+        ..offerVerified(bl1, accountKey: bobAcc.keys.publicKeyBase64);
+      final history = fx.history(owner: alice, view: view);
+      await importAll(history, [r1, r2, r3]);
+      expect(history.current!.id, r3.id);
+      expect(history.admittedByRevokedAuthors(), isEmpty);
+      // The admin device is revoked by its account: what it admitted waits.
+      view.offerVerified(
+        await admAcc.list(2, [adm2], revoked: ['adm1']),
+        accountKey: admAcc.keys.publicKeyBase64,
+      );
+      expect(history.admittedByRevokedAuthors(), {'bob1'});
+    });
+
+    test('an account id a contact has with another key is flagged', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1]);
+      final r2 = await pinBob(r1, l1, [bob1]);
+      final view = DeviceListView(groupId: fx.groupId)
+        ..offerVerified(l1, accountKey: bobAcc.keys.publicKeyBase64);
+      final resolution = resolveGroup(
+        r2.group,
+        view,
+        accountKeyConflicts: (entry) => entry.accountId == 'acc-bob',
+      );
+      expect(resolution.unverifiedAccountIds, ['acc-bob']);
+      expect(resolveGroup(r2.group, view).unverifiedAccountIds, isEmpty);
+    });
+  });
 }

@@ -613,7 +613,12 @@ class GroupResolution {
     required this.unverifiedDeviceIds,
     required this.pendingDeviceIds,
     required this.compromisedAccountIds,
+    this.unverifiedAccountIds = const [],
   });
+
+  /// Accounts whose id is one this device knows with another account key (a
+  /// contact's). Shown as unverified, never merged with the contact.
+  final List<String> unverifiedAccountIds;
 
   final GroupRecord group;
 
@@ -640,6 +645,7 @@ GroupResolution resolveGroup(
   GroupRecord signed,
   DeviceListView view, {
   bool Function(String deviceId, DeviceCert cert)? conflictsWithKnownIdentity,
+  bool Function(GroupAccountMember entry)? accountKeyConflicts,
   Map<String, GroupMemberProfile> announces = const {},
 }) {
   if (signed.memberAccounts.isEmpty) {
@@ -677,6 +683,10 @@ GroupResolution resolveGroup(
           profile,
     ];
   }
+  final unverifiedAccounts = [
+    for (final entry in signed.memberAccounts)
+      if (accountKeyConflicts?.call(entry) ?? false) entry.accountId,
+  ];
   final siblings = <GroupMemberProfile>[];
   final suppressed = <String>[];
   final unverified = <String>[];
@@ -737,6 +747,7 @@ GroupResolution resolveGroup(
     unverifiedDeviceIds: unverified,
     pendingDeviceIds: pending,
     compromisedAccountIds: compromised,
+    unverifiedAccountIds: unverifiedAccounts,
   );
 }
 

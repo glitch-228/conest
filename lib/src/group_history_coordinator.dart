@@ -469,6 +469,10 @@ class GroupHistoryCoordinator {
     return proof;
   });
 
+  /// Devices admitted by a record whose author is revoked in the local view.
+  Future<Set<String>> devicesAdmittedByRevoked(String id) async =>
+      (await _replica(id)).admittedByRevoked();
+
   /// Which of [ids] the journal of [id] holds.
   Future<Set<String>> retainedIdsOf(String id, List<String> ids) async =>
       ids.isEmpty ? <String>{} : (await _replica(id)).journal.retainedIds(ids);
