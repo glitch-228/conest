@@ -1476,7 +1476,11 @@ void main() {
         ).readAsString(),
       );
       // Both keys: an older build reading the file still behaves.
-      expect(saved, {'channel': 'canary', 'receiveUnstableUpdates': true});
+      expect(saved, {
+        'channel': 'canary',
+        'chosen': true,
+        'receiveUnstableUpdates': true,
+      });
     });
 
     test(
@@ -1820,6 +1824,55 @@ void main() {
       );
       expect(await read(UpdateChannel.stable, '[]'), UpdateChannel.stable);
       expect(await read(UpdateChannel.canary, null), UpdateChannel.canary);
+    });
+
+    test('a default saved by another build does not hold a canary build back', () async {
+      Future<UpdateChannel> read(UpdateChannel build, String content) async {
+        final support = await Directory.systemTemp.createTemp('conest-upd-');
+        addTearDown(() => support.delete(recursive: true));
+        await File(p.join(support.path, 'update_preferences.json'))
+            .writeAsString(content);
+        final service = _serviceFor(
+          baseUrl: 'http://127.0.0.1:1',
+          signer: await _ManifestSigner.create(),
+          channel: build,
+          buildTag: 'v0.4.3',
+          support: support,
+        );
+        addTearDown(service.dispose);
+        await service.loadPreferences();
+        return service.updateChannel;
+      }
+
+      const unchosen =
+          '{"channel":"nightly","chosen":false,"receiveUnstableUpdates":true}';
+      const chosen =
+          '{"channel":"nightly","chosen":true,"receiveUnstableUpdates":true}';
+      // A nightly build's saved default, then a canary build is installed.
+      expect(await read(UpdateChannel.canary, unchosen), UpdateChannel.canary);
+      // The user's own choice stands, and files without the mark count as one.
+      expect(await read(UpdateChannel.canary, chosen), UpdateChannel.nightly);
+      expect(
+        await read(UpdateChannel.canary, '{"channel":"nightly"}'),
+        UpdateChannel.nightly,
+      );
+      // Other builds keep a saved default (a nightly install that moved to a
+      // stable release keeps receiving nightlies).
+      expect(await read(UpdateChannel.stable, unchosen), UpdateChannel.nightly);
+      expect(await read(UpdateChannel.nightly, unchosen), UpdateChannel.nightly);
+    });
+
+    test('the build default is saved as not chosen, a switch as chosen', () async {
+      final (service, support) = await serviceOver(
+        [stable042],
+        channel: UpdateChannel.nightly,
+        buildTag: 'v0.4.3-nightly.20261028.1',
+      );
+      final file = File(p.join(support.path, 'update_preferences.json'));
+      await service.loadPreferences();
+      expect(jsonDecode(await file.readAsString())['chosen'], false);
+      await service.setUpdateChannel(UpdateChannel.stable);
+      expect(jsonDecode(await file.readAsString())['chosen'], true);
     });
 
     test('a check that starts during the load uses the saved choice', () async {

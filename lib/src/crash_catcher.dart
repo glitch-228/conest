@@ -61,6 +61,12 @@ class CrashReport {
   String format() => records.map((record) => record.format()).join('\n\n');
 }
 
+/// An error as text for a crash record. A [FormatException] is written
+/// without its `source`: that is a piece of what could not be parsed, which
+/// can be message content.
+String describeError(Object error) =>
+    error is FormatException ? 'FormatException: ${error.message}' : '$error';
+
 class CrashCatcher {
   CrashCatcher({
     this.maxBytes = 256 * 1024,
@@ -107,14 +113,16 @@ class CrashCatcher {
     FlutterError.onError = (details) {
       record(
         'flutter',
-        details.exceptionAsString(),
+        details.exception is FormatException
+            ? describeError(details.exception)
+            : details.exceptionAsString(),
         details.stack,
         context: details.context?.toString(),
       );
       presentError?.call(details);
     };
     PlatformDispatcher.instance.onError = (error, stack) {
-      record('uncaught', '$error', stack);
+      record('uncaught', describeError(error), stack);
       return true;
     };
     final port = RawReceivePort((Object? pair) {
@@ -131,7 +139,7 @@ class CrashCatcher {
 
   /// For `runZonedGuarded`.
   void zoneError(Object error, StackTrace stack) =>
-      record('zone', '$error', stack);
+      record('zone', describeError(error), stack);
 
   /// Writes it down at once (a crash may be next), and passes it on to the
   /// error history once that is open.

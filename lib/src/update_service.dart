@@ -432,6 +432,7 @@ class UpdateService extends ChangeNotifier {
       // Saving is best effort: the update goes ahead.
     }
   }
+
   final bool _automaticStartupChecksEnabled;
 
   bool _startupCheckStarted = false;
@@ -510,7 +511,12 @@ class UpdateService extends ChangeNotifier {
             _ => null,
           };
           if (saved != null) {
-            _followed ??= saved;
+            // A default saved by an earlier run (not chosen by the user)
+            // does not hold a canary build back: it is on the newest line.
+            final chosen = decoded['chosen'] != false;
+            _followed ??= !chosen && buildInfo.channel == UpdateChannel.canary
+                ? UpdateChannel.canary
+                : saved;
             return;
           }
           if (decoded['receiveUnstableUpdates'] is bool) {
@@ -525,7 +531,7 @@ class UpdateService extends ChangeNotifier {
           }
         }
       }
-      await _savePreferences(updateChannel);
+      await _savePreferences(updateChannel, chosen: false);
     } catch (_) {
       // Without a readable file the build's default applies.
     }
@@ -564,19 +570,23 @@ class UpdateService extends ChangeNotifier {
   );
 
   /// Writes are chained, so two quick switches land in order.
-  Future<void> _savePreferences(UpdateChannel channel) {
-    final next = _preferencesWrite.then((_) => _writePreferences(channel));
+  Future<void> _savePreferences(UpdateChannel channel, {bool chosen = true}) {
+    final next = _preferencesWrite.then(
+      (_) => _writePreferences(channel, chosen),
+    );
     _preferencesWrite = next.then((_) {}, onError: (_) {});
     return next;
   }
 
-  Future<void> _writePreferences(UpdateChannel channel) async {
+  Future<void> _writePreferences(UpdateChannel channel, bool chosen) async {
     final directory = await _applicationSupportDirectoryProvider();
     await directory.create(recursive: true);
     final file = File(p.join(directory.path, _preferencesFileName));
     await file.writeAsString(
       jsonEncode({
         'channel': channel.label,
+        // False: the build's own default, not a choice of the user's.
+        'chosen': chosen,
         // Kept for older builds that read this file after a downgrade.
         'receiveUnstableUpdates': channel != UpdateChannel.stable,
       }),

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:conest/src/build_info.dart';
 import 'package:conest/src/crash_catcher.dart';
@@ -289,6 +290,69 @@ void main() {
         await buildProblemReportOffMain(inputs),
         buildProblemReport(inputs),
       );
+    });
+  });
+
+  group('crash records keep no excerpt of what failed', () {
+    const secret = 'meet me at the old bridge';
+    final formatError = const FormatException(
+      'Unexpected character',
+      '{"text":"$secret"}',
+      3,
+    );
+
+    test('the catcher writes a FormatException without its source', () {
+      final crashes = CrashCatcher(now: () => _t);
+      crashes.zoneError(
+        formatError,
+        StackTrace.fromString('#0 f (package:conest/a.dart:1)'),
+      );
+      expect(crashes.thisRun.single.text, isNot(contains(secret)));
+      expect(
+        crashes.thisRun.single.text,
+        startsWith('FormatException: Unexpected character'),
+      );
+      expect(
+        crashes.thisRun.single.text,
+        contains('#0 f (package:conest/a.dart:1)'),
+      );
+      expect(describeError(StateError('x')), 'Bad state: x');
+    });
+
+    test('an uncaught error goes the same way', () {
+      final crashes = CrashCatcher(now: () => _t);
+      final before = PlatformDispatcher.instance.onError;
+      addTearDown(() => PlatformDispatcher.instance.onError = before);
+      crashes.install();
+      PlatformDispatcher.instance.onError!(formatError, StackTrace.current);
+      expect(crashes.thisRun.single.kind, 'uncaught');
+      expect(crashes.thisRun.single.text, isNot(contains(secret)));
+    });
+
+    test('the report keeps the first line and the frames, nothing between', () {
+      // As an older record or another isolate may have written it.
+      final text = buildProblemReport(
+        _inputs(
+          crashes: [
+            ReportCrash(
+              _t,
+              'isolate',
+              'FormatException: Unexpected character (at character 4)\n'
+                  '{"text":"$secret"}\n'
+                  '   ^\n'
+                  '#0      _parse (package:conest/src/a.dart:10:3)\n'
+                  '#1      main (dart:core/x.dart:1)\n'
+                  '  0: conest::vault::open\n'
+                  '     at /home/anna/src/vault.rs:12',
+            ),
+          ],
+        ),
+      );
+      expect(text, isNot(contains(secret)));
+      expect(text, contains('FormatException: Unexpected character'));
+      expect(text, contains('#0      _parse (package:conest/src/a.dart:10:3)'));
+      expect(text, contains('0: conest::vault::open'));
+      expect(text, isNot(contains('anna')));
     });
   });
 

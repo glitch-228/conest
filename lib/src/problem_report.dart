@@ -114,6 +114,22 @@ const Set<String> _crashKinds = {
   'exit',
 };
 
+final RegExp _frameLine = RegExp(
+  r'^\s*(?:#\d+\s|\d+:\s|at\s|(?:package|dart|file):)',
+);
+
+/// A crash record keeps its first line and its stack frames. Any other
+/// line may be an excerpt of what failed (a `FormatException` prints the
+/// source it could not parse under its message).
+String _crashShape(String text) {
+  final lines = text.split('\n');
+  return [
+    lines.first,
+    for (final line in lines.skip(1))
+      if (_frameLine.hasMatch(line)) line,
+  ].join('\n');
+}
+
 String _safeWord(String value, int max) {
   final cleaned = value.replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_');
   return cleaned.length <= max ? cleaned : cleaned.substring(0, max);
@@ -175,7 +191,7 @@ String buildProblemReport(ProblemReportInputs inputs) {
   final crashBlocks = <String>[
     for (final crash in crashes)
       '${crash.at.toUtc().toIso8601String()} [${_safeWord(crash.kind, 16)}] '
-          '${clean(crash.text, ProblemReportLimits.crashEntryChars)}',
+          '${clean(_crashShape(crash.text), ProblemReportLimits.crashEntryChars)}',
   ];
 
   final errorLines = <String>[];
@@ -302,7 +318,7 @@ class _Redactor {
     r'(?<![\w:])\[?[0-9a-fA-F:]*::[0-9a-fA-F:.]*\]?(?::\d{1,5})?(?![\w:])',
   );
   static final _hostPort = RegExp(
-    r'\b[A-Za-z0-9][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}:\d{2,5}\b',
+    r'\b[A-Za-z0-9][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)*\.(?!(?:dart|rs|kt|java|cpp|cc|so|js|ts|py)\b)[A-Za-z]{2,}:\d{2,5}\b',
   );
   static final _bearer = RegExp(
     r'\b(Bearer|Basic)\s+\S+',
