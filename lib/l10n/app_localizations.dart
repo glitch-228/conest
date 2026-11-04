@@ -10718,6 +10718,114 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Airtime used in the last minute: {percent}%'**
   String airtimeBudgetUsed(int percent);
+
+  /// Settings → Updates: heading of the choice between stable, nightly and canary
+  ///
+  /// In en, this message translates to:
+  /// **'Update channel'**
+  String get updateChannelTitle;
+
+  /// Update channel name: stable releases
+  ///
+  /// In en, this message translates to:
+  /// **'Stable'**
+  String get updateChannelStable;
+
+  /// One line under the Stable choice
+  ///
+  /// In en, this message translates to:
+  /// **'Releases that passed the full tests. The safest choice.'**
+  String get updateChannelStableHelp;
+
+  /// Update channel name: nightly releases
+  ///
+  /// In en, this message translates to:
+  /// **'Nightly'**
+  String get updateChannelNightly;
+
+  /// One line under the Nightly choice
+  ///
+  /// In en, this message translates to:
+  /// **'Newer features, tested in our lab but less settled. Also takes stable releases.'**
+  String get updateChannelNightlyHelp;
+
+  /// Update channel name: canary releases (a build for every new feature or fix)
+  ///
+  /// In en, this message translates to:
+  /// **'Canary'**
+  String get updateChannelCanary;
+
+  /// One line under the Canary choice
+  ///
+  /// In en, this message translates to:
+  /// **'Every new feature and fix as soon as it is built, with little testing. May break. Also takes nightly and stable releases.'**
+  String get updateChannelCanaryHelp;
+
+  /// Banner in Settings → Updates on a canary build
+  ///
+  /// In en, this message translates to:
+  /// **'Canary: new features, may break'**
+  String get canaryBanner;
+
+  /// Title of the confirmation before switching to canary updates
+  ///
+  /// In en, this message translates to:
+  /// **'Switch to canary?'**
+  String get canaryConfirmTitle;
+
+  /// Confirmation before switching to canary: it may break and Conest never goes back to an older build
+  ///
+  /// In en, this message translates to:
+  /// **'Canary builds come first and may break. Going back to Nightly or Stable later waits for a release newer than the build you have; Conest does not go back to an older build.'**
+  String get canaryConfirmBody;
+
+  /// Shown when the installed build is newer than the chosen update channel: no downgrade, wait for a newer release
+  ///
+  /// In en, this message translates to:
+  /// **'This build is newer than the line you chose. Conest stays on it until a release newer than this build is published there.'**
+  String get updateChannelWaiting;
+
+  /// Update prompt: the release is a canary build (lower case, in a sentence)
+  ///
+  /// In en, this message translates to:
+  /// **'canary'**
+  String get releaseCanary;
+
+  /// Settings and crash notice: make a file with the details of a problem to send to the developers
+  ///
+  /// In en, this message translates to:
+  /// **'Report a problem'**
+  String get reportProblemTitle;
+
+  /// Subtitle of Report a problem in Settings
+  ///
+  /// In en, this message translates to:
+  /// **'Make a file with the version, errors and crash records to send to the developers. Conest sends nothing.'**
+  String get reportProblemSubtitle;
+
+  /// Note above the problem report preview: read before sharing
+  ///
+  /// In en, this message translates to:
+  /// **'Read it before you share it. It holds no messages and no keys, and names are replaced, but an error line may still mention something that was not recognised.'**
+  String get reportProblemNote;
+
+  /// Shown while the problem report is built
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing the report…'**
+  String get reportProblemBuilding;
+
+  /// Snackbar after copying the problem report
+  ///
+  /// In en, this message translates to:
+  /// **'Copied the report.'**
+  String get reportProblemCopied;
+
+  /// File picker title when saving the problem report
+  ///
+  /// In en, this message translates to:
+  /// **'Save the report'**
+  String get reportProblemSaveTitle;
 }
 
 class _AppLocalizationsDelegate

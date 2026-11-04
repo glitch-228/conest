@@ -6771,4 +6771,65 @@ class AppLocalizationsRu extends AppLocalizations {
   String airtimeBudgetUsed(int percent) {
     return 'Эфирное время за последнюю минуту: $percent%';
   }
+
+  @override
+  String get updateChannelTitle => 'Канал обновлений';
+
+  @override
+  String get updateChannelStable => 'Стабильный';
+
+  @override
+  String get updateChannelStableHelp =>
+      'Выпуски, прошедшие все проверки. Самый безопасный выбор.';
+
+  @override
+  String get updateChannelNightly => 'Ночной';
+
+  @override
+  String get updateChannelNightlyHelp =>
+      'Новые функции, проверенные в нашей лаборатории, но менее устоявшиеся. Также получает стабильные выпуски.';
+
+  @override
+  String get updateChannelCanary => 'Canary';
+
+  @override
+  String get updateChannelCanaryHelp =>
+      'Каждая новая функция и исправление сразу после сборки, почти без проверки. Может сломаться. Также получает ночные и стабильные выпуски.';
+
+  @override
+  String get canaryBanner => 'Canary: новые функции, возможны сбои';
+
+  @override
+  String get canaryConfirmTitle => 'Перейти на Canary?';
+
+  @override
+  String get canaryConfirmBody =>
+      'Сборки Canary выходят первыми и могут ломаться. Возврат на Ночной или Стабильный потом ждёт выпуска новее вашей сборки; Conest не откатывается на старую сборку.';
+
+  @override
+  String get updateChannelWaiting =>
+      'Эта сборка новее выбранного канала. Conest остаётся на ней, пока в этом канале не выйдет выпуск новее.';
+
+  @override
+  String get releaseCanary => 'canary';
+
+  @override
+  String get reportProblemTitle => 'Сообщить о проблеме';
+
+  @override
+  String get reportProblemSubtitle =>
+      'Создайте файл с версией, ошибками и записями о сбоях, чтобы отправить разработчикам. Conest ничего не отправляет.';
+
+  @override
+  String get reportProblemNote =>
+      'Прочитайте перед отправкой. В нём нет сообщений и ключей, имена заменены, но строка с ошибкой всё же может упоминать то, что не удалось распознать.';
+
+  @override
+  String get reportProblemBuilding => 'Готовим отчёт…';
+
+  @override
+  String get reportProblemCopied => 'Отчёт скопирован.';
+
+  @override
+  String get reportProblemSaveTitle => 'Сохранить отчёт';
 }

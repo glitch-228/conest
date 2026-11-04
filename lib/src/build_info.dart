@@ -4,7 +4,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 enum UpdateChannel {
   stable('stable'),
   nightly('nightly'),
-  debug('debug');
+  debug('debug'),
+  canary('canary');
 
   const UpdateChannel(this.label);
 
@@ -13,6 +14,7 @@ enum UpdateChannel {
   static UpdateChannel parse(String? value) {
     return switch (value?.trim().toLowerCase()) {
       'debug' => UpdateChannel.debug,
+      'canary' => UpdateChannel.canary,
       'nightly' || 'beta' => UpdateChannel.nightly,
       _ => UpdateChannel.stable,
     };
@@ -41,6 +43,12 @@ class ConestBuildInfo {
   final String? commit;
 
   String get channelLabel => channel.label;
+
+  /// New features that are not on nightly yet are shown only on canary
+  /// builds (and debug ones). A plain read of the channel this build was
+  /// compiled for: not a setting, not remote, and not the update choice.
+  bool get canaryFeatures =>
+      channel == UpdateChannel.canary || channel == UpdateChannel.debug;
 
   String get displayVersion {
     final tag = buildTag?.trim();

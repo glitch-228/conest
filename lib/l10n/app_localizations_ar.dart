@@ -6762,4 +6762,65 @@ class AppLocalizationsAr extends AppLocalizations {
   String airtimeBudgetUsed(int percent) {
     return 'زمن البث المستخدم في آخر دقيقة: $percent%';
   }
+
+  @override
+  String get updateChannelTitle => 'قناة التحديث';
+
+  @override
+  String get updateChannelStable => 'مستقر';
+
+  @override
+  String get updateChannelStableHelp =>
+      'إصدارات اجتازت كل الاختبارات. الخيار الأكثر أمانًا.';
+
+  @override
+  String get updateChannelNightly => 'ليلي';
+
+  @override
+  String get updateChannelNightlyHelp =>
+      'ميزات أحدث، اختُبرت في مختبرنا لكنها أقل استقرارًا. تتلقى أيضًا الإصدارات المستقرة.';
+
+  @override
+  String get updateChannelCanary => 'كناري';
+
+  @override
+  String get updateChannelCanaryHelp =>
+      'كل ميزة وإصلاح جديد فور بنائه، مع اختبار قليل. قد يتعطل. تتلقى أيضًا الإصدارات الليلية والمستقرة.';
+
+  @override
+  String get canaryBanner => 'كناري: ميزات جديدة، قد يتعطل';
+
+  @override
+  String get canaryConfirmTitle => 'التبديل إلى كناري؟';
+
+  @override
+  String get canaryConfirmBody =>
+      'إصدارات كناري تأتي أولًا وقد تتعطل. العودة لاحقًا إلى الليلي أو المستقر تنتظر إصدارًا أحدث من الإصدار الذي لديك؛ لا يعود Conest إلى إصدار أقدم.';
+
+  @override
+  String get updateChannelWaiting =>
+      'هذا الإصدار أحدث من القناة التي اخترتها. يبقى Conest عليه حتى يصدر هناك إصدار أحدث منه.';
+
+  @override
+  String get releaseCanary => 'كناري';
+
+  @override
+  String get reportProblemTitle => 'الإبلاغ عن مشكلة';
+
+  @override
+  String get reportProblemSubtitle =>
+      'أنشئ ملفًا بالإصدار والأخطاء وسجلات الأعطال لإرساله إلى المطورين. لا يرسل Conest شيئًا.';
+
+  @override
+  String get reportProblemNote =>
+      'اقرأه قبل مشاركته. لا يحتوي على رسائل ولا مفاتيح، وتُستبدل الأسماء، لكن قد يذكر سطر خطأ شيئًا لم يُتعرَّف عليه.';
+
+  @override
+  String get reportProblemBuilding => 'جارٍ إعداد التقرير…';
+
+  @override
+  String get reportProblemCopied => 'تم نسخ التقرير.';
+
+  @override
+  String get reportProblemSaveTitle => 'حفظ التقرير';
 }

@@ -2,6 +2,9 @@ name: Release
 
 # Dispatched from the branch with the tag to release (pushed first):
 #   gh workflow run release.yml --ref feature/matrix-client -f tag=v0.4.3-nightly.YYYYMMDD.N
+# A canary (pre-release, its own manifest files) is dispatched from the
+# canary branch with a tag v0.4.3-canary.YYYYMMDD.N.
+# tool/release_channel.sh is the one rule that maps a tag to its channel.
 # A run on the branch can use the branch's build caches; a run started by
 # the tag itself never can (tag runs see only their own and main's caches).
 on:
@@ -32,6 +35,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
       channel: ${{ steps.meta.outputs.channel }}
+      version_code: ${{ steps.meta.outputs.version_code }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
       sanitized: ${{ steps.meta.outputs.sanitized }}
     steps:
@@ -40,29 +44,32 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
       - id: meta
         shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          tag="${{ inputs.tag }}"
+          set -euo pipefail
+          tag="$TAG"
           sha="$(git rev-parse HEAD)"
           version="${tag#v}"
-          channel="stable"
-          prerelease="false"
-          lowered="$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]')"
-          case "$lowered" in
-            *nightly*|*beta*|*rc*|*alpha*|*dev*|*pre*)
-              channel="nightly"
-              prerelease="true"
-              ;;
-          esac
+          # The tags that exist, for the tag guards (no stable of the same
+          # core, not before the previous canary, ...).
+          git ls-remote --tags --refs origin | sed 's#.*refs/tags/##' > "$RUNNER_TEMP/tags.txt"
+          bash tool/release_channel.sh --tags-file "$RUNNER_TEMP/tags.txt" "$tag" > "$RUNNER_TEMP/channel.txt"
+          cat "$RUNNER_TEMP/channel.txt"
+          channel="$(sed -n 's/^channel=//p' "$RUNNER_TEMP/channel.txt")"
+          prerelease="$(sed -n 's/^prerelease=//p' "$RUNNER_TEMP/channel.txt")"
+          version_code="$(sed -n 's/^version_code=//p' "$RUNNER_TEMP/channel.txt")"
           sanitized="$(printf '%s' "$tag" | tr -c 'A-Za-z0-9._-' '_')"
           {
             echo "sha=$sha"
             echo "tag=$tag"
             echo "version=$version"
             echo "channel=$channel"
+            echo "version_code=$version_code"
             echo "is_prerelease=$prerelease"
             echo "sanitized=$sanitized"
           } >> "$GITHUB_OUTPUT"
-          echo "Release tag: $tag (channel=$channel prerelease=$prerelease)"
+          echo "Release tag: $tag (channel=$channel prerelease=$prerelease versionCode=$version_code)"
 
   build-relay:
     name: Build relay (${{ matrix.target.label }})
@@ -406,6 +413,7 @@ jobs:
         run: |
           flutter build apk --release \
             --target-platform android-arm64 \
+            --build-number=${{ needs.prepare.outputs.version_code }} \
             --dart-define=CONEST_BUILD_TAG=${{ needs.prepare.outputs.tag }} \
             --dart-define=CONEST_BUILD_CHANNEL=${{ needs.prepare.outputs.channel }} \
             --dart-define=CONEST_BUILD_COMMIT=${{ needs.prepare.outputs.sha }} \
@@ -484,6 +492,7 @@ jobs:
             exit 1
           fi
           notes_args=()
+          # A canary carries no signed notes: its body is the change list.
           if [ "${{ needs.prepare.outputs.channel }}" = "stable" ] && [ -f RELEASE_NOTES.md ]; then
             notes_args+=(--release-notes RELEASE_NOTES.md)
             echo "Embedding RELEASE_NOTES.md into the signed manifest."
@@ -493,6 +502,8 @@ jobs:
           fi
           dart run tool/release_manifest.dart \
             --dist dist \
+            --channel "${{ needs.prepare.outputs.channel }}" \
+            --android-version-code "${{ needs.prepare.outputs.version_code }}" \
             "${notes_args[@]}" \
             "${{ needs.prepare.outputs.tag }}"
           ls -la dist/
@@ -508,6 +519,7 @@ jobs:
           fi
           dart run tool/verify_release_manifest.dart \
             --dist dist \
+            --channel "${{ needs.prepare.outputs.channel }}" \
             --public-key "$CONEST_RELEASE_MANIFEST_PUBLIC_KEY"
       - name: The relay installer, with the release key it checks against
         env:
@@ -526,6 +538,20 @@ jobs:
           set -euo pipefail
           tag="${{ needs.prepare.outputs.tag }}"
           channel="${{ needs.prepare.outputs.channel }}"
+          # The previous release of the same kind: a canary is compared with
+          # the previous canary, the others never with a canary.
+          if [ "$channel" = "canary" ]; then
+            prev_tag="$(git describe --tags --abbrev=0 --match 'v*-canary.*' "$tag^" 2>/dev/null || true)"
+            if [ -z "$prev_tag" ]; then
+              prev_tag="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
+            fi
+            manifest_name="RELEASE-MANIFEST.canary.json"
+            signature_name="RELEASE-MANIFEST.canary.ed25519.sig"
+          else
+            prev_tag="$(git describe --tags --abbrev=0 --exclude 'v*-canary.*' "$tag^" 2>/dev/null || true)"
+            manifest_name="RELEASE-MANIFEST.json"
+            signature_name="RELEASE-MANIFEST.ed25519.sig"
+          fi
           {
             echo "Conest $tag"
             echo
@@ -534,14 +560,12 @@ jobs:
             elif [ "$channel" = "nightly" ] && [ -f NIGHTLY_RELEASE_NOTES.md ]; then
               cat NIGHTLY_RELEASE_NOTES.md
               echo
-              prev_tag="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
               if [ -n "$prev_tag" ]; then
                 echo "Changes since \`$prev_tag\`:"
                 echo
                 git log --no-merges --format='- %s' "$prev_tag..$tag"
               fi
             else
-              prev_tag="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
               if [ -n "$prev_tag" ]; then
                 echo "Changes since \`$prev_tag\`:"
                 echo
@@ -553,15 +577,20 @@ jobs:
             echo
             echo "---"
             echo
-            echo "Built from commit \`${{ needs.prepare.outputs.sha }}\`. Each desktop and mobile asset is covered by \`RELEASE-MANIFEST.json\` and its Ed25519 signature \`RELEASE-MANIFEST.ed25519.sig\`. The Conest desktop and Android updater both verify this signature before applying an update."
+            echo "Built from commit \`${{ needs.prepare.outputs.sha }}\`. Each desktop and mobile asset is covered by \`$manifest_name\` and its Ed25519 signature \`$signature_name\`. The Conest desktop and Android updater both verify this signature before applying an update."
           } > release-notes.md
           echo "path=release-notes.md" >> "$GITHUB_OUTPUT"
+      # Two steps because a canary release carries its own manifest pair and
+      # never the standard one (relay supervisors and older apps read the
+      # standard names). Only a stable release is ever "latest".
       - name: Create GitHub release
+        if: ${{ needs.prepare.outputs.channel != 'canary' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: Conest ${{ needs.prepare.outputs.tag }}
           prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          make_latest: ${{ needs.prepare.outputs.channel == 'stable' && 'true' || 'false' }}
           body_path: ${{ steps.notes.outputs.path }}
           fail_on_unmatched_files: true
           files: |
@@ -580,3 +609,48 @@ jobs:
             dist/RELEASE-MANIFEST.json
             dist/RELEASE-MANIFEST.ed25519.sig
             dist/SHA256SUMS.txt
+      - name: Create GitHub canary release
+        if: ${{ needs.prepare.outputs.channel == 'canary' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: Conest ${{ needs.prepare.outputs.tag }}
+          prerelease: true
+          make_latest: 'false'
+          body_path: ${{ steps.notes.outputs.path }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/conest-linux-x64-*.zip
+            dist/conest-windows-x64-portable-*.zip
+            dist/conest-android-arm64-*.apk
+            dist/conest_relay-linux-x64-*
+            dist/conest_relay-windows-x64-*
+            dist/conest_updater-linux-x64-*
+            dist/conest_updater-windows-x64-*
+            dist/conest_relay_supervisor-linux-x64-*
+            dist/conest_relay_supervisor-windows-x64-*
+            dist/conest_relay-linux-arm64-*
+            dist/conest_relay_supervisor-linux-arm64-*
+            dist/install-relay.sh
+            dist/RELEASE-MANIFEST.canary.json
+            dist/RELEASE-MANIFEST.canary.ed25519.sig
+            dist/SHA256SUMS.txt
+      # Old readers (relay supervisors and the install script read the first
+      # 20 releases, older apps the first 30) must still find a nightly and a
+      # stable: keep the newest 10 canaries, never more. The tags stay.
+      - name: Prune old canary releases
+        if: ${{ needs.prepare.outputs.channel == 'canary' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          keep=10
+          gh release list --limit 200 --json tagName --jq '.[].tagName' |
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]{8}\.[0-9]+$' |
+            sort -V -r > canaries.txt || true
+          tail -n +$((keep + 1)) canaries.txt | while read -r old; do
+            echo "Deleting release $old (its tag stays)"
+            gh release delete "$old" --yes
+          done

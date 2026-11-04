@@ -33,6 +33,9 @@ import 'package:conest/src/bitchat/packet.dart';
 import 'package:conest/src/bitchat_carrier.dart';
 import 'package:conest/src/bitchat_chats.dart';
 import 'package:conest/src/build_info.dart';
+import 'package:conest/src/crash_catcher.dart';
+import 'package:conest/src/problem_report.dart';
+import 'package:conest/src/problem_report_sources.dart';
 import 'package:conest/src/carrier.dart';
 import 'package:conest/src/crypto_service.dart';
 import 'package:conest/src/feature_models.dart';
@@ -28024,6 +28027,94 @@ void main() {
     );
     await tester.pump();
     expect(find.text('Nothing recorded.'), findsOneWidget);
+  });
+
+  testWidgets('the problem report built from a controller holds no message '
+      'text, names, addresses or keys', (tester) async {
+    final relay = _FakeRelayClient();
+    final (alice, bob) = (await tester.runAsync(() async {
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        keepErrorHistory: true,
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob Zebrowski',
+      );
+      await _pairControllers(alice, bob);
+      return (alice, bob);
+    }))!;
+    addTearDown(alice.dispose);
+    addTearDown(bob.dispose);
+    relay.shouldFailStore = (_, _, _, _, _) => true;
+    await tester.runAsync(
+      () => alice
+          .sendMessage(
+            contact: alice.contacts.single,
+            body: 'ZXQ-private-message-7391',
+          )
+          .catchError((Object _) {}),
+    );
+    // An error that carries the source of what it could not parse, and one
+    // that carries an address.
+    alice.recordError(
+      'receive',
+      'Dropped message: '
+          '${const FormatException('Unexpected character', '{"text":"ZXQ-source-text-4417"}', 3)}',
+    );
+    alice.recordError(
+      'carrier',
+      'Route failed: ${const SocketException('Connection refused', address: null)} '
+          'to 203.0.113.77:4433',
+    );
+    final crashes = CrashCatcher(now: () => DateTime.utc(2026, 11, 3));
+    crashes.record(
+      'zone',
+      'Bad state while sending to Bob Zebrowski',
+      StackTrace.fromString('#0 main (package:conest/main.dart:1)'),
+      context: 'file /home/anna/Documents/ZXQ-private-message-7391.txt',
+    );
+    final inputs = collectProblemReportInputs(
+      buildInfo: ConestBuildInfo(
+        appName: 'Conest',
+        packageName: 'dev.conest.conest',
+        version: '0.4.3',
+        buildNumber: '306201',
+        channel: UpdateChannel.canary,
+        isDebugBuild: false,
+        buildTag: 'v0.4.3-canary.20261103.1',
+      ),
+      updateChannel: 'canary',
+      crashes: crashes,
+      controller: alice,
+      now: DateTime.utc(2026, 11, 3),
+    );
+    final report = await tester.runAsync(
+      () => buildProblemReportOffMain(inputs),
+    );
+    final me = alice.identity!;
+    final peer = alice.contacts.single;
+    for (final secret in [
+      'ZXQ-private-message-7391',
+      'ZXQ-source-text-4417',
+      'Zebrowski',
+      'anna',
+      '203.0.113.77',
+      me.privateKeyBase64,
+      me.accountId,
+      me.deviceId,
+      peer.deviceId,
+      peer.accountId,
+    ]) {
+      expect(report, isNot(contains(secret)), reason: secret);
+    }
+    // And it is still a useful report.
+    expect(report, contains('Channel: canary'));
+    expect(report, contains('found no route'));
+    expect(report, contains('Dropped message: FormatException'));
+    expect(report, contains('Bad state while sending to [name]'));
+    expect(report, contains('localRelay: '));
   });
 
   test(

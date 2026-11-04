@@ -6352,4 +6352,62 @@ class AppLocalizationsZh extends AppLocalizations {
   String airtimeBudgetUsed(int percent) {
     return '最近一分钟已用空中时间：$percent%';
   }
+
+  @override
+  String get updateChannelTitle => '更新渠道';
+
+  @override
+  String get updateChannelStable => '稳定版';
+
+  @override
+  String get updateChannelStableHelp => '通过全部测试的版本。最稳妥的选择。';
+
+  @override
+  String get updateChannelNightly => '每夜版';
+
+  @override
+  String get updateChannelNightlyHelp => '更新的功能，已在我们的实验室测试，但不够成熟。同时接收稳定版。';
+
+  @override
+  String get updateChannelCanary => '金丝雀版';
+
+  @override
+  String get updateChannelCanaryHelp =>
+      '每个新功能和修复在构建后立即提供，几乎未经测试，可能出问题。同时接收每夜版和稳定版。';
+
+  @override
+  String get canaryBanner => '金丝雀版：新功能，可能出问题';
+
+  @override
+  String get canaryConfirmTitle => '切换到金丝雀版？';
+
+  @override
+  String get canaryConfirmBody =>
+      '金丝雀版最先发布，可能出问题。之后切回每夜版或稳定版时，会等待比当前版本更新的发布；Conest 不会回退到旧版本。';
+
+  @override
+  String get updateChannelWaiting =>
+      '此版本比你选择的渠道更新。在该渠道发布比当前版本更新的版本之前，Conest 会保持在当前版本。';
+
+  @override
+  String get releaseCanary => '金丝雀';
+
+  @override
+  String get reportProblemTitle => '报告问题';
+
+  @override
+  String get reportProblemSubtitle =>
+      '生成包含版本、错误和崩溃记录的文件，发给开发者。Conest 不会自动发送任何内容。';
+
+  @override
+  String get reportProblemNote => '分享前请先阅读。其中不含消息和密钥，名称已被替换，但错误行仍可能提到未能识别的内容。';
+
+  @override
+  String get reportProblemBuilding => '正在准备报告…';
+
+  @override
+  String get reportProblemCopied => '已复制报告。';
+
+  @override
+  String get reportProblemSaveTitle => '保存报告';
 }

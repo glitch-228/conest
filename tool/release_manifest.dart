@@ -4,15 +4,18 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart';
 
-const _manifestName = 'RELEASE-MANIFEST.json';
-const _signatureName = 'RELEASE-MANIFEST.ed25519.sig';
+import 'release_channel_lib.dart';
+
 const _checksumName = 'SHA256SUMS.txt';
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty || args.contains('--help') || args.contains('-h')) {
     stderr.writeln(
       'usage: dart run tool/release_manifest.dart [--dist <dir>] '
+      '--channel <stable|nightly|canary> [--android-version-code <n>] '
       '[--release-notes <path>] <tag> [asset ...]\n'
+      '\n'
+      '--channel must equal what tool/release_channel.sh says for the tag.\n'
       '\n'
       'Set CONEST_RELEASE_MANIFEST_PRIVATE_KEY to a base64 Ed25519 seed.\n'
       'If no assets are listed, every file in the dist dir except release metadata is included.\n'
@@ -23,6 +26,8 @@ Future<void> main(List<String> args) async {
   }
 
   var distPath = 'dist';
+  String? channelArg;
+  int? androidVersionCode;
   String? releaseNotesPath;
   final positional = <String>[];
   for (var index = 0; index < args.length; index++) {
@@ -36,6 +41,20 @@ Future<void> main(List<String> args) async {
       distPath = args[index];
     } else if (arg.startsWith('--dist=')) {
       distPath = arg.substring('--dist='.length);
+    } else if (arg == '--channel') {
+      index++;
+      channelArg = index < args.length ? args[index] : null;
+    } else if (arg.startsWith('--channel=')) {
+      channelArg = arg.substring('--channel='.length);
+    } else if (arg == '--android-version-code') {
+      index++;
+      androidVersionCode = index < args.length
+          ? int.tryParse(args[index])
+          : null;
+      if (androidVersionCode == null || androidVersionCode <= 0) {
+        stderr.writeln('--android-version-code requires a positive number.');
+        exit(2);
+      }
     } else if (arg == '--release-notes') {
       index++;
       if (index >= args.length) {
@@ -55,19 +74,33 @@ Future<void> main(List<String> args) async {
   }
 
   final tagName = positional.first;
-  final normalizedTag = tagName.toLowerCase();
-  final channel =
-      normalizedTag.contains('nightly') ||
-          normalizedTag.contains('beta') ||
-          normalizedTag.contains('alpha') ||
-          normalizedTag.contains('dev') ||
-          normalizedTag.contains('rc')
-      ? 'nightly'
-      : 'stable';
+  if (channelArg == null) {
+    stderr.writeln('--channel is required.');
+    exit(2);
+  }
+  // The signed channel is the tag's own, by the one rule the workflow uses.
+  await requireChannelOfTag(channelArg, tagName);
+  final channel = channelArg;
+  final names = manifestNamesFor(channel);
+  final manifestName = names.manifest;
+  final signatureName = names.signature;
   final distDir = Directory(distPath);
   if (!await distDir.exists()) {
     stderr.writeln('${distDir.path} does not exist.');
     exit(2);
+  }
+  // A canary release never carries the standard pair, nor the others the
+  // canary pair.
+  final otherNames = manifestNamesFor(
+    channel == 'canary' ? 'stable' : 'canary',
+  );
+  for (final other in [otherNames.manifest, otherNames.signature]) {
+    if (await File('${distDir.path}/$other').exists()) {
+      stderr.writeln(
+        '${distDir.path}/$other does not belong in a $channel release.',
+      );
+      exit(2);
+    }
   }
   final privateSeedText =
       Platform.environment['CONEST_RELEASE_MANIFEST_PRIVATE_KEY']?.trim() ?? '';
@@ -127,6 +160,7 @@ Future<void> main(List<String> args) async {
     'minimumSupervisorVersion':
         Platform.environment['CONEST_MINIMUM_SUPERVISOR_VERSION']?.trim() ??
         '0.1.0',
+    'androidVersionCode': ?androidVersionCode,
     'releaseNotes': ?releaseNotesText,
     'assets': [
       for (final file in assetFiles)
@@ -147,15 +181,15 @@ Future<void> main(List<String> args) async {
   final publicKey = await keyPair.extractPublicKey();
 
   await File(
-    '${distDir.path}/$_manifestName',
+    '${distDir.path}/$manifestName',
   ).writeAsBytes(manifestBytes, flush: true);
   await File(
-    '${distDir.path}/$_signatureName',
+    '${distDir.path}/$signatureName',
   ).writeAsString('${base64Encode(signature.bytes)}\n', flush: true);
   await _writeSha256Sums(distDir);
 
-  stdout.writeln('Wrote ${distDir.path}/$_manifestName');
-  stdout.writeln('Wrote ${distDir.path}/$_signatureName');
+  stdout.writeln('Wrote ${distDir.path}/$manifestName');
+  stdout.writeln('Wrote ${distDir.path}/$signatureName');
   stdout.writeln('Wrote ${distDir.path}/$_checksumName');
   stdout.writeln(
     'CONEST_RELEASE_MANIFEST_PUBLIC_KEY=${base64Encode(publicKey.bytes)}',
@@ -188,9 +222,7 @@ Map<String, String> _assetTarget(String name) {
 }
 
 bool _isReleaseMetadata(String name) {
-  return name == _manifestName ||
-      name == _signatureName ||
-      name == _checksumName;
+  return allManifestNames().contains(name) || name == _checksumName;
 }
 
 Future<void> _writeSha256Sums(Directory distDir) async {

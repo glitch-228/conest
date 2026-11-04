@@ -9771,5 +9771,77 @@
         "type": "int"
       }
     }
+  },
+  "updateChannelTitle": "Update channel",
+  "@updateChannelTitle": {
+    "description": "Settings \u2192 Updates: heading of the choice between stable, nightly and canary"
+  },
+  "updateChannelStable": "Stable",
+  "@updateChannelStable": {
+    "description": "Update channel name: stable releases"
+  },
+  "updateChannelStableHelp": "Releases that passed the full tests. The safest choice.",
+  "@updateChannelStableHelp": {
+    "description": "One line under the Stable choice"
+  },
+  "updateChannelNightly": "Nightly",
+  "@updateChannelNightly": {
+    "description": "Update channel name: nightly releases"
+  },
+  "updateChannelNightlyHelp": "Newer features, tested in our lab but less settled. Also takes stable releases.",
+  "@updateChannelNightlyHelp": {
+    "description": "One line under the Nightly choice"
+  },
+  "updateChannelCanary": "Canary",
+  "@updateChannelCanary": {
+    "description": "Update channel name: canary releases (a build for every new feature or fix)"
+  },
+  "updateChannelCanaryHelp": "Every new feature and fix as soon as it is built, with little testing. May break. Also takes nightly and stable releases.",
+  "@updateChannelCanaryHelp": {
+    "description": "One line under the Canary choice"
+  },
+  "canaryBanner": "Canary: new features, may break",
+  "@canaryBanner": {
+    "description": "Banner in Settings \u2192 Updates on a canary build"
+  },
+  "canaryConfirmTitle": "Switch to canary?",
+  "@canaryConfirmTitle": {
+    "description": "Title of the confirmation before switching to canary updates"
+  },
+  "canaryConfirmBody": "Canary builds come first and may break. Going back to Nightly or Stable later waits for a release newer than the build you have; Conest does not go back to an older build.",
+  "@canaryConfirmBody": {
+    "description": "Confirmation before switching to canary: it may break and Conest never goes back to an older build"
+  },
+  "updateChannelWaiting": "This build is newer than the line you chose. Conest stays on it until a release newer than this build is published there.",
+  "@updateChannelWaiting": {
+    "description": "Shown when the installed build is newer than the chosen update channel: no downgrade, wait for a newer release"
+  },
+  "releaseCanary": "canary",
+  "@releaseCanary": {
+    "description": "Update prompt: the release is a canary build (lower case, in a sentence)"
+  },
+  "reportProblemTitle": "Report a problem",
+  "@reportProblemTitle": {
+    "description": "Settings and crash notice: make a file with the details of a problem to send to the developers"
+  },
+  "reportProblemSubtitle": "Make a file with the version, errors and crash records to send to the developers. Conest sends nothing.",
+  "@reportProblemSubtitle": {
+    "description": "Subtitle of Report a problem in Settings"
+  },
+  "reportProblemNote": "Read it before you share it. It holds no messages and no keys, and names are replaced, but an error line may still mention something that was not recognised.",
+  "@reportProblemNote": {
+    "description": "Note above the problem report preview: read before sharing"
+  },
+  "reportProblemBuilding": "Preparing the report…",
+  "@reportProblemBuilding": {
+    "description": "Shown while the problem report is built"
+  },
+  "reportProblemCopied": "Copied the report.",
+  "@reportProblemCopied": {
+    "description": "Snackbar after copying the problem report"
+  },
+  "reportProblemSaveTitle": "Save the report",
+  "@reportProblemSaveTitle": {
+    "description": "File picker title when saving the problem report"
   }
 }

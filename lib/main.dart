@@ -68,6 +68,8 @@ import 'src/ui/read_sweep.dart';
 import 'src/ui/forwarding.dart';
 import 'src/relay_link.dart';
 import 'src/ui/crash_notice.dart';
+import 'src/ui/report_problem.dart';
+import 'src/ui/update_channel_picker.dart';
 import 'src/activity_counters.dart';
 import 'src/crash_catcher.dart';
 import 'src/native_crash_reports.dart';
@@ -124,6 +126,7 @@ import 'src/ui/xmpp_carrier_panel.dart';
 import 'src/ui/xmpp_chats_screen.dart';
 import 'src/ui/client_only_home.dart';
 import 'src/update_service.dart';
+import 'src/release_order.dart';
 import 'src/ui/linked_text.dart';
 
 export 'src/conest_theme.dart'
@@ -1228,6 +1231,12 @@ class _ConestAppState extends State<ConestApp> with WidgetsBindingObserver {
           messenger: messenger,
           crashes: CrashCatcher.instance,
           dialogContext: () => _navigatorKey.currentContext,
+          onReport: (context) => ReportProblemScreen.show(
+            context,
+            buildInfo: widget.buildInfo,
+            updateChannel: widget.updateService.updateChannel.label,
+            controller: widget.controller,
+          ),
         );
       }
     });
@@ -1618,10 +1627,11 @@ class UpdatePromptDialog extends StatelessWidget {
                 Text(
                   l10nOf(context).uiValueIsAvailableOnTheD338C4(
                     (available.release.tagName).toString(),
-                    (available.release.prerelease
-                            ? l10nOf(context).releaseNightly
-                            : l10nOf(context).releaseStable)
-                        .toString(),
+                    (switch (available.line) {
+                      ReleaseLine.canary => l10nOf(context).releaseCanary,
+                      ReleaseLine.nightly => l10nOf(context).releaseNightly,
+                      _ => l10nOf(context).releaseStable,
+                    }).toString(),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -16631,6 +16641,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                CanaryBanner(buildInfo: buildInfo),
                                 Text(
                                   l10nOf(context).uiCurrentBuildValueValue9A675D((buildInfo.displayVersion).toString(), (buildInfo.channelLabel).toString()),
                                   style: Theme.of(context).textTheme.bodyLarge
@@ -16663,29 +16674,27 @@ class _SettingsDialogState extends State<SettingsDialog> {
                                       widget.controller,
                                     ),
                                   ),
+                                ListTile(
+                                  key: const ValueKey('report-problem'),
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.flag_outlined),
+                                  title: Text(
+                                    l10nOf(context).reportProblemTitle,
+                                  ),
+                                  subtitle: Text(
+                                    l10nOf(context).reportProblemSubtitle,
+                                  ),
+                                  onTap: () => ReportProblemScreen.show(
+                                    context,
+                                    buildInfo: buildInfo,
+                                    updateChannel:
+                                        updateService.updateChannel.label,
+                                    controller: widget.controller,
+                                  ),
+                                ),
                                 if (updateService.supportsUpdates)
-                                  SwitchListTile.adaptive(
-                                    key: const ValueKey(
-                                      'receive-unstable-updates',
-                                    ),
-                                    contentPadding: EdgeInsets.zero,
-                                    value: updateService.receiveUnstableUpdates,
-                                    onChanged:
-                                        updateService.isChecking ||
-                                            updateService.isDownloading
-                                        ? null
-                                        : (value) => unawaited(
-                                            updateService
-                                                .setReceiveUnstableUpdates(
-                                                  value,
-                                                ),
-                                          ),
-                                    title:  Text(
-                                      l10nOf(context).uiReceiveUnstableUpdatesBF7122,
-                                    ),
-                                    subtitle:  Text(
-                                      l10nOf(context).uiAlsoOfferNightlyBuildsNewerA7FAB0,
-                                    ),
+                                  UpdateChannelPicker(
+                                    updateService: updateService,
                                   ),
                                 if (available != null) ...[
                                   const SizedBox(height: 10),

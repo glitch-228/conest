@@ -4,14 +4,13 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart';
 
-const _manifestName = 'RELEASE-MANIFEST.json';
-const _signatureName = 'RELEASE-MANIFEST.ed25519.sig';
+import 'release_channel_lib.dart';
 
 Future<void> main(List<String> args) async {
   if (args.contains('--help') || args.contains('-h')) {
     stderr.writeln(
-      'usage: dart run tool/verify_release_manifest.dart [--dist <dir>] '
-      '[--public-key <base64>]\n'
+      'usage: dart run tool/verify_release_manifest.dart --channel <stable|nightly|canary> '
+      '[--dist <dir>] [--public-key <base64>]\n'
       '\n'
       'If --public-key is omitted, CONEST_RELEASE_MANIFEST_PUBLIC_KEY is used.\n'
       'Verifies the manifest signature and that every listed asset matches the '
@@ -21,6 +20,7 @@ Future<void> main(List<String> args) async {
   }
 
   var distPath = 'dist';
+  String? channelArg;
   String? publicKeyText;
   for (var index = 0; index < args.length; index++) {
     final arg = args[index];
@@ -33,6 +33,11 @@ Future<void> main(List<String> args) async {
       distPath = args[index];
     } else if (arg.startsWith('--dist=')) {
       distPath = arg.substring('--dist='.length);
+    } else if (arg == '--channel') {
+      index++;
+      channelArg = index < args.length ? args[index] : null;
+    } else if (arg.startsWith('--channel=')) {
+      channelArg = arg.substring('--channel='.length);
     } else if (arg == '--public-key') {
       index++;
       if (index >= args.length) {
@@ -58,15 +63,29 @@ Future<void> main(List<String> args) async {
     exit(2);
   }
 
+  if (channelArg == null || !releaseChannels.contains(channelArg)) {
+    stderr.writeln('--channel stable, nightly or canary is required.');
+    exit(2);
+  }
   final distDir = Directory(distPath);
-  final manifestFile = File('${distDir.path}/$_manifestName');
-  final signatureFile = File('${distDir.path}/$_signatureName');
+  final names = manifestNamesFor(channelArg);
+  final others = manifestNamesFor(channelArg == 'canary' ? 'stable' : 'canary');
+  for (final other in [others.manifest, others.signature]) {
+    if (await File('${distDir.path}/$other').exists()) {
+      stderr.writeln(
+        '${distDir.path}/$other does not belong in a $channelArg release.',
+      );
+      exit(1);
+    }
+  }
+  final manifestFile = File('${distDir.path}/${names.manifest}');
+  final signatureFile = File('${distDir.path}/${names.signature}');
   if (!await manifestFile.exists()) {
-    stderr.writeln('Missing $_manifestName in ${distDir.path}.');
+    stderr.writeln('Missing ${names.manifest} in ${distDir.path}.');
     exit(2);
   }
   if (!await signatureFile.exists()) {
-    stderr.writeln('Missing $_signatureName in ${distDir.path}.');
+    stderr.writeln('Missing ${names.signature} in ${distDir.path}.');
     exit(2);
   }
 
@@ -93,6 +112,19 @@ Future<void> main(List<String> args) async {
   final decoded = jsonDecode(utf8.decode(manifestBytes));
   if (decoded is! Map<String, dynamic>) {
     stderr.writeln('Manifest is not a JSON object.');
+    exit(1);
+  }
+  // The signed channel and tag agree with the channel being released.
+  final signedTag = decoded['tagName'];
+  if (signedTag is! String) {
+    stderr.writeln('Manifest has no tagName.');
+    exit(1);
+  }
+  await requireChannelOfTag(channelArg, signedTag);
+  if (decoded['channel'] != channelArg) {
+    stderr.writeln(
+      'Manifest channel ${decoded['channel']} is not $channelArg.',
+    );
     exit(1);
   }
   final assets = decoded['assets'];
