@@ -201,6 +201,35 @@ void main() {
     expect(perEvent.values.where((n) => n > 2), hasLength(1));
   });
 
+  test('relays out of reach do not hold a send for their timeout: the rest of '
+      'the list is tried within moments', () async {
+    final silent1 = relays.relay('wss://s1.test')..silent = true;
+    final silent2 = relays.relay('wss://s2.test')..silent = true;
+    relays.relay('wss://ok1.test');
+    relays.relay('wss://ok2.test');
+    final urls = [
+      'wss://s1.test',
+      'wss://s2.test',
+      'wss://ok1.test',
+      'wss://ok2.test',
+    ];
+    final bobGot = <(String, Uint8List)>[];
+    final bob = channel(urls, bobGot)..start();
+    final alice = channel(['wss://ok1.test'], [])..start();
+    final address = bob.localAddress!;
+    // Heard from: two relays per event, the silent ones listed first.
+    alice.noteDelivered(address);
+    final watch = Stopwatch()..start();
+    await alice.sendFrame(address, Uint8List.fromList([1, ...frame]));
+    expect(
+      watch.elapsed,
+      lessThan(const Duration(seconds: 6)),
+      reason: 'waited out the silent relays',
+    );
+    await until(() => bobGot.isNotEmpty);
+    expect(silent1.stored.length + silent2.stored.length, 0);
+  }, timeout: const Timeout(Duration(minutes: 1)));
+
   test('a receipt credits the relays of the message it names, not of the '
       'last one sent', () async {
     for (var i = 0; i < 3; i++) {

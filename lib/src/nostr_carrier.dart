@@ -384,17 +384,24 @@ class NostrCarrierChannel
     }
 
     final all = Future.wait(chosen.map(publishTo));
-    await Future.any([firstStored.future, all]);
+    // Not stored within a moment (the chosen relays are slow or out of
+    // reach from here): the rest of the list is tried at the same time,
+    // not after the chosen ones have run out their timeouts.
+    final hedge = Completer<void>();
+    final hedgeTimer = Timer(_hedgeAfter, hedge.complete);
+    await Future.any([firstStored.future, all, hedge.future]);
+    hedgeTimer.cancel();
     if (stored == 0) {
-      await all;
-    }
-    // None took it: the next relays of the list, one at a time.
-    for (final url in to.relays) {
-      if (stored > 0) break;
-      if (used.contains(url) || _relayFor(url).restRemaining > Duration.zero) {
-        continue;
-      }
-      await publishTo(url);
+      final others = <Future<void>>[
+        for (final url in to.relays)
+          if (!used.contains(url) &&
+              _relayFor(url).restRemaining <= Duration.zero)
+            publishTo(url),
+      ];
+      await Future.any([
+        firstStored.future,
+        Future.wait([all, ...others]),
+      ]);
     }
     if (stored == 0) {
       final rateLimited = errors.whereType<NostrRelayException>().any(
@@ -437,6 +444,10 @@ class NostrCarrierChannel
   /// Relays each send went through (by send id, or by address when the
   /// caller names none), and whether it was one relay alone.
   final Map<String, ({Set<String> relays, bool solo})> _sends = {};
+
+  /// How long the chosen relays have to store an event before the others of
+  /// the list are tried too.
+  static const Duration _hedgeAfter = Duration(seconds: 2);
 
   /// Relays the last event to a recipient went through.
   final Map<String, List<String>> _lastRelays = {};
@@ -499,7 +510,9 @@ class NostrCarrierChannel
     final lastRelays = _lastRelays[address] ?? const <String>[];
     double rank(Uri url) {
       final score = _scores[url.toString()] ?? (sent: 0, delivered: 0);
-      final base = (score.delivered + 1) / (score.sent + 2);
+      var base = (score.delivered + 1) / (score.sent + 2);
+      // One that is not connected now (out of reach from here) goes last.
+      if (_relayFor(url).state != NostrRelayState.connected) base *= 0.25;
       return lastRelays.contains(url.toString()) ? base * 0.5 : base;
     }
 
