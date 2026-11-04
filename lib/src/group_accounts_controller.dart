@@ -223,7 +223,7 @@ extension GroupAccountsController on MessengerController {
     if (raw is! List || raw.length > _maxListsPerMessage) return const [];
     return [
       for (final entry in raw)
-        if (AccountDeviceList.fromJson(entry) case final list?) list,
+        ?AccountDeviceList.fromJson(entry),
     ];
   }
 

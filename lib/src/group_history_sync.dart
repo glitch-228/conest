@@ -199,7 +199,7 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
     }
     return [
       for (final digest in digests.toSet())
-        if (_membership.lists.get(digest) case final list?) list,
+        ?_membership.lists.get(digest),
     ];
   }
 

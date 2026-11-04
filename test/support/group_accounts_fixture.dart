@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:conest/src/account/account_model.dart';
-import 'package:conest/src/feature_models.dart';
 import 'package:conest/src/group_account_member.dart';
 import 'package:conest/src/group_accounts.dart';
 import 'package:conest/src/group_history_event.dart';
