@@ -461,6 +461,11 @@ class GroupHistoryCoordinator {
     return proof;
   });
 
+  /// Whether the history of [id] lacks device lists its records pin (a
+  /// restart after a crash): a catch-up must fetch them before anything is
+  /// signed.
+  Future<bool> isBehind(String id) async => (await _replica(id)).behind;
+
   /// The current signed membership record of [id], if any.
   Future<GroupMembershipRecord?> currentMembership(String id) =>
       _write(id, () async => (await _replica(id)).membership.current);

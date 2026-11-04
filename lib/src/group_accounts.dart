@@ -432,8 +432,34 @@ class DeviceListView {
 
   /// The certificate of [deviceId] in any verified list seen (also a revoked
   /// device's, so its old events can still be checked up to its cutoff).
-  DeviceCert? certFor(String accountId, String deviceId) =>
-      _accounts[accountId]?.certs[deviceId];
+  DeviceCert? certFor(
+    String accountId,
+    String deviceId, {
+    String? accountKey,
+  }) {
+    final state = _accounts[accountId];
+    if (state == null || (accountKey != null && state.key != accountKey)) {
+      return null;
+    }
+    return state.certs[deviceId];
+  }
+
+  /// Whether a list checked against [entry]'s key has been seen.
+  bool knows(GroupAccountMember entry) {
+    final state = _accounts[entry.accountId];
+    return state != null &&
+        state.key == entry.accountKeyBase64 &&
+        state.current != null;
+  }
+
+  /// The facts about the account [entry] admits: none when the lists seen
+  /// were checked against another key than the signed record holds.
+  AccountFacts factsFor(GroupAccountMember entry) {
+    final state = _accounts[entry.accountId];
+    return state == null || state.key != entry.accountKeyBase64
+        ? AccountFacts.empty
+        : state.facts;
+  }
 
   AccountDeviceList? current(String accountId) => _accounts[accountId]?.current;
   AccountFacts facts(String accountId) =>
@@ -450,7 +476,11 @@ class DeviceListView {
   }) {
     final state = _accounts[entry.accountId];
     final list = state?.current;
-    if (list == null || state!.facts.compromised) return const [];
+    if (list == null ||
+        state!.key != entry.accountKeyBase64 ||
+        state.facts.compromised) {
+      return const [];
+    }
     return [
       for (final cert in list.devices)
         if (cert.accountId == entry.accountId &&
@@ -466,7 +496,11 @@ class DeviceListView {
   List<DeviceCert> pendingCerts(GroupAccountMember entry) {
     final state = _accounts[entry.accountId];
     final list = state?.current;
-    if (list == null || state!.facts.compromised) return const [];
+    if (list == null ||
+        state!.key != entry.accountKeyBase64 ||
+        state.facts.compromised) {
+      return const [];
+    }
     return [
       for (final cert in list.devices)
         if (!state.facts.revoked.contains(cert.deviceId) &&
@@ -648,11 +682,17 @@ GroupResolution resolveGroup(
   final unverified = <String>[];
   final pending = <String>[];
   final compromised = <String>[];
-  final claimed = <String, String>{};
+  // A device id belongs to the member whose signed projection names it;
+  // else to the first account (the record's order is the order of admission)
+  // whose list holds it. A later claimant is ignored, never the rightful one.
+  final claimed = <String, String>{
+    for (final profile in signed.memberProfiles)
+      profile.deviceId: profile.accountId,
+  };
   for (final entry in signed.memberAccounts) {
     // Nothing known about this account yet: the signed projection stands.
-    if (view.current(entry.accountId) == null) continue;
-    final isCompromised = view.compromised(entry.accountId);
+    if (!view.knows(entry)) continue;
+    final isCompromised = view.factsFor(entry).compromised;
     if (isCompromised) compromised.add(entry.accountId);
     final effective = view.effectiveCerts(
       entry,
@@ -668,12 +708,7 @@ GroupResolution resolveGroup(
     }
     for (final cert in effective) {
       final owner = claimed[cert.deviceId];
-      if (owner != null && owner != entry.accountId) {
-        // Two accounts claim one device id: effective for neither.
-        suppressed.add(cert.deviceId);
-        siblings.removeWhere((profile) => profile.deviceId == cert.deviceId);
-        continue;
-      }
+      if (owner != null && owner != entry.accountId) continue;
       claimed[cert.deviceId] = entry.accountId;
       if (projected.contains(cert.deviceId)) continue;
       if (conflictsWithKnownIdentity?.call(cert.deviceId, cert) ?? false) {

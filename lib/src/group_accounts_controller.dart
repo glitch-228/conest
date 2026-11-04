@@ -941,6 +941,15 @@ extension GroupAccountsController on MessengerController {
         group.isDissolved) {
       return;
     }
+    // Behind (device lists lost in a crash): catch up first, sign later.
+    if (await _groupHistory.isBehind(groupId)) {
+      final peer = group.activeMemberDeviceIds.firstWhere(
+        (id) => id != me.deviceId,
+        orElse: () => '',
+      );
+      if (peer.isNotEmpty) _scheduleGroupHistorySync(groupId, peer);
+      return;
+    }
     final signed = group.signedView;
     final view = _viewOf(groupId);
     final now = _now().toUtc();

@@ -464,8 +464,8 @@ class GroupMembershipHistory {
       } else if (!identical(accounts, theirs.accounts)) {
         final merged = Map<String, AccountFacts>.of(accounts);
         for (final entry in theirs.accounts.entries) {
-          merged[entry.key] = merged[entry.key]?.merge(entry.value) ??
-              entry.value;
+          merged[entry.key] =
+              merged[entry.key]?.merge(entry.value) ?? entry.value;
         }
         accounts = merged;
       }
@@ -484,9 +484,10 @@ class GroupMembershipHistory {
       final merged = Map<String, AccountFacts>.of(accounts);
       for (final entry in group.memberAccounts) {
         final list = lists.get(entry.listDigest)!;
-        merged[entry.accountKeyBase64] = (merged[entry.accountKeyBase64] ??
-                AccountFacts.empty)
-            .withList(list);
+        merged[entry.accountKeyBase64] =
+            (merged[entry.accountKeyBase64] ?? AccountFacts.empty).withList(
+              list,
+            );
       }
       accounts = merged;
     }
@@ -780,8 +781,7 @@ class GroupMembershipHistory {
       return;
     }
     final limited = !ownerAction && !exempt;
-    if (next.confirmNewDevices != prev.confirmNewDevices &&
-        !ownerAction) {
+    if (next.confirmNewDevices != prev.confirmNewDevices && !ownerAction) {
       throw const FormatException('Only the owner changes device approval.');
     }
     if (next.memberAccounts.isNotEmpty) {
@@ -848,8 +848,7 @@ class GroupMembershipHistory {
             for (final (parent, theirs) in holders)
               parent.accountAdmission(theirs),
           };
-          if (admissions.length != 1 ||
-              entry.admission != admissions.single) {
+          if (admissions.length != 1 || entry.admission != admissions.single) {
             throw const FormatException(
               'An admission boundary cannot change for an existing account.',
             );
@@ -954,7 +953,9 @@ class GroupMembershipHistory {
       }
       if (entry.role == GroupAccountRole.owner &&
           !projected.any((p) => p.deviceId == next.ownerDeviceId)) {
-        throw const FormatException('The owner account must project its owner.');
+        throw const FormatException(
+          'The owner account must project its owner.',
+        );
       }
       if (entry.role != GroupAccountRole.owner &&
           projected.any((p) => p.deviceId == next.ownerDeviceId)) {
@@ -990,9 +991,10 @@ class GroupMembershipHistory {
       final profile = next.memberProfileFor(device)!;
       if (byId.containsKey(profile.accountId)) continue;
       for (final entry in next.memberAccounts) {
-        if (lists.get(entry.listDigest)!.devices.any(
-          (cert) => cert.deviceId == device,
-        )) {
+        if (lists
+            .get(entry.listDigest)!
+            .devices
+            .any((cert) => cert.deviceId == device)) {
           throw const FormatException(
             'A device-only member appears in an account list.',
           );
@@ -1224,9 +1226,7 @@ class GroupMembershipHistory {
     if (facts == null || facts.accounts.isEmpty) return false;
     for (final entry in groupOf(head).memberAccounts) {
       if (entry.accountId == accountId &&
-          (facts.accounts[entry.accountKeyBase64]?.revoked.contains(
-                deviceId,
-              ) ??
+          (facts.accounts[entry.accountKeyBase64]?.revoked.contains(deviceId) ??
               false)) {
         return true;
       }
@@ -1242,7 +1242,9 @@ class GroupMembershipHistory {
     GroupHistoryCheckpoint cutoff,
   ) async {
     if (event.sequence > cutoff.sequence) return false;
-    if (event.sequence == cutoff.sequence) return event.eventId == cutoff.eventId;
+    if (event.sequence == cutoff.sequence) {
+      return event.eventId == cutoff.eventId;
+    }
     final oracle = chainAdmits;
     return oracle != null && await oracle(event, cutoff);
   }
@@ -1285,12 +1287,14 @@ class GroupMembershipHistory {
   }
 
   /// A device acting for a member account without being in the signed
-  /// projection: effective in the account's newest list. Message events
-  /// only; the signed projection never depends on this.
+  /// projection: effective in the newest list of the first account that
+  /// holds it (a later claimant of the same device id is ignored). Message
+  /// events only; the signed projection never depends on this.
   GroupMemberProfile? _siblingProfile(GroupRecord group, String deviceId) {
     final lists = view;
     if (lists == null ||
         group.memberAccounts.isEmpty ||
+        group.memberDeviceIds.contains(deviceId) ||
         group.removedDeviceIds.contains(deviceId)) {
       return null;
     }
@@ -1305,21 +1309,23 @@ class GroupMembershipHistory {
     return null;
   }
 
-  /// The account of [group] that lists [deviceId] as its device, if the view
-  /// knows the certificate (also for a revoked device).
-  (GroupAccountMember, DeviceCert)? _accountCert(
+  /// Whether an account listed before [entry] holds [deviceId] effectively.
+  bool _claimedByEarlier(
     GroupRecord group,
-    String accountId,
+    GroupAccountMember entry,
     String deviceId,
   ) {
     final lists = view;
-    if (lists == null) return null;
-    for (final entry in group.memberAccounts) {
-      if (entry.accountId != accountId) continue;
-      final cert = lists.certFor(accountId, deviceId);
-      if (cert != null) return (entry, cert);
+    if (lists == null) return false;
+    for (final earlier in group.memberAccounts) {
+      if (earlier.accountId == entry.accountId) return false;
+      if (lists
+          .effectiveCerts(earlier, confirmNewDevices: group.confirmNewDevices)
+          .any((cert) => cert.deviceId == deviceId)) {
+        return true;
+      }
     }
-    return null;
+    return false;
   }
 
   /// Whether the view says [deviceId] no longer counts for its account
@@ -1329,9 +1335,20 @@ class GroupMembershipHistory {
     if (lists == null) return false;
     for (final entry in group.memberAccounts) {
       if (entry.accountId != accountId) continue;
-      return lists.compromised(accountId) ||
-          lists.revoked(accountId).contains(deviceId) ||
+      final facts = lists.factsFor(entry);
+      return facts.compromised ||
+          facts.revoked.contains(deviceId) ||
           entry.excludedDeviceIds.contains(deviceId);
+    }
+    return false;
+  }
+
+  /// Whether a signed record in the ancestry of the head took [deviceId] out
+  /// of the projection: its checkpoint (or the want of one) decides what of
+  /// its events still counts, in [_isBeforeRemovalFences].
+  bool _departedInDag(GroupMembershipRecord head, String deviceId) {
+    for (final recordId in _ancestors(head.id)) {
+      if (_departures(recordId).containsKey(deviceId)) return true;
     }
     return false;
   }
@@ -1355,24 +1372,39 @@ class GroupMembershipHistory {
         .firstOrNull;
     if (entry == null) return projected;
     final lists = view;
-    if (lists != null && lists.compromised(accountId)) return null;
+    if (lists != null && lists.factsFor(entry).compromised) return null;
     final suspended = _suspended(group, accountId, deviceId);
     var profile = projected;
     if (profile == null) {
-      final known = _accountCert(group, accountId, deviceId);
-      if (known == null || group.removedDeviceIds.contains(deviceId)) {
+      if (group.memberDeviceIds.contains(deviceId) ||
+          group.removedDeviceIds.contains(deviceId) ||
+          lists == null ||
+          _claimedByEarlier(group, entry, deviceId)) {
         return null;
       }
-      // A device nobody approved (confirm mode) never wrote anything.
-      if (group.confirmNewDevices &&
-          !entry.approvedDeviceIds.contains(deviceId)) {
-        return null;
-      }
-      profile = profileFromCert(known.$2);
+      // A sibling counts through the account's *effective* devices; a
+      // revoked one only through the certificate it had, up to its cutoff.
+      final cert = suspended
+          ? lists.certFor(
+              accountId,
+              deviceId,
+              accountKey: entry.accountKeyBase64,
+            )
+          : lists
+                .effectiveCerts(
+                  entry,
+                  confirmNewDevices: group.confirmNewDevices,
+                )
+                .where((c) => c.deviceId == deviceId)
+                .firstOrNull;
+      if (cert == null) return null;
+      profile = profileFromCert(cert);
     }
     if (profile == null) return null;
-    if (suspended) {
-      // Revoked or excluded: only up to its cutoff, on its own chain.
+    // A device a signed record took out of the projection is held to the
+    // checkpoint that record carries (see [_isBeforeRemovalFences]); only a
+    // device no record ever listed needs a cutoff a sibling signed.
+    if (suspended && !_departedInDag(head, deviceId)) {
       final cutoff = lists?.cutoffFor(accountId, deviceId);
       if (cutoff == null ||
           !await _onChain(
