@@ -742,5 +742,76 @@ void _groupAccountsControllerTests() {
         );
       },
     );
+
+    test(
+      'a list that names another member\'s device id is never pinned, and the '
+      'owner can still sign the next record',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(ownerWrites: false);
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        final bob = t.bob.identity!;
+        final accountKeys = AccountKeys(
+          publicKeyBase64: bob.accountKeyPublicBase64!,
+          privateKeyBase64: bob.accountKeyPrivateBase64!,
+        );
+        final carolId = t.carol.identity!.deviceId;
+        final impostor = await TestDevice.create(carolId, bob.accountId);
+        final laptop = t.bob.accountDevices!.devices.first;
+        final cert = await DeviceCert.issue(
+          account: accountKeys,
+          accountId: bob.accountId,
+          deviceId: carolId,
+          encryptionKeyBase64: impostor.encryptionPublicKey,
+          signingKeyBase64: impostor.signingPublicKey,
+          irohEndpointId: impostor.iroh,
+          name: 'impostor',
+          linkedAt: fixtureEpoch,
+          proofSignatureBase64: await signEd25519(
+            DeviceCert.proofBytes(
+              accountId: bob.accountId,
+              accountKeyBase64: accountKeys.publicKeyBase64,
+              deviceId: carolId,
+              encryptionKeyBase64: impostor.encryptionPublicKey,
+              signingKeyBase64: impostor.signingPublicKey,
+              irohEndpointId: impostor.iroh,
+            ),
+            publicKeyBase64: impostor.signingPublicKey,
+            privateKeyBase64: impostor.signingPrivateKey,
+          ),
+        );
+        final hostile = await AccountDeviceList.issue(
+          account: accountKeys,
+          accountId: bob.accountId,
+          version: 9,
+          devices: [laptop, cert],
+          issuedAt: DateTime.now().toUtc(),
+        );
+        final before = of(t.alice).membershipVersion;
+        await t.alice.handleGroupDevicesForTesting(t.groupId, bob.deviceId, {
+          'version': 1,
+          'groupId': t.groupId,
+          'type': 'devices',
+          'lists': [hostile.toJson()],
+        });
+        await t.alice.runOwnerWriterForTesting(t.groupId);
+        // Nothing was signed with the colliding list, and carol is still
+        // carol.
+        expect(of(t.alice).membershipVersion, before);
+        expect(
+          of(t.alice).memberProfileFor(carolId)!.accountId,
+          t.carol.identity!.accountId,
+        );
+        expect(of(t.alice).hasActiveMember(carolId), isTrue);
+        // The owner can still sign: the next record goes through.
+        await t.alice.setGroupMemberRole(
+          groupId: t.groupId,
+          memberDeviceId: bob.deviceId,
+          role: GroupMemberRole.moderator,
+        );
+        expect(of(t.alice).membershipVersion, before + 1);
+      },
+    );
   });
 }

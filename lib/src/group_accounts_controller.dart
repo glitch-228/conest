@@ -302,6 +302,22 @@ extension GroupAccountsController on MessengerController {
       _announcedFor.length;
 
   @visibleForTesting
+  Future<void> handleGroupDevicesForTesting(
+    String groupId,
+    String senderDeviceId,
+    Map<String, dynamic> message,
+  ) async {
+    final group = _groupById(groupId);
+    final sender = _contactByDeviceId(senderDeviceId);
+    if (group == null || sender == null) return;
+    await _handleGroupDevices(group, sender, message);
+  }
+
+  @visibleForTesting
+  Future<void> runOwnerWriterForTesting(String groupId) =>
+      _runOwnerWriter(groupId);
+
+  @visibleForTesting
   Future<GroupRecord> commitGroupChangeForTesting(GroupRecord candidate) =>
       _commitGroupChange(candidate);
 
