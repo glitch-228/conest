@@ -159,8 +159,8 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
   void _requirePeer(String peer) {
     final head = _membership.current;
     if (head == null ||
-        !head.group.hasActiveMember(peer) ||
-        !head.group.hasActiveMember(localDeviceId)) {
+        !_membership.isActiveOrSibling(peer) ||
+        !_membership.isActiveOrSibling(localDeviceId)) {
       throw StateError(
         'Group membership must be current and undisputed before serving history.',
       );
@@ -174,15 +174,11 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
   }) async {
     // During a fork, existing peers common to every head may exchange the
     // signed control records needed for resolution; ordinary history stays shut.
-    final heads = _membership.heads;
-    if (heads.isEmpty ||
-        !heads.every((id) {
-          final group = _membership.record(id)!.group;
-          return group.hasActiveMember(requesterDeviceId) &&
-              group.hasActiveMember(localDeviceId);
-        })) {
+    if (!_membership.activeInEveryHead(requesterDeviceId) ||
+        !_membership.activeInEveryHead(localDeviceId)) {
       throw StateError('Unauthorized membership history request.');
     }
+    final heads = _membership.heads;
     final page = await journal.readMembershipPage(afterEventId: afterEventId);
     if (heads.join(',') != _membership.heads.join(',')) {
       throw StateError('Membership changed during history request.');
@@ -195,15 +191,10 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
     String requesterDeviceId,
     List<String> digests,
   ) async {
-    final heads = _membership.heads;
     if (digests.isEmpty ||
         digests.length > 16 ||
-        heads.isEmpty ||
-        !heads.every((id) {
-          final group = _membership.record(id)!.group;
-          return group.hasActiveMember(requesterDeviceId) &&
-              group.hasActiveMember(localDeviceId);
-        })) {
+        !_membership.activeInEveryHead(requesterDeviceId) ||
+        !_membership.activeInEveryHead(localDeviceId)) {
       throw StateError('Unauthorized device list request.');
     }
     return [

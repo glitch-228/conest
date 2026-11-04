@@ -824,4 +824,33 @@ void main() {
       expect(resolved.group.hasActiveMember('carol'), isTrue);
     });
   });
+
+  group('delivery to a member account', () {
+    test('delivered when any device has it, read when any has read it; the '
+        'rest stop being sent to once one read', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final r2 = await pinBob(r1, l1, [bob1, bob2]);
+      final group = r2.group;
+      final states = {
+        'carol': DeliveryState.delivered,
+        'bob1': DeliveryState.delivered,
+        'bob2': DeliveryState.pending,
+      };
+      final folded = foldAccountDeliveryStates(group, states);
+      expect(folded.keys, containsAll(['carol', 'account:acc-bob']));
+      expect(folded['account:acc-bob'], DeliveryState.delivered);
+      expect(accountHasRead(group, 'bob2', states), isFalse);
+      final read = {...states, 'bob1': DeliveryState.read};
+      expect(
+        foldAccountDeliveryStates(group, read)['account:acc-bob'],
+        DeliveryState.read,
+      );
+      // bob2 is not waited for any more once bob1 read it.
+      expect(accountHasRead(group, 'bob2', read), isTrue);
+      // A group without accounts is untouched.
+      final plain = r1.group;
+      expect(foldAccountDeliveryStates(plain, states), same(states));
+    });
+  });
 }

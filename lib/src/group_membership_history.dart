@@ -249,6 +249,18 @@ class GroupMembershipHistory {
       if (lists.get(entry.listDigest) == null) entry.listDigest,
   ];
 
+  /// Whether [deviceId] takes part in the current membership: a member
+  /// device of the head, or an effective sibling of a member account.
+  bool isActiveOrSibling(String deviceId) {
+    final head = current;
+    return head != null && _mayReceive(groupOf(head), deviceId);
+  }
+
+  /// Whether [deviceId] is active in every head (during a fork).
+  bool activeInEveryHead(String deviceId) =>
+      _heads.isNotEmpty &&
+      _heads.every((id) => _mayReceive(groupOf(_records[id]!), deviceId));
+
   /// A candidate index can be validated before its proof is flushed, then
   /// published only after the journal append succeeds.
   GroupMembershipHistory fork() {

@@ -14,7 +14,13 @@ extension GroupAccountsController on MessengerController {
   static const int _maxListsPerMessage = 16;
   static const int _maxCutoffsPerMessage = 64;
   static const Duration _newAdminDeviceDelay = Duration(hours: 24);
-  static const Duration _ownerWriterDebounce = Duration(seconds: 2);
+
+  /// Tests shorten the wait before the owner's app writes a record.
+  @visibleForTesting
+  void setOwnerWriterDelayForTesting(Duration delay) {
+    _ownerWriterDelay = delay;
+    _ownerRecordWindow = delay;
+  }
 
   // ---- State ----------------------------------------------------------
 
@@ -101,6 +107,17 @@ extension GroupAccountsController on MessengerController {
       if (list != null &&
           _pinnedLists.isVerified(entry.listDigest, entry.accountKeyBase64)) {
         view.absorbPinned(list, accountKey: entry.accountKeyBase64);
+      }
+    }
+    // This device's own account list: known without being told.
+    final me = _snapshot.identity;
+    final own = accountDevices;
+    if (me != null && own != null && me.accountKeyPublicBase64 != null) {
+      for (final entry in signed.memberAccounts) {
+        if (entry.accountKeyBase64 == me.accountKeyPublicBase64 &&
+            entry.accountId == own.accountId) {
+          view.offerVerified(own, accountKey: entry.accountKeyBase64);
+        }
       }
     }
     final resolution = resolveGroup(
@@ -283,18 +300,47 @@ extension GroupAccountsController on MessengerController {
         if (cutoff != null && await view.offerCutoff(cutoff)) changed = true;
       }
     }
+    final announcedIds = <String>{};
     final announce = message['announce'];
     if (announce is Map<String, dynamic>) {
       try {
         final profile = GroupMemberProfile.fromJson(announce);
         if (profile.deviceId == sender.deviceId) {
           final held = _siblingAnnounces.putIfAbsent(group.groupId, () => {});
-          if (held.length < 64 || held.containsKey(profile.deviceId)) {
+          if ((held.length < 64 || held.containsKey(profile.deviceId)) &&
+              canonicalGroupJson(held[profile.deviceId]?.toJson()) !=
+                  canonicalGroupJson(profile.toJson())) {
             held[profile.deviceId] = profile;
             changed = true;
+            announcedIds.add(profile.deviceId);
           }
         }
       } catch (_) {}
+    }
+    // Routes an effective device knows for its account's other devices.
+    final siblings = message['siblings'];
+    if (siblings is List && siblings.length <= 8) {
+      final held = _siblingAnnounces.putIfAbsent(group.groupId, () => {});
+      for (final raw in siblings) {
+        if (raw is! Map<String, dynamic>) continue;
+        try {
+          final profile = GroupMemberProfile.fromJson(raw);
+          final cert = view.certFor(sender.accountId, profile.deviceId);
+          if (profile.accountId != sender.accountId ||
+              profile.deviceId == sender.deviceId ||
+              cert == null ||
+              held.containsKey(profile.deviceId) ||
+              held.length >= 64) {
+            continue;
+          }
+          final merged = profileFromCert(cert, announced: profile);
+          if (merged != null && merged.routeHints.isNotEmpty) {
+            held[profile.deviceId] = merged;
+            changed = true;
+            announcedIds.add(profile.deviceId);
+          }
+        } catch (_) {}
+      }
     }
     final upgrade = AccountUpgrade.fromJson(message['upgrade']);
     if (upgrade != null && upgrade.deviceId == sender.deviceId) {
@@ -330,7 +376,96 @@ extension GroupAccountsController on MessengerController {
         ).catchError((Object _) {}),
       );
     }
+    // A device whose routes are now known gets the group it belongs to from
+    // the owner (the record named it before anyone could reach it).
+    final owner = _snapshot.identity;
+    final current = _groupById(group.groupId);
+    if (announcedIds.isNotEmpty &&
+        owner != null &&
+        current != null &&
+        current.ownerDeviceId == owner.deviceId) {
+      final targets = [
+        for (final id in announcedIds)
+          if (current.hasActiveMember(id) && id != owner.deviceId) id,
+      ];
+      if (targets.isNotEmpty) {
+        unawaited(
+          _sendGroupMembershipUpdate(
+            current,
+            targetDeviceIds: targets,
+            reason: 'new-device',
+          ).catchError((Object _) {}),
+        );
+      }
+    }
     _scheduleOwnerWriter(group.groupId);
+  }
+
+  /// For a group with member accounts, the stored group follows the signed
+  /// membership head: a record that could not be taken when it arrived (it
+  /// needed earlier records or lists) is adopted once catch-up has brought
+  /// them. Only a head that is newer than what is stored, and only through the
+  /// verified history; groups without accounts are left to the old path.
+  Future<void> _adoptMembershipHead(String groupId) async {
+    final stored = _groupById(groupId);
+    if (_disposed || stored == null || stored.localRemovedAt != null) return;
+    final head = await _groupHistory.currentMembership(groupId);
+    if (head == null) return;
+    final signed = head.group;
+    if (signed.membershipVersion <= stored.membershipVersion ||
+        (signed.memberAccounts.isEmpty && stored.memberAccounts.isEmpty)) {
+      return;
+    }
+    // Keep what this device knows beyond the record (routes, addresses) for
+    // members whose keys the record pins.
+    final profiles = [
+      for (final profile in signed.memberProfiles)
+        if (stored.memberProfileFor(profile.deviceId) case final known?
+            when known.accountId == profile.accountId &&
+                known.publicKeyBase64 == profile.publicKeyBase64 &&
+                known.signingPublicKeyBase64 == profile.signingPublicKeyBase64)
+          known
+        else
+          profile,
+    ];
+    final merged = GroupRecord.fromJson({
+      ...signed.copyWith(
+        memberProfiles: profiles,
+        profileRevision: max(
+          signed.profileRevision,
+          stored.profileRevision,
+        ),
+      ).toJson(),
+      'localRemovedAt': stored.localRemovedAt?.toIso8601String(),
+    });
+    for (final entry in merged.memberAccounts) {
+      final list = _pinnedLists.get(entry.listDigest);
+      if (list != null) {
+        _pinnedLists.markVerified(entry.listDigest, entry.accountKeyBase64);
+      }
+    }
+    _upsertGroup(merged);
+    _ensureGroupConversation(_groupById(groupId)!);
+    _persistPinnedLists();
+    await _persist('Updated group ${merged.title}.');
+    _scheduleOwnerWriter(groupId);
+  }
+
+  /// Offers this device's account list to a group once per list version and
+  /// state of the group: after the group is stored, and after the account's
+  /// devices change.
+  void _announceOnGroupChange(GroupRecord group) {
+    final me = _snapshot.identity;
+    final list = accountDevices;
+    if (me == null || list == null) return;
+    final mine = group.memberAccounts.any((e) => e.accountId == me.accountId);
+    if (!mine) return;
+    final key =
+        '${list.version}|${group.membershipVersion}|'
+        '${group.memberDeviceIds.contains(me.deviceId)}';
+    if (_announcedFor[group.groupId] == key) return;
+    _announcedFor[group.groupId] = key;
+    _announceOwnDeviceList(onlyGroup: group.groupId);
   }
 
   // ---- Announcing this account's list ---------------------------------
@@ -372,6 +507,12 @@ extension GroupAccountsController on MessengerController {
         'type': 'devices',
         'lists': [list.toJson()],
         'announce': _groupProfileForIdentity(me).toJson(),
+        // The account's other devices, with the routes this device knows for
+        // them, so a new device is reachable as soon as it is listed.
+        'siblings': [
+          for (final device in ownDevices.take(8))
+            _groupProfileForContact(device).toJson(),
+        ],
         if (!mine && me.accountUpgrade != null) 'upgrade': me.accountUpgrade,
       };
       for (final device in group.activeMemberDeviceIds.take(64)) {
@@ -385,8 +526,9 @@ extension GroupAccountsController on MessengerController {
         }
         try {
           await _groupHistory.send(groupId, device, payload);
-        } catch (_) {
+        } catch (error) {
           // Unreachable now: it gets the list with the next announcement.
+          appendDebugLog('Device list not sent to $device: $error');
         }
       }
     } catch (error) {
@@ -409,7 +551,7 @@ extension GroupAccountsController on MessengerController {
       return;
     }
     _groupWriterTimers[groupId]?.cancel();
-    _groupWriterTimers[groupId] = Timer(after ?? _ownerWriterDebounce, () {
+    _groupWriterTimers[groupId] = Timer(after ?? _ownerWriterDelay, () {
       _groupWriterTimers.remove(groupId);
       if (_disposed) return;
       unawaited(
@@ -626,8 +768,8 @@ extension GroupAccountsController on MessengerController {
     }
     // The per account rate limit: at most one record per window.
     final last = _lastOwnerRecordAt[groupId];
-    if (last != null && now.difference(last) < const Duration(seconds: 30)) {
-      _scheduleOwnerWriter(groupId, after: const Duration(seconds: 30));
+    if (last != null && now.difference(last) < _ownerRecordWindow) {
+      _scheduleOwnerWriter(groupId, after: _ownerRecordWindow);
       return;
     }
     final fresh = _groupById(groupId);
@@ -722,6 +864,7 @@ extension GroupAccountsController on MessengerController {
     _groupResolutions.clear();
     _lastOwnerRecordAt.clear();
     _announcing.clear();
+    _announcedFor.clear();
     _deviceFirstSeenStore.clear();
     _pinnedLists.clear();
   }

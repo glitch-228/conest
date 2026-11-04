@@ -623,6 +623,26 @@ GroupResolution resolveGroup(
     );
   }
   final projected = signed.memberDeviceIds.toSet();
+  // A device's own announcement brings its routes and capabilities to the
+  // profile the record projects, when its keys are the record's.
+  var profiles = signed.memberProfiles;
+  if (announces.isNotEmpty) {
+    profiles = [
+      for (final profile in signed.memberProfiles)
+        if (announces[profile.deviceId] case final announced?
+            when announced.accountId == profile.accountId &&
+                announced.publicKeyBase64 == profile.publicKeyBase64 &&
+                announced.signingPublicKeyBase64 ==
+                    profile.signingPublicKeyBase64 &&
+                announced.irohEndpointId == profile.irohEndpointId &&
+                signed.memberAccounts.any(
+                  (entry) => entry.accountId == profile.accountId,
+                ))
+          announced
+        else
+          profile,
+    ];
+  }
   final siblings = <GroupMemberProfile>[];
   final suppressed = <String>[];
   final unverified = <String>[];
@@ -675,6 +695,7 @@ GroupResolution resolveGroup(
   }
   return GroupResolution(
     group: signed.copyWith(
+      memberProfiles: profiles,
       siblingProfiles: siblings,
       suppressedDeviceIds: suppressed,
     ),
@@ -682,4 +703,65 @@ GroupResolution resolveGroup(
     pendingDeviceIds: pending,
     compromisedAccountIds: compromised,
   );
+}
+
+int _progress(DeliveryState state) => switch (state) {
+  DeliveryState.read => 5,
+  DeliveryState.delivered => 4,
+  DeliveryState.relayed => 3,
+  DeliveryState.local => 2,
+  DeliveryState.pending => 1,
+  DeliveryState.failed => 0,
+  DeliveryState.canceled => -1,
+};
+
+/// Folds the delivery states of a member account's devices into one: the
+/// furthest any of them got. The account is delivered when any device has the
+/// message, read when any device has read it. Device-only members and groups
+/// without accounts are returned as they are.
+Map<String, DeliveryState> foldAccountDeliveryStates(
+  GroupRecord? group,
+  Map<String, DeliveryState> states,
+) {
+  if (group == null || group.memberAccounts.isEmpty) return states;
+  final accounts = {for (final entry in group.memberAccounts) entry.accountId};
+  final result = <String, DeliveryState>{};
+  final byAccount = <String, DeliveryState>{};
+  for (final entry in states.entries) {
+    final accountId = group.memberProfileFor(entry.key)?.accountId;
+    if (accountId == null || !accounts.contains(accountId)) {
+      result[entry.key] = entry.value;
+      continue;
+    }
+    final known = byAccount[accountId];
+    if (known == null || _progress(entry.value) > _progress(known)) {
+      byAccount[accountId] = entry.value;
+    }
+  }
+  for (final entry in byAccount.entries) {
+    result['account:${entry.key}'] = entry.value;
+  }
+  return result;
+}
+
+/// Whether some device of the member account that [deviceId] belongs to has
+/// read the message ([states] are its per device states).
+bool accountHasRead(
+  GroupRecord group,
+  String deviceId,
+  Map<String, DeliveryState> states,
+) {
+  if (group.memberAccounts.isEmpty) return false;
+  final accountId = group.memberProfileFor(deviceId)?.accountId;
+  if (accountId == null ||
+      !group.memberAccounts.any((entry) => entry.accountId == accountId)) {
+    return false;
+  }
+  for (final entry in states.entries) {
+    if (entry.value == DeliveryState.read &&
+        group.memberProfileFor(entry.key)?.accountId == accountId) {
+      return true;
+    }
+  }
+  return false;
 }

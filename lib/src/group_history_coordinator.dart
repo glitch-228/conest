@@ -298,10 +298,29 @@ class GroupHistoryCoordinator {
   }) => _write(given.groupId, () async {
     // What is signed is the record as members hold it, never this device's
     // resolved view with its effective siblings.
-    final snapshot = given.signedView;
-    final replica = await _replica(snapshot.groupId);
+    final base = given.signedView;
+    final replica = await _replica(base.groupId);
     final history = replica.membership;
     final current = history.current;
+    // An account that the previous record already holds is written with the
+    // boundary that record gave it and without the proof of its fold.
+    final snapshot = current == null || base.memberAccounts.isEmpty
+        ? base
+        : base.copyWith(
+            memberAccounts: [
+              for (final entry in base.memberAccounts)
+                if (current.group.memberAccounts
+                    .where((held) => held.accountId == entry.accountId)
+                    .firstOrNull
+                    case final held?)
+                  entry.copyWith(
+                    admission: current.accountAdmission(held),
+                    clearUpgrade: true,
+                  )
+                else
+                  entry,
+            ],
+          );
     final me = identity();
     if (history.hasConflict) {
       throw StateError('Group membership conflict needs owner resolution.');

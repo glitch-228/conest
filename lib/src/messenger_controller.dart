@@ -2833,6 +2833,8 @@ class MessengerController extends ChangeNotifier {
         vault: _vaultStore,
         identity: _requireIdentity,
         group: _requireGroup,
+        lists: _pinnedLists,
+        viewFor: _viewOf,
         send: (groupId, peer, payload) async {
           final group = _requireGroup(groupId);
           final me = _requireIdentity();
@@ -4012,6 +4014,7 @@ class MessengerController extends ChangeNotifier {
     bool passOn = true,
   }) async {
     final count = await _groupHistory.synchronize(groupId, peerDeviceId);
+    await _adoptMembershipHead(groupId);
     await _saveSnapshotSilently();
     // New to this device: other members may not have it either (their
     // author may not reach them). Tell them it changed; each pulls only
@@ -4599,6 +4602,9 @@ class MessengerController extends ChangeNotifier {
   final Map<String, DateTime> _lastOwnerRecordAt = {};
   final Map<String, Timer> _groupWriterTimers = {};
   final Set<String> _announcing = {};
+  final Map<String, String> _announcedFor = {};
+  Duration _ownerWriterDelay = const Duration(seconds: 2);
+  Duration _ownerRecordWindow = const Duration(seconds: 30);
   Map<String, DateTime> get _deviceFirstSeen => _deviceFirstSeenStore;
   final Map<String, DateTime> _deviceFirstSeenStore = {};
 
@@ -18695,8 +18701,10 @@ class MessengerController extends ChangeNotifier {
       }
       final contact = _groupMemberContact(profiledGroup, deviceId);
       if (contact == null) {
+        appendDebugLog('Group membership not sent to $deviceId: no contact');
         continue;
       }
+      appendDebugLog('Group membership ($reason) sent to $deviceId');
       final envelope = await _crypto.encryptPayloadEnvelope(
         kind: 'group_membership',
         messageId: _randomId('grpctl'),
@@ -31233,6 +31241,9 @@ class MessengerController extends ChangeNotifier {
     }
     final message = _groupMessageById(group.groupId, messageId);
     if (message == null || message.deleted) return false;
+    // Once any device of a member account has read it, nothing more goes to
+    // that member's other devices; the read reaches them by own-device sync.
+    if (accountHasRead(group, deviceId, message.recipientStates)) return false;
     return message.recipientStates[deviceId]?.awaitsRecipientAck ?? true;
   }
 
@@ -35649,6 +35660,7 @@ class MessengerController extends ChangeNotifier {
       if (_groupShapeChanged(before, group)) _syncGroupStateToMirrors(group);
     }
     _snapshot = _snapshot.copyWith(groups: groups);
+    if (group.memberAccounts.isNotEmpty) _announceOnGroupChange(group);
   }
 
   /// [gone] left the group (removed, or left): this device's messages no
@@ -42146,8 +42158,11 @@ class MessengerController extends ChangeNotifier {
     var delivered = 0;
     var accepted = 0;
     var pending = 0;
-    // Members who left are not counted.
-    final states = message.recipientStates.values
+    // Members who left are not counted; an account is one member.
+    final states = foldAccountDeliveryStates(
+      _groupById(message.conversationId),
+      message.recipientStates,
+    ).values
         .where((state) => state != DeliveryState.canceled)
         .toList();
     if (states.isEmpty) return message.state.label;
@@ -42684,7 +42699,10 @@ class MessengerController extends ChangeNotifier {
         _clearOutboundAttempt(recipientDeviceId, message.id);
       }
       return message.copyWith(
-        state: _aggregateGroupDeliveryState(states),
+        state: _aggregateGroupDeliveryState(
+          states,
+          group: _groupById(groupId),
+        ),
         recipientStates: states,
       );
     }).toList();
@@ -42706,8 +42724,12 @@ class MessengerController extends ChangeNotifier {
   }
 
   DeliveryState _aggregateGroupDeliveryState(
-    Map<String, DeliveryState> recipientStates,
-  ) {
+    Map<String, DeliveryState> given, {
+    GroupRecord? group,
+  }) {
+    // A member account counts as delivered or read when any of its devices
+    // has it (M29): its devices fold into one state, the furthest.
+    final recipientStates = foldAccountDeliveryStates(group, given);
     if (recipientStates.isEmpty) {
       return DeliveryState.delivered;
     }

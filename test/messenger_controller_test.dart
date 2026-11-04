@@ -17,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
+import 'package:conest/src/group_account_member.dart';
 import 'package:conest/main.dart' as app;
 import 'package:conest/l10n/app_localizations.dart';
 import 'package:conest/src/ui/internet_transports.dart';
@@ -161,6 +162,7 @@ part 'l10n_controller_cases.dart';
 part 'xmpp_controller_cases.dart';
 part 'telegram_controller_cases.dart';
 part 'discord_controller_cases.dart';
+part 'group_accounts_controller_cases.dart';
 
 final _unreachableXmppNetwork = XmppNetwork(
   connector: (host, port, {required tls, alpn}) =>
@@ -1866,6 +1868,7 @@ void main() {
   _xmppControllerTests();
   _telegramControllerTests();
   _discordControllerTests();
+  _groupAccountsControllerTests();
   test('a desktop notifies only while Conest is not in front', () async {
     final relay = _FakeRelayClient();
     final recorder = _RecordingPlatformBridge();
