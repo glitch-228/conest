@@ -12690,6 +12690,10 @@ class MessengerController extends ChangeNotifier {
     }
   }
 
+  /// A lab run's `--debug-power`: the power setting a new identity starts
+  /// with, as if the user had chosen it. Null: the default.
+  EnergyBudgetSetting? initialEnergyBudget;
+
   Future<void> createIdentity({
     required String displayName,
     String? internetRelayHost,
@@ -12748,11 +12752,17 @@ class MessengerController extends ChangeNotifier {
       ),
     );
     // A new identity chooses how much of the app it sees.
-    _snapshot = _snapshot.copyWith(identity: created, userModeChosen: false);
+    final power = initialEnergyBudget;
+    final withPower = power == null
+        ? created
+        : created.copyWith(
+            connectivity: created.connectivity.copyWith(energyBudget: power),
+          );
+    _snapshot = _snapshot.copyWith(identity: withPower, userModeChosen: false);
     // A new device has told nobody anything yet; every later exchange
     // carries the current list.
     _snapshot = _snapshot.copyWith(
-      identity: created.copyWith(
+      identity: withPower.copyWith(
         advertisedFeatureCapabilities: [
           for (final capability in _localApplicationCapabilities())
             capability.name,

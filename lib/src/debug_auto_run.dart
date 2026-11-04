@@ -13,6 +13,8 @@
 ///          [--debug-relay=HOST:PORT]      add a relay
 ///          [--debug-accept-invite=CODE]   add a contact (repeatable)
 ///          [--debug-approve]              approve contact requests
+///          [--debug-power=SETTING]        balanced, eco, fast, cold or
+///                                         automatic, chosen as a user would
 ///          [--debug-serve=SECONDS]        wait this long for the others
 ///          [--debug-group=TITLE]          then make a group of everyone
 ///          [--debug-no-reserve]           files even on a nearly full disk
@@ -59,6 +61,7 @@ import 'dart:typed_data';
 import 'package:flutter/scheduler.dart';
 
 import 'activity_counters.dart';
+import 'energy_budget_setting.dart';
 import 'group_call/group_call_service.dart';
 import 'group_file_download.dart';
 import 'messenger_controller.dart';
@@ -95,6 +98,7 @@ class DebugRunRequest {
     ],
     this.callLength = const Duration(minutes: 1),
     this.linkNew = false,
+    this.power,
     this.linkFrom,
     this.deadline,
   });
@@ -104,6 +108,12 @@ class DebugRunRequest {
   /// never waits for a device that hangs. A run that finishes later still
   /// replaces it.
   final Duration? deadline;
+
+  /// `--debug-power=balanced|eco|fast|cold|automatic`: the power setting a
+  /// lab run starts with, set as the user's own choice before the identity
+  /// exists. Without it the default (Automatic) applies, which is cold on a
+  /// phone.
+  final EnergyBudgetSetting? power;
 
   /// 'routes', 'messages', 'files', 'interactions', 'all', 'contacts',
   /// 'burst', 'calls', 'none' (only set up), or 'serve' (set up, then run
@@ -288,6 +298,9 @@ class DebugRunRequest {
         ),
         _ => null,
       },
+      power: EnergyBudgetSetting.values
+          .where((setting) => setting.name == value('debug-power'))
+          .firstOrNull,
       linkNew: args.contains('--debug-link-new'),
       linkFrom: switch (value('debug-link-from')) {
         final text? when text.isNotEmpty && text.length <= 4096 => text,
@@ -551,6 +564,17 @@ Future<String> runDebugRequest(
     watchCalls();
   });
 
+  // The power setting is a user choice made before anything starts, so a
+  // lab run measures what it asks to (a cold phone sleeps its transports).
+  if (request.power case final power?) {
+    controller.initialEnergyBudget = power;
+    if (controller.hasIdentity) {
+      await step('power', () async {
+        await controller.setEnergyBudget(power);
+        return power.name;
+      });
+    }
+  }
   final name = request.name;
   if (name != null && !controller.hasIdentity) {
     await step('identity', () async {

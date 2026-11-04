@@ -21994,6 +21994,49 @@ void main() {
       expect(aliceId, isNotEmpty);
     });
 
+    test('--debug-power sets the explicit power setting, and nothing without '
+        'it', () {
+      DebugRunRequest? request(List<String> extra) => DebugRunRequest.fromArgs([
+        '--debug-run=burst',
+        '--debug-name=lab',
+        ...extra,
+      ]);
+      expect(request(const [])!.power, isNull);
+      for (final setting in EnergyBudgetSetting.values) {
+        expect(request(['--debug-power=${setting.name}'])!.power, setting);
+      }
+      expect(request(const ['--debug-power=nonsense'])!.power, isNull);
+    });
+
+    test('a fresh phone started with --debug-power=balanced is not cold after '
+        'creating its identity, and an explicit cold stays cold', () async {
+      for (final (setting, cold) in [
+        (EnergyBudgetSetting.balanced, false),
+        (EnergyBudgetSetting.cold, true),
+      ]) {
+        final policy = EnergyPolicy(
+          source: _MutablePower(
+            const PowerState(hasBattery: true, charging: false),
+          ),
+          isPhone: true,
+        );
+        final phone = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Phone',
+          energyPolicy: policy,
+          createIdentity: false,
+        );
+        addTearDown(phone.dispose);
+        // What a lab run does first, before the identity exists.
+        phone.initialEnergyBudget = setting;
+        await phone.createIdentity(displayName: 'Phone');
+        expect(phone.identity!.connectivity.energyBudget, setting);
+        await phone.setUserMode(UserMode.advanced);
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        expect(phone.coldModeActive, cold, reason: setting.name);
+      }
+    });
+
     test('a fresh phone with the Automatic default creates its identity and '
         'is cold afterwards', () async {
       final policy = EnergyPolicy(
