@@ -41,7 +41,9 @@ void main() {
         author: alice,
         parents: [r1],
         deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, l1, [bob1])],
+        accounts: [
+          AccountSpec(bobAcc, l1, [bob1]),
+        ],
       );
       final l2 = await bobAcc.list(2, [bob1, bob2]);
       final r3 = await fx.record(
@@ -49,7 +51,9 @@ void main() {
         author: alice,
         parents: [r2],
         deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, l2, [bob1, bob2])],
+        accounts: [
+          AccountSpec(bobAcc, l2, [bob1, bob2]),
+        ],
       );
       // A device that has no lists yet.
       final late = fx.history(owner: alice, store: PinnedListStore());
@@ -81,7 +85,9 @@ void main() {
         author: alice,
         parents: [r1],
         deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, l1, [bob1])],
+        accounts: [
+          AccountSpec(bobAcc, l1, [bob1]),
+        ],
       );
       final history = fx.history(owner: alice);
       await history.import(r1);
@@ -92,7 +98,9 @@ void main() {
         author: bob2,
         parents: [r2],
         deviceOnly: [carol, eve],
-        accounts: [AccountSpec(bobAcc, l1, [bob1])],
+        accounts: [
+          AccountSpec(bobAcc, l1, [bob1]),
+        ],
       );
       expect(() => history.import(forged), throwsFormatException);
     });
@@ -108,7 +116,9 @@ void main() {
         author: alice,
         parents: [r1],
         deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, l1, [bob1, bob2])],
+        accounts: [
+          AccountSpec(bobAcc, l1, [bob1, bob2]),
+        ],
       );
       final e1 = await fx.message(r2, bob2);
       final e2 = await fx.message(r2, bob2);
@@ -129,7 +139,9 @@ void main() {
         author: alice,
         parents: [r2],
         deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, l2, [bob1])],
+        accounts: [
+          AccountSpec(bobAcc, l2, [bob1]),
+        ],
         checkpoints: {
           'bob2': GroupHistoryCheckpoint(
             sequence: e2.sequence,
@@ -157,7 +169,9 @@ void main() {
         author: alice,
         parents: [r3],
         deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, l1, [bob1, bob2])],
+        accounts: [
+          AccountSpec(bobAcc, l1, [bob1, bob2]),
+        ],
       );
       expect(() => history.import(back), throwsFormatException);
       // The device is no longer effective for message events either.
@@ -179,7 +193,11 @@ void main() {
       final aliceAcc = await TestAccount.create('acc-alice');
       final alice1 = await TestDevice.create('alice1', 'acc-alice');
       final alice2 = await TestDevice.create('alice2', 'acc-alice');
-      final r1 = await fx.record(owner: alice1, author: alice1, deviceOnly: [carol]);
+      final r1 = await fx.record(
+        owner: alice1,
+        author: alice1,
+        deviceOnly: [carol],
+      );
       final l1 = await aliceAcc.list(1, [alice1, alice2]);
       // The owner folds into its account (the proof is embedded).
       final r2 = await fx.record(
@@ -220,12 +238,10 @@ void main() {
         parents: [r2],
         deviceOnly: [carol, eve],
         accounts: [
-          AccountSpec(
-            aliceAcc,
-            l1,
-            [alice1, alice2],
-            role: GroupAccountRole.owner,
-          ),
+          AccountSpec(aliceAcc, l1, [
+            alice1,
+            alice2,
+          ], role: GroupAccountRole.owner),
         ],
       );
       expect(await history.import(o1), GroupMembershipImport.accepted);
@@ -382,7 +398,9 @@ void main() {
         author: alice,
         parents: [ra, rb],
         deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, honest, [bob1])],
+        accounts: [
+          AccountSpec(bobAcc, honest, [bob1]),
+        ],
       );
       expect(() => history.import(merged), throwsFormatException);
       final resolved = await fx.record(
@@ -459,12 +477,9 @@ void main() {
         deviceOnly: [carol],
         admins: ['carol'],
         accounts: [
-          AccountSpec(
-            bobAcc,
-            l2,
-            [bob1],
-            keyOverride: stranger.keys.publicKeyBase64,
-          ),
+          AccountSpec(bobAcc, l2, [
+            bob1,
+          ], keyOverride: stranger.keys.publicKeyBase64),
         ],
       );
       final history = fx.history(owner: alice);
@@ -476,7 +491,9 @@ void main() {
         parents: [r1],
         deviceOnly: [carol],
         admins: ['carol'],
-        accounts: [AccountSpec(bobAcc, await danAcc.list(2, [dan1]), [])],
+        accounts: [
+          AccountSpec(bobAcc, await danAcc.list(2, [dan1]), []),
+        ],
       );
       expect(() => history.import(otherAccount), throwsFormatException);
       final r2 = await pinBob(r1, l2, [bob1], admins: ['carol']);
@@ -493,32 +510,36 @@ void main() {
       expect(() => history.import(rollback), throwsFormatException);
     });
 
-    test('a certificate cannot take a device id another identity pinned',
-        () async {
-      final r1 = await root(members: [carol, eve]);
-      final fakeEve = await TestDevice.create('eve', 'acc-bob');
-      final l1 = await bobAcc.list(1, [bob1, fakeEve]);
-      // eve left the group, but its id stays pinned in the ancestry.
-      final r2 = await fx.record(
-        owner: alice,
-        author: alice,
-        parents: [r1],
-        deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, l1, [bob1])],
-      );
-      final history = fx.history(owner: alice);
-      await history.import(r1);
-      expect(
-        () => history.import(r2),
-        throwsA(
-          isA<FormatException>().having(
-            (e) => e.message,
-            'message',
-            contains('pinned identity'),
+    test(
+      'a certificate cannot take a device id another identity pinned',
+      () async {
+        final r1 = await root(members: [carol, eve]);
+        final fakeEve = await TestDevice.create('eve', 'acc-bob');
+        final l1 = await bobAcc.list(1, [bob1, fakeEve]);
+        // eve left the group, but its id stays pinned in the ancestry.
+        final r2 = await fx.record(
+          owner: alice,
+          author: alice,
+          parents: [r1],
+          deviceOnly: [carol],
+          accounts: [
+            AccountSpec(bobAcc, l1, [bob1]),
+          ],
+        );
+        final history = fx.history(owner: alice);
+        await history.import(r1);
+        expect(
+          () => history.import(r2),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              contains('pinned identity'),
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
 
     test('an admin adds an account only as a member', () async {
       final r1 = await fx.record(
@@ -548,27 +569,31 @@ void main() {
       );
     });
 
-    test('accounts mode needs an owner and admins that know accounts',
-        () async {
-      final r1 = await fx.record(
-        owner: alice,
-        author: alice,
-        deviceOnly: [carol],
-        profileOverrides: {'alice': alice.profile(capable: false)},
-      );
-      final l1 = await bobAcc.list(1, [bob1]);
-      final r2 = await fx.record(
-        owner: alice,
-        author: alice,
-        parents: [r1],
-        deviceOnly: [carol],
-        profileOverrides: {'alice': alice.profile(capable: false)},
-        accounts: [AccountSpec(bobAcc, l1, [bob1])],
-      );
-      final history = fx.history(owner: alice);
-      await history.import(r1);
-      expect(() => history.import(r2), throwsFormatException);
-    });
+    test(
+      'accounts mode needs an owner and admins that know accounts',
+      () async {
+        final r1 = await fx.record(
+          owner: alice,
+          author: alice,
+          deviceOnly: [carol],
+          profileOverrides: {'alice': alice.profile(capable: false)},
+        );
+        final l1 = await bobAcc.list(1, [bob1]);
+        final r2 = await fx.record(
+          owner: alice,
+          author: alice,
+          parents: [r1],
+          deviceOnly: [carol],
+          profileOverrides: {'alice': alice.profile(capable: false)},
+          accounts: [
+            AccountSpec(bobAcc, l1, [bob1]),
+          ],
+        );
+        final history = fx.history(owner: alice);
+        await history.import(r1);
+        expect(() => history.import(r2), throwsFormatException);
+      },
+    );
   });
 
   group('folding a device-only member into an account', () {
@@ -606,13 +631,9 @@ void main() {
       final other = await TestAccount.create('acc-dan');
       final h2 = fx.history(owner: alice);
       await h2.import(r1);
-      final forged = await fold(
-        r1,
-        danAcc,
+      final forged = await fold(r1, danAcc, dan1, [
         dan1,
-        [dan1],
-        upgrade: await other.upgrade(dan1),
-      );
+      ], upgrade: await other.upgrade(dan1));
       expect(() => h2.import(forged), throwsFormatException);
       // Neither does one without it.
       final bare = await fx.record(
@@ -621,12 +642,9 @@ void main() {
         parents: [r1],
         deviceOnly: [carol],
         accounts: [
-          AccountSpec(
-            danAcc,
-            await danAcc.list(1, [dan1]),
-            [dan1],
-            admission: r1.admissions['dan1'],
-          ),
+          AccountSpec(danAcc, await danAcc.list(1, [dan1]), [
+            dan1,
+          ], admission: r1.admissions['dan1']),
         ],
       );
       expect(() => h2.import(bare), throwsFormatException);
@@ -677,20 +695,18 @@ void main() {
       await importAll(pendingHistory, [r1, r2, on]);
       final entry = on.group.memberAccounts.single;
       expect(
-        view.effectiveCerts(entry, confirmNewDevices: true).map((c) => c.deviceId),
+        view
+            .effectiveCerts(entry, confirmNewDevices: true)
+            .map((c) => c.deviceId),
         ['bob1'],
       );
-      expect(
-        view.pendingCerts(entry).map((c) => c.deviceId),
-        ['bob2'],
-      );
+      expect(view.pendingCerts(entry).map((c) => c.deviceId), ['bob2']);
     });
   });
 
   group('message events of sibling devices', () {
     test('a second device posts and receives; strangers and pending devices '
-        'do not; a new account sees history only from its admission',
-        () async {
+        'do not; a new account sees history only from its admission', () async {
       final r1 = await fx.record(
         owner: alice,
         author: alice,
@@ -704,7 +720,9 @@ void main() {
         author: alice,
         parents: [r1],
         deviceOnly: [carol],
-        accounts: [AccountSpec(bobAcc, l1, [bob1])],
+        accounts: [
+          AccountSpec(bobAcc, l1, [bob1]),
+        ],
         checkpoints: {
           'carol': GroupHistoryCheckpoint(
             sequence: before.sequence,
@@ -883,9 +901,7 @@ void main() {
       final l1 = await bobAcc.list(1, [bob1, bob2]);
       final r2 = await pinBob(r1, l1, [bob1, bob2]);
       final original = await fx.message(r2, bob1);
-      final payloadOriginal = GroupHistoryEvent.decode(
-        original.encode(),
-      );
+      final payloadOriginal = GroupHistoryEvent.decode(original.encode());
       // The projection needs a body.
       final text = await fx.sign(
         author: bob1,
@@ -934,5 +950,111 @@ void main() {
       expect(asDevices.body, 'hi');
       expect(asDevices.reactions['+'], hasLength(2));
     });
+  });
+
+  group('view and signed record together', () {
+    test('a revoked projected device is held to the owner checkpoint even '
+        'when the view knows the revocation and has no cutoff', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1, bob2]);
+      final r2 = await pinBob(r1, l1, [bob1, bob2]);
+      final e1 = await fx.message(r2, bob2);
+      final e2 = await fx.message(r2, bob2);
+      final e3 = await fx.message(r2, bob2);
+      final l2 = await bobAcc.list(2, [bob1], revoked: ['bob2']);
+      final r3 = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r2],
+        deviceOnly: [carol],
+        accounts: [
+          AccountSpec(bobAcc, l2, [bob1]),
+        ],
+        checkpoints: {
+          'bob2': GroupHistoryCheckpoint(
+            sequence: e2.sequence,
+            eventId: e2.eventId,
+          ),
+        },
+      );
+      final chain = {e1.eventId, e2.eventId};
+      final view = DeviceListView(groupId: fx.groupId)
+        ..offerVerified(l1, accountKey: bobAcc.keys.publicKeyBase64)
+        ..offerVerified(l2, accountKey: bobAcc.keys.publicKeyBase64);
+      final history = fx.history(
+        owner: alice,
+        view: view,
+        chain: (event, cutoff) async => chain.contains(event.eventId),
+      );
+      await importAll(history, [r1, r2, r3]);
+      Future<bool> counts(GroupHistoryEvent e) =>
+          history.canReceive(e, recipientDeviceId: 'carol');
+      expect(await counts(e1), isTrue);
+      expect(await counts(e2), isTrue);
+      expect(await counts(e3), isFalse);
+      // A device no record ever listed has no checkpoint: it needs a cutoff.
+      final l3 = await bobAcc.list(3, [bob1], revoked: ['bob2', 'bob3']);
+      view.offerVerified(l3, accountKey: bobAcc.keys.publicKeyBase64);
+      final l1b = await bobAcc.list(1, [bob1, bob2, bob3]);
+      view.offerVerified(l1b, accountKey: bobAcc.keys.publicKeyBase64);
+      final stray = await fx.message(r3, bob3);
+      expect(await counts(stray), isFalse);
+    });
+
+    test('a device id belongs to the first holder: a later claimant is '
+        'ignored and the rightful device stays', () async {
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1]);
+      final r2 = await pinBob(r1, l1, [bob1]);
+      // Dan's list names bob1's device id with the stranger's keys.
+      final fakeBob1 = await TestDevice.create('bob1', 'acc-dan');
+      final dl = await danAcc.list(1, [fakeBob1, dan2]);
+      final group = r2.group.copyWith(
+        memberAccounts: [
+          ...r2.group.memberAccounts,
+          GroupAccountMember(
+            accountId: 'acc-dan',
+            accountKeyBase64: danAcc.keys.publicKeyBase64,
+            role: GroupAccountRole.member,
+            listVersion: 1,
+            listDigest: fx.lists.put(dl),
+          ),
+        ],
+      );
+      final view = DeviceListView(groupId: fx.groupId)
+        ..offerVerified(l1, accountKey: bobAcc.keys.publicKeyBase64)
+        ..offerVerified(dl, accountKey: danAcc.keys.publicKeyBase64);
+      final resolved = resolveGroup(group, view).group;
+      expect(resolved.hasActiveMember('bob1'), isTrue);
+      expect(resolved.memberProfileFor('bob1')!.accountId, 'acc-bob');
+      expect(resolved.hasActiveMember('dan2'), isTrue);
+    });
+
+    test(
+      'lists seen under another key than the record holds are not used',
+      () async {
+        final r1 = await root();
+        final l1 = await bobAcc.list(1, [bob1, bob2]);
+        final r2 = await pinBob(r1, l1, [bob1]);
+        final other = await TestAccount.create('acc-bob');
+        final view = DeviceListView(groupId: fx.groupId)
+          ..offerVerified(
+            await other.list(5, [bob1, bob3]),
+            accountKey: other.keys.publicKeyBase64,
+          );
+        final entry = r2.group.memberAccounts.single;
+        expect(view.effectiveCerts(entry, confirmNewDevices: false), isEmpty);
+        expect(view.knows(entry), isFalse);
+        expect(
+          view.certFor('acc-bob', 'bob3', accountKey: entry.accountKeyBase64),
+          isNull,
+        );
+        // The signed projection stands.
+        expect(
+          resolveGroup(r2.group, view).group.hasActiveMember('bob1'),
+          isTrue,
+        );
+      },
+    );
   });
 }
