@@ -557,6 +557,16 @@ void _groupAccountsControllerTests() {
           ],
         );
         expect(of(t.alice).hasActiveMember(dave.identity!.deviceId), isTrue);
+        // The invitee has no history yet: it believes the group once the
+        // signed records back to the root, pulled from the sender, check out.
+        await settle(
+          [t.alice, t.bob, t.carol, t.phone, dave],
+          until: () => dave.groups.any((g) => g.groupId == t.groupId),
+          rounds: 200,
+        );
+        final joined = dave.groups.firstWhere((g) => g.groupId == t.groupId);
+        expect(joined.memberAccounts, isNotEmpty);
+        expect(joined.hasActiveMember(dave.identity!.deviceId), isTrue);
         // The owner can still sign: the account (with its sibling) gets a
         // role, then loses it, then is removed.
         await t.alice.setGroupMemberRole(

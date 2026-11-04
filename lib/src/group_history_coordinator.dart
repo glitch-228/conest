@@ -208,14 +208,36 @@ class GroupHistoryCoordinator {
     }
   }
 
+  /// Owners of groups this device is still joining (not stored yet): the
+  /// profile the invitation named, which the signed root must be anchored to.
+  final _ownerHints = <String, GroupMemberProfile>{};
+
+  void hintOwner(String id, GroupMemberProfile owner) {
+    while (_ownerHints.length >= 16 && !_ownerHints.containsKey(id)) {
+      _ownerHints.remove(_ownerHints.keys.first);
+    }
+    _ownerHints[id] = owner;
+  }
+
+  void dropOwnerHint(String id) => _ownerHints.remove(id);
+
+  /// Pulls the signed membership records (and device lists) of a group this
+  /// device is joining from [peer], which the invitation came from.
+  Future<int> pullMembership(String id, String peer) async {
+    if (_closed || !_ownerHints.containsKey(id)) return 0;
+    final replica = await _replica(id);
+    return replica.pullFrom(_wire(id).remote(peer), carrierDeviceId: peer);
+  }
+
   Future<GroupHistoryReplica> _openReplica(String id) async {
-    final snapshot = group(id);
+    final hinted = _ownerHints[id];
+    final snapshot = hinted == null ? group(id) : null;
     final journal = await vault.openGroupHistory(id);
     final retainedRoot = await journal.readMembershipPage(limit: 1);
     // A retained root is authenticated by this vault's encryption and was
     // validated at import. New groups anchor to their approved owner profile.
     final owner = retainedRoot.isEmpty
-        ? snapshot.memberProfileFor(snapshot.ownerDeviceId)
+        ? (hinted ?? snapshot!.memberProfileFor(snapshot.ownerDeviceId))
         : GroupMembershipRecord.fromEvent(
             retainedRoot.single,
           ).group.memberProfileFor(

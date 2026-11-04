@@ -2838,11 +2838,11 @@ class MessengerController extends ChangeNotifier {
       _groupHistoryService ??= GroupHistoryCoordinator(
         vault: _vaultStore,
         identity: _requireIdentity,
-        group: _requireGroup,
+        group: _requireGroupOrPending,
         lists: _pinnedLists,
         viewFor: _viewOf,
         send: (groupId, peer, payload) async {
-          final group = _requireGroup(groupId);
+          final group = _requireGroupOrPending(groupId);
           final me = _requireIdentity();
           final contact = _groupMemberContact(group, peer);
           if (_disposed ||
@@ -4617,6 +4617,9 @@ class MessengerController extends ChangeNotifier {
   final Map<String, Timer> _groupWriterTimers = {};
   final Set<String> _announcing = {};
   final Set<String> _replayingSiblings = {};
+  final Set<String> _joining = {};
+  final Map<String, ({GroupRecord group, String sender, DateTime at})>
+  _pendingJoins = {};
   final Map<String, String> _announcedFor = {};
   Duration _ownerWriterDelay = const Duration(seconds: 2);
   Duration _ownerRecordWindow = const Duration(seconds: 30);
@@ -4727,7 +4730,7 @@ class MessengerController extends ChangeNotifier {
   }
 
   Future<void> _handleGroupHistory(RelayEnvelope envelope) async {
-    final group = _groupById(envelope.conversationId);
+    final group = _groupOrPending(envelope.conversationId);
     final me = _snapshot.identity;
     if (group == null ||
         me == null ||
@@ -4743,7 +4746,7 @@ class MessengerController extends ChangeNotifier {
     );
     // Membership may have changed while the envelope was decrypted: nothing
     // below acts on the group as it was before.
-    final now = _groupById(envelope.conversationId);
+    final now = _groupOrPending(envelope.conversationId);
     if (now == null ||
         now.localRemovedAt != null ||
         !now.hasActiveMember(me.deviceId) ||
@@ -26470,6 +26473,18 @@ class MessengerController extends ChangeNotifier {
       // removed us, or whose request was declined, cancelled or is open.
       if (!sender.canSendOutbound) {
         appendDebugLog('Ignored a new group from a contact not accepted.');
+        return;
+      }
+      // A group that already has account members is believed through its
+      // signed history, back to the owner's root.
+      if (accountsMode &&
+          !await _joinAccountsGroup(
+            incoming,
+            payload['historyProof'] as String,
+            sentLists,
+            sender,
+            meListed,
+          )) {
         return;
       }
     } else {

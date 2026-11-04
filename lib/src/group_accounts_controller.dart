@@ -619,6 +619,141 @@ extension GroupAccountsController on MessengerController {
     _scheduleOwnerWriter(group.groupId);
   }
 
+  // ---- Joining a group that already has account members ----------------
+
+  static const int _maxPendingJoins = 8;
+  static const Duration _pendingJoinLifetime = Duration(hours: 24);
+
+  /// The stored group, or the invitation of one still being joined (never
+  /// stored, never shown: only used to reach the sender and pull its
+  /// signed history).
+  GroupRecord? _groupOrPending(String groupId) =>
+      _groupById(groupId) ?? _pendingJoins[groupId]?.group;
+
+  GroupRecord _requireGroupOrPending(String groupId) {
+    final group = _groupOrPending(groupId);
+    if (group == null) throw ArgumentError('Group not found.');
+    return group;
+  }
+
+  /// A new group in accounts mode arrives as the head of a history this
+  /// device has not got. It is believed only once the signed records back to
+  /// the owner's root, pulled from the sender, verify and name this device.
+  /// Returns whether the proof was accepted at once.
+  Future<bool> _joinAccountsGroup(
+    GroupRecord incoming,
+    String proof,
+    List<AccountDeviceList> lists,
+    ContactRecord sender,
+    bool meListed,
+  ) async {
+    final me = _snapshot.identity;
+    final owner = incoming.memberProfileFor(incoming.ownerDeviceId);
+    if (me == null || owner?.signingPublicKeyBase64 == null) return false;
+    _groupHistory.hintOwner(incoming.groupId, owner!);
+    try {
+      final result = await _groupHistory.importMembership(
+        incoming.groupId,
+        proof,
+        deviceLists: lists,
+      );
+      if (result == GroupMembershipImport.accepted ||
+          result == GroupMembershipImport.duplicate) {
+        _groupHistory.dropOwnerHint(incoming.groupId);
+        return true;
+      }
+    } on StateError {
+      // Missing earlier records: pulled below.
+    } catch (error) {
+      appendDebugLog('Group invitation not accepted: $error');
+      _groupHistory.dropOwnerHint(incoming.groupId);
+      return false;
+    }
+    final now = _now().toUtc();
+    _pendingJoins.removeWhere(
+      (_, join) => now.difference(join.at) > _pendingJoinLifetime,
+    );
+    if (_pendingJoins.length >= _maxPendingJoins &&
+        !_pendingJoins.containsKey(incoming.groupId)) {
+      _pendingJoins.remove(_pendingJoins.keys.first);
+    }
+    final mine = _groupProfileForIdentity(me);
+    _pendingJoins[incoming.groupId] = (
+      group: meListed && !incoming.memberDeviceIds.contains(me.deviceId)
+          ? incoming.copyWith(siblingProfiles: [mine])
+          : incoming,
+      sender: sender.deviceId,
+      at: now,
+    );
+    unawaited(
+      _runPendingJoin(incoming.groupId).catchError((Object error) {
+        appendDebugLog('Joining a group waits: $error');
+      }),
+    );
+    return false;
+  }
+
+  Future<void> _runPendingJoin(String groupId) async {
+    final pending = _pendingJoins[groupId];
+    if (_disposed || pending == null || !_joining.add(groupId)) return;
+    try {
+      await _groupHistory.pullMembership(groupId, pending.sender);
+      await _finishPendingJoin(groupId);
+    } finally {
+      _joining.remove(groupId);
+    }
+  }
+
+  Future<void> _finishPendingJoin(String groupId) async {
+    final pending = _pendingJoins[groupId];
+    final me = _snapshot.identity;
+    if (_disposed || pending == null || me == null) return;
+    final head = await _groupHistory.currentMembership(groupId);
+    if (head == null) return;
+    final signed = head.group;
+    final lists = [
+      for (final entry in signed.memberAccounts)
+        ?_pinnedLists.get(entry.listDigest),
+    ];
+    final named =
+        signed.memberDeviceIds.contains(me.deviceId) ||
+        await _isEffectiveSibling(signed, lists);
+    if (!named || signed.removedDeviceIds.contains(me.deviceId)) {
+      // The verified history does not name this device: not a member.
+      _pendingJoins.remove(groupId);
+      _groupHistory.dropOwnerHint(groupId);
+      return;
+    }
+    _pendingJoins.remove(groupId);
+    _groupHistory.dropOwnerHint(groupId);
+    // Routes and addresses the invitation carried stay for members whose
+    // keys the signed record pins.
+    final wire = pending.group;
+    final profiles = [
+      for (final profile in signed.memberProfiles)
+        if (wire.memberProfileFor(profile.deviceId) case final known?
+            when known.accountId == profile.accountId &&
+                known.publicKeyBase64 == profile.publicKeyBase64 &&
+                known.signingPublicKeyBase64 == profile.signingPublicKeyBase64)
+          known
+        else
+          profile,
+    ];
+    final stored = GroupRecord.fromJson(
+      signed.copyWith(memberProfiles: profiles).toJson(),
+    );
+    for (final entry in stored.memberAccounts) {
+      if (_pinnedLists.get(entry.listDigest) != null) {
+        _pinnedLists.markVerified(entry.listDigest, entry.accountKeyBase64);
+      }
+    }
+    _upsertGroup(stored);
+    _ensureGroupConversation(_groupById(groupId)!);
+    _persistPinnedLists();
+    await _persist('Joined group ${stored.title}.');
+    _scheduleOwnerWriter(groupId);
+  }
+
   /// For a group with member accounts, the stored group follows the signed
   /// membership head: a record that could not be taken when it arrived (it
   /// needed earlier records or lists) is adopted once catch-up has brought
@@ -1292,6 +1427,8 @@ extension GroupAccountsController on MessengerController {
     _lastOwnerRecordAt.clear();
     _announcing.clear();
     _announcedFor.clear();
+    _pendingJoins.clear();
+    _joining.clear();
     _replayingSiblings.clear();
     _siblingAnnounceAt.clear();
     _deviceFirstSeenStore.clear();
