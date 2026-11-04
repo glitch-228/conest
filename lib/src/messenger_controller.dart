@@ -16527,12 +16527,15 @@ class MessengerController extends ChangeNotifier {
     if (newMemberIds.isEmpty) {
       return;
     }
-    final active = <String>{...group.activeMemberDeviceIds, ...newMemberIds};
+    // A group with member accounts is edited from its signed record: the
+    // devices this device only resolves from lists are not part of it.
+    final base = group.signedView;
+    final active = <String>{...base.activeMemberDeviceIds, ...newMemberIds};
     if (active.length > _maxGroupMembers) {
       throw ArgumentError('Groups are capped at $_maxGroupMembers members.');
     }
     final updated = _refreshGroupMemberProfiles(
-      group.copyWith(
+      base.copyWith(
         memberDeviceIds: [...active],
         removedDeviceIds: group.removedDeviceIds
             .where((deviceId) => !newMemberIds.contains(deviceId))
@@ -16542,7 +16545,7 @@ class MessengerController extends ChangeNotifier {
       ),
       contacts: members,
     );
-    _upsertGroup(updated);
+    await _commitGroupChange(updated);
     await _persist('Updated group ${updated.title}.');
     await _sendGroupMembershipUpdate(
       updated,
@@ -16568,7 +16571,12 @@ class MessengerController extends ChangeNotifier {
     if (!group.activeMemberDeviceIds.contains(memberDeviceId)) {
       return;
     }
-    final updated = _refreshGroupMemberProfiles(group).copyWith(
+    // A member account is removed as a whole.
+    if (group.accountOf(memberDeviceId) != null) {
+      await _removeAccountMember(group, memberDeviceId);
+      return;
+    }
+    final updated = _refreshGroupMemberProfiles(group.signedView).copyWith(
       adminDeviceIds: group.adminDeviceIds
           .where((deviceId) => deviceId != memberDeviceId)
           .toList(growable: false),
@@ -16582,7 +16590,7 @@ class MessengerController extends ChangeNotifier {
       membershipVersion: group.membershipVersion + 1,
       updatedAt: _now(),
     );
-    _upsertGroup(updated);
+    await _commitGroupChange(updated);
     await _persist('Removed a member from ${updated.title}.');
     await _sendGroupMembershipUpdate(
       updated,
@@ -16619,6 +16627,7 @@ class MessengerController extends ChangeNotifier {
       membershipVersion: group.membershipVersion + 1,
       updatedAt: _now(),
     );
+    // The leaver's own view: the group takes the leave from its message.
     _upsertGroup(updated);
     await _persist('Left group ${updated.title}.');
     await _sendGroupLeave(updated);
@@ -16681,6 +16690,12 @@ class MessengerController extends ChangeNotifier {
         'Ownership can only be transferred to an active member.',
       );
     }
+    if (group.memberAccounts.isNotEmpty) {
+      // The owner's account and its projection are tied to the owner device.
+      throw ArgumentError(
+        'Ownership cannot be transferred in a group with account members yet.',
+      );
+    }
     final previousOwner = me.deviceId;
     final adminIds = [
       previousOwner,
@@ -16704,7 +16719,7 @@ class MessengerController extends ChangeNotifier {
         updatedAt: _now(),
       ),
     );
-    _upsertGroup(updated);
+    await _commitGroupChange(updated);
     await _persist(
       'Transferred ownership of ${updated.title} to ${groupMemberLabel(newOwnerDeviceId)}.',
     );
@@ -16735,13 +16750,13 @@ class MessengerController extends ChangeNotifier {
     final formerActive = group.activeMemberDeviceIds.toList(growable: false);
     final now = _now();
     final updated = _refreshGroupMemberProfiles(
-      group.copyWith(
+      group.signedView.copyWith(
         dissolvedAt: now,
         membershipVersion: group.membershipVersion + 1,
         updatedAt: now,
       ),
     );
-    _upsertGroup(updated);
+    await _commitGroupChange(updated);
     await _persist('Deleted group ${updated.title} for everyone.');
     await _sendGroupMembershipUpdate(
       updated,
@@ -16769,6 +16784,11 @@ class MessengerController extends ChangeNotifier {
     if (!group.hasActiveMember(memberDeviceId)) {
       throw ArgumentError('Roles can only be assigned to active members.');
     }
+    // The role of a member account is the account's.
+    if (group.accountOf(memberDeviceId) != null) {
+      await _setAccountRole(group, memberDeviceId, role);
+      return;
+    }
 
     final adminIds = group.adminDeviceIds
         .where((deviceId) => deviceId != memberDeviceId)
@@ -16786,14 +16806,14 @@ class MessengerController extends ChangeNotifier {
       return;
     }
     final updated = _refreshGroupMemberProfiles(
-      group.copyWith(
+      group.signedView.copyWith(
         adminDeviceIds: adminIds,
         moderatorDeviceIds: moderatorIds,
         membershipVersion: group.membershipVersion + 1,
         updatedAt: _now(),
       ),
     );
-    _upsertGroup(updated);
+    await _commitGroupChange(updated);
     await _persist(
       'Updated ${groupMemberLabel(memberDeviceId)} in ${updated.title}.',
     );

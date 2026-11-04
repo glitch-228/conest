@@ -262,6 +262,10 @@ extension GroupAccountsController on MessengerController {
       _announcedFor.length;
 
   @visibleForTesting
+  Future<GroupRecord> commitGroupChangeForTesting(GroupRecord candidate) =>
+      _commitGroupChange(candidate);
+
+  @visibleForTesting
   void replaySiblingParkedForTesting(String groupId) =>
       _replaySiblingParked(groupId);
 
@@ -825,17 +829,25 @@ extension GroupAccountsController on MessengerController {
         final admission = held?.admissions[entry.key];
         final role = signed.roleFor(entry.key);
         if (held == null || admission == null || role == null) continue;
+        // A list that names a device some other member holds is not folded
+        // (it would be refused, and a refused record must never be stored).
+        final taken = _claimedDevices(signed, view, exceptAccountId: null);
+        if (list.devices.any(
+          (cert) => cert.deviceId != entry.key && taken.contains(cert.deviceId),
+        )) {
+          _pendingUpgrades[groupId]?.remove(entry.key);
+          continue;
+        }
         final digest = _pinnedLists.put(list);
         final privileged = role != GroupMemberRole.member;
+        final room = 16 - next.activeMemberDeviceIds.length;
         final projected = privileged
             ? [x]
             : [
-                for (final cert in list.devices.take(8))
-                  if (cert.deviceId == entry.key)
-                    x
-                  else
-                    ?profileFromCert(cert),
-              ];
+                x,
+                for (final cert in list.devices)
+                  if (cert.deviceId != entry.key) ?profileFromCert(cert),
+              ].take(1 + (room < 0 ? 0 : room)).toList();
         next = next.copyWith(
           memberAccounts: [
             ...next.memberAccounts,
@@ -890,6 +902,17 @@ extension GroupAccountsController on MessengerController {
         continue;
       }
       final pinned = _pinnedLists.get(entry.listDigest);
+      // A list that names a device another member holds is not pinned: the
+      // record would be refused. The claimant is ignored by the view.
+      final taken = _claimedDevices(
+        next,
+        view,
+        exceptAccountId: entry.accountId,
+      );
+      if (current.devices.any((c) => taken.contains(c.deviceId))) {
+        entries.add(updated);
+        continue;
+      }
       final effective = {
         for (final c in view.effectiveCerts(
           entry,
@@ -925,9 +948,10 @@ extension GroupAccountsController on MessengerController {
       final newRevocations = view
           .revoked(entry.accountId)
           .difference(pinned?.revoked.keys.toSet() ?? const <String>{});
+      // Also when the list was pinned meanwhile (the 24 hour wake of a new
+      // admin device falls due after its list was already pinned).
       final needsPin =
-          current.version > entry.listVersion &&
-          (drop.isNotEmpty || add.isNotEmpty || newRevocations.isNotEmpty);
+          drop.isNotEmpty || add.isNotEmpty || newRevocations.isNotEmpty;
       if (!needsPin) {
         entries.add(updated);
         continue;
@@ -999,9 +1023,11 @@ extension GroupAccountsController on MessengerController {
     for (final id in folds) {
       _pendingUpgrades[groupId]?.remove(id);
     }
-    _upsertGroup(next);
+    // The signed history accepts the record before anything is stored; a
+    // refusal leaves the group at its head, so the next record can follow.
     _persistPinnedLists();
-    await _persist('Updated the devices of ${next.title}.');
+    final stored = await _commitGroupChange(next);
+    await _persist('Updated the devices of ${stored.title}.');
     final targets = next.activeMemberDeviceIds
         .followedBy(signed.activeMemberDeviceIds)
         .toSet()
@@ -1015,6 +1041,61 @@ extension GroupAccountsController on MessengerController {
     if (wakeAt != null) {
       _scheduleOwnerWriter(groupId, after: wakeAt.difference(now));
     }
+  }
+
+  /// Device ids that members other than [exceptAccountId] hold: device-only
+  /// members, projected devices, and the devices other accounts list.
+  Set<String> _claimedDevices(
+    GroupRecord signed,
+    DeviceListView view, {
+    required String? exceptAccountId,
+  }) {
+    final ownProjected = {
+      for (final p in signed.memberProfiles)
+        if (exceptAccountId != null && p.accountId == exceptAccountId)
+          p.deviceId,
+    };
+    final taken = <String>{
+      for (final id in signed.memberDeviceIds)
+        if (!ownProjected.contains(id)) id,
+      signed.ownerDeviceId,
+      ...signed.removedDeviceIds,
+    };
+    for (final other in signed.memberAccounts) {
+      if (other.accountId == exceptAccountId) continue;
+      final list = view.current(other.accountId) ??
+          _pinnedLists.get(other.listDigest);
+      if (list != null) taken.addAll(list.devices.map((c) => c.deviceId));
+    }
+    return taken;
+  }
+
+  /// Signs [candidate] and has the signed history accept it, then stores it.
+  /// In a group with member accounts a record must never be stored ahead of
+  /// the history (the next record would then fail on its version), so a
+  /// refusal throws and leaves the stored group as it is. Groups without
+  /// accounts keep their older path.
+  Future<GroupRecord> _commitGroupChange(GroupRecord given) async {
+    // The profiles the wire copy will carry are the ones that are signed.
+    final candidate = _refreshGroupMemberProfiles(given);
+    final before = _groupById(candidate.groupId);
+    final accounts =
+        candidate.memberAccounts.isNotEmpty ||
+        (before?.memberAccounts.isNotEmpty ?? false);
+    if (accounts) {
+      final proof = await _groupHistory.prepareMembership(candidate);
+      if (proof == null) {
+        throw StateError('This group change could not be signed.');
+      }
+      final after = _groupById(candidate.groupId);
+      if (after == null ||
+          (before != null &&
+              after.membershipVersion != before.membershipVersion)) {
+        throw StateError('The group changed meanwhile; try again.');
+      }
+    }
+    _upsertGroup(candidate);
+    return _groupById(candidate.groupId)!;
   }
 
   GroupRecord _withoutDevices(GroupRecord group, Set<String> drop) =>
@@ -1036,6 +1117,96 @@ extension GroupAccountsController on MessengerController {
             if (!drop.contains(id)) id,
         ],
       );
+
+  /// An admin or the owner removes a member account (all its devices).
+  Future<void> _removeAccountMember(GroupRecord group, String deviceId) async {
+    final me = _requireIdentity();
+    final entry = group.accountOf(deviceId);
+    if (entry == null) return;
+    final allowed = switch (entry.role) {
+      GroupAccountRole.owner => false,
+      GroupAccountRole.admin => group.ownerDeviceId == me.deviceId,
+      _ => group.canAddMembers(me.deviceId),
+    };
+    if (!allowed) {
+      throw ArgumentError('You do not have permission to remove that member.');
+    }
+    final signed = group.signedView;
+    final gone = {
+      for (final p in signed.memberProfiles)
+        if (p.accountId == entry.accountId) p.deviceId,
+    };
+    final next = _withoutDevices(signed, gone).copyWith(
+      memberAccounts: [
+        for (final held in signed.memberAccounts)
+          if (held.accountId != entry.accountId) held,
+      ],
+      removedDeviceIds: [...signed.removedDeviceIds, ...gone],
+      membershipVersion: signed.membershipVersion + 1,
+      updatedAt: _now(),
+    );
+    await _commitGroupChange(_refreshGroupMemberProfiles(next));
+    await _persist('Removed a member from ${next.title}.');
+    await _sendGroupMembershipUpdate(
+      _groupById(group.groupId)!,
+      targetDeviceIds: [
+        ...next.activeMemberDeviceIds.where((id) => id != me.deviceId),
+        ...gone,
+      ],
+      reason: 'remove_member',
+    );
+  }
+
+  /// The owner gives a member account a role; every projected device of it
+  /// follows (devices that are not projected yet get it when they are).
+  Future<void> _setAccountRole(
+    GroupRecord group,
+    String deviceId,
+    GroupMemberRole role,
+  ) async {
+    final me = _requireIdentity();
+    final entry = group.accountOf(deviceId);
+    if (entry == null || entry.role == GroupAccountRole.owner) return;
+    final target = switch (role) {
+      GroupMemberRole.admin => GroupAccountRole.admin,
+      GroupMemberRole.moderator => GroupAccountRole.moderator,
+      _ => GroupAccountRole.member,
+    };
+    if (target == entry.role) return;
+    final signed = group.signedView;
+    final devices = {
+      for (final p in signed.memberProfiles)
+        if (p.accountId == entry.accountId && signed.hasActiveMember(p.deviceId))
+          p.deviceId,
+    };
+    final next = signed.copyWith(
+      memberAccounts: [
+        for (final held in signed.memberAccounts)
+          held.accountId == entry.accountId
+              ? held.copyWith(role: target)
+              : held,
+      ],
+      adminDeviceIds: [
+        ...signed.adminDeviceIds.where((id) => !devices.contains(id)),
+        if (target == GroupAccountRole.admin) ...devices,
+      ],
+      moderatorDeviceIds: [
+        ...signed.moderatorDeviceIds.where((id) => !devices.contains(id)),
+        if (target == GroupAccountRole.moderator) ...devices,
+      ],
+      membershipVersion: signed.membershipVersion + 1,
+      updatedAt: _now(),
+    );
+    await _commitGroupChange(_refreshGroupMemberProfiles(next));
+    await _persist('Updated a member of ${next.title}.');
+    await _sendGroupMembershipUpdate(
+      _groupById(group.groupId)!,
+      targetDeviceIds: next.activeMemberDeviceIds
+          .where((id) => id != me.deviceId)
+          .toList(growable: false),
+      reason: 'role_change',
+    );
+  }
 
   /// A device of a member account left: the account leaves with all its
   /// devices. Only the owner's app writes the record (removal is a signed
@@ -1067,7 +1238,7 @@ extension GroupAccountsController on MessengerController {
       membershipVersion: signed.membershipVersion + 1,
       updatedAt: at,
     );
-    _upsertGroup(next);
+    await _commitGroupChange(next);
     await _persist('${entry.accountId} left ${next.title}.');
     await _sendGroupMembershipUpdate(
       _groupById(group.groupId)!,

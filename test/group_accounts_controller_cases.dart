@@ -81,9 +81,15 @@ void _groupAccountsControllerTests() {
         MessengerController carol,
         MessengerController phone,
         String groupId,
+        _FakeRelayClient relay,
+        _InProcessIrohNetwork network,
       })
     >
-    joinedPhone({DateTime Function()? aliceClock, bool settled = true}) async {
+    joinedPhone({
+      DateTime Function()? aliceClock,
+      bool settled = true,
+      bool ownerWrites = true,
+    }) async {
       final network = _InProcessIrohNetwork();
       final relay = _FakeRelayClient();
       Future<MessengerController> make(
@@ -122,6 +128,10 @@ void _groupAccountsControllerTests() {
             of(alice).memberAccounts.isNotEmpty &&
             of(carol).memberAccounts.isNotEmpty,
       );
+      // From here the owner's app writes nothing more (a sibling stays one).
+      if (!ownerWrites) {
+        alice.setOwnerWriterDelayForTesting(const Duration(days: 1));
+      }
       final qr = await phone.startLinkAsNewDevice();
       await bob.startLinkFromQrCode(qr);
       await _waitForIroh(
@@ -140,14 +150,18 @@ void _groupAccountsControllerTests() {
           carol: carol,
           phone: phone,
           groupId: group.groupId,
+          relay: relay,
+          network: network,
         );
       }
       await settle(
         [alice, bob, carol, phone],
         until: () =>
-            of(alice).memberDeviceIds.contains(phoneId) &&
-            of(carol).hasActiveMember(phoneId) &&
-            of(phone).memberDeviceIds.contains(phoneId),
+            (ownerWrites
+                ? of(alice).memberDeviceIds.contains(phoneId) &&
+                      of(phone).memberDeviceIds.contains(phoneId)
+                : of(alice).hasActiveMember(phoneId)) &&
+            of(carol).hasActiveMember(phoneId),
       );
       return (
         alice: alice,
@@ -155,6 +169,8 @@ void _groupAccountsControllerTests() {
         carol: carol,
         phone: phone,
         groupId: group.groupId,
+        relay: relay,
+        network: network,
       );
     }
 
@@ -500,6 +516,74 @@ void _groupAccountsControllerTests() {
           rounds: 250,
         );
         expect(find(t.carol, 'edited on the phone'), isNull);
+      },
+    );
+
+    test(
+      'admin edits of a group with an account member stay signed: adding, '
+      'role changes and removal, and a refused record is never stored',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(ownerWrites: false);
+        final dave = await _createController(
+          relayClient: t.relay,
+          displayName: 'Dave',
+          transportRegistryFactory: t.network.registry,
+        );
+        addTearDown(dave.dispose);
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        final bobId = t.bob.identity!.deviceId;
+        final phoneId = t.phone.identity!.deviceId;
+        // A refused record (it adds a member with no identity) is not stored.
+        final head = of(t.alice);
+        final bad = head.signedView.copyWith(
+          memberDeviceIds: [...head.memberDeviceIds, 'dev-nobody'],
+          membershipVersion: head.membershipVersion + 1,
+        );
+        await expectLater(
+          t.alice.commitGroupChangeForTesting(bad),
+          throwsA(anything),
+        );
+        expect(of(t.alice).membershipVersion, head.membershipVersion);
+        // A device-only member joins while the account's sibling is in the group.
+        await _pairControllers(t.alice, dave);
+        await t.alice.addGroupMembers(
+          groupId: t.groupId,
+          members: [
+            t.alice.contacts.firstWhere(
+              (c) => c.deviceId == dave.identity!.deviceId,
+            ),
+          ],
+        );
+        expect(of(t.alice).hasActiveMember(dave.identity!.deviceId), isTrue);
+        // The owner can still sign: the account (with its sibling) gets a
+        // role, then loses it, then is removed.
+        await t.alice.setGroupMemberRole(
+          groupId: t.groupId,
+          memberDeviceId: bobId,
+          role: GroupMemberRole.moderator,
+        );
+        expect(
+          of(t.alice).memberAccounts.single.role,
+          GroupAccountRole.moderator,
+        );
+        expect(of(t.alice).roleFor(bobId), GroupMemberRole.moderator);
+        // The sibling is not in the signed projection yet: member powers.
+        expect(of(t.alice).roleFor(phoneId), GroupMemberRole.member);
+        await t.alice.setGroupMemberRole(
+          groupId: t.groupId,
+          memberDeviceId: bobId,
+          role: GroupMemberRole.member,
+        );
+        expect(of(t.alice).memberAccounts.single.role, GroupAccountRole.member);
+        await t.alice.removeGroupMember(
+          groupId: t.groupId,
+          memberDeviceId: phoneId,
+        );
+        expect(of(t.alice).memberAccounts, isEmpty);
+        expect(of(t.alice).hasActiveMember(bobId), isFalse);
+        expect(of(t.alice).hasActiveMember(phoneId), isFalse);
       },
     );
   });
