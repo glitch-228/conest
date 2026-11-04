@@ -29045,9 +29045,17 @@ void main() {
     List<int> burstFileSizes = const [64 * 1024],
     TransportKind? only = TransportKind.conestRelay,
     PlatformBridge Function()? bridge,
+    Duration messageStoreDelay = Duration.zero,
+    void Function(MessengerController laptop)? watchLaptop,
   }) async {
     final network = _InProcessIrohNetwork();
     final relay = _FakeRelayClient();
+    if (messageStoreDelay > Duration.zero) {
+      relay.storeDelayFor = (e) =>
+          e.kind == 'direct_message' || e.kind == 'group_message'
+          ? messageStoreDelay
+          : Duration.zero;
+    }
     Future<MessengerController> device() async {
       final controller = await _createController(
         relayClient: relay,
@@ -29065,6 +29073,7 @@ void main() {
 
     final phone = await device();
     final laptop = await device();
+    watchLaptop?.call(laptop);
     var polling = true;
     addTearDown(() => polling = false);
     unawaited(() async {
@@ -29237,6 +29246,53 @@ void main() {
       expect(phone['events'], isNotEmpty);
     },
     timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'a lab burst does not wait for a slow route to take each message',
+    () async {
+      final watch = Stopwatch()..start();
+      Duration? allMade;
+      final (_, laptop) = await labPair(
+        laptopRun: 'burst',
+        messageStoreDelay: const Duration(seconds: 10),
+        watchLaptop: (laptop) => unawaited(() async {
+          while (allMade == null &&
+              watch.elapsed < const Duration(minutes: 8)) {
+            await Future<void>.delayed(const Duration(milliseconds: 200));
+            if (!laptop.hasIdentity) continue;
+            var made = 0;
+            for (final contact in laptop.contacts) {
+              made += laptop
+                  .messagesFor(contact.deviceId)
+                  .where((m) => m.outbound && m.body.startsWith('lab burst'))
+                  .length;
+            }
+            for (final group in laptop.groups) {
+              made += laptop
+                  .messagesForGroup(group.groupId)
+                  .where((m) => m.outbound && m.body.startsWith('lab burst'))
+                  .length;
+            }
+            if (made >= 40) allMade = watch.elapsed;
+          }
+        }()),
+      );
+      expect(allMade, isNotNull);
+      // (After the pairing, ~20 s, the burst is 20 rounds half a second apart.)
+      expect(
+        allMade!,
+        lessThan(const Duration(seconds: 90)),
+        reason: 'the burst waited for every send (40 x 10 s)',
+      );
+      final bursts = [
+        for (final chat in laptop['chats'] as List)
+          for (final m in chat['messages'] as List)
+            if ((m['body'] as String).startsWith('lab burst')) m,
+      ];
+      expect(bursts, hasLength(40));
+    },
+    timeout: const Timeout(Duration(minutes: 5)),
   );
 
   test(

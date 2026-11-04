@@ -421,7 +421,11 @@ Future<String> runDebugRequest(
   }
   Future<void> step(String name, Future<Object?> Function() work) async {
     try {
-      final result = await work();
+      // No step waits without a bound: the run must reach its report.
+      final result = await work().timeout(
+        _stepLimit,
+        onTimeout: () => throw TimeoutException('step took over $_stepLimit'),
+      );
       steps.add({'step': name, 'ok': true, 'result': ?result});
     } catch (error) {
       steps.add({'step': name, 'ok': false, 'error': '$error'});
@@ -1121,6 +1125,9 @@ Iterable<GroupRecord> _labGroups(MessengerController controller) =>
           group.hasActiveMember(controller.identity?.deviceId ?? ''),
     );
 
+/// The longest any one step of a lab run may take.
+const Duration _stepLimit = Duration(minutes: 10);
+
 typedef _Step =
     Future<void> Function(String name, Future<Object?> Function() work);
 
@@ -1573,6 +1580,20 @@ Future<void> _callEveryone(
 /// Twenty messages to every chat and lab group, half a second apart (not
 /// waiting for each), then a 1, a 10 and a 50 MB file to each: how long
 /// each took shows in its marks ([_chatReport]).
+/// A burst message is on its way once it is made; the burst does not wait
+/// for a slow route to take it (a phone on a bad network once held the whole
+/// run for tens of minutes, past the gate's wait for its report). The send
+/// goes on, and its end is logged.
+Future<void> _launched(
+  MessengerController controller,
+  Future<void> send,
+) async {
+  final finished = send.catchError((Object error) {
+    controller.recordError('test', 'Lab burst send failed: $error');
+  });
+  await finished.timeout(const Duration(milliseconds: 500), onTimeout: () {});
+}
+
 Future<void> _burst(
   MessengerController controller,
   _Step step,
@@ -1582,18 +1603,24 @@ Future<void> _burst(
   for (var i = 1; i <= 20; i++) {
     for (final contact in _contacts(controller)) {
       await step('burst ${contact.alias} $i', () async {
-        await controller.sendMessage(
-          contact: contact,
-          body: 'lab burst $i from $me to ${contact.alias}',
+        await _launched(
+          controller,
+          controller.sendMessage(
+            contact: contact,
+            body: 'lab burst $i from $me to ${contact.alias}',
+          ),
         );
         return null;
       });
     }
     for (final group in _labGroups(controller)) {
       await step('burst ${group.title} $i', () async {
-        await controller.sendGroupMessage(
-          groupId: group.groupId,
-          body: 'lab burst $i from $me to ${group.title}',
+        await _launched(
+          controller,
+          controller.sendGroupMessage(
+            groupId: group.groupId,
+            body: 'lab burst $i from $me to ${group.title}',
+          ),
         );
         return null;
       });
