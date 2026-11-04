@@ -44,14 +44,16 @@ run_lab() { # label, then env assignments for lab.sh
 }
 
 alone() { # transport, order, scenario
-  local carriers="" matrix_url=""
+  local carriers="" matrix_url="" linger=""
   case "$1" in
     nostr | tor | reticulum | bitchat) carriers=$1 ;;
-    deltaChat) carriers=email ;;
+    # Mail is paced by its quota (50 a minute shared with receipts, by
+    # design): judged on eventual delivery, so the devices stay up longer.
+    deltaChat) carriers=email linger=600 ;;
   esac
   [ "$1" = matrix ] && matrix_url=${MATRIX_URL:-http://localhost:${MATRIX_TUNNEL:-8008}}
   run_lab "$1-$2-$3" FRESH=1 ORDER="$2" ONLY="$1" CARRIERS="$carriers" \
-    MATRIX_URL="$matrix_url" RUN="$3"
+    ${linger:+LINGER=$linger} MATRIX_URL="$matrix_url" RUN="$3"
 }
 
 together() { # order, scenario
