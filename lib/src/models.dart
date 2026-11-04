@@ -3935,7 +3935,7 @@ class GroupRecord {
           for (final raw in (json['memberAccounts'] as List).take(
             maxGroupAccounts,
           ))
-            if (GroupAccountMember.tryParse(raw) case final entry?) entry,
+            ?GroupAccountMember.tryParse(raw),
       ],
       confirmNewDevices: json['confirmNewDevices'] == true,
       groupId: json['groupId'] as String,
