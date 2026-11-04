@@ -7011,6 +7011,107 @@ void main() {
 
   group('nothing in incoming processing waits for a carrier', () {
     test(
+      'a group membership update is acknowledged after processing',
+      () async {
+        final relay = _FakeRelayClient();
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+        // Bob reads nothing until the test hands him the update.
+        relay.fetchDelay = const Duration(hours: 1);
+        relay.storedEnvelopes.clear();
+        final group = await alice.createGroup(
+          title: 'G',
+          members: alice.contacts,
+        );
+        final update = relay.storedEnvelopes.firstWhere(
+          (e) =>
+              e.kind == 'group_membership' &&
+              e.recipientDeviceId == bob.identity!.deviceId,
+        );
+        relay.storeDelayFor = (e) => e.kind == 'group_membership_ack'
+            ? const Duration(seconds: 3)
+            : Duration.zero;
+        final watch = Stopwatch()..start();
+        await bob.processEnvelopesForTesting([update], settleReceipts: false);
+        expect(
+          watch.elapsed,
+          lessThan(const Duration(seconds: 1)),
+          reason: 'processing waited for the acknowledgement',
+        );
+        expect(bob.groups.any((g) => g.groupId == group.groupId), isTrue);
+        // The acknowledgement still goes.
+        await _waitForIroh(
+          () => relay.storedEnvelopes.any(
+            (e) => e.kind == 'group_membership_ack',
+          ),
+          timeout: const Duration(seconds: 15),
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
+    test(
+      'a session offer is answered after processing',
+      () async {
+        final relay = _FakeRelayClient(
+          shouldBlackholeStore: (_, _, _, _, e) => e.kind == 'ratchet_bundle',
+        );
+        final alice = await _createController(
+          relayClient: relay,
+          displayName: 'Alice',
+          ratchetEngine: FakeRatchetEngine(),
+        );
+        final bob = await _createController(
+          relayClient: relay,
+          displayName: 'Bob',
+          ratchetEngine: FakeRatchetEngine(),
+        );
+        addTearDown(alice.dispose);
+        addTearDown(bob.dispose);
+        await _pairControllers(alice, bob);
+
+        RelayEnvelope? offer;
+        for (var i = 0; i < 100 && offer == null; i++) {
+          await alice.pollNow();
+          await bob.pollNow();
+          await alice.retryUnacknowledgedMessagesNow();
+          await bob.retryUnacknowledgedMessagesNow();
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          offer = relay.storedEnvelopes
+              .where((e) => e.kind == 'ratchet_bundle')
+              .firstOrNull;
+        }
+        expect(offer, isNotNull, reason: 'no session offer was made');
+        final receiver = offer!.recipientDeviceId == alice.identity!.deviceId
+            ? alice
+            : bob;
+        relay.storeDelayFor = (e) =>
+            e.kind == 'ratchet_bundle' || e.kind == 'ratchet_hello'
+            ? const Duration(seconds: 3)
+            : Duration.zero;
+        final watch = Stopwatch()..start();
+        await receiver.processEnvelopesForTesting([
+          offer,
+        ], settleReceipts: false);
+        expect(
+          watch.elapsed,
+          lessThan(const Duration(seconds: 1)),
+          reason: 'processing waited for the answer and the hello',
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 2)),
+    );
+
+    test(
       'answering a group history request does not hold the batch',
       () async {
         final relay = _FakeRelayClient();

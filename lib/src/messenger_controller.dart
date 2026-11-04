@@ -22207,6 +22207,30 @@ class MessengerController extends ChangeNotifier {
     return true;
   }
 
+  /// Replies that handlers owe go out after the handler, not inside it: a
+  /// carrier's turn (seconds behind a burst) must never hold the processing
+  /// of what arrived. At most 64 wait; what is dropped here is sent again by
+  /// the peer's own retry (membership, exchange, call, session).
+  int _afterProcessingPending = 0;
+
+  void _afterProcessing(String what, Future<void> Function() send) {
+    if (_disposed) return;
+    if (_afterProcessingPending >= 64) {
+      appendDebugLog('$what not sent: too many replies waiting.');
+      return;
+    }
+    _afterProcessingPending++;
+    unawaited(() async {
+      try {
+        await send();
+      } catch (error) {
+        if (!_disposed) appendDebugLog('$what not sent: $error');
+      } finally {
+        _afterProcessingPending--;
+      }
+    }());
+  }
+
   Future<void> _handleVoiceCallSignal(RelayEnvelope envelope) async {
     final service = _voiceCallService;
     final contact = _contactByDeviceId(envelope.senderDeviceId);
@@ -22257,13 +22281,16 @@ class MessengerController extends ChangeNotifier {
         identity?.experimentalVoiceCallsEnabled != true) {
       final me = identity;
       if (me != null) {
-        await _sendVoiceCallSignal(
-          VoiceCallSignal(
-            callId: signal.callId,
-            action: 'busy',
-            senderDeviceId: me.deviceId,
-            recipientDeviceId: contact.deviceId,
-            issuedAt: _now().toUtc(),
+        _afterProcessing(
+          'Call busy reply',
+          () => _sendVoiceCallSignal(
+            VoiceCallSignal(
+              callId: signal.callId,
+              action: 'busy',
+              senderDeviceId: me.deviceId,
+              recipientDeviceId: contact.deviceId,
+              issuedAt: _now().toUtc(),
+            ),
           ),
         );
       }
@@ -22274,13 +22301,16 @@ class MessengerController extends ChangeNotifier {
         !_canUseIrohForContact(contact, asleepOk: true)) {
       final me = identity;
       if (me != null) {
-        await _sendVoiceCallSignal(
-          VoiceCallSignal(
-            callId: signal.callId,
-            action: 'busy',
-            senderDeviceId: me.deviceId,
-            recipientDeviceId: contact.deviceId,
-            issuedAt: _now().toUtc(),
+        _afterProcessing(
+          'Call busy reply',
+          () => _sendVoiceCallSignal(
+            VoiceCallSignal(
+              callId: signal.callId,
+              action: 'busy',
+              senderDeviceId: me.deviceId,
+              recipientDeviceId: contact.deviceId,
+              issuedAt: _now().toUtc(),
+            ),
           ),
         );
       }
@@ -22301,13 +22331,16 @@ class MessengerController extends ChangeNotifier {
         ),
       );
       if (me != null) {
-        await _sendVoiceCallSignal(
-          VoiceCallSignal(
-            callId: signal.callId,
-            action: 'busy',
-            senderDeviceId: me.deviceId,
-            recipientDeviceId: contact.deviceId,
-            issuedAt: _now(),
+        _afterProcessing(
+          'Call busy reply',
+          () => _sendVoiceCallSignal(
+            VoiceCallSignal(
+              callId: signal.callId,
+              action: 'busy',
+              senderDeviceId: me.deviceId,
+              recipientDeviceId: contact.deviceId,
+              issuedAt: _now(),
+            ),
           ),
         );
       }
@@ -22321,13 +22354,16 @@ class MessengerController extends ChangeNotifier {
         !_appInForeground &&
         me?.androidBackgroundCallsEnabled != true) {
       if (me != null) {
-        await _sendVoiceCallSignal(
-          VoiceCallSignal(
-            callId: signal.callId,
-            action: 'busy',
-            senderDeviceId: me.deviceId,
-            recipientDeviceId: contact.deviceId,
-            issuedAt: _now(),
+        _afterProcessing(
+          'Call busy reply',
+          () => _sendVoiceCallSignal(
+            VoiceCallSignal(
+              callId: signal.callId,
+              action: 'busy',
+              senderDeviceId: me.deviceId,
+              recipientDeviceId: contact.deviceId,
+              issuedAt: _now(),
+            ),
           ),
         );
       }
@@ -23990,7 +24026,10 @@ class MessengerController extends ChangeNotifier {
             ),
           );
         }
-        await _sendAttachmentComplete(sender, attachmentId);
+        _afterProcessing(
+          'Attachment complete notice',
+          () => _sendAttachmentComplete(sender, attachmentId),
+        );
         // The account's other devices show it too (and fetch it from here).
         if (state.debugTest == null) {
           final received = _messageById(sender.deviceId, state.messageId);
@@ -25755,9 +25794,13 @@ class MessengerController extends ChangeNotifier {
       if (featureCapabilityVersion == 1 &&
           (capabilitiesChanged || requestPeerCapabilities) &&
           updated != null) {
-        await _sendReciprocalContactExchange(
-          updated,
-          recipientKnowsIdentity: true,
+        final replyTo = updated;
+        _afterProcessing(
+          'Contact exchange reply',
+          () => _sendReciprocalContactExchange(
+            replyTo,
+            recipientKnowsIdentity: true,
+          ),
         );
       }
       final me = identity;
@@ -26394,10 +26437,13 @@ class MessengerController extends ChangeNotifier {
       if (incoming.membershipVersion <= existing.membershipVersion &&
           !profileUpdate) {
         if (sameMembership) {
-          await _sendGroupMembershipAck(
-            envelope,
-            group: existing,
-            sender: sender,
+          _afterProcessing(
+            'Group membership ack',
+            () => _sendGroupMembershipAck(
+              envelope,
+              group: existing,
+              sender: sender,
+            ),
           );
         }
         return;
@@ -26473,7 +26519,10 @@ class MessengerController extends ChangeNotifier {
     }
     // Tell the sender we applied their version so they can drop the
     // pending-retry entry. Best-effort; the sender will retry on miss.
-    await _sendGroupMembershipAck(envelope, group: merged, sender: sender);
+    _afterProcessing(
+      'Group membership ack',
+      () => _sendGroupMembershipAck(envelope, group: merged, sender: sender),
+    );
     // An admin's change carries the admin's view of everyone; as the owner,
     // pass on ours where it is newer, so members the admin added do not keep
     // an old one (an address someone has since withdrawn, say).
@@ -26548,12 +26597,15 @@ class MessengerController extends ChangeNotifier {
     _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
     await _persist('${sender.alias} left ${updated.title}.');
     if (updated.ownerDeviceId == me.deviceId) {
-      await _sendGroupMembershipUpdate(
-        updated,
-        targetDeviceIds: updated.activeMemberDeviceIds
-            .where((deviceId) => deviceId != me.deviceId)
-            .toList(growable: false),
-        reason: 'member_left',
+      _afterProcessing(
+        'Group membership update',
+        () => _sendGroupMembershipUpdate(
+          updated,
+          targetDeviceIds: updated.activeMemberDeviceIds
+              .where((deviceId) => deviceId != me.deviceId)
+              .toList(growable: false),
+          reason: 'member_left',
+        ),
       );
     }
   }
@@ -36185,13 +36237,18 @@ class MessengerController extends ChangeNotifier {
     if (reason == 'answer') return;
     await sessions.startSession(id, bundle);
     _newPeerSession(peer.deviceId);
-    await _sendRatchetBundle(peer, reason: 'answer');
-    await _sendRatchetHello(peer);
-    // The peer had no usable session: anything recently sent on the old one
-    // may be undecryptable there, so send it again on the new session.
-    _bulkKeyAnnouncedAt.removeWhere((key, _) => key.startsWith('$id|'));
-    _resendRecentControls(peer);
-    _resendWaitingMessages(peer);
+    // The answer and the hello go after this handler (a carrier's turn must
+    // not hold the processing of what arrived), in order, then what waited
+    // for the new session.
+    _afterProcessing('Session answer', () async {
+      await _sendRatchetBundle(peer, reason: 'answer');
+      await _sendRatchetHello(peer);
+      // The peer had no usable session: anything recently sent on the old
+      // one may be undecryptable there, so send it again on the new session.
+      _bulkKeyAnnouncedAt.removeWhere((key, _) => key.startsWith('$id|'));
+      _resendRecentControls(peer);
+      _resendWaitingMessages(peer);
+    });
   }
 
   /// Sends a fresh session hello to [peer] (a new envelope each time, so it
