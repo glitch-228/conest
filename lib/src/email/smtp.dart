@@ -1,15 +1,29 @@
 import 'dart:convert';
 
+import '../limits/network_limiter.dart';
 import 'mail_socket.dart';
 
 /// An SMTP server refused a command.
-class SmtpException implements Exception {
+class SmtpException implements Exception, ServerSlowDown {
   const SmtpException(this.code, this.message);
   final int code;
   final String message;
 
   /// 4xx replies may succeed later.
   bool get temporary => code >= 400 && code < 500;
+
+  static final RegExp _slowDown = RegExp(
+    r'too (much|many)|rate|limit|slow down|throttl|quota',
+    caseSensitive: false,
+  );
+
+  /// The server says this account sends too fast ("450 4.7.1 Too much mail
+  /// from ..."): not a full mailbox or a bad address (one contact's), and
+  /// not a broken route. It names no wait, so the account's pace slows
+  /// ([NetworkLimiter.pushedBack]) and the mail is sent again later.
+  @override
+  Duration? get slowDownFor =>
+      temporary && _slowDown.hasMatch(message) ? Duration.zero : null;
 
   @override
   String toString() => 'SMTP $code: $message';

@@ -447,13 +447,7 @@ class EmailCarrierChannel
   /// server cut; not a full mailbox or a bad address (one contact's), and
   /// not a network that is away.
   static bool _serverPushedBack(Object error) {
-    if (error is SmtpException) {
-      return error.temporary &&
-          RegExp(
-            r'too (much|many)|rate|limit|slow down|throttl|quota',
-            caseSensitive: false,
-          ).hasMatch(error.message);
-    }
+    if (error is SmtpException) return error.slowDownFor != null;
     return error is SocketException &&
         RegExp(
           r'closed|reset|broken pipe',
