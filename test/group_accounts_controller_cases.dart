@@ -814,6 +814,158 @@ void _groupAccountsControllerTests() {
       },
     );
 
+    /// A device certificate naming [deviceId] with keys that are not its own
+    /// (an impostor's), issued by [keys].
+    Future<DeviceCert> impostorCert(
+      AccountKeys keys,
+      String accountId,
+      String deviceId,
+    ) async {
+      final impostor = await TestDevice.create(deviceId, accountId);
+      return DeviceCert.issue(
+        account: keys,
+        accountId: accountId,
+        deviceId: deviceId,
+        encryptionKeyBase64: impostor.encryptionPublicKey,
+        signingKeyBase64: impostor.signingPublicKey,
+        irohEndpointId: impostor.iroh,
+        name: 'impostor',
+        linkedAt: fixtureEpoch,
+        proofSignatureBase64: await signEd25519(
+          DeviceCert.proofBytes(
+            accountId: accountId,
+            accountKeyBase64: keys.publicKeyBase64,
+            deviceId: deviceId,
+            encryptionKeyBase64: impostor.encryptionPublicKey,
+            signingKeyBase64: impostor.signingPublicKey,
+            irohEndpointId: impostor.iroh,
+          ),
+          publicKeyBase64: impostor.signingPublicKey,
+          privateKeyBase64: impostor.signingPrivateKey,
+        ),
+      );
+    }
+
+    test(
+      'a hostile account listing another member\'s device id does not block '
+      'that member\'s record',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone();
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        final phoneId = t.phone.identity!.deviceId;
+        // Carol becomes an account too (a second account in the group).
+        await t.carol.createAccount(deviceName: 'Carol phone');
+        await settle(
+          all,
+          until: () => of(t.alice).memberAccounts.length == 2,
+          rounds: 150,
+        );
+        expect(of(t.alice).memberAccounts, hasLength(2));
+        // Carol's account (its key) lists Bob's laptop under keys that are
+        // not the laptop's, in a list newer than any pinned one.
+        final carol = t.carol.identity!;
+        final keys = AccountKeys(
+          publicKeyBase64: carol.accountKeyPublicBase64!,
+          privateKeyBase64: carol.accountKeyPrivateBase64!,
+        );
+        final ownCert = t.carol.accountDevices!.devices.first;
+        final hostile = await AccountDeviceList.issue(
+          account: keys,
+          accountId: carol.accountId,
+          version: 50,
+          devices: [
+            ownCert,
+            await impostorCert(keys, carol.accountId, t.bob.identity!.deviceId),
+          ],
+          issuedAt: DateTime.now().toUtc(),
+        );
+        await t.alice.handleGroupDevicesForTesting(t.groupId, carol.deviceId, {
+          'version': 1,
+          'groupId': t.groupId,
+          'type': 'devices',
+          'lists': [hostile.toJson()],
+        });
+        // Bob revokes his phone: the owner's record for Bob's account must
+        // still be written, whatever Carol's account claims.
+        await t.bob.revokeAccountDevice(phoneId);
+        await settle(
+          all,
+          until: () => !of(t.alice).memberDeviceIds.contains(phoneId),
+          rounds: 150,
+        );
+        expect(of(t.alice).memberDeviceIds, isNot(contains(phoneId)));
+        expect(of(t.alice).hasActiveMember(t.bob.identity!.deviceId), isTrue);
+      },
+    );
+
+    test(
+      'a pending upgrade the owner will not fold is dropped without stopping '
+      'the writer',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(ownerWrites: false);
+        final carol = t.carol.identity!;
+        final keys = await AccountKeys.generate();
+        final upgrade = await AccountUpgrade.create(
+          accountId: carol.accountId,
+          deviceId: carol.deviceId,
+          deviceSigningPublicKeyBase64: carol.signingPublicKeyBase64!,
+          deviceSigningPrivateKeyBase64: carol.signingPrivateKeyBase64!,
+          account: keys,
+          issuedAt: fixtureEpoch,
+        );
+        final own = await DeviceCert.issue(
+          account: keys,
+          accountId: carol.accountId,
+          deviceId: carol.deviceId,
+          encryptionKeyBase64: carol.publicKeyBase64,
+          signingKeyBase64: carol.signingPublicKeyBase64!,
+          irohEndpointId: carol.irohEndpointId,
+          name: 'carol',
+          linkedAt: fixtureEpoch,
+          proofSignatureBase64: await signEd25519(
+            DeviceCert.proofBytes(
+              accountId: carol.accountId,
+              accountKeyBase64: keys.publicKeyBase64,
+              deviceId: carol.deviceId,
+              encryptionKeyBase64: carol.publicKeyBase64,
+              signingKeyBase64: carol.signingPublicKeyBase64!,
+              irohEndpointId: carol.irohEndpointId,
+            ),
+            publicKeyBase64: carol.signingPublicKeyBase64!,
+            privateKeyBase64: carol.signingPrivateKeyBase64!,
+          ),
+        );
+        // The list also names the owner's device id with someone else's keys.
+        final list = await AccountDeviceList.issue(
+          account: keys,
+          accountId: carol.accountId,
+          version: 1,
+          devices: [
+            own,
+            await impostorCert(
+              keys,
+              carol.accountId,
+              t.alice.identity!.deviceId,
+            ),
+          ],
+          issuedAt: fixtureEpoch,
+        );
+        t.alice.notePendingUpgradeForTesting(
+          t.groupId,
+          upgrade,
+          list,
+          DateTime.now().toUtc(),
+        );
+        expect(t.alice.pendingUpgradeCountForTesting(t.groupId), 1);
+        await t.alice.runOwnerWriterForTesting(t.groupId);
+        expect(t.alice.pendingUpgradeCountForTesting(t.groupId), 0);
+      },
+    );
+
     test(
       'on slow routes one device of an account gets a message and passes it '
       'on to the other',

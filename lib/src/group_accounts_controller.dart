@@ -1438,7 +1438,8 @@ extension GroupAccountsController on MessengerController {
     // Folds first: a device-only member that became an account.
     final folds = <String>[];
     if (capable && !signed.confirmNewDevices) {
-      for (final entry in (_pendingUpgrades[groupId] ?? const {}).entries) {
+      for (final entry
+          in (_pendingUpgrades[groupId] ?? const {}).entries.toList()) {
         final (upgrade, list, _) = entry.value;
         final x = signed.memberProfileFor(entry.key);
         if (x == null ||
@@ -1463,7 +1464,7 @@ extension GroupAccountsController on MessengerController {
         if (held == null || admission == null || role == null) continue;
         // A list that names a device some other member holds is not folded
         // (it would be refused, and a refused record must never be stored).
-        final taken = _claimedDevices(signed, view, exceptAccountId: null);
+        final taken = _claimedDevices(signed, exceptAccountId: null);
         if (list.devices.any(
           (cert) => cert.deviceId != entry.key && taken.contains(cert.deviceId),
         )) {
@@ -1536,11 +1537,7 @@ extension GroupAccountsController on MessengerController {
       final pinned = _pinnedLists.get(entry.listDigest);
       // A list that names a device another member holds is not pinned: the
       // record would be refused. The claimant is ignored by the view.
-      final taken = _claimedDevices(
-        next,
-        view,
-        exceptAccountId: entry.accountId,
-      );
+      final taken = _claimedDevices(next, exceptAccountId: entry.accountId);
       if (current.devices.any((c) => taken.contains(c.deviceId))) {
         entries.add(updated);
         continue;
@@ -1704,10 +1701,14 @@ extension GroupAccountsController on MessengerController {
   }
 
   /// Device ids that members other than [exceptAccountId] hold: device-only
-  /// members, projected devices, and the devices other accounts list.
+  /// members, projected devices, and the devices the lists the record pins
+  /// for other accounts name. Only what the signed record pins counts, as
+  /// in the validator (R6): a list another account merely published could
+  /// otherwise name a device of this one and block every record for it,
+  /// revocation pins included. A list that names a device an earlier holder
+  /// has is the later claimant's problem and is not pinned (its own check).
   Set<String> _claimedDevices(
-    GroupRecord signed,
-    DeviceListView view, {
+    GroupRecord signed, {
     required String? exceptAccountId,
   }) {
     final ownProjected = {
@@ -1723,8 +1724,7 @@ extension GroupAccountsController on MessengerController {
     };
     for (final other in signed.memberAccounts) {
       if (other.accountId == exceptAccountId) continue;
-      final list =
-          view.current(other.accountId) ?? _pinnedLists.get(other.listDigest);
+      final list = _pinnedLists.get(other.listDigest);
       if (list != null) taken.addAll(list.devices.map((c) => c.deviceId));
     }
     return taken;
