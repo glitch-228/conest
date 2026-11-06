@@ -117,7 +117,7 @@ Answers to the plan's questions:
 
 - 5c47a2e Matrix budget, slow-down classification, strict Matrix server, tests
 - 8475f25 chatmail own accounts, quiet retry pass, tests
-- (handoff commit follows)
+- the handoff commit, then: Limiter test judged against the Matrix budget's own gap
 
 ### Tests (strict fakes) and sabotage checks
 
@@ -173,4 +173,9 @@ Nothing. No separate reviewer agent was run from this session (the changes are b
 - The first version of the "server at 2 a second" test passed under sabotage (its sends came in clusters 1 s apart, shorter than the 0.5 s wait). Made the fake's `retry_after` a whole 2 s minimum, like a real header; now the sabotage (no `pushedBack` on a slow-down) gives 38 early sends and goes red.
 - `flutter analyze`: 28 issues (baseline). New files formatted with `dart format`; hunks in existing files formatted by hand, checked against `dart format` output on copies (one line wrapped in debug_auto_run.dart); `git diff -w` clean of formatter changes. `fmt_mine.py` not run on the two big files.
 - Focused tests green: matrix_burst, server_slow_down, email_carrier, transport, the Email carrier group and the new controller tests.
-- Full suite: started under the lab lock, log `~/conest-lab/g9-<epoch>.log`.
+- Full suite (`~/conest-lab/g9-1793971086.log`, exit 0): 4 failures.
+  - "native Iroh direct contact adding works without LAN or any relay": the known local-only one.
+  - "relay blobs (M27 tier 2) a tampered blob is refused...": `_waitForIroh` timing under load; passes alone, nothing of mine in its path.
+  - "the problem report built from a controller holds no message text...": fails alone and on the base f389855 too (checked in a temporary worktree, removed): the crash-record line for the fixed 2026-11-03 clock is not shown with today's date (pitfall 20, a date bomb in that test). Not touched.
+  - "network_limiter_test: a rest does not hand out the whole burst when it ends": mine. It asserted 2 s between four turns (three gaps of the old 1 s). Now judged against the budget's own gap (3 gaps), so it still fails if the burst is handed out at once. Green now (39 pass in that file); pubspec.lock restored from `pubspec.lock.mine`.
+- CI: `debug.yml` run 42224604300 on agent/g9-gate-308 (head before the limiter-test commit): all jobs green, including the real Synapse and the real mail server carrier jobs, Android, Linux and Windows builds.
