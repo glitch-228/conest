@@ -373,9 +373,24 @@ extension GroupAccountsController on MessengerController {
     _siblingAnnounceAt['$groupId|${profile.deviceId}'] = at;
   }
 
+  /// Announced profiles per group are few, and one account takes at most as
+  /// many slots as it can have devices (a hostile account cannot crowd the
+  /// others out).
+  static const int _maxAnnouncesPerGroup = 64;
+  static const int _maxAnnouncesPerAccount = maxAccountDevices;
+
+  bool _announceRoom(
+    Map<String, GroupMemberProfile> held,
+    GroupMemberProfile profile,
+  ) =>
+      held.containsKey(profile.deviceId) ||
+      (held.length < _maxAnnouncesPerGroup &&
+          held.values.where((p) => p.accountId == profile.accountId).length <
+              _maxAnnouncesPerAccount);
+
   /// A group's devices changed: parked envelopes whose sender is a member
   /// now are read again (one run at a time per group).
-  void _replaySiblingParked(String groupId) {
+  void _replaySiblingParked(String groupId, {bool again = true}) {
     if (_disposed || !_replayingSiblings.add(groupId)) return;
     final group = _groupById(groupId);
     final now = _now().toUtc();
@@ -410,6 +425,9 @@ extension GroupAccountsController on MessengerController {
       } finally {
         _replayingSiblings.remove(groupId);
         if (!_disposed) await _saveSnapshotSilently(notify: false);
+        // Envelopes whose sender became a member during this run (a list
+        // arrived meanwhile) are read once more.
+        if (again && !_disposed) _replaySiblingParked(groupId, again: false);
       }
     }());
   }
@@ -580,9 +598,10 @@ extension GroupAccountsController on MessengerController {
     if (announce is Map<String, dynamic>) {
       try {
         final profile = GroupMemberProfile.fromJson(announce);
-        if (profile.deviceId == sender.deviceId) {
+        if (profile.deviceId == sender.deviceId &&
+            profile.accountId == sender.accountId) {
           final held = _siblingAnnounces.putIfAbsent(group.groupId, () => {});
-          if ((held.length < 64 || held.containsKey(profile.deviceId)) &&
+          if (_announceRoom(held, profile) &&
               canonicalGroupJson(held[profile.deviceId]?.toJson()) !=
                   canonicalGroupJson(profile.toJson())) {
             held[profile.deviceId] = profile;
@@ -607,7 +626,7 @@ extension GroupAccountsController on MessengerController {
               profile.deviceId == sender.deviceId ||
               cert == null ||
               held.containsKey(profile.deviceId) ||
-              held.length >= 64) {
+              !_announceRoom(held, profile)) {
             continue;
           }
           final merged = profileFromCert(cert, announced: profile);

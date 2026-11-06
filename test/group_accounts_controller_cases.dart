@@ -402,6 +402,79 @@ void _groupAccountsControllerTests() {
     );
 
     test(
+      'envelopes that become due while a replay runs are read in a second '
+      'pass',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone();
+        final carol = t.carol.identity!;
+        RelayEnvelope parked(String id) => RelayEnvelope(
+          kind: 'group_message',
+          messageId: id,
+          conversationId: t.groupId,
+          senderAccountId: carol.accountId,
+          senderDeviceId: carol.deviceId,
+          recipientDeviceId: t.alice.identity!.deviceId,
+          createdAt: DateTime.now().toUtc(),
+        );
+        t.alice.parkSiblingEnvelopeForTesting(parked('first'));
+        t.alice.replaySiblingParkedForTesting(t.groupId);
+        // Parked while the first replay is running: its call returns early.
+        t.alice.parkSiblingEnvelopeForTesting(parked('second'));
+        t.alice.replaySiblingParkedForTesting(t.groupId);
+        await t.alice.settleSiblingReplaysForTesting();
+        expect(t.alice.parkedSiblingEnvelopesForTesting, isEmpty);
+      },
+    );
+
+    test(
+      'an announced profile is the sender\'s own, and one account cannot '
+      'crowd the others out of the slots',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(ownerWrites: false);
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        Future<void> announce(
+          MessengerController from,
+          Map<String, Object?> profile,
+        ) => t.alice.handleGroupDevicesForTesting(
+          t.groupId,
+          from.identity!.deviceId,
+          {
+            'version': 1,
+            'groupId': t.groupId,
+            'type': 'devices',
+            'announce': profile,
+          },
+        );
+        final carol = t.carol.identity!;
+        final carolProfile = of(t.alice).memberProfileFor(carol.deviceId)!;
+        final base = t.alice.groupAccountStateSizeForTesting;
+        // Another account's id in a profile is not the sender's to announce.
+        await announce(t.carol, {
+          ...carolProfile.toJson(),
+          'accountId': 'acc-victim',
+        });
+        expect(t.alice.groupAccountStateSizeForTesting, base);
+        // Sixteen slots taken under Carol's account leave none for her own.
+        for (var i = 0; i < 16; i++) {
+          t.alice.noteSiblingAnnounceForTesting(
+            t.groupId,
+            GroupMemberProfile.fromJson({
+              ...carolProfile.toJson(),
+              'deviceId': 'dev-fake-$i',
+            }),
+            DateTime.now().toUtc(),
+          );
+        }
+        final full = t.alice.groupAccountStateSizeForTesting;
+        await announce(t.carol, carolProfile.toJson());
+        expect(t.alice.groupAccountStateSizeForTesting, full);
+      },
+    );
+
+    test(
       'announced profiles and pending upgrades expire',
       timeout: const Timeout(Duration(minutes: 3)),
       () async {
