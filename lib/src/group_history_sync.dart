@@ -171,11 +171,16 @@ class GroupHistoryReplica implements GroupHistoryExchange, DeviceListExchange {
   Future<GroupMembershipImport> importMembership(GroupHistoryEvent proof) =>
       _serialize(() async {
         final candidate = _membership.fork();
-        final result = await candidate.import(
-          GroupMembershipRecord.fromEvent(proof),
-        );
+        final record = GroupMembershipRecord.fromEvent(proof);
+        final result = await candidate.import(record);
         if (result == GroupMembershipImport.accepted) {
-          await beforeAppend?.call();
+          // The vault is rewritten whole: only a record that pins a list the
+          // vault does not hold yet waits for a save.
+          if (record.group.memberAccounts.any(
+            (entry) => !lists.isSaved(entry.listDigest),
+          )) {
+            await beforeAppend?.call();
+          }
           await journal.append(proof);
           _membership = candidate;
         }

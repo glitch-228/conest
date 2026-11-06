@@ -34,9 +34,8 @@ String canonicalGroupJson(Object? value) => _canonical(value);
 
 /// The content address of a device list: sha256 of its canonical JSON,
 /// signature included.
-String deviceListDigest(AccountDeviceList list) => hashes.sha256
-    .convert(utf8.encode(_canonical(list.toJson())))
-    .toString();
+String deviceListDigest(AccountDeviceList list) =>
+    hashes.sha256.convert(utf8.encode(_canonical(list.toJson()))).toString();
 
 String signingKeyHex(String signingKeyBase64) => base64Decode(
   signingKeyBase64,
@@ -128,9 +127,7 @@ class AccountFacts {
       nextListed,
       nextRevokeMin,
       {...revoked, ...other.revoked},
-      compromised ||
-          other.compromised ||
-          _violates(nextListed, nextRevokeMin),
+      compromised || other.compromised || _violates(nextListed, nextRevokeMin),
     );
   }
 }
@@ -146,6 +143,7 @@ class PinnedListStore {
   final _lists = <String, AccountDeviceList>{};
   final _sizes = <String, int>{};
   final _pinned = <String>{};
+  final _saved = <String>{};
   final _verified = <String>{};
   int _bytes = 0;
 
@@ -177,6 +175,17 @@ class PinnedListStore {
     if (_lists.containsKey(digest)) _pinned.add(digest);
   }
 
+  /// Whether the list at [digest] is in the last vault save.
+  bool isSaved(String digest) => _saved.contains(digest);
+
+  /// Notes that the vault now holds the lists at [digests] (call it after a
+  /// save that included them).
+  void markSaved(Iterable<String> digests) {
+    for (final digest in digests) {
+      if (_lists.containsKey(digest)) _saved.add(digest);
+    }
+  }
+
   /// Whether the list at [digest] was checked against [accountKeyBase64].
   bool isVerified(String digest, String accountKeyBase64) =>
       _verified.contains('$digest|$accountKeyBase64');
@@ -201,6 +210,7 @@ class PinnedListStore {
       _bytes -= _sizes[digest]!;
       _lists.remove(digest);
       _sizes.remove(digest);
+      _saved.remove(digest);
       dropped++;
     }
     return dropped;
@@ -210,13 +220,17 @@ class PinnedListStore {
     _lists.clear();
     _sizes.clear();
     _pinned.clear();
+    _saved.clear();
     _verified.clear();
     _bytes = 0;
   }
 
   List<Map<String, Object?>> toJson() => [
     for (final entry in _lists.entries)
-      {'list': entry.value.toJson(), if (_pinned.contains(entry.key)) 'pinned': true},
+      {
+        'list': entry.value.toJson(),
+        if (_pinned.contains(entry.key)) 'pinned': true,
+      },
   ];
 
   static PinnedListStore fromJson(Object? json) {
@@ -229,6 +243,8 @@ class PinnedListStore {
         final digest = store.put(list);
         if (raw['pinned'] == true) store.markPinned(digest);
       }
+      // What was loaded is what the vault holds.
+      store.markSaved(store.digests.toList());
     }
     return store;
   }
@@ -432,11 +448,7 @@ class DeviceListView {
 
   /// The certificate of [deviceId] in any verified list seen (also a revoked
   /// device's, so its old events can still be checked up to its cutoff).
-  DeviceCert? certFor(
-    String accountId,
-    String deviceId, {
-    String? accountKey,
-  }) {
+  DeviceCert? certFor(String accountId, String deviceId, {String? accountKey}) {
     final state = _accounts[accountId];
     if (state == null || (accountKey != null && state.key != accountKey)) {
       return null;
@@ -650,8 +662,8 @@ GroupResolution resolveGroup(
 }) {
   if (signed.memberAccounts.isEmpty) {
     return GroupResolution(
-      group: signed.siblingProfiles.isEmpty &&
-              signed.suppressedDeviceIds.isEmpty
+      group:
+          signed.siblingProfiles.isEmpty && signed.suppressedDeviceIds.isEmpty
           ? signed
           : signed.copyWith(
               siblingProfiles: const [],
@@ -725,7 +737,10 @@ GroupResolution resolveGroup(
         unverified.add(cert.deviceId);
         continue;
       }
-      final profile = profileFromCert(cert, announced: announces[cert.deviceId]);
+      final profile = profileFromCert(
+        cert,
+        announced: announces[cert.deviceId],
+      );
       if (profile == null) {
         unverified.add(cert.deviceId);
         continue;

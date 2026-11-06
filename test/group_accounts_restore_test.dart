@@ -55,7 +55,9 @@ void main() {
       author: alice,
       parents: [r1],
       deviceOnly: [carol],
-      accounts: [AccountSpec(bobAcc, l1, [bob1])],
+      accounts: [
+        AccountSpec(bobAcc, l1, [bob1]),
+      ],
     );
     // Alice holds everything.
     final aliceReplica = await open('alice', alice, 'alice', fx.lists);
@@ -86,10 +88,7 @@ void main() {
     );
     await carolReplica.importMembership(r1.proof);
     carolLists.put(l1);
-    expect(
-      await carolReplica.importMembership(r2.proof),
-      anything,
-    );
+    expect(await carolReplica.importMembership(r2.proof), anything);
     expect(savedBeforeAppend, isTrue);
     expect(journalHadRecord, isFalse);
     await carolJournal.close();
@@ -107,5 +106,90 @@ void main() {
     expect(pulled, greaterThanOrEqualTo(0));
     expect(restarted.behind, isFalse);
     expect(restarted.membership.current!.id, r2.id);
+  });
+
+  test('the vault is saved only before a record that pins a list not saved '
+      'yet', () async {
+    final fx = GroupFixture(groupId: 'group-acc');
+    final alice = await TestDevice.create('alice', 'acc-alice');
+    final carol = await TestDevice.create('carol', 'acc-carol');
+    final dave = await TestDevice.create('dave', 'acc-dave');
+    final bobAcc = await TestAccount.create('acc-bob');
+    final bob1 = await TestDevice.create('bob1', 'acc-bob');
+    final bob2 = await TestDevice.create('bob2', 'acc-bob');
+    final l1 = await bobAcc.list(1, [bob1]);
+    final l2 = await bobAcc.list(2, [bob1, bob2]);
+    final r1 = await fx.record(
+      owner: alice,
+      author: alice,
+      deviceOnly: [carol],
+    );
+    final r2 = await fx.record(
+      owner: alice,
+      author: alice,
+      parents: [r1],
+      deviceOnly: [carol],
+      accounts: [
+        AccountSpec(bobAcc, l1, [bob1]),
+      ],
+    );
+    // Same pinned list as r2: only a device-only member comes.
+    final r3 = await fx.record(
+      owner: alice,
+      author: alice,
+      parents: [r2],
+      deviceOnly: [carol, dave],
+      accounts: [
+        AccountSpec(bobAcc, l1, [bob1]),
+      ],
+    );
+    final r4 = await fx.record(
+      owner: alice,
+      author: alice,
+      parents: [r3],
+      deviceOnly: [carol, dave],
+      accounts: [
+        AccountSpec(bobAcc, l2, [bob1, bob2]),
+      ],
+    );
+    final lists = PinnedListStore();
+    for (final list in [l1, l2]) {
+      lists.put(list);
+    }
+    var saves = 0;
+    final replica = await open(
+      'saves',
+      alice,
+      'alice',
+      lists,
+      // What the controller does: save the vault, then note the lists saved.
+      beforeAppend: () async {
+        saves++;
+        lists.markSaved(lists.digests.toList());
+      },
+    );
+    await replica.importMembership(r1.proof);
+    expect(saves, 0, reason: 'no list pinned');
+    await replica.importMembership(r2.proof);
+    expect(saves, 1, reason: 'a new list');
+    await replica.importMembership(r3.proof);
+    expect(saves, 1, reason: 'the list is saved already');
+    await replica.importMembership(r4.proof);
+    // l2 was put before r2 and saved with l1: the store marks what it held.
+    expect(saves, 1);
+    // A list put after the last save needs one.
+    final l3 = await bobAcc.list(3, [bob1, bob2]);
+    lists.put(l3);
+    final r5 = await fx.record(
+      owner: alice,
+      author: alice,
+      parents: [r4],
+      deviceOnly: [carol, dave],
+      accounts: [
+        AccountSpec(bobAcc, l3, [bob1, bob2]),
+      ],
+    );
+    await replica.importMembership(r5.proof);
+    expect(saves, 2);
   });
 }

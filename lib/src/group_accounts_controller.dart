@@ -75,7 +75,9 @@ extension GroupAccountsController on MessengerController {
   Future<void> _savePinnedListsNow() async {
     if (_disposed) return;
     _persistPinnedLists();
+    final saved = _pinnedLists.digests.toList();
     await _saveSnapshotSilently(notify: false);
+    _pinnedLists.markSaved(saved);
   }
 
   static const Duration _pendingLifetime = Duration(days: 7);
