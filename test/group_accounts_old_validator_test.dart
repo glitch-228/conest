@@ -3,7 +3,6 @@
 // projection). The frozen validator in test/support is the pre-accounts
 // code; each record of a long scenario runs through both.
 import 'package:conest/src/group_account_member.dart';
-import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/group_membership_history.dart';
 import 'package:flutter_test/flutter_test.dart';
 

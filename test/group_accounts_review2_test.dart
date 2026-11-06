@@ -6,7 +6,6 @@ import 'package:conest/src/group_accounts.dart';
 import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/group_membership_history.dart';
 import 'package:conest/src/group_message_projection.dart';
-import 'package:conest/src/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/group_accounts_fixture.dart';
