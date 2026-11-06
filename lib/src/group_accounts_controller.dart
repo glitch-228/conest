@@ -321,6 +321,10 @@ extension GroupAccountsController on MessengerController {
   Future<void> runDeputyForTesting(String groupId) => _runDeputy(groupId);
 
   @visibleForTesting
+  Future<void> sendGroupLeaveForTesting(GroupRecord group) =>
+      _sendGroupLeave(group);
+
+  @visibleForTesting
   Future<GroupRecord> commitGroupChangeForTesting(GroupRecord candidate) =>
       _commitGroupChange(candidate);
 
@@ -2006,9 +2010,82 @@ extension GroupAccountsController on MessengerController {
     );
   }
 
+  /// A member left a group that has account members. A leave is a signed
+  /// membership change, so only the owner's app writes it, at the next
+  /// version after the signed head (the leaver's own number is never used);
+  /// the other members wait for that record. Runs off the inbound path.
+  void _memberLeft(GroupRecord group, String deviceId, DateTime at) {
+    unawaited(
+      (group.accountOf(deviceId) != null
+              ? _accountLeft(group, deviceId, at)
+              : _deviceLeft(group, deviceId, at))
+          .catchError((Object error) {
+            appendDebugLog('A leave was not recorded: $error');
+          }),
+    );
+  }
+
+  /// Signs the change [build] makes to the signed record, starting again
+  /// from the newest record when another change landed meanwhile (two
+  /// leaves in a row). [build] returns null when there is nothing to do.
+  Future<GroupRecord?> _commitFromHead(
+    String groupId,
+    GroupRecord? Function(GroupRecord signed) build,
+  ) async {
+    for (var attempt = 0; attempt < 4; attempt++) {
+      final group = _groupById(groupId);
+      if (_disposed || group == null) return null;
+      final next = build(group.signedView);
+      if (next == null) return null;
+      try {
+        return await _commitGroupChange(next);
+      } on StateError {
+        if (attempt == 3) rethrow;
+        await Future<void>.delayed(Duration(milliseconds: 20 * (attempt + 1)));
+      }
+    }
+    return null;
+  }
+
+  /// A device-only member left: the owner's app removes it.
+  Future<void> _deviceLeft(
+    GroupRecord group,
+    String deviceId,
+    DateTime at,
+  ) async {
+    final me = _snapshot.identity;
+    if (me == null ||
+        group.ownerDeviceId != me.deviceId ||
+        deviceId == me.deviceId) {
+      return;
+    }
+    final stored = await _commitFromHead(group.groupId, (signed) {
+      if (!signed.hasActiveMember(deviceId) ||
+          signed.accountOf(deviceId) != null) {
+        return null;
+      }
+      return _withoutDevices(signed, {deviceId}).copyWith(
+        removedDeviceIds: [...signed.removedDeviceIds, deviceId],
+        membershipVersion: signed.membershipVersion + 1,
+        updatedAt: at,
+      );
+    });
+    if (stored == null) return;
+    await _persist('$deviceId left ${stored.title}.');
+    await _sendGroupMembershipUpdate(
+      stored,
+      targetDeviceIds: [
+        ...stored.activeMemberDeviceIds.where((id) => id != me.deviceId),
+        deviceId,
+      ],
+      reason: 'member_left',
+    );
+  }
+
   /// A device of a member account left: the account leaves with all its
-  /// devices. Only the owner's app writes the record (removal is a signed
-  /// membership change); the owner's own account cannot leave this way.
+  /// devices, the ones the record projects and the siblings it does not.
+  /// Only the owner's app writes the record (removal is a signed membership
+  /// change); the owner's own account cannot leave this way.
   Future<void> _accountLeft(
     GroupRecord group,
     String deviceId,
@@ -2022,28 +2099,37 @@ extension GroupAccountsController on MessengerController {
         entry.role == GroupAccountRole.owner) {
       return;
     }
-    final signed = group.signedView;
-    final gone = {
-      for (final p in signed.memberProfiles)
-        if (p.accountId == entry.accountId) p.deviceId,
-    };
-    final next = _withoutDevices(signed, gone).copyWith(
-      memberAccounts: [
-        for (final held in signed.memberAccounts)
-          if (held.accountId != entry.accountId) held,
-      ],
-      removedDeviceIds: [...signed.removedDeviceIds, ...gone],
-      membershipVersion: signed.membershipVersion + 1,
-      updatedAt: at,
-    );
-    await _commitGroupChange(next);
-    await _persist('${entry.accountId} left ${next.title}.');
+    // Siblings the record does not project get told too.
+    final siblings = [
+      for (final id in group.activeMemberDeviceIds)
+        if (group.memberProfileFor(id)?.accountId == entry.accountId) id,
+    ];
+    final stored = await _commitFromHead(group.groupId, (signed) {
+      if (!signed.memberAccounts.any((e) => e.accountId == entry.accountId)) {
+        return null;
+      }
+      final gone = {
+        for (final p in signed.memberProfiles)
+          if (p.accountId == entry.accountId) p.deviceId,
+      };
+      return _withoutDevices(signed, gone).copyWith(
+        memberAccounts: [
+          for (final held in signed.memberAccounts)
+            if (held.accountId != entry.accountId) held,
+        ],
+        removedDeviceIds: [...signed.removedDeviceIds, ...gone],
+        membershipVersion: signed.membershipVersion + 1,
+        updatedAt: at,
+      );
+    });
+    if (stored == null) return;
+    await _persist('${entry.accountId} left ${stored.title}.');
     await _sendGroupMembershipUpdate(
-      _groupById(group.groupId)!,
-      targetDeviceIds: [
-        ...next.activeMemberDeviceIds.where((id) => id != me.deviceId),
-        ...gone,
-      ],
+      stored,
+      targetDeviceIds: {
+        ...stored.activeMemberDeviceIds.where((id) => id != me.deviceId),
+        ...siblings,
+      }.toList(),
       reason: 'member_left',
     );
   }

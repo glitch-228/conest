@@ -26695,10 +26695,12 @@ class MessengerController extends ChangeNotifier {
         !current.hasActiveMember(me.deviceId)) {
       return;
     }
-    // A member account leaves as a whole, through a signed record by the
-    // owner's app; other members wait for that record.
-    if (current.accountOf(envelope.senderDeviceId) != null) {
-      await _accountLeft(current, envelope.senderDeviceId, envelope.createdAt);
+    // In a group with account members a leave is a signed change: the
+    // owner's app writes the record (an account leaves as a whole), the
+    // other members wait for it.
+    if (current.memberAccounts.isNotEmpty) {
+      _reachability.noteAnySignal(sender.deviceId, at: envelope.createdAt);
+      _memberLeft(current, envelope.senderDeviceId, envelope.createdAt);
       return;
     }
     final updated = current.copyWith(

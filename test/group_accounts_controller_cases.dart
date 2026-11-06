@@ -709,9 +709,8 @@ void _groupAccountsControllerTests() {
         }
         // Group traffic flows again.
         await t.carol.sendGroupMessage(groupId: t.groupId, body: 'after fork');
-        bool got(MessengerController c) => c
-            .messagesForGroup(t.groupId)
-            .any((m) => m.body == 'after fork');
+        bool got(MessengerController c) =>
+            c.messagesForGroup(t.groupId).any((m) => m.body == 'after fork');
         await settle(all, until: () => got(t.alice) && got(t.bob), rounds: 100);
         expect(got(t.alice), isTrue);
         expect(got(t.bob), isTrue);
@@ -738,6 +737,80 @@ void _groupAccountsControllerTests() {
           throwsA(isA<StateError>()),
         );
         expect(of(t.alice).title, head.title);
+      },
+    );
+
+    test(
+      'a device-only member\'s leave in a group with accounts is signed by the '
+      'owner at the next version, whatever number the leaver claims',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(ownerWrites: false);
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        final carolId = t.carol.identity!.deviceId;
+        final base = of(t.alice).membershipVersion;
+        // Carol leaves, claiming a version far ahead of the signed head.
+        await t.carol.sendGroupLeaveForTesting(
+          of(t.carol).copyWith(
+            removedDeviceIds: [...of(t.carol).removedDeviceIds, carolId],
+            membershipVersion: base + 90,
+          ),
+        );
+        await settle(
+          all,
+          until: () =>
+              !of(t.alice).hasActiveMember(carolId) &&
+              !of(t.bob).hasActiveMember(carolId),
+          rounds: 100,
+        );
+        expect(of(t.alice).hasActiveMember(carolId), isFalse);
+        // One record, one version up: the number the leaver gave is not used.
+        expect(of(t.alice).membershipVersion, base + 1);
+        // The group still moves: the owner's next record is accepted.
+        await t.alice.setGroupMemberRole(
+          groupId: t.groupId,
+          memberDeviceId: t.bob.identity!.deviceId,
+          role: GroupMemberRole.moderator,
+        );
+        expect(of(t.alice).membershipVersion, base + 2);
+        await settle(
+          all,
+          until: () => of(t.bob).membershipVersion == base + 2,
+          rounds: 100,
+        );
+        expect(of(t.bob).membershipVersion, base + 2);
+        expect(of(t.bob).hasActiveMember(carolId), isFalse);
+      },
+    );
+
+    test(
+      'two leaves in a row are both signed, the second from the new head',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(ownerWrites: false);
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        final carolId = t.carol.identity!.deviceId;
+        final bobId = t.bob.identity!.deviceId;
+        final base = of(t.alice).membershipVersion;
+        await Future.wait([
+          t.carol.leaveGroup(t.groupId),
+          t.phone.leaveGroup(t.groupId),
+        ]);
+        await settle(
+          all,
+          until: () =>
+              !of(t.alice).hasActiveMember(carolId) &&
+              !of(t.alice).hasActiveMember(bobId),
+          rounds: 150,
+        );
+        expect(of(t.alice).hasActiveMember(carolId), isFalse);
+        expect(of(t.alice).hasActiveMember(bobId), isFalse);
+        expect(of(t.alice).memberAccounts, isEmpty);
+        expect(of(t.alice).membershipVersion, base + 2);
       },
     );
 
