@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'circumvention/circumvention.dart';
 import 'links/link_preview_data.dart';
+import 'net/link_scope.dart';
 import 'transport_models.dart';
 import 'group_file_manifest.dart';
 import 'cold_mode.dart'
@@ -504,13 +505,23 @@ List<PeerEndpoint> dedupePeerEndpoints(Iterable<PeerEndpoint> routes) {
   return deduped;
 }
 
+/// Keeps at most [maxLan], [maxDirectInternet] and [maxRelay] routes of each
+/// kind. With [dropLinkScoped] link-local hosts and zones (169.254, fe80,
+/// `%`) are left out: those mean something on one cable only, so they are
+/// never saved or taken from a contact. The flag is off for what is read
+/// from the vault, which is never trimmed of what it already holds.
 List<PeerEndpoint> prunePeerEndpointsByKind(
   Iterable<PeerEndpoint> routes, {
   int maxLan = 6,
   int maxDirectInternet = 4,
   int maxRelay = 4,
+  bool dropLinkScoped = false,
 }) {
-  final deduped = dedupePeerEndpoints(routes);
+  final deduped = dedupePeerEndpoints(
+    dropLinkScoped
+        ? routes.where((route) => !isLinkScopedHost(route.host))
+        : routes,
+  );
   final pruned = <PeerEndpoint>[];
   var lanCount = 0;
   var directInternetCount = 0;
@@ -3800,6 +3811,28 @@ class GroupRecord {
       }
     }
     return null;
+  }
+
+  /// This record with every link-local or zoned route (169.254, fe80, `%`)
+  /// of its member profiles left out: a group record from the network never
+  /// brings those in. The same record when there is none.
+  GroupRecord withoutLinkScopedRoutes() {
+    bool scoped(GroupMemberProfile profile) =>
+        profile.routeHints.any((route) => isLinkScopedHost(route.host));
+    if (!memberProfiles.any(scoped)) return this;
+    return copyWith(
+      memberProfiles: [
+        for (final profile in memberProfiles)
+          scoped(profile)
+              ? profile.copyWith(
+                  routeHints: prunePeerEndpointsByKind(
+                    profile.routeHints,
+                    dropLinkScoped: true,
+                  ),
+                )
+              : profile,
+      ],
+    );
   }
 
   GroupRecord copyWith({

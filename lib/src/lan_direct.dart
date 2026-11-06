@@ -521,6 +521,9 @@ LanAttachmentBlock _decodeAttachmentBlock(Uint8List bytes) {
 }
 
 bool isValidLanDirectHost(String host) {
+  // A zone (`fe80::1%3`) names a link of this machine: not for a contact to
+  // choose.
+  if (host.contains('%')) return false;
   final address = InternetAddress.tryParse(host.trim());
   if (address == null || address.address != host.trim()) return false;
   final bytes = address.rawAddress;

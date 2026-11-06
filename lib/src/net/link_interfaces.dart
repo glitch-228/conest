@@ -2,6 +2,9 @@ import 'dart:io';
 
 import '../local_relay_node.dart'
     show isIgnoredLanInterfaceName, isLanDiscoveryAddress;
+import 'link_scope.dart';
+
+export 'link_scope.dart';
 
 /// What a network interface is, judged by its name only. It decides labels
 /// and which links get a ping; [isIgnoredLanInterfaceName] stays the only
@@ -67,16 +70,6 @@ LinkKind classifyLinkInterface(String name) {
     return LinkKind.cable;
   }
   return LinkKind.other;
-}
-
-/// Whether [host] only means something on one link: a link-local address
-/// (169.254/16, fe80::/10) or anything with a zone (`%`). Such a host never
-/// goes into the vault, an invite or a message to a contact.
-bool isLinkScopedHost(String host) {
-  final value = host.trim();
-  if (value.contains('%')) return true;
-  final address = InternetAddress.tryParse(value);
-  return address != null && address.isLinkLocal;
 }
 
 /// The real interface listing: IPv4 only for now.
