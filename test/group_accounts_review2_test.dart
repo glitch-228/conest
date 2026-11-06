@@ -5,6 +5,7 @@ import 'package:conest/src/group_account_member.dart';
 import 'package:conest/src/group_accounts.dart';
 import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/group_membership_history.dart';
+import 'package:conest/src/group_message_projection.dart';
 import 'package:conest/src/models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -474,6 +475,70 @@ void main() {
       expect(await history.import(pin), GroupMembershipImport.accepted);
       expect(history.current!.id, pin.id);
       expect(history.admittedByRevokedAuthors(), isEmpty);
+    });
+  });
+
+  group('M4: an account that left does not undo what its devices did', () {
+    test('a sibling\'s deletion still counts after the account is removed, '
+        'and a device-only newcomer with the same account id gets no such '
+        'right', () async {
+      final r1 = await root();
+      final r2 = await withBob(r1);
+      // bob1 writes; bob2 (the same account) deletes it.
+      final original = await fx.sign(
+        author: bob1,
+        membershipId: r2.id,
+        kind: GroupEventKind.message,
+        payload: {'body': 'hello'},
+      );
+      final deletion = await fx.sign(
+        author: bob2,
+        membershipId: r2.id,
+        kind: GroupEventKind.deletion,
+        payload: {
+          'targetEventId': original.eventId,
+          'changedAt': fixtureEpoch.toIso8601String(),
+        },
+      );
+      // The account is removed by the owner.
+      final r3 = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r2],
+        deviceOnly: [carol],
+      );
+      final history = fx.history(owner: alice);
+      for (final r in [r1, r2, r3]) {
+        await history.import(r);
+      }
+      expect(r3.group.memberAccounts, isEmpty);
+      GroupMessageProjection? project(GroupHistoryEvent mutation) =>
+          GroupMessageProjection.reduce(original, [
+            mutation,
+          ], accountIdsAt: (event) => history.accountIdsAt(event.membershipId));
+      // Judged at the record the deletion names, the account was a member.
+      expect(history.accountIdsAt(deletion.membershipId), {'acc-bob'});
+      expect(project(deletion)!.deleted, isTrue);
+      // Judged by the head (no account left), the deletion would be undone.
+      expect(
+        GroupMessageProjection.reduce(original, [
+          deletion,
+        ], accountIds: history.accountIdsAt(r3.id))!.deleted,
+        isFalse,
+      );
+      // A later device that merely calls itself 'acc-bob' is not the account.
+      final impostor = await TestDevice.create('bob9', 'acc-bob');
+      final late = await fx.sign(
+        author: impostor,
+        membershipId: r3.id,
+        kind: GroupEventKind.deletion,
+        payload: {
+          'targetEventId': original.eventId,
+          'changedAt': fixtureEpoch.toIso8601String(),
+        },
+      );
+      expect(history.accountIdsAt(late.membershipId), isEmpty);
+      expect(project(late)!.deleted, isFalse);
     });
   });
 }

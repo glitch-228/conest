@@ -720,7 +720,12 @@ class GroupHistoryCoordinator {
     GroupHistoryReplica replica,
     GroupRecord snapshot,
     GroupHistoryEvent original,
-  ) => _accountIdsOf(snapshot).contains(original.authorAccountId)
+  ) =>
+      // An account that left since still counts for what it did before.
+      _accountIdsOf(snapshot).contains(original.authorAccountId) ||
+          replica.membership
+              .accountIdsAt(original.membershipId)
+              .contains(original.authorAccountId)
       ? replica.journal.targetMutations(original.eventId)
       : replica.journal.messageMutations(original);
 
@@ -744,6 +749,21 @@ class GroupHistoryCoordinator {
   Set<String> _accountIdsOf(GroupRecord snapshot) => {
     for (final entry in snapshot.memberAccounts) entry.accountId,
   };
+
+  /// The projection of [original] with [mutations], each judged by the
+  /// accounts of the record it names (see [GroupMessageProjection.reduce]).
+  GroupMessageProjection? _reduce(
+    GroupHistoryReplica replica,
+    GroupHistoryEvent original,
+    Iterable<GroupHistoryEvent> mutations,
+  ) {
+    final history = replica.membership;
+    return GroupMessageProjection.reduce(
+      original,
+      mutations,
+      accountIdsAt: (event) => history.accountIdsAt(event.membershipId),
+    );
+  }
 
   Future<void> mutateMessage(
     GroupRecord snapshot,
@@ -785,10 +805,10 @@ class GroupHistoryCoordinator {
       if (original == null || membership == null) {
         throw StateError('Waiting for signed group history.');
       }
-      final projected = GroupMessageProjection.reduce(
+      final projected = _reduce(
+        replica,
         original,
         await _mutationsFor(replica, current, original),
-        accountIds: _accountIdsOf(current),
       );
       if (projected == null || projected.deleted) {
         throw StateError('This message has already been deleted.');
@@ -841,10 +861,10 @@ class GroupHistoryCoordinator {
       if (original == null || membership == null) {
         throw StateError('Waiting for signed group history.');
       }
-      final projection = GroupMessageProjection.reduce(
+      final projection = _reduce(
+        replica,
         original,
         await replica.journal.messageMutations(original),
-        accountIds: _accountIdsOf(current),
       );
       // One reaction per account: it is mine if any of my devices set it.
       final mine = {
@@ -1062,11 +1082,7 @@ class GroupHistoryCoordinator {
     }
     // Recheck local removal after asynchronous journal/authorization reads.
     if (_closed || group(id).localRemovedAt != null) return;
-    final projection = GroupMessageProjection.reduce(
-      original,
-      permitted,
-      accountIds: _accountIdsOf(group(id)),
-    );
+    final projection = _reduce(replica, original, permitted);
     if (projection != null) {
       onMessage(id, projection);
     }

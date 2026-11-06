@@ -27,10 +27,15 @@ class GroupMessageProjection {
   /// An edit or deletion by any device of the author's account counts, and a
   /// reaction counts once per account. An account id of a device-only member
   /// is only a name its owner chose, so it never merges devices.
+  ///
+  /// [accountIdsAt] judges each mutation by the accounts of the record it
+  /// names (and wins over [accountIds]): an account that left the group
+  /// later does not take back what its devices did while it was a member.
   static GroupMessageProjection? reduce(
     GroupHistoryEvent original,
     Iterable<GroupHistoryEvent> mutations, {
     Set<String> accountIds = const {},
+    Set<String> Function(GroupHistoryEvent event)? accountIdsAt,
   }) {
     if (original.kind != GroupEventKind.message ||
         original.payload['body'] is! String) {
@@ -40,10 +45,11 @@ class GroupMessageProjection {
     GroupHistoryEvent? deletion;
     final latestReactions = <String, GroupHistoryEvent>{};
     for (final event in mutations) {
+      final accounts = accountIdsAt?.call(event) ?? accountIds;
       if (event.kind == GroupEventKind.reaction) {
         if (!isMutation(event) || !canReact(original, event)) continue;
         final emoji = event.payload['emoji'] as String;
-        final who = accountIds.contains(event.authorAccountId)
+        final who = accounts.contains(event.authorAccountId)
             ? 'account:${event.authorAccountId}'
             : event.authorDeviceId;
         final key = '$who\u0000$emoji';
@@ -54,7 +60,7 @@ class GroupMessageProjection {
         }
         continue;
       }
-      if (!canMutate(original, event, accountIds: accountIds)) continue;
+      if (!canMutate(original, event, accountIds: accounts)) continue;
       if (event.kind == GroupEventKind.deletion) {
         if (deletion == null ||
             GroupHistoryEvent.compare(event, deletion) > 0) {

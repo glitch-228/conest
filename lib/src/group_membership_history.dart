@@ -311,6 +311,16 @@ class GroupMembershipHistory {
     );
   }
 
+  /// The member accounts the record [membershipId] names (none when it is
+  /// unknown). Who may act for an account is judged at the record an event
+  /// names, so an account that left later does not undo what its devices
+  /// did while it was a member.
+  Set<String> accountIdsAt(String membershipId) {
+    final record = _records[membershipId];
+    if (record == null) return const {};
+    return {for (final entry in groupOf(record).memberAccounts) entry.accountId};
+  }
+
   /// Devices that are members in some current head.
   Set<String> get activeInSomeHead => {
     for (final id in _heads) ...groupOf(_records[id]!).activeMemberDeviceIds,

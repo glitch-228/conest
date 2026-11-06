@@ -553,6 +553,80 @@ void _groupAccountsControllerTests() {
     );
 
     test(
+      'a deletion by a device of an account stays after the account leaves, '
+      'for a member who reads the history later',
+      timeout: const Timeout(Duration(minutes: 4)),
+      () async {
+        final t = await joinedPhone();
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        ChatMessage? find(MessengerController c, String body) => c
+            .messagesForGroup(t.groupId)
+            .where((m) => m.body == body && !m.deleted)
+            .firstOrNull;
+        await t.bob.sendGroupMessage(groupId: t.groupId, body: 'doomed');
+        await t.bob.sendGroupMessage(groupId: t.groupId, body: 'kept');
+        await settle(
+          all,
+          until: () =>
+              find(t.phone, 'doomed') != null && find(t.carol, 'kept') != null,
+        );
+        final onPhone = find(t.phone, 'doomed')!;
+        for (var attempt = 0; attempt < 20; attempt++) {
+          try {
+            await t.phone.changeGroupMessage(
+              groupId: t.groupId,
+              messageId: onPhone.id,
+              delete: true,
+            );
+            break;
+          } on StateError {
+            await settle(all, rounds: 3);
+          }
+        }
+        await settle(
+          all,
+          until: () => find(t.carol, 'doomed') == null,
+          rounds: 250,
+        );
+        expect(find(t.carol, 'doomed'), isNull);
+        // The account leaves the group.
+        final bobId = t.bob.identity!.deviceId;
+        await t.bob.leaveGroup(t.groupId);
+        await settle(
+          all,
+          until: () => !of(t.carol).hasActiveMember(bobId),
+          rounds: 250,
+        );
+        expect(of(t.carol).memberAccounts, isEmpty);
+        // Dave joins afterwards and reads the retained history.
+        final dave = await _createController(
+          relayClient: t.relay,
+          displayName: 'Dave',
+          transportRegistryFactory: t.network.registry,
+        );
+        addTearDown(dave.dispose);
+        await _pairControllers(t.alice, dave);
+        await t.alice.addGroupMembers(
+          groupId: t.groupId,
+          members: [
+            t.alice.contacts.firstWhere(
+              (c) => c.deviceId == dave.identity!.deviceId,
+            ),
+          ],
+        );
+        await settle(
+          [t.alice, t.carol, dave],
+          until: () => find(dave, 'kept') != null,
+          rounds: 300,
+        );
+        expect(find(dave, 'kept'), isNotNull);
+        expect(find(dave, 'doomed'), isNull);
+      },
+    );
+
+    test(
       'admin edits of a group with an account member stay signed: adding, '
       'role changes and removal, and a refused record is never stored',
       timeout: const Timeout(Duration(minutes: 3)),
