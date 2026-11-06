@@ -249,3 +249,64 @@ New `lib/src/ui/cable_links_panel.dart`, one entry in the Connectivity list; no 
 6. **Rust link-local test:** a CI-only dummy-interface step in `rust-tests.yml` is fine.
 
 Implementation waits for the Opus design review. Its findings will be appended here.
+
+## Design review (Opus, 2026-11-05): revise first
+
+The review's verdict was "revise first". Both HIGH findings need small changes to the note, not a redesign. Fold all the items below into the Design note.
+
+### HIGH
+
+**H1. Link routes are saved into `contact.routeHints` and the vault, which breaks decision 2.**
+- **Cause:** link routes added to `_candidateRoutesForContact` are written by `_rememberLanRoutesForContact` (~34228) through four paths:
+  - route selection (~2227);
+  - `checkContactRoutes` (~10866);
+  - a LAN delivery (~31909);
+  - the LAN probe (~32560).
+- **Effect:** 169.254 addresses, and fe80 addresses with their zone, outlive the cable in the vault.
+- **Fix:**
+  - reject link-local addresses and any host containing `%` in `_rememberLanRoutesForContact` (one choke point), and keep the planned divert in `_rememberContactLanRouteFromBeacon`;
+  - put the same rule in `prunePeerEndpointsByKind`;
+  - test: deliver over the cable first, then assert that no such host is in the vault.
+
+**H2. The cable ping's reply goes to the ping socket's ephemeral port, not to 7668.**
+- **Cause:** the handler at ~20786 replies to `datagram.address:datagram.port`. Old peers do the same and can't be changed.
+- **Fix:**
+  - the ping socket listens for its 5 s lifetime and feeds `_onPairingBeaconDatagram`, with the same 50/s limiter and counters;
+  - `FakeBeaconNetwork` models a separate port per socket, so this case is caught.
+
+### MEDIUM
+
+**M1. Forged beacons can crowd out the real entry** (a denial of service on shared segments).
+- Once an entry for a (device, link) is confirmed by an authenticated success (a receipt over that route, or an Iroh connection), pin it. Unconfirmed entries never evict it.
+- At most 2 unconfirmed entries per (device, link).
+- At most one deviceId per source address.
+
+**M2. Drop the inbound-source hint source:**
+- Iroh: `NativeInboundEnvelope` carries no source address.
+- LAN: note the source only after the envelope decrypts with sender == deviceId, and only if it was not forwarded or stored. A forwarder's or depositor's address must never be mapped to the original sender.
+
+**M3. The LAN-direct file path never gets a link-local endpoint**, because `senderLanAddresses` excludes link-local and `_groupLanDirectEndpoint` reads only `lanRouteHints`.
+- Build a runtime `LanDirectEndpoint` from the LinkTable host plus the peer's advertised LAN-direct port. Use it for 1:1 files and group files (group parity).
+- If that is not feasible, state that link-local files go over Iroh, and measure it in the lab.
+
+**M4. The Android fallback is switched off as soon as it starts.**
+- `registerNetworkCallback` calls `onAvailable` at once, and tethering with the phone as host raises no callback.
+- Only a `USB_STATE` or `TETHER_STATE_CHANGED` event switches the fallback off.
+- Also observe a known contact's ping source (the host only).
+
+### LOW
+
+- **Fact 8:** Iroh keeps app-supplied paths until its actor has been idle for 60 s.
+  - Don't clear the Rust hint cache on every `network_change`. Overwrite or prune it instead.
+- **Hint order:**
+  - fresh hints may take only 8 minus the number of stored hints (at least 4 fresh);
+  - stored hints go up to 4 (`maxDirectInternet`).
+- **A bad hint:** `send_to_with_hints` gives up on the first hint it can't parse.
+  - The Dart side drops entries it can't normalise.
+  - The recording fake fails the whole send in that case.
+- **`LinkMonitor` stop and dispose:**
+  - `stop` signals the waiter at once (condvar);
+  - the handle is freed only after the blocking wait returns (shared ownership);
+  - test: dispose while a wait is running.
+- **First contact over a cable:** when a contact or group member is added, send a ping on the cable links already present.
+- **Privacy:** state in the note that `irohPort4`/`irohPort6` go out in the cleartext beacon unless quiet LAN is on, and that cable pings broadcast the deviceId. This is the same exposure as the existing `checkContactRoutes` pings.
