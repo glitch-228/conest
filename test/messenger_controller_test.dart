@@ -20948,6 +20948,58 @@ void main() {
       );
       expect(second.emailCarrierConfig!.mail, first.emailCarrierConfig!.mail);
       expect(File('${root.path}/second.json.email').existsSync(), isFalse);
+      // A chatmail account stays one when the lab hands it back: its mail
+      // is paced per minute (the server's limit), not by the hourly quota
+      // of an ordinary provider, which a burst used up in minutes (gate,
+      // build 308: every send refused for the next 57 minutes).
+      expect(second.emailCarrierConfig!.chatmail, isTrue);
+      final budget = second.limiterForTesting(TransportKind.deltaChat)!.budget;
+      expect(budget.window, const Duration(minutes: 1));
+      expect(budget.quota, lessThanOrEqualTo(60));
+      // Files the lab kept before this field existed still work.
+      expect(
+        DebugRunRequest.fromArgs([
+          '--debug-run=none',
+          '--debug-email=a@chat.test,pw,chat.test,chat.test',
+        ])!.email,
+        isNotNull,
+      );
+    });
+
+    test('an account on a known chatmail server is paced as one, kept by '
+        'the lab before it said so or entered by hand', () async {
+      final server = await FakeMailServer.start();
+      addTearDown(server.close);
+      server.passwords['me@tarpit.fun'] = 'right';
+      server.passwords['me@gmail.test'] = 'right';
+      final alice = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Alice',
+        mailConnector: server.connect,
+      );
+      addTearDown(alice.dispose);
+      await alice.enableOwnEmailCarrier(
+        mail: 'me@tarpit.fun',
+        password: 'right',
+        imapHost: 'tarpit.fun',
+        smtpHost: 'tarpit.fun',
+      );
+      final config = alice.emailCarrierConfig!;
+      expect(config.chatmail, isTrue);
+      // The user gave this account: it is never moved to another server.
+      expect(config.serverPicked, isFalse);
+      expect(
+        alice.limiterForTesting(TransportKind.deltaChat)!.budget.window,
+        const Duration(minutes: 1),
+      );
+      // An ordinary provider keeps the hourly quota.
+      await alice.enableOwnEmailCarrier(
+        mail: 'me@gmail.test',
+        password: 'right',
+        imapHost: 'imap.gmail.test',
+        smtpHost: 'smtp.gmail.test',
+      );
+      expect(alice.emailCarrierConfig!.chatmail, isFalse);
     });
 
     test('a failed login keeps email off', () async {
@@ -21900,6 +21952,71 @@ void main() {
         );
       });
     }
+
+    test('a retry that finds only the store that holds the message is '
+        'quiet: no send error for every pass', () async {
+      // Build 308, Matrix alone: 40 "found no route: No eligible transport
+      // route" per device, one for each forced pass over messages that the
+      // carrier already stored. The pass is right to leave them; it is not
+      // an error.
+      final relay = _FakeRelayClient();
+      relay.shouldFailStore = (_, _, _, _, envelope) =>
+          envelope.kind == 'direct_message';
+      // The store is the only route for messages; the relay carries the
+      // pairing while the store is down.
+      final keeper = _KeepingAdapter()..accepting = false;
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        keepErrorHistory: true,
+        transportRegistryFactory: (_) async => TransportRegistry([keeper]),
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      keeper.accepting = true;
+      // Only this carrier, as the gate's single-transport runs.
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(
+          lanEnabled: false,
+          transportPolicies: {
+            for (final kind in TransportKind.values)
+              kind: kind == keeper.kind
+                  ? TransportPolicy.automatic
+                  : TransportPolicy.disabled,
+          },
+        ),
+      );
+      await alice.sendMessage(contact: alice.contacts.single, body: 'stored');
+      final id = alice
+          .messagesFor(bob.identity!.deviceId)
+          .singleWhere((m) => m.body == 'stored')
+          .id;
+      expect(keeper.stored, contains(id));
+      expect(
+        alice.errorHistoryEntries.where(
+          (e) => e.kind == 'send' && e.text.contains('No eligible'),
+        ),
+        isEmpty,
+        reason: 'the first send found a route',
+      );
+      for (var pass = 0; pass < 3; pass++) {
+        await alice.retryUnacknowledgedMessagesNow();
+      }
+      expect(
+        alice.errorHistoryEntries.where(
+          (e) => e.kind == 'send' && e.text.contains('No eligible'),
+        ),
+        isEmpty,
+        reason: 'a pass that only finds the store holding it is no error',
+      );
+      // It was not sent again to the store: held there, not forgotten.
+      expect(keeper.stored.where((stored) => stored == id), hasLength(1));
+    });
 
     test('a group message stored on a relay still goes on to a route that '
         'was failing', () async {

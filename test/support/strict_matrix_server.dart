@@ -75,13 +75,21 @@ class _StepTimer implements Timer {
 /// limit to to-device messages of its own types, so by default there is
 /// none ([perSecond] null).
 class StrictMatrixServer implements MatrixCarrierChannel {
-  StrictMatrixServer(this._clock, {this.perSecond, this.burst = 10});
+  StrictMatrixServer(
+    this._clock, {
+    this.perSecond,
+    this.burst = 10,
+    this.minRetryAfter = const Duration(seconds: 2),
+  });
 
   final StepClock _clock;
 
   /// Frames per second one account may send; null: no limit.
   final double? perSecond;
   final int burst;
+
+  /// The shortest `Retry-After` it names (servers name whole seconds).
+  final Duration minRetryAfter;
 
   double _tokens = 0;
   DateTime? _refilledAt;
@@ -123,9 +131,10 @@ class StrictMatrixServer implements MatrixCarrierChannel {
       _refilledAt = now;
       if (_tokens < 1) {
         refusals++;
-        final wait = Duration(
+        var wait = Duration(
           milliseconds: ((1 - _tokens) / limit * 1000).ceil(),
         );
+        if (wait < minRetryAfter) wait = minRetryAfter;
         _refusedAt = now;
         _notBefore = now.add(wait);
         throw MatrixException(
