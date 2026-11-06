@@ -92,4 +92,29 @@ void main() {
       expect(isValidLanDirectHost('fe80::1%lo'), isFalse);
     });
   });
+
+  group('GlobalConnectivityPreferences.cableLinksEnabled', () {
+    test(
+      'is on for a vault that never heard of it and is not written then',
+      () {
+        final loaded = GlobalConnectivityPreferences.fromJson(
+          const <String, dynamic>{},
+        );
+        expect(loaded.cableLinksEnabled, isTrue);
+        expect(loaded.toJson().containsKey('cableLinksEnabled'), isFalse);
+      },
+    );
+
+    test('off survives a save and load, and copyWith', () {
+      final off = const GlobalConnectivityPreferences().copyWith(
+        cableLinksEnabled: false,
+      );
+      expect(off.toJson()['cableLinksEnabled'], isFalse);
+      expect(
+        GlobalConnectivityPreferences.fromJson(off.toJson()).cableLinksEnabled,
+        isFalse,
+      );
+      expect(off.copyWith(lanEnabled: false).cableLinksEnabled, isFalse);
+    });
+  });
 }

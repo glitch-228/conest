@@ -755,6 +755,7 @@ extension AutoDownloadPresetPolicy on AutoDownloadPreset {
 class GlobalConnectivityPreferences {
   const GlobalConnectivityPreferences({
     this.lanEnabled = true,
+    this.cableLinksEnabled = true,
     this.onlineEnabled = true,
     this.irohRelayEnabled = true,
     this.irohRelayUrls = const [],
@@ -792,6 +793,10 @@ class GlobalConnectivityPreferences {
   });
 
   final bool lanEnabled;
+
+  /// Whether Conest looks for contacts on cables and USB tethering links
+  /// (169.254, tethering subnets). Off: no ping, no hints from them.
+  final bool cableLinksEnabled;
   final bool onlineEnabled;
   final bool irohRelayEnabled;
 
@@ -854,6 +859,7 @@ class GlobalConnectivityPreferences {
 
   GlobalConnectivityPreferences copyWith({
     bool? lanEnabled,
+    bool? cableLinksEnabled,
     bool? onlineEnabled,
     bool? irohRelayEnabled,
     List<String>? irohRelayUrls,
@@ -885,6 +891,7 @@ class GlobalConnectivityPreferences {
           shareIdentifyingCarriersWithGroups ??
           this.shareIdentifyingCarriersWithGroups,
       lanEnabled: lanEnabled ?? this.lanEnabled,
+      cableLinksEnabled: cableLinksEnabled ?? this.cableLinksEnabled,
       onlineEnabled: onlineEnabled ?? this.onlineEnabled,
       irohRelayEnabled: irohRelayEnabled ?? this.irohRelayEnabled,
       irohRelayUrls: irohRelayUrls ?? this.irohRelayUrls,
@@ -901,6 +908,7 @@ class GlobalConnectivityPreferences {
 
   Map<String, dynamic> toJson() => {
     'lanEnabled': lanEnabled,
+    if (!cableLinksEnabled) 'cableLinksEnabled': false,
     'onlineEnabled': onlineEnabled,
     'irohRelayEnabled': irohRelayEnabled,
     'irohRelayUrls': irohRelayUrls,
@@ -939,6 +947,7 @@ class GlobalConnectivityPreferences {
     );
     return GlobalConnectivityPreferences(
       lanEnabled: lanEnabled,
+      cableLinksEnabled: json['cableLinksEnabled'] != false,
       onlineEnabled: onlineEnabled,
       storageReserveEnabled: json['storageReserveEnabled'] as bool? ?? true,
       irohTransferLimitEnabled:
