@@ -8791,6 +8791,10 @@ class MessengerController extends ChangeNotifier {
     int imapPort = 993,
     required String smtpHost,
     int smtpPort = 465,
+    // An account on a chatmail server given back (the lab keeps them): its
+    // mail is paced by the server's per-minute limit, not by the hourly
+    // quota of an ordinary provider.
+    bool chatmail = false,
   }) async {
     final address = mail.trim().toLowerCase();
     if (!isPlausibleMailAddress(address) ||
@@ -8809,6 +8813,10 @@ class MessengerController extends ChangeNotifier {
         smtpHost: smtpHost.trim(),
         smtpPort: smtpPort,
         mailboxKey: EmailCarrierConfig.newMailboxKey(),
+        chatmail:
+            chatmail || defaultChatmailDomains.contains(imapHost.trim()),
+        // The user gave this account: it is never moved to another server.
+        serverPicked: false,
       ),
     );
   }
@@ -29638,6 +29646,7 @@ class MessengerController extends ChangeNotifier {
           envelope: envelope,
           background: background,
           excludeRouteKeys: stored.keys.toSet(),
+          quietWithoutOtherRoute: true,
         );
       } on TransportSendCancelled {
         rethrow;
@@ -31565,6 +31574,9 @@ class MessengerController extends ChangeNotifier {
     // ones resting after failures: a route that works one way must not
     // keep the other side from learning this device's session keys.
     bool ignoreRouteBackoff = false,
+    // A retry that leaves out the stores holding the message: finding no
+    // other route to try is no error to report.
+    bool quietWithoutOtherRoute = false,
   }) async {
     // Defense in depth: the crypto layer already can't derive a shared
     // secret for a pending or archived contact (publicKeyBase64 is empty
@@ -31882,7 +31894,9 @@ class MessengerController extends ChangeNotifier {
           'Routes wait after earlier failures (${waiting.take(3).join('; ')}).',
         );
       }
-      if (!background) {
+      if (!background &&
+          !(quietWithoutOtherRoute &&
+              '$lastError'.contains('No eligible transport'))) {
         recordError(
           'send',
           '${_boundedLogValue(envelope.kind)} to ${contact.alias} '

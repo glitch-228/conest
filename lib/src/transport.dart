@@ -453,7 +453,10 @@ class TransportRegistry {
         rethrow;
       } catch (error) {
         lastError = error;
-        var limiterHeld = error is LimiterRefused;
+        // A server's "slow down" (429, "450 Too much mail") is the account
+        // being held back too: it says nothing about the route.
+        var limiterHeld =
+            error is LimiterRefused || serverSlowDownOf(error) != null;
         if (error is TimeoutException) {
           // The attempt ran out: stop the send, so it does not go on
           // sending frames the caller has given up on.
@@ -490,11 +493,19 @@ class TransportRegistry {
     final failures = attempts.map((attempt) => attempt.error).nonNulls.toList();
     if (routes.isNotEmpty &&
         failures.isNotEmpty &&
-        failures.every((error) => error is LimiterRefused)) {
+        failures.every(
+          (error) => error is LimiterRefused || serverSlowDownOf(error) != null,
+        )) {
       Duration? soonest;
-      for (final error in failures.cast<LimiterRefused>()) {
-        final wait = error.retryIn;
-        if (wait != null && (soonest == null || wait < soonest)) soonest = wait;
+      for (final error in failures) {
+        final wait = error is LimiterRefused
+            ? error.retryIn
+            : serverSlowDownOf(error);
+        if (wait != null &&
+            wait > Duration.zero &&
+            (soonest == null || wait < soonest)) {
+          soonest = wait;
+        }
       }
       throw LimiterRefused(LimiterRefusal.wouldWait, retryIn: soonest);
     }

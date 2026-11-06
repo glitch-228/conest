@@ -28,7 +28,7 @@
 ///                                         switch these carriers on first
 ///          [--debug-reticulum=HOST:PORT]  the Reticulum node to use
 ///          [--debug-chatmail=DOMAIN]      the chatmail server for email
-///          [--debug-email=MAIL,PASSWORD,IMAP_HOST,SMTP_HOST]
+///          [--debug-email=MAIL,PASSWORD,IMAP_HOST,SMTP_HOST[,chatmail]]
 ///                                         use this mail account instead of
 ///                                         signing up (a lab device's own,
 ///                                         kept from an earlier run)
@@ -164,8 +164,8 @@ class DebugRunRequest {
   /// default one).
   final String? chatmail;
 
-  /// MAIL,PASSWORD,IMAP_HOST,SMTP_HOST of a mail account to use instead of
-  /// signing up: chatmail servers limit sign-ups per address, and every
+  /// MAIL,PASSWORD,IMAP_HOST,SMTP_HOST[,chatmail] of a mail account to use
+  /// instead of signing up: chatmail servers limit sign-ups per address, and every
   /// fresh lab run would otherwise make new accounts. After a sign-up the
   /// account is written to `<report>.email` for the lab to keep.
   final String? email;
@@ -277,7 +277,9 @@ class DebugRunRequest {
       reticulum: value('debug-reticulum'),
       chatmail: value('debug-chatmail'),
       email: switch (value('debug-email')) {
-        final text? when text.split(',').length == 4 && text.length <= 1024 =>
+        final text?
+            when {4, 5}.contains(text.split(',').length) &&
+                text.length <= 1024 =>
           text,
         _ => null,
       },
@@ -613,12 +615,15 @@ Future<String> runDebugRequest(
               await controller.enableTorCarrier();
             case 'email':
               if (request.email case final account?) {
-                final [mail, password, imap, smtp] = account.split(',');
+                final [mail, password, imap, smtp, ...rest] = account.split(
+                  ',',
+                );
                 await controller.enableOwnEmailCarrier(
                   mail: mail,
                   password: password,
                   imapHost: imap,
                   smtpHost: smtp,
+                  chatmail: rest.contains('chatmail'),
                 );
               } else {
                 await controller.enableChatmailCarrier(request.chatmail);
@@ -631,6 +636,7 @@ Future<String> runDebugRequest(
                       config.password,
                       config.imapHost,
                       config.smtpHost,
+                      if (config.chatmail) 'chatmail',
                     ].join(','),
                   );
                 }

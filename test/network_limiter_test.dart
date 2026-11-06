@@ -332,7 +332,11 @@ void main() {
       // After the rest the bucket is empty: one a gap, not ten at once.
       expect(turns.length, 4);
       expect(turns.first, greaterThanOrEqualTo(60000));
-      expect(turns.last - turns.first, greaterThanOrEqualTo(2000));
+      // Three gaps between four turns (not all four at the same moment).
+      expect(
+        turns.last - turns.first,
+        greaterThanOrEqualTo(NetworkBudgets.matrix.gap.inMilliseconds * 3),
+      );
     });
 
     test('a clock that jumps back does not stall the account', () async {

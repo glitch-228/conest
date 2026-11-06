@@ -38,13 +38,19 @@ abstract final class NetworkBudgets {
     maxWait: Duration(seconds: 45),
   );
 
-  /// Matrix: synapse's default `rc_message` is 0.2 a second with a burst of
-  /// 10, and matrix.org is more generous; the answer to going over is
-  /// `M_LIMIT_EXCEEDED` with `retry_after_ms`, obeyed exactly. One a second
-  /// with a burst of 10 stays close to that.
+  /// Matrix: the carrier sends to-device messages of its own event type, and
+  /// Synapse applies no rate limit to those (`rc_message` is for room
+  /// events; only `m.room_key_request` to other users is limited, checked
+  /// in its source, November 2026). A server that does limit answers
+  /// `M_LIMIT_EXCEEDED` with `retry_after`, obeyed exactly. The gate's
+  /// burst (20 messages to each contact and group, two seconds apart, and
+  /// their receipts) offers about three sends a second from one account;
+  /// with one a second (this budget until build 308) the queue stood at its
+  /// 45 s limit and messages took 54 s (p50) to 117 s (p95). Five a second
+  /// with a burst of 10 carries it and stays below any limit seen.
   static const LimiterBudget matrix = LimiterBudget(
     name: 'Matrix',
-    gap: Duration(seconds: 1),
+    gap: Duration(milliseconds: 200),
     burst: 10,
     maxGap: Duration(seconds: 30),
     maxQueue: 64,
