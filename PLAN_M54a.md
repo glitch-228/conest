@@ -238,3 +238,14 @@ New `lib/src/ui/cable_links_panel.dart`, one entry in the Connectivity list; no 
 ## Progress log
 
 - 2026-11-04: design note written (no code). Checked the Today facts against the code, the Dart SDK 3.12.1 sources, Iroh 1.0.3 and netwatch 0.19.1; two spikes in the scratchpad (not in the repo) confirmed that Dart UDP ignores IPv6 scope ids and that `includeLinkLocal` hides 169.254. Corrections are in section 0. Decision: keep link-local out of `identity.lanAddresses` and out of everything sent to contacts, use a runtime link table. Waiting for the design review.
+
+## Maintainer's answers to the design note's open questions (2026-11-05)
+
+1. **IPv4 first:** ship P1a (IPv4: 169.254, tethering subnets, I1 hints) first. P1b (IPv6 link-local) comes after P1a's lab.
+2. **Link-local addresses stay local:** 169.254 and fe80 addresses never go into `identity.lanAddresses` or anything sent to contacts. They live in the runtime table only.
+3. **Second netwatch monitor:** a second monitor in `conest_native` is fine.
+4. **Android broadcasts:** rely on them, with the bounded foreground fallback. Verify them in the lab.
+5. **P2 and P3:** P2 (AOA) comes later, Linux only, with Windows deferred. P3 (serial) is deferred.
+6. **Rust link-local test:** a CI-only dummy-interface step in `rust-tests.yml` is fine.
+
+Implementation waits for the Opus design review. Its findings will be appended here.
