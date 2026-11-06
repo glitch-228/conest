@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:conest/src/models.dart';
 import 'package:conest/src/net/cable_links.dart';
 import 'package:conest/src/net/link_interfaces.dart';
 import 'package:conest/src/net/link_table.dart';
@@ -61,6 +62,7 @@ class Rig {
           ),
         ),
       ],
+      enabled: () => enabled,
       isKnownDevice: knownDevices.contains,
       feedBeacon: (datagram, ifIndex) {
         beaconsFed++;
@@ -99,6 +101,7 @@ class Rig {
   int beaconsFed = 0;
   int networkChanges = 0;
   bool probeAnswer = true;
+  bool enabled = true;
   final probes = <(String, String, String)>[];
   final confirmed = <LinkEntry>[];
   final dropped = <LinkEntry>[];
@@ -593,6 +596,153 @@ void main() {
       expect(rig.links.candidateRoutes('dev-peer'), isEmpty);
       expect(rig.links.hints.portsFor('dev-peer'), isNull);
       expect(rig.links.probesInFlight, 0);
+      rig.links.dispose();
+    });
+  });
+
+  group('switched off', () {
+    testWidgets('nothing is listed, pinged, noted or probed while the '
+        'setting is off', (tester) async {
+      // The link is known (the setting was on), then it is switched off.
+      await rig.links.onLinksChanged();
+      await tester.pump(const Duration(seconds: 6));
+      rig.probes.clear();
+      final listings = rig.interfaces.calls;
+      final opened = rig.pingSocketsOpened;
+      rig.enabled = false;
+      await rig.links.onLinksChanged();
+      await rig.links.pingNow();
+      await tester.pump(const Duration(seconds: 1));
+      expect(rig.interfaces.calls, listings);
+      expect(rig.pingSocketsOpened, opened);
+      expect(
+        rig.links.observeBeacon(
+          deviceId: 'dev-peer',
+          address: '169.254.20.77',
+          relayPort: 7667,
+          ifIndex: 7,
+        ),
+        isFalse,
+      );
+      expect(rig.probes, isEmpty);
+      rig.links.dispose();
+    });
+  });
+
+  group('a route that keeps failing', () {
+    PeerEndpoint route(String host) =>
+        PeerEndpoint(kind: PeerRouteKind.lan, host: host, port: 7667);
+
+    Future<void> confirmPeer(WidgetTester tester) async {
+      await rig.links.onLinksChanged();
+      await tester.pump(const Duration(milliseconds: 50));
+      rig.links.onProbeReply(rig.probes.first.$3, 'dev-peer');
+      await tester.pump(const Duration(seconds: 6));
+    }
+
+    testWidgets('is evicted after three failures in a row, and the link is '
+        'looked at again', (tester) async {
+      await confirmPeer(tester);
+      final opened = rig.pingSocketsOpened;
+      rig.links.noteRouteOutcome(route('169.254.20.2'), false);
+      rig.links.noteRouteOutcome(route('169.254.20.2'), false);
+      expect(rig.links.candidateRoutes('dev-peer'), isNotEmpty);
+      rig.links.noteRouteOutcome(route('169.254.20.2'), false);
+      expect(rig.links.candidateRoutes('dev-peer'), isEmpty);
+      expect(rig.dropped.map((e) => e.address), ['169.254.20.2']);
+      await tester.pump(const Duration(seconds: 6));
+      expect(rig.pingSocketsOpened, opened + 1);
+      rig.links.dispose();
+    });
+
+    testWidgets('a success in between starts the count again; other routes '
+        'are none of its business', (tester) async {
+      await confirmPeer(tester);
+      rig.links.noteRouteOutcome(route('169.254.20.2'), false);
+      rig.links.noteRouteOutcome(route('169.254.20.2'), false);
+      rig.links.noteRouteOutcome(route('169.254.20.2'), true);
+      rig.links.noteRouteOutcome(route('169.254.20.2'), false);
+      rig.links.noteRouteOutcome(route('169.254.20.2'), false);
+      for (var i = 0; i < 10; i++) {
+        rig.links.noteRouteOutcome(route('192.168.1.9'), false);
+      }
+      expect(rig.links.candidateRoutes('dev-peer'), isNotEmpty);
+      expect(rig.dropped, isEmpty);
+      rig.links.dispose();
+    });
+  });
+
+  group('Iroh hints', () {
+    testWidgets('a confirmed cable host and a healthy LAN host come first, '
+        'with the ports the contact told us', (tester) async {
+      await rig.links.onLinksChanged();
+      await tester.pump(const Duration(milliseconds: 50));
+      rig.links.onProbeReply(rig.probes.first.$3, 'dev-peer');
+      await tester.pump(const Duration(seconds: 6));
+      rig.links.notePorts('dev-peer', {'iroh4': 41000, 'junk': 1});
+      PeerRouteHealth health(PeerEndpoint route, {required bool ok}) =>
+          PeerRouteHealth(
+            route: route,
+            available: ok,
+            latency: null,
+            checkedAt: rig.now.subtract(const Duration(minutes: 1)),
+          );
+      final lanOk = PeerEndpoint(
+        kind: PeerRouteKind.lan,
+        host: '192.168.7.7',
+        port: 7667,
+      );
+      final lanDown = PeerEndpoint(
+        kind: PeerRouteKind.lan,
+        host: '192.168.7.8',
+        port: 7667,
+      );
+      final hints = rig.links.irohHints(
+        deviceId: 'dev-peer',
+        stored: [
+          PeerEndpoint(
+            kind: PeerRouteKind.directInternet,
+            host: '203.0.113.9',
+            port: 5000,
+            protocol: PeerRouteProtocol.udp,
+          ),
+        ],
+        lanHints: [lanOk, lanDown],
+        healthOf: (route) => route.host == '192.168.7.7'
+            ? health(route, ok: true)
+            : health(route, ok: false),
+      );
+      expect(hints.last, '203.0.113.9:5000');
+      expect(hints.take(2).toSet(), {
+        '169.254.20.2:41000',
+        '192.168.7.7:41000',
+      });
+      expect(hints, hasLength(3));
+      rig.links.dispose();
+    });
+
+    testWidgets('a LAN host not checked in the last 10 minutes is not fresh', (
+      tester,
+    ) async {
+      rig.links.notePorts('dev-peer', {'iroh4': 41000});
+      final hints = rig.links.irohHints(
+        deviceId: 'dev-peer',
+        stored: const [],
+        lanHints: [
+          PeerEndpoint(
+            kind: PeerRouteKind.lan,
+            host: '192.168.7.7',
+            port: 7667,
+          ),
+        ],
+        healthOf: (route) => PeerRouteHealth(
+          route: route,
+          available: true,
+          latency: null,
+          checkedAt: rig.now.subtract(const Duration(minutes: 11)),
+        ),
+      );
+      expect(hints, isEmpty);
       rig.links.dispose();
     });
   });

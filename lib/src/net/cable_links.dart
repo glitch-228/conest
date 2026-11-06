@@ -113,6 +113,7 @@ class CableLinks {
     required void Function(Datagram datagram, int ifIndex) feedBeacon,
     required Future<bool> Function(LinkEntry entry, String probeId) sendProbe,
     required String Function() newProbeId,
+    bool Function()? enabled,
     this.onConfirmed,
     this.onDropped,
     this.networkChanged,
@@ -126,6 +127,7 @@ class CableLinks {
        _feedBeacon = feedBeacon,
        _sendProbe = sendProbe,
        _newProbeId = newProbeId,
+       _enabled = enabled ?? (() => true),
        table = LinkTable(now: now),
        hints = IrohHintBook(now: now) {
     watcher = LinkWatcher(
@@ -143,6 +145,10 @@ class CableLinks {
   final void Function(Datagram datagram, int ifIndex) _feedBeacon;
   final Future<bool> Function(LinkEntry entry, String probeId) _sendProbe;
   final String Function() _newProbeId;
+
+  /// Whether cable links are on (the setting, LAN on, not asleep). Checked
+  /// at every entry point, so nothing is sent while it is false.
+  final bool Function() _enabled;
 
   /// A contact proved itself on a link (an entry was confirmed).
   final void Function(LinkEntry entry)? onConfirmed;
@@ -208,7 +214,7 @@ class CableLinks {
 
   /// Lists the links again: pings the new ones, forgets those that went.
   Future<void> onLinksChanged() async {
-    if (_disposed) return;
+    if (_disposed || !_enabled()) return;
     final listed = await listLinkInterfaces(source: _source);
     if (_disposed) return;
     final previous = _links;
@@ -239,7 +245,7 @@ class CableLinks {
   /// A contact or group member was just added: ping the cable links that
   /// are already up (at most once in 10 s).
   Future<void> pingNow() async {
-    if (_disposed) return;
+    if (_disposed || !_enabled()) return;
     final now = _now();
     final last = _lastPingNowAt;
     if (last != null && now.difference(last) < _pingNowGap) return;
@@ -336,7 +342,7 @@ class CableLinks {
     required int relayPort,
     int? ifIndex,
   }) {
-    if (_disposed || !_isKnownDevice(deviceId)) return false;
+    if (_disposed || !_enabled() || !_isKnownDevice(deviceId)) return false;
     if (relayPort < 1 || relayPort > 65535) return false;
     if (InternetAddress.tryParse(address)?.type != InternetAddressType.IPv4) {
       return false;
@@ -451,6 +457,89 @@ class CableLinks {
 
   void touch(String deviceId, String address) => table.touch(deviceId, address);
 
+  final Map<String, int> _failures = {};
+  final Map<int, DateTime> _evictedPingAt = {};
+
+  /// How a delivery or health check over [route] went. A confirmed entry
+  /// whose route fails three times in a row is dropped (a beacon or a new
+  /// ping brings it back) and its link is pinged again, at most every 30 s.
+  void noteRouteOutcome(PeerEndpoint route, bool ok) {
+    if (_disposed || route.kind != PeerRouteKind.lan) return;
+    final entries = [
+      for (final entry in table.all)
+        if (entry.confirmed &&
+            entry.address == route.host &&
+            entry.relayPort == route.port)
+          entry,
+    ];
+    if (entries.isEmpty) return;
+    final key = '${route.host}:${route.port}';
+    if (ok) {
+      _failures.remove(key);
+      return;
+    }
+    final count = (_failures[key] ?? 0) + 1;
+    if (count < 3) {
+      _failures[key] = count;
+      return;
+    }
+    _failures.remove(key);
+    final removed = <LinkEntry>[];
+    for (final entry in entries) {
+      final gone = table.evict(entry.deviceId, entry.address);
+      if (gone != null) removed.add(gone);
+    }
+    if (removed.isEmpty) return;
+    onDropped?.call(removed);
+    final now = _now();
+    for (final ifIndex in removed.map((entry) => entry.ifIndex).toSet()) {
+      final link = _links[ifIndex];
+      final last = _evictedPingAt[ifIndex];
+      if (link == null || !link.pingable) continue;
+      if (last != null && now.difference(last) < const Duration(seconds: 30)) {
+        continue;
+      }
+      _evictedPingAt[ifIndex] = now;
+      unawaited(_ping(link));
+    }
+    revision.value++;
+  }
+
+  /// Hints for one Iroh dial to [deviceId]: [stored] are the direct hints
+  /// the contact record holds, [lanHints] its LAN routes, and [healthOf]
+  /// when a route last answered. See [IrohHintBook.hintsFor].
+  List<String> irohHints({
+    required String deviceId,
+    required List<PeerEndpoint> stored,
+    required List<PeerEndpoint> lanHints,
+    required PeerRouteHealth? Function(PeerEndpoint route) healthOf,
+  }) {
+    final now = _now();
+    final fresh = <FreshHost>[
+      ...freshHostsFor(
+        deviceId,
+        healthyAt: (route) {
+          final health = healthOf(route);
+          return health != null && health.available ? health.checkedAt : null;
+        },
+      ),
+    ];
+    for (final route in lanHints) {
+      final health = healthOf(route);
+      if (health == null ||
+          !health.available ||
+          now.difference(health.checkedAt) > _freshFor) {
+        continue;
+      }
+      fresh.add(FreshHost(route.host, health.checkedAt));
+    }
+    return hints.hintsFor(
+      deviceId: deviceId,
+      storedDirect: stored,
+      fresh: fresh,
+    );
+  }
+
   /// The ports a contact told us in an encrypted route update.
   void notePorts(String deviceId, Object? json) {
     final ports = LinkPorts.tryParse(json);
@@ -466,6 +555,8 @@ class CableLinks {
     hints.clear();
     _pending.clear();
     _probedAt.clear();
+    _failures.clear();
+    _evictedPingAt.clear();
     _pingedAddresses.clear();
     _lastPingNowAt = null;
     _lastRelistAt = null;
