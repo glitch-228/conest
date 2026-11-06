@@ -308,4 +308,172 @@ void main() {
       expect(modern.current!.id, legacy.current!.id);
     });
   });
+
+  group('H1: a revoked author does not decide the merge', () {
+    test('what a thief admin added on its own branch is not merged', () async {
+      final eve = await TestDevice.create('eve', 'acc-eve');
+      final nic = await TestDevice.create('nic', 'acc-nic');
+      final r1 = await root();
+      final l1 = await bobAcc.list(1, [bob1, bob2, bob3]);
+      AccountSpec bobAdmin(AccountDeviceList list, List<TestDevice> devices) =>
+          AccountSpec(bobAcc, list, devices, role: GroupAccountRole.admin);
+      final r2 = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        accounts: [
+          bobAdmin(l1, [bob1, bob2, bob3]),
+        ],
+      );
+      // bob3 is stolen: it adds two members while bob1 pins its revocation.
+      final thief1 = await fx.record(
+        owner: alice,
+        author: bob3,
+        parents: [r2],
+        deviceOnly: [carol, eve],
+        accounts: [
+          bobAdmin(l1, [bob1, bob2, bob3]),
+        ],
+      );
+      final thief2 = await fx.record(
+        owner: alice,
+        author: bob3,
+        parents: [thief1],
+        deviceOnly: [carol, eve, nic],
+        accounts: [
+          bobAdmin(l1, [bob1, bob2, bob3]),
+        ],
+      );
+      final l2 = await bobAcc.list(2, [bob1, bob2], revoked: ['bob3']);
+      final pin = await fx.record(
+        owner: alice,
+        author: bob1,
+        parents: [r2],
+        deviceOnly: [carol],
+        accounts: [
+          bobAdmin(l2, [bob1, bob2]),
+        ],
+      );
+      final history = fx.history(owner: alice);
+      for (final r in [r1, r2, thief1, thief2, pin]) {
+        expect(await history.import(r), GroupMembershipImport.accepted);
+      }
+      expect(history.hasConflict, isTrue);
+      final merge = await ownerMerge(history, alice);
+      expect(
+        merge.group.activeMemberDeviceIds,
+        unorderedEquals(['alice', 'carol', 'bob1', 'bob2']),
+      );
+      expect(await history.import(merge), GroupMembershipImport.accepted);
+      expect(history.hasConflict, isFalse);
+    });
+  });
+
+  group('H2: the local send rule does not cut members off for good', () {
+    late TestAccount admAcc;
+    late TestDevice adm1, adm2;
+    late GroupMembershipRecord r2, r3;
+    late GroupHistoryEvent firstEvent;
+    late AccountDeviceList al1, al2, bl1;
+    late DeviceListView view;
+    late GroupMembershipHistory history;
+
+    /// An admin device of an account admits Bob's account. [firstMessage]
+    /// puts one event of the admin before the admitting record.
+    Future<void> admit({bool firstMessage = false}) async {
+      admAcc = await TestAccount.create('acc-adm');
+      adm1 = await TestDevice.create('adm1', 'acc-adm');
+      adm2 = await TestDevice.create('adm2', 'acc-adm');
+      final r1 = await root();
+      al1 = await admAcc.list(1, [adm1, adm2]);
+      r2 = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r1],
+        deviceOnly: [carol],
+        accounts: [
+          AccountSpec(admAcc, al1, [adm1], role: GroupAccountRole.admin),
+        ],
+      );
+      if (firstMessage) firstEvent = await fx.message(r2, adm1);
+      bl1 = await bobAcc.list(1, [bob1]);
+      r3 = await fx.record(
+        owner: alice,
+        author: adm1,
+        parents: [r2],
+        deviceOnly: [carol],
+        accounts: [
+          AccountSpec(admAcc, al1, [adm1], role: GroupAccountRole.admin),
+          AccountSpec(bobAcc, bl1, [bob1]),
+        ],
+      );
+      al2 = await admAcc.list(2, [adm2], revoked: ['adm1']);
+      view = DeviceListView(groupId: fx.groupId)
+        ..offerVerified(al1, accountKey: admAcc.keys.publicKeyBase64)
+        ..offerVerified(bl1, accountKey: bobAcc.keys.publicKeyBase64);
+      history = fx.history(owner: alice, view: view);
+      for (final r in [r1, r2, r3]) {
+        await history.import(r);
+      }
+    }
+
+    Future<AccountCutoff> cutoff(GroupHistoryEvent at) => AccountCutoff.sign(
+      groupId: fx.groupId,
+      accountId: 'acc-adm',
+      deviceId: 'adm1',
+      sequence: at.sequence,
+      eventId: at.eventId,
+      signerDeviceId: adm2.id,
+      signerPublicKeyBase64: adm2.signingPublicKey,
+      signerPrivateKeyBase64: adm2.signingPrivateKey,
+    );
+
+    test(
+      'a record the admin signed before its cutoff does not count',
+      () async {
+        await admit();
+        // The admin's later events; the sibling signs where it ends.
+        await fx.message(r3, adm1);
+        final last = await fx.message(r3, adm1);
+        view.offerVerified(al2, accountKey: admAcc.keys.publicKeyBase64);
+        // The admin is revoked and nobody has said where it ends yet.
+        expect(history.admittedByRevokedAuthors(), {'bob1'});
+        expect(await view.offerCutoff(await cutoff(last)), isTrue);
+        // Bob was admitted well before: he receives again.
+        expect(history.admittedByRevokedAuthors(), isEmpty);
+      },
+    );
+
+    test('a cutoff below the admitting record leaves the device waiting '
+        'for the owner', () async {
+      await admit(firstMessage: true);
+      // The admin's first event came before the admitting record.
+      final first = firstEvent;
+      view.offerVerified(al2, accountKey: admAcc.keys.publicKeyBase64);
+      expect(await view.offerCutoff(await cutoff(first)), isTrue);
+      expect(r3.proof.sequence, greaterThan(first.sequence));
+      expect(history.admittedByRevokedAuthors(), {'bob1'});
+    });
+
+    test('an owner record after the revocation pin that still lists the '
+        'device answers the wait', () async {
+      await admit();
+      view.offerVerified(al2, accountKey: admAcc.keys.publicKeyBase64);
+      expect(history.admittedByRevokedAuthors(), {'bob1'});
+      final pin = await fx.record(
+        owner: alice,
+        author: alice,
+        parents: [r3],
+        deviceOnly: [carol],
+        accounts: [
+          AccountSpec(admAcc, al2, [adm2], role: GroupAccountRole.admin),
+          AccountSpec(bobAcc, bl1, [bob1]),
+        ],
+      );
+      expect(await history.import(pin), GroupMembershipImport.accepted);
+      expect(history.current!.id, pin.id);
+      expect(history.admittedByRevokedAuthors(), isEmpty);
+    });
+  });
 }

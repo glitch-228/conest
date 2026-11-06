@@ -341,10 +341,31 @@ class GroupMembershipHistory {
       return null;
     }
     final base = groupOf(authority);
-    final groups = [for (final record in records) groupOf(record)];
+    var groups = [for (final record in records) groupOf(record)];
     if (groups.any((group) => group.ownerDeviceId != base.ownerDeviceId)) {
       return null;
     }
+    // A branch signed by a device that any branch shows revoked is left out
+    // (a thief's record must not decide what the owner vouches for).
+    var union = const <String, AccountFacts>{};
+    for (final record in records) {
+      final theirs = _facts[record.id]?.accounts ?? const {};
+      final merged = Map<String, AccountFacts>.of(union);
+      for (final entry in theirs.entries) {
+        merged[entry.key] =
+            merged[entry.key]?.merge(entry.value) ?? entry.value;
+      }
+      union = merged;
+    }
+    final unionFacts = _Facts(union, const {}, const {});
+    final trusted = <int>[
+      for (var i = 0; i < records.length; i++)
+        if (base.memberProfileFor(records[i].proof.authorDeviceId)
+            case final actor? when !_isRevokedAuthor(base, actor, unionFacts))
+          i,
+    ];
+    if (trusted.isEmpty) return null;
+    groups = [for (final i in trusted) groups[i]];
     var best = 0;
     for (var i = 1; i < groups.length; i++) {
       if (groups[i].membershipVersion > groups[best].membershipVersion) {
@@ -440,9 +461,13 @@ class GroupMembershipHistory {
   Set<String> _admittedByRevokedCache = const {};
 
   /// Devices of the current head that were first admitted by a record whose
-  /// author is revoked (or in a compromised account) in the local view: no
-  /// new message is delivered to them until the owner's record answers. A
-  /// local rule, not consensus.
+  /// author is revoked (or in a compromised account) in the local view, and
+  /// that the owner has not answered: no new message is delivered to them
+  /// until it does. A local rule, not consensus. A record the author signed
+  /// up to its cutoff (a checkpoint of the owner's revocation pin, or one a
+  /// sibling signed) was signed before the compromise and counts for
+  /// nothing, and an owner-signed record after the revocation pin that still
+  /// lists the device is the owner's answer.
   Set<String> admittedByRevokedAuthors() {
     final head = current;
     final lists = view;
@@ -451,15 +476,17 @@ class GroupMembershipHistory {
     if (_admittedByRevokedKey == key) return _admittedByRevokedCache;
     final result = <String>{};
     final headGroup = groupOf(head);
-    bool revokedAuthor(String authorDeviceId, GroupRecord at) {
+    GroupAccountMember? revokedAuthor(String authorDeviceId, GroupRecord at) {
       final profile = at.memberProfileFor(authorDeviceId);
-      if (profile == null) return false;
+      if (profile == null) return null;
       for (final entry in at.memberAccounts) {
         if (entry.accountId != profile.accountId) continue;
         final facts = lists.factsFor(entry);
-        return facts.compromised || facts.revoked.contains(authorDeviceId);
+        return facts.compromised || facts.revoked.contains(authorDeviceId)
+            ? entry
+            : null;
       }
-      return false;
+      return null;
     }
 
     if (headGroup.memberAccounts.isNotEmpty) {
@@ -471,10 +498,15 @@ class GroupMembershipHistory {
         final group = groupOf(record);
         for (final device in group.activeMemberDeviceIds) {
           if (!seen.add(device)) continue;
-          final authority = previous ?? group;
-          if (revokedAuthor(record.proof.authorDeviceId, authority) &&
-              headGroup.hasActiveMember(device) &&
-              device != headGroup.ownerDeviceId) {
+          if (!headGroup.hasActiveMember(device) ||
+              device == headGroup.ownerDeviceId) {
+            continue;
+          }
+          final author = record.proof.authorDeviceId;
+          final entry = revokedAuthor(author, previous ?? group);
+          if (entry != null &&
+              !_signedBeforeCutoff(head, record, entry) &&
+              !_answeredByOwner(head, record, device, entry)) {
             result.add(device);
           }
         }
@@ -483,6 +515,64 @@ class GroupMembershipHistory {
     }
     _admittedByRevokedKey = key;
     return _admittedByRevokedCache = result;
+  }
+
+  /// Whether [record] (by a revoked author of [entry]'s account) is at or
+  /// below where that author's signing ends: the earliest checkpoint of a
+  /// record that pins its revocation or follows one, else a sibling's cutoff.
+  bool _signedBeforeCutoff(
+    GroupMembershipRecord head,
+    GroupMembershipRecord record,
+    GroupAccountMember entry,
+  ) {
+    final author = record.proof.authorDeviceId;
+    GroupHistoryCheckpoint? cutoff;
+    for (final id in _ancestors(head.id)) {
+      final checkpoint = _records[id]!.checkpoints[author];
+      if (checkpoint == null ||
+          !accountFacts(id, entry.accountKeyBase64).revoked.contains(author)) {
+        continue;
+      }
+      if (cutoff == null || checkpoint.sequence < cutoff.sequence) {
+        cutoff = checkpoint;
+      }
+    }
+    if (cutoff == null) {
+      final signed = view?.cutoffFor(entry.accountId, author);
+      if (signed != null) {
+        cutoff = GroupHistoryCheckpoint(
+          sequence: signed.sequence,
+          eventId: signed.eventId,
+        );
+      }
+    }
+    if (cutoff == null) return false;
+    return record.proof.sequence < cutoff.sequence ||
+        (record.proof.sequence == cutoff.sequence &&
+            record.id == cutoff.eventId);
+  }
+
+  /// Whether a record the owner signed after the revocation of [admitting]'s
+  /// author was pinned still lists [device]: the owner's answer.
+  bool _answeredByOwner(
+    GroupMembershipRecord head,
+    GroupMembershipRecord admitting,
+    String device,
+    GroupAccountMember entry,
+  ) {
+    final author = admitting.proof.authorDeviceId;
+    for (final id in _ancestors(head.id)) {
+      if (id == admitting.id || !_isAncestor(admitting.id, id)) continue;
+      final record = _records[id]!;
+      final group = groupOf(record);
+      if (record.proof.authorDeviceId != group.ownerDeviceId ||
+          !group.hasActiveMember(device)) {
+        continue;
+      }
+      final facts = accountFacts(id, entry.accountKeyBase64);
+      if (facts.compromised || facts.revoked.contains(author)) return true;
+    }
+    return false;
   }
 
   /// Whether [deviceId] takes part in the current membership: a member
