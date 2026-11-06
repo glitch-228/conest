@@ -660,6 +660,88 @@ void _groupAccountsControllerTests() {
     );
 
     test(
+      'a sibling and the owner write at once: the owner merges the fork and '
+      'the group keeps working',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(deputyDelay: const Duration(days: 1));
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        final phoneId = t.phone.identity!.deviceId;
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        t.alice.setOwnerWriterDelayForTesting(const Duration(days: 1));
+        await t.bob.revokeAccountDevice(phoneId);
+        // Both know the revocation; neither has written a record for it.
+        await settle(
+          all,
+          until: () =>
+              !of(t.alice).hasActiveMember(phoneId) &&
+              !of(t.bob).hasActiveMember(phoneId),
+          rounds: 200,
+        );
+        expect(of(t.alice).memberDeviceIds, contains(phoneId));
+        final base = of(t.alice).membershipVersion;
+        expect(of(t.bob).membershipVersion, base);
+        // Neither reaches the other while both sign.
+        final alicePoint = t.alice.identity!.irohEndpointId!;
+        final bobPoint = t.bob.identity!.irohEndpointId!;
+        t.network.blockedPairs
+          ..add((alicePoint, bobPoint))
+          ..add((bobPoint, alicePoint));
+        t.alice.setOwnerWriterDelayForTesting(const Duration(milliseconds: 50));
+        await t.alice.runOwnerWriterForTesting(t.groupId);
+        await t.bob.runDeputyForTesting(t.groupId);
+        expect(of(t.alice).membershipVersion, base + 1);
+        expect(of(t.bob).membershipVersion, base + 1);
+        // They meet again: two records on one parent. The owner resolves it.
+        t.network.blockedPairs.clear();
+        await settle(
+          all,
+          until: () =>
+              of(t.alice).membershipVersion == base + 2 &&
+              of(t.bob).membershipVersion == base + 2 &&
+              of(t.carol).membershipVersion == base + 2,
+          rounds: 300,
+        );
+        for (final c in [t.alice, t.bob, t.carol]) {
+          expect(of(c).membershipVersion, base + 2);
+          expect(of(c).memberDeviceIds, isNot(contains(phoneId)));
+        }
+        // Group traffic flows again.
+        await t.carol.sendGroupMessage(groupId: t.groupId, body: 'after fork');
+        bool got(MessengerController c) => c
+            .messagesForGroup(t.groupId)
+            .any((m) => m.body == 'after fork');
+        await settle(all, until: () => got(t.alice) && got(t.bob), rounds: 100);
+        expect(got(t.alice), isTrue);
+        expect(got(t.bob), isTrue);
+      },
+    );
+
+    test(
+      'a candidate at the head\'s version that is not the head is refused, '
+      'the head itself is accepted',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(ownerWrites: false);
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        final head = of(t.alice);
+        // The same members and entries: nothing to sign, nothing changes.
+        await t.alice.commitGroupChangeForTesting(head.signedView);
+        expect(of(t.alice).membershipVersion, head.membershipVersion);
+        // Another record at that version is not the head, and is not stored.
+        await expectLater(
+          t.alice.commitGroupChangeForTesting(
+            head.signedView.copyWith(title: 'Not what was signed'),
+          ),
+          throwsA(isA<StateError>()),
+        );
+        expect(of(t.alice).title, head.title);
+      },
+    );
+
+    test(
       'on slow routes one device of an account gets a message and passes it '
       'on to the other',
       timeout: const Timeout(Duration(minutes: 3)),

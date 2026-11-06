@@ -26483,6 +26483,10 @@ class MessengerController extends ChangeNotifier {
         return;
       }
       if (_groupById(incoming.groupId) == null) return;
+      // Two records on one parent: the owner's app resolves the fork.
+      if (await _groupHistory.hasConflict(incoming.groupId)) {
+        _scheduleOwnerWriter(incoming.groupId);
+      }
     }
     if (existing == null) {
       final senderRole = incoming.roleFor(envelope.senderDeviceId);

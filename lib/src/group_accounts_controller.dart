@@ -318,6 +318,9 @@ extension GroupAccountsController on MessengerController {
       _runOwnerWriter(groupId);
 
   @visibleForTesting
+  Future<void> runDeputyForTesting(String groupId) => _runDeputy(groupId);
+
+  @visibleForTesting
   Future<GroupRecord> commitGroupChangeForTesting(GroupRecord candidate) =>
       _commitGroupChange(candidate);
 
@@ -816,7 +819,13 @@ extension GroupAccountsController on MessengerController {
     final stored = _groupById(groupId);
     if (_disposed || stored == null || stored.localRemovedAt != null) return;
     final head = await _groupHistory.currentMembership(groupId);
-    if (head == null) return;
+    if (head == null) {
+      // A fork: the owner's app resolves it.
+      if (await _groupHistory.hasConflict(groupId)) {
+        _scheduleOwnerWriter(groupId);
+      }
+      return;
+    }
     final signed = head.group;
     if (signed.membershipVersion <= stored.membershipVersion ||
         (signed.memberAccounts.isEmpty && stored.memberAccounts.isEmpty)) {
@@ -1209,6 +1218,14 @@ extension GroupAccountsController on MessengerController {
         ],
       );
     } else {
+      // One writer per account (the validator enforces it): the smallest
+      // projected device that is neither revoked nor the owner device. Two
+      // siblings signing alike would fork the group for good.
+      final designated = [
+        for (final id in mine)
+          if (id != signed.ownerDeviceId && !revoked.contains(id)) id,
+      ]..sort();
+      if (designated.isEmpty || designated.first != me.deviceId) return;
       next = _withoutDevices(signed, drop);
     }
     next = next.copyWith(
@@ -1221,6 +1238,14 @@ extension GroupAccountsController on MessengerController {
       membershipVersion: signed.membershipVersion + 1,
       updatedAt: now,
     );
+    // Read the head again right before signing: a record that arrived
+    // meanwhile (the owner's, a sibling's) makes this one a fork.
+    final head = await _groupHistory.currentMembership(groupId);
+    if (head == null ||
+        head.group.membershipVersion != signed.membershipVersion ||
+        _groupById(groupId)?.membershipVersion != signed.membershipVersion) {
+      return;
+    }
     _persistPinnedLists();
     await _commitGroupChange(next);
     await _persist('Updated the devices of ${next.title}.');
@@ -1392,6 +1417,11 @@ extension GroupAccountsController on MessengerController {
         orElse: () => '',
       );
       if (peer.isNotEmpty) _scheduleGroupHistorySync(groupId, peer);
+      return;
+    }
+    // A fork freezes the group: resolving it comes before anything else.
+    if (await _groupHistory.hasConflict(groupId)) {
+      await _mergeFork(groupId);
       return;
     }
     final signed = group.signedView;
@@ -1639,6 +1669,34 @@ extension GroupAccountsController on MessengerController {
     if (wakeAt != null) {
       _scheduleOwnerWriter(groupId, after: wakeAt.difference(now));
     }
+  }
+
+  /// The owner's app resolves a fork of the signed membership (two records
+  /// on the same parent, say a sibling's revocation pin and the owner's own
+  /// record) with one record that has every head as a parent. The owner's
+  /// writer then continues from there and re-pins what a losing branch had.
+  Future<void> _mergeFork(String groupId) async {
+    final merged = await _groupHistory.mergeCandidate(groupId);
+    if (merged == null) {
+      appendDebugLog('A split of the group could not be merged.');
+      return;
+    }
+    final me = _snapshot.identity;
+    final inHeads = await _groupHistory.membersOfHeads(groupId);
+    _persistPinnedLists();
+    final stored = await _commitGroupChange(
+      merged.copyWith(updatedAt: _now().toUtc()),
+    );
+    await _persist('Resolved a split of ${stored.title}.');
+    await _sendGroupMembershipUpdate(
+      _groupById(groupId)!,
+      targetDeviceIds: {
+        ...stored.activeMemberDeviceIds,
+        ...inHeads,
+      }.where((id) => id != me?.deviceId).toList(),
+      reason: 'devices',
+    );
+    _scheduleOwnerWriter(groupId);
   }
 
   /// Device ids that members other than [exceptAccountId] hold: device-only

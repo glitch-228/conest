@@ -249,6 +249,193 @@ class GroupMembershipHistory {
       if (lists.get(entry.listDigest) == null) entry.listDigest,
   ];
 
+  // ---- A fork and the owner's merge ----------------------------------
+
+  /// The version of a record that has every current head as a parent.
+  int get nextVersion {
+    var highest = 0;
+    for (final id in _heads) {
+      final version = groupOf(_records[id]!).membershipVersion;
+      if (version > highest) highest = version;
+    }
+    return highest + 1;
+  }
+
+  /// The admission record of [deviceId] in a record that has every current
+  /// head as a parent: the one all heads agree on, or null when that record
+  /// itself admits the device.
+  String? nextAdmission(String deviceId) {
+    final prior = {for (final id in _heads) _records[id]!.admissions[deviceId]};
+    return _heads.isNotEmpty && !prior.contains(null) && prior.length == 1
+        ? prior.single
+        : null;
+  }
+
+  /// Whether some current head holds the account.
+  bool holdsAccount(String accountId) => _heads.any(
+    (id) => groupOf(
+      _records[id]!,
+    ).memberAccounts.any((entry) => entry.accountId == accountId),
+  );
+
+  /// The same for an account entry.
+  String? nextAccountAdmission(String accountId) {
+    final seen = <String?>{};
+    for (final id in _heads) {
+      final record = _records[id]!;
+      final held = groupOf(record).memberAccounts
+          .where((entry) => entry.accountId == accountId)
+          .firstOrNull;
+      seen.add(held == null ? null : record.accountAdmission(held));
+    }
+    return seen.length == 1 && !seen.contains(null) ? seen.single : null;
+  }
+
+  /// [snapshot] as the next record writes its accounts: an account a head
+  /// holds keeps the admission boundary all heads agree on (none: this
+  /// record admits it) and does not repeat the proof of its fold.
+  GroupRecord forNextRecord(GroupRecord snapshot) {
+    if (_heads.isEmpty || snapshot.memberAccounts.isEmpty) return snapshot;
+    return snapshot.copyWith(
+      memberAccounts: [
+        for (final entry in snapshot.memberAccounts)
+          if (holdsAccount(entry.accountId))
+            entry.copyWith(
+              admission: nextAccountAdmission(entry.accountId),
+              clearAdmission: nextAccountAdmission(entry.accountId) == null,
+              clearUpgrade: true,
+            )
+          else
+            entry,
+      ],
+    );
+  }
+
+  /// Devices that are members in some current head.
+  Set<String> get activeInSomeHead => {
+    for (final id in _heads) ...groupOf(_records[id]!).activeMemberDeviceIds,
+  };
+
+  /// Every group of a current head (the owner's merge reads removals and
+  /// lists from all of them).
+  List<GroupRecord> get headGroups => [
+    for (final id in heads) groupOf(_records[id]!),
+  ];
+
+  /// The group the owner signs to resolve a fork (a record with every head
+  /// as a parent): the head with the highest version, with what left on any
+  /// branch kept out (a removal, a revoked or removed device, a removed
+  /// account), every account at its newest pinned list, and the projected
+  /// devices that list and the revocations no longer allow dropped. What a
+  /// losing branch only added is not merged; whoever added it can repeat it.
+  /// The owner's writer re-pins the rest on its next run. Null when there
+  /// is no fork or the heads do not share an owner (a handoff in one of
+  /// them needs its own resolution).
+  GroupRecord? mergedHeads() {
+    if (_heads.length < 2) return null;
+    final records = [for (final id in heads) _records[id]!];
+    final GroupMembershipRecord authority;
+    try {
+      authority = _resolutionAuthority(records);
+    } on FormatException {
+      return null;
+    }
+    final base = groupOf(authority);
+    final groups = [for (final record in records) groupOf(record)];
+    if (groups.any((group) => group.ownerDeviceId != base.ownerDeviceId)) {
+      return null;
+    }
+    var best = 0;
+    for (var i = 1; i < groups.length; i++) {
+      if (groups[i].membershipVersion > groups[best].membershipVersion) {
+        best = i;
+      }
+    }
+    final merged = groups[best];
+    final drop = <String>{};
+    final goneAccounts = <String>{};
+    final removed = <String>{...merged.removedDeviceIds};
+    for (final group in groups) {
+      removed.addAll(group.removedDeviceIds);
+      for (final device in base.activeMemberDeviceIds) {
+        if (!group.hasActiveMember(device)) drop.add(device);
+      }
+      for (final entry in base.memberAccounts) {
+        if (!group.memberAccounts.any((e) => e.accountId == entry.accountId)) {
+          goneAccounts.add(entry.accountId);
+        }
+      }
+    }
+    final entries = <GroupAccountMember>[];
+    for (final entry in merged.memberAccounts) {
+      if (goneAccounts.contains(entry.accountId)) continue;
+      var chosen = entry;
+      for (final group in groups) {
+        final theirs = group.memberAccounts
+            .where((candidate) => candidate.accountId == entry.accountId)
+            .firstOrNull;
+        if (theirs != null && theirs.listVersion > chosen.listVersion) {
+          chosen = chosen.copyWith(
+            listVersion: theirs.listVersion,
+            listDigest: theirs.listDigest,
+          );
+        }
+      }
+      final list = lists.get(chosen.listDigest);
+      var facts = AccountFacts.empty;
+      for (final record in records) {
+        facts = facts.merge(accountFacts(record.id, entry.accountKeyBase64));
+      }
+      if (list != null) {
+        chosen = chosen.copyWith(
+          approvedDeviceIds: [
+            for (final id in chosen.approvedDeviceIds)
+              if (list.deviceFor(id) != null) id,
+          ],
+        );
+      }
+      for (final profile in merged.memberProfiles) {
+        if (profile.accountId != entry.accountId) continue;
+        final id = profile.deviceId;
+        if (list == null ||
+            list.deviceFor(id) == null ||
+            facts.compromised ||
+            facts.revoked.contains(id) ||
+            chosen.excludedDeviceIds.contains(id) ||
+            (merged.confirmNewDevices &&
+                !chosen.approvedDeviceIds.contains(id))) {
+          drop.add(id);
+        }
+      }
+      entries.add(chosen);
+    }
+    for (final profile in merged.memberProfiles) {
+      if (goneAccounts.contains(profile.accountId)) drop.add(profile.deviceId);
+    }
+    if (drop.contains(merged.ownerDeviceId)) return null;
+    return merged.copyWith(
+      memberDeviceIds: [
+        for (final id in merged.memberDeviceIds)
+          if (!drop.contains(id)) id,
+      ],
+      memberProfiles: [
+        for (final profile in merged.memberProfiles)
+          if (!drop.contains(profile.deviceId)) profile,
+      ],
+      adminDeviceIds: [
+        for (final id in merged.adminDeviceIds)
+          if (!drop.contains(id)) id,
+      ],
+      moderatorDeviceIds: [
+        for (final id in merged.moderatorDeviceIds)
+          if (!drop.contains(id)) id,
+      ],
+      removedDeviceIds: removed.toList(),
+      memberAccounts: entries,
+      membershipVersion: nextVersion,
+    );
+  }
+
   String? _admittedByRevokedKey;
   Set<String> _admittedByRevokedCache = const {};
 
@@ -602,8 +789,23 @@ class GroupMembershipHistory {
     GroupMemberRole.member => GroupAccountRole.member,
   };
 
-  bool _sameEntry(GroupAccountMember a, GroupAccountMember b) =>
-      canonicalGroupJson(a.toJson()) == canonicalGroupJson(b.toJson());
+  /// Whether [after] is [before] unchanged in a record that follows
+  /// [authority]: an admission the authority itself made is written out in
+  /// the next record, and a fold's proof is not repeated.
+  bool _sameEntry(
+    GroupMembershipRecord authority,
+    GroupAccountMember before,
+    GroupAccountMember after,
+  ) =>
+      canonicalGroupJson(
+        before
+            .copyWith(
+              admission: authority.accountAdmission(before),
+              clearUpgrade: true,
+            )
+            .toJson(),
+      ) ==
+      canonicalGroupJson(after.toJson());
 
   /// The new owner takes over from an owner device its account revoked
   /// (O1). Evidence is in the DAG: a pinned list of the owner's account
@@ -677,14 +879,14 @@ class GroupMembershipHistory {
       if (theirs == null) return false;
       if (entry.accountId == ownerEntry.accountId) {
         if (theirs.role != entry.role ||
-            theirs.admission != entry.admission ||
+            theirs.admission != authority.accountAdmission(entry) ||
             canonicalGroupJson(theirs.approvedDeviceIds) !=
                 canonicalGroupJson(entry.approvedDeviceIds) ||
             canonicalGroupJson(theirs.excludedDeviceIds) !=
                 canonicalGroupJson(entry.excludedDeviceIds)) {
           return false;
         }
-      } else if (!_sameEntry(entry, theirs)) {
+      } else if (!_sameEntry(authority, entry, theirs)) {
         return false;
       }
     }
@@ -708,6 +910,27 @@ class GroupMembershipHistory {
     final left = a.toSet();
     final right = b.toSet();
     return left.length == right.length && left.containsAll(right);
+  }
+
+  /// The device that signs an account's own revocation pin when the owner's
+  /// app does not: the smallest projected device of the account that is
+  /// neither revoked nor the owner device (the owner device writes as the
+  /// owner). Null when there is none.
+  String? _designatedSigner(
+    GroupRecord group,
+    String accountId,
+    Set<String> revoked,
+  ) {
+    String? best;
+    for (final device in group.activeMemberDeviceIds) {
+      if (device == group.ownerDeviceId ||
+          revoked.contains(device) ||
+          group.memberProfileFor(device)?.accountId != accountId) {
+        continue;
+      }
+      if (best == null || device.compareTo(best) < 0) best = device;
+    }
+    return best;
   }
 
   /// A projected, not revoked device of an account pins a newer list of its
@@ -740,7 +963,7 @@ class GroupMembershipHistory {
         next.memberAccounts.length != prev.memberAccounts.length ||
         nextEntry.accountKeyBase64 != entry.accountKeyBase64 ||
         nextEntry.role != entry.role ||
-        nextEntry.admission != entry.admission ||
+        nextEntry.admission != authority.accountAdmission(entry) ||
         nextEntry.listVersion <= entry.listVersion ||
         canonicalGroupJson(nextEntry.approvedDeviceIds) !=
             canonicalGroupJson(entry.approvedDeviceIds) ||
@@ -753,9 +976,15 @@ class GroupMembershipHistory {
       final theirs = next.memberAccounts
           .where((candidate) => candidate.accountId == other.accountId)
           .firstOrNull;
-      if (theirs == null || !_sameEntry(other, theirs)) return false;
+      if (theirs == null || !_sameEntry(authority, other, theirs)) {
+        return false;
+      }
     }
     final revoked = _revokedOf(facts, entry);
+    // One writer per account: two siblings (or a sibling and a returning
+    // device) signing alike would fork the group for good.
+    final designated = _designatedSigner(prev, entry.accountId, revoked);
+    if (designated != actor.deviceId) return false;
     final before = prev.activeMemberDeviceIds.toSet();
     final after = next.activeMemberDeviceIds.toSet();
     final removed = before.difference(after);

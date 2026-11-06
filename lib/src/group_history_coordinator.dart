@@ -341,59 +341,54 @@ class GroupHistoryCoordinator {
     }
     final history = replica.membership;
     final current = history.current;
+    // A fork is resolved by the owner alone, with a record that has every
+    // head as a parent (the group is frozen until then).
+    final fork = history.hasConflict;
+    final me = identity();
+    if (fork && base.ownerDeviceId != me.deviceId) {
+      throw StateError('Group membership conflict needs owner resolution.');
+    }
     // An account that the previous record already holds is written with the
     // boundary that record gave it and without the proof of its fold.
-    final snapshot = current == null || base.memberAccounts.isEmpty
-        ? base
-        : base.copyWith(
-            memberAccounts: [
-              for (final entry in base.memberAccounts)
-                if (current.group.memberAccounts
-                    .where((held) => held.accountId == entry.accountId)
-                    .firstOrNull
-                    case final held?)
-                  entry.copyWith(
-                    admission: current.accountAdmission(held),
-                    clearUpgrade: true,
-                  )
-                else
-                  entry,
-            ],
-          );
-    final me = identity();
-    if (history.hasConflict) {
-      throw StateError('Group membership conflict needs owner resolution.');
+    final snapshot = history.forNextRecord(base);
+    if (fork && snapshot.membershipVersion != history.nextVersion) {
+      throw StateError('The group changed meanwhile; try again.');
     }
     if (visibility != null && snapshot.ownerDeviceId != me.deviceId) {
       throw StateError('Only the group owner can change history visibility.');
     }
     if (current != null &&
         current.group.membershipVersion == snapshot.membershipVersion) {
+      // Someone else's record at this version is not the candidate's.
+      if ((snapshot.memberAccounts.isNotEmpty ||
+              current.group.memberAccounts.isNotEmpty) &&
+          !_sameMembership(history.groupOf(current), snapshot)) {
+        throw StateError('The group changed meanwhile; try again.');
+      }
       return current.proof;
     }
-    if (current == null && snapshot.ownerDeviceId != me.deviceId) return null;
+    if (history.heads.isEmpty && snapshot.ownerDeviceId != me.deviceId) {
+      return null;
+    }
     final parents = history.heads;
     final checkpoints = <String, GroupHistoryCheckpoint>{};
     final needsAdmissionBoundary =
         snapshot.activeMemberDeviceIds.any(
-          (device) => current?.admissions[device] == null,
+          (device) => history.nextAdmission(device) == null,
         ) ||
         snapshot.memberAccounts.any(
           (entry) =>
-              entry.admission == null &&
-              !(current?.group.memberAccounts.any(
-                    (held) => held.accountId == entry.accountId,
-                  ) ??
-                  false),
+              entry.admission == null && !history.holdsAccount(entry.accountId),
         );
-    final departedMembers = current == null
+    final departedMembers = parents.isEmpty
         ? const <String>{}
         : {
-            ...current.group.activeMemberDeviceIds.toSet().difference(
+            ...history.activeInSomeHead.difference(
               snapshot.activeMemberDeviceIds.toSet(),
             ),
             // Every author of an account that left, projected or not.
-            ...await _authorsOfDepartedAccounts(replica, current.group, snapshot),
+            for (final held in history.headGroups)
+              ...await _authorsOfDepartedAccounts(replica, held, snapshot),
           };
     // Admission and departure fences use signed author-sequence checkpoints,
     // never wall clocks. New admissions need a boundary for every author;
@@ -456,11 +451,13 @@ class GroupHistoryCoordinator {
         parents: parents,
         historyVisibility:
             visibility ??
-            current?.historyVisibility ??
+            (parents.isEmpty
+                ? null
+                : history.record(parents.first)?.historyVisibility) ??
             GroupHistoryVisibility.allRetained,
         admissions: {
           for (final device in snapshot.activeMemberDeviceIds)
-            device: current?.admissions[device],
+            device: history.nextAdmission(device),
         },
         checkpoints: checkpoints,
       ),
@@ -468,6 +465,55 @@ class GroupHistoryCoordinator {
     await replica.importMembership(proof);
     return proof;
   });
+
+  /// Whether two groups name the same members, roles and account entries
+  /// (member profile details such as routes do not count).
+  static bool _sameMembership(GroupRecord a, GroupRecord b) {
+    bool same(Iterable<String> x, Iterable<String> y) {
+      final left = x.toSet();
+      final right = y.toSet();
+      return left.length == right.length && left.containsAll(right);
+    }
+
+    if (a.ownerDeviceId != b.ownerDeviceId ||
+        a.title != b.title ||
+        a.isDissolved != b.isDissolved ||
+        a.confirmNewDevices != b.confirmNewDevices ||
+        !same(a.activeMemberDeviceIds, b.activeMemberDeviceIds) ||
+        !same(a.removedDeviceIds, b.removedDeviceIds) ||
+        !same(a.adminDeviceIds, b.adminDeviceIds) ||
+        !same(a.moderatorDeviceIds, b.moderatorDeviceIds) ||
+        a.memberAccounts.length != b.memberAccounts.length) {
+      return false;
+    }
+    for (final entry in a.memberAccounts) {
+      final other = b.memberAccounts
+          .where((candidate) => candidate.accountId == entry.accountId)
+          .firstOrNull;
+      if (other == null ||
+          other.accountKeyBase64 != entry.accountKeyBase64 ||
+          other.role != entry.role ||
+          other.listDigest != entry.listDigest ||
+          other.listVersion != entry.listVersion ||
+          !same(other.approvedDeviceIds, entry.approvedDeviceIds) ||
+          !same(other.excludedDeviceIds, entry.excludedDeviceIds)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// Whether the signed membership of [id] has competing heads.
+  Future<bool> hasConflict(String id) =>
+      _write(id, () async => (await _replica(id)).membership.hasConflict);
+
+  /// Devices that are members in some head of the signed membership of [id].
+  Future<Set<String>> membersOfHeads(String id) =>
+      _write(id, () async => (await _replica(id)).membership.activeInSomeHead);
+
+  /// The group the owner signs to resolve a fork of [id], or null.
+  Future<GroupRecord?> mergeCandidate(String id) =>
+      _write(id, () async => (await _replica(id)).membership.mergedHeads());
 
   /// Devices admitted by a record whose author is revoked in the local view.
   Future<Set<String>> devicesAdmittedByRevoked(String id) async =>
