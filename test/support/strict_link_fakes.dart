@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:conest/src/net/cable_links.dart' show PingDatagram, PingSocket;
 import 'package:conest/src/net/link_interfaces.dart';
 
 /// The system interface listing with the real Dart behaviour: without
@@ -73,19 +74,19 @@ class StrictHost {
   /// What the long-lived listener on port 7668 gets.
   void Function(StrictHost host, Uint8List data, String from, int fromPort)?
   onListenerDatagram;
-  final Map<int, _StrictSocket> _sockets = {};
+  final Map<int, StrictSocket> _sockets = {};
   int get openSockets => _sockets.length;
 
   /// A socket bound to this host's [address] on a fresh port (the ping
   /// socket); it listens until closed.
-  StrictDatagramSocket bind(String localAddress, {bool broadcast = false}) {
+  StrictSocket bind(String localAddress) {
     if (localAddress != address) {
       throw SocketException(
         'Failed to create datagram socket (errno = 22), address = $localAddress',
       );
     }
     final port = _network._nextPort++;
-    final socket = _StrictSocket(this, port, broadcast);
+    final socket = StrictSocket(this, port);
     _sockets[port] = socket;
     return socket;
   }
@@ -95,31 +96,30 @@ class StrictHost {
       onListenerDatagram?.call(this, data, from, fromPort);
       return;
     }
-    _sockets[toPort]?._controller.add((data, from, fromPort));
+    final socket = _sockets[toPort];
+    if (socket != null && !socket.closed) {
+      socket._controller.add((data, from, fromPort));
+    }
   }
 }
 
-/// What a ping socket looks like to the code that uses it.
-abstract interface class StrictDatagramSocket {
-  int get port;
-  Stream<(Uint8List, String, int)> get datagrams;
-  void send(List<int> bytes, String address, int port);
-  void close();
-}
-
-class _StrictSocket implements StrictDatagramSocket {
-  _StrictSocket(this._host, this.port, this._broadcast);
+class StrictSocket implements PingSocket {
+  StrictSocket(this._host, this.port);
 
   final StrictHost _host;
-  final bool _broadcast;
-  final _controller = StreamController<(Uint8List, String, int)>.broadcast();
+  final _controller = StreamController<PingDatagram>.broadcast();
 
-  @override
+  /// A datagram socket cannot send to a broadcast address until it is told
+  /// to (the system refuses with EACCES).
+  bool _broadcast = false;
   final int port;
   bool closed = false;
 
   @override
-  Stream<(Uint8List, String, int)> get datagrams => _controller.stream;
+  set broadcastEnabled(bool value) => _broadcast = value;
+
+  @override
+  Stream<PingDatagram> get datagrams => _controller.stream;
 
   @override
   void send(List<int> bytes, String address, int toPort) {
