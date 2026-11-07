@@ -125,3 +125,67 @@ Groups with several-device members recover by themselves when two devices change
 ## Progress log, round 2
 - 2026-11-06: read the rules and the review. Tests first, one finding at a time, each with a sabotage check (listed above). Found on the way: raw admission compare in the validator (fixed with H1); `parents.first` on an empty list in the first draft of `prepareMembership` (caught by the existing controller tests).
 - 2026-11-06: analyzer back to the base's 28 issues. Full suite and debug run: see below.
+
+## Review round 3 (Opus check of f4b63f3, f27317e, 6a6869d; 2026-11-07): fix first
+
+**Confirmed fixed:**
+- H3.
+- H1 for the reported races. A fork whose heads disagree on the owner still freezes; it is listed as Not done and is no worse than before.
+- The merge record is accepted by the frozen old validator.
+
+### HIGH (must fix)
+
+**R3-H1. The H2 rule is defeated.**
+
+How it fails:
+- `_answeredByOwner` (gmh ~567–584) counts the owner's own revocation pin as an answer. The owner's writer re-pin loop (gac ~1540–1640) keeps devices that the revoked admin admitted. So the automatic pin releases them, with no one having decided anything.
+- The DAG cutoff is the signer's journal head for that author (coord ~413–419). It covers every record the thief made before the pin, and it wins over an earlier cutoff signed by a sibling (gmh ~540–557).
+- Sequence numbers alone are compared (gmh ~560), so the thief can backdate a record. `_onChain` / `chainAdmits` (gmh ~1614–1627) exist for exactly this case.
+- The merge taint filter checks only the head record's author (gmh ~368–374). An honest record built on top of the thief's record makes the branch look trusted.
+
+Fix:
+- When the owner's writer pins a revocation, it drops every device that a revoked author admitted after that author's cutoff.
+- Only owner records strictly after the pin count as an answer.
+- The cutoff is the minimum of the DAG cutoff and the sibling-signed cutoff, checked with `_onChain` (no sequence-only comparison).
+- The taint check covers every record on the branch since the fork point.
+
+Tests, each with a sabotage check:
+- a stolen admin phone admits a thief device and is then revoked;
+- the owner's automatic pin drops the thief device, and live sends stop;
+- a backdated record is refused;
+- an honest record on top of a thief record does not make the branch trusted.
+
+**R3-H2. A revoked, stolen device can fork the group without limit.**
+
+How it fails:
+- `_isRevokedAuthor` looks only at the incoming record's own ancestry (gmh ~684–689), so a revoked device keeps signing on parents from before the pin.
+- Each such record forces an owner merge, which bypasses the per-record rate limit (`_mergeFork` at gac ~1449 runs before the limit at ~1657).
+- With 17 or more heads, a merge record cannot be built (the 16-parent cap, gmh ~142), so the group freezes for good.
+
+Fix:
+- A head whose author is revoked in the current view or the DAG (as the merged revocations show) does not count as a head: it is not merged, only kept.
+- At most 16 heads are merged per record.
+- Merges are rate-limited like other owner records, and the first one may run at once.
+
+Test: a revoked device publishes 20 records on old parents. The group keeps one effective head and keeps working, and the owner's merge work stays bounded. Sabotage-check it.
+
+### MEDIUM (fix, small)
+
+- **The merge silently drops the losing branch's changes.**
+  - Additions, role changes, title and visibility made on the losing branch are lost. When versions are equal, the base is just the first head in sorted order (gmh ~378–383).
+  - `removed` is a union over branches (gmh ~388), so a device re-added on the winning branch after the fork is dropped again.
+  - Fix: merge by field, keeping additions and role changes from every trusted branch unless another trusted branch removed that member after the fork. Take title and visibility from the head with the latest lamport.
+  - If this can't be done cleanly, the owner's app re-applies the losing branch's own changes in its next record and logs what it did.
+- **A leave that arrives during a fork is dropped.** Build the leave at `nextVersion` when a fork is present, or queue it until the merge is done.
+
+### LOW
+
+The designated deputy may be offline for a long time. Note it in the Handoff; a fallback to the next device after N hours is optional.
+
+### Rules for this round
+
+Same as round 2:
+- one fix round;
+- tests first, and a sabotage check for each fix;
+- the full suite, analyze, push and `debug.yml`;
+- update the Handoff.
