@@ -706,6 +706,24 @@ class _FakeRelayClient extends RelayClient {
   Duration Function(RelayEnvelope envelope)? storeDelayFor;
   final List<String> storeAttempts = <String>[];
 
+  /// Strict addressing for LAN hosts (private and link-local IPv4): a store
+  /// to a `host:port` that is not listed is refused (nobody is there), and
+  /// a store to a listed one reaches only the device that owns it. What a
+  /// store reaches nobody else: an address that belongs to someone else
+  /// (a forger, a proxy) takes the envelope and keeps it. Null: as before,
+  /// where every host delivers to whoever the envelope is for.
+  Map<String, String>? reachableAddresses;
+
+  /// What a proxy does with an envelope it took: hands it to [recipientId].
+  void deliverDirectly(String recipientId, RelayEnvelope envelope) {
+    _queues.putIfAbsent(recipientId, () => <RelayEnvelope>[]).add(envelope);
+  }
+
+  static bool _isLanHost(String host) =>
+      RegExp(
+        r'^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)',
+      ).hasMatch(host);
+
   /// An error to throw for stores to [host] (a network's own error).
   Object? Function(String host)? storeErrorFor;
   final List<String> fetchAttempts = <String>[];
@@ -996,6 +1014,18 @@ class _FakeRelayClient extends RelayClient {
     }
     final key = _key(host, port, protocol);
     storeAttempts.add('$host:$port');
+    final addressed = reachableAddresses;
+    if (addressed != null && _isLanHost(host)) {
+      final owner = addressed['$host:$port'];
+      if (owner == null) {
+        throw StateError('Nobody answers at $host:$port');
+      }
+      if (owner != recipientDeviceId) {
+        // Taken by someone else: kept there, never delivered.
+        storedEnvelopes.add(envelope);
+        return true;
+      }
+    }
     if (!_isRouteAllowed(_storeAllowedHosts, host, port, protocol)) {
       throw StateError('Route unavailable for $key');
     }
@@ -37364,6 +37394,7 @@ void _cableLinkControllerTests() {
       bool bobAnswers = true,
       bool bobSeesPings = false,
       bool aliceDirect = false,
+      bool strictAddresses = false,
     }) async {
       pingsBobSaw = 0;
       aliceClockOffset = Duration.zero;
@@ -37436,6 +37467,13 @@ void _cableLinkControllerTests() {
       bobId = bob.identity!.deviceId;
       aliceId = alice.identity!.deviceId;
       await _pairControllers(alice, bob);
+      if (strictAddresses) {
+        // From here on a store to a LAN address reaches only its owner.
+        relay.reachableAddresses = {
+          '169.254.20.2:${bob.identity!.localRelayPort}': bobId,
+          '169.254.10.1:${alice.identity!.localRelayPort}': aliceId,
+        };
+      }
     }
 
     /// Everything the cable address could be found in: contacts, groups,
@@ -37793,6 +37831,91 @@ void _cableLinkControllerTests() {
       );
       expect(relay.storeAttempts, contains('169.254.20.2:7667'));
       expect(leaksLinkLocal(savedState()), isFalse);
+    });
+
+    Datagram forgedBeaconFor(String from) => Datagram(
+      utf8.encode(
+        jsonEncode({
+          'app': 'conest',
+          'kind': 'pairing_route',
+          'deviceId': bobId,
+          'relayPort': 7667,
+        }),
+      ),
+      InternetAddress(from),
+      7668,
+    );
+
+    Future<void> bothCablesListed() => _waitForIroh(
+      () =>
+          alice.cableLinks!.links.isNotEmpty &&
+          bob.cableLinks!.links.isNotEmpty,
+      reason: 'both cables listed',
+    );
+
+    test('a probe that reaches the contact is answered with proof and '
+        'confirms the address it was sent to', () async {
+      await rig(bobSeesPings: true, strictAddresses: true);
+      await bothCablesListed();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      aliceClockOffset = const Duration(seconds: 30);
+      await alice.cableLinks!.pingNow();
+      for (var i = 0; i < 100; i++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        if (alice.cableLinks!.candidateRoutes(bobId).isNotEmpty) break;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        alice.cableLinks!.candidateRoutes(bobId).first.host,
+        '169.254.20.2',
+      );
+    });
+
+    test('a forged address nobody answers at stays unconfirmed', () async {
+      await rig(bobAnswers: false, strictAddresses: true);
+      await bothCablesListed();
+      alice.receivePairingBeaconForTesting(forgedBeaconFor('169.254.99.9'));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(
+        alice.cableLinks!.table.unconfirmedFor(bobId).map((e) => e.address),
+        contains('169.254.99.9'),
+      );
+      for (var i = 0; i < 10; i++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(alice.cableLinks!.candidateRoutes(bobId), isEmpty);
+    });
+
+    test('a probe that a forger passed on to the contact does not confirm '
+        'the forger\'s address', () async {
+      await rig(bobAnswers: false, strictAddresses: true);
+      await bothCablesListed();
+      // The forger owns 169.254.99.9: what is stored there stays there.
+      relay.reachableAddresses!['169.254.99.9:7667'] = 'forger';
+      alice.receivePairingBeaconForTesting(forgedBeaconFor('169.254.99.9'));
+      await _waitForIroh(
+        () => relay.storeAttempts.contains('169.254.99.9:7667'),
+        reason: 'the probe went to the forged address',
+      );
+      final probe = relay.storedEnvelopes.lastWhere(
+        (e) => e.kind == 'route_update' && e.recipientDeviceId == bobId,
+      );
+      // The forger hands the sealed probe to Bob, who answers it.
+      relay.deliverDirectly(bobId, probe);
+      for (var i = 0; i < 50; i++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(alice.cableLinks!.candidateRoutes(bobId), isEmpty);
+      expect(
+        alice.cableLinks!.table.unconfirmedFor(bobId).map((e) => e.address),
+        contains('169.254.99.9'),
+      );
+      expect(alice.cableLinks!.table.confirmedFor(bobId), isEmpty);
     });
 
     test('switching cable links off forgets what was found and stops the '

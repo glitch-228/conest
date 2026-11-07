@@ -19077,6 +19077,7 @@ class MessengerController extends ChangeNotifier {
     List<PeerEndpoint>? routes,
     String? probeId,
     DateTime? sentAt,
+    bool cableProbeOk = false,
   }) async {
     // Skip the send entirely for non-sendable contacts. _sendRouteUpdate
     // historically bypassed _deliverToContact (which has the same
@@ -19126,6 +19127,12 @@ class MessengerController extends ChangeNotifier {
       },
       ..._localLanDirectHintPayload(contact),
       ..._linkPortsPayload(),
+      // A cable probe names the address it goes to, inside the encrypted
+      // payload: only that address's owner can say it is its own.
+      if (reason == 'cable_probe' && routes != null && routes.length == 1)
+        'probedAddress': routes.single.host,
+      // The answer to a probe: the address it was sent to is ours.
+      if (cableProbeOk) 'cableProbeOk': true,
     };
     if (effectiveProbeId != null) {
       routeUpdatePayload['probeId'] = effectiveProbeId;
@@ -26309,7 +26316,11 @@ class MessengerController extends ChangeNotifier {
       final pending = _pendingRouteUpdateProbes.remove(pendingKey);
       if (pending != null) {
         // The authenticated answer to a cable probe proves the address.
-        if (pending.reason == 'cable_probe') {
+        // It counts only with the answerer's word that the address the
+        // probe went to is its own: a forger that passes the probe on
+        // cannot get that.
+        if (pending.reason == 'cable_probe' &&
+            routePayload?['cableProbeOk'] == true) {
           _cable?.onProbeReply(probeId, sender.deviceId);
         }
         if (pending.reason == 'heartbeat' || pending.reason == 'chat_resume') {
@@ -26337,6 +26348,9 @@ class MessengerController extends ChangeNotifier {
           final cableRoutes = reason == 'cable_probe'
               ? _cable?.replyRoutes(sender.deviceId) ?? const <PeerEndpoint>[]
               : const <PeerEndpoint>[];
+          final probeOk =
+              reason == 'cable_probe' &&
+              _ownsProbedAddress(routePayload?['probedAddress']);
           if (cableRoutes.isNotEmpty) {
             await _sendRouteUpdate(
               replyContact,
@@ -26345,6 +26359,7 @@ class MessengerController extends ChangeNotifier {
               probeId: probeId,
               sentAt: replySentAt,
               routes: cableRoutes,
+              cableProbeOk: probeOk,
             ).catchError((Object _) => false);
           }
           await _refreshLanAddresses(persist: false, advertise: false);
@@ -26354,6 +26369,7 @@ class MessengerController extends ChangeNotifier {
             reason: reason,
             probeId: probeId,
             sentAt: replySentAt,
+            cableProbeOk: probeOk,
           );
         }().catchError((Object error) {
           appendDebugLog('Route update reply not sent: $error');
@@ -43393,6 +43409,20 @@ class MessengerController extends ChangeNotifier {
       routes: [entry.route],
       probeId: probeId,
     );
+  }
+
+  /// Whether [address] (named inside a cable probe) is one of this device's
+  /// own: only then is the probe's answer a proof for the address it went
+  /// to. A listing that is behind (a cable just plugged in) is asked to
+  /// catch up, and the next probe is answered.
+  bool _ownsProbedAddress(Object? address) {
+    if (address is! String || _cable == null) return false;
+    if (_cable!.ownsAddress(address) ||
+        (_snapshot.identity?.lanAddresses.contains(address) ?? false)) {
+      return true;
+    }
+    _cable!.requestRelist();
+    return false;
   }
 
   /// The contact proved itself at [entry]: files can go over the cable.

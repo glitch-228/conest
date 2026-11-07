@@ -395,6 +395,13 @@ class CableLinks {
     return true;
   }
 
+  /// Whether [address] is one of this device's own on a listed link.
+  bool ownsAddress(String address) =>
+      _links.values.any((link) => link.v4.contains(address));
+
+  /// Asks for a new listing (at most one in 10 s).
+  void requestRelist() => _requestRelist();
+
   void _requestRelist() {
     final now = _now();
     final last = _lastRelistAt;

@@ -746,4 +746,30 @@ void main() {
       rig.links.dispose();
     });
   });
+
+  group('own addresses', () {
+    testWidgets('are those of the listed links, and a request to list again '
+        'is limited', (tester) async {
+      await rig.links.onLinksChanged();
+      await tester.pump(const Duration(seconds: 6));
+      expect(rig.links.ownsAddress('169.254.10.1'), isTrue);
+      expect(rig.links.ownsAddress('169.254.20.2'), isFalse);
+      expect(rig.links.ownsAddress('not an address'), isFalse);
+      final before = rig.interfaces.calls;
+      rig.links.requestRelist();
+      rig.links.requestRelist();
+      await tester.pump(const Duration(seconds: 1));
+      expect(rig.interfaces.calls, before + 1);
+      rig.interfaces.interfaces = [
+        RawInterface(name: 'enp3s0', index: 7, addresses: ['169.254.10.9']),
+      ];
+      rig.now = rig.now.add(const Duration(seconds: 11));
+      rig.links.requestRelist();
+      await tester.pump(const Duration(seconds: 1));
+      expect(rig.links.ownsAddress('169.254.10.9'), isTrue);
+      expect(rig.links.ownsAddress('169.254.10.1'), isFalse);
+      await tester.pump(const Duration(seconds: 6));
+      rig.links.dispose();
+    });
+  });
 }
