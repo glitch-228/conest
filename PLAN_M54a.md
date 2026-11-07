@@ -264,7 +264,74 @@ None are open. The maintainer's six answers are applied: IPv4 first (P1b after P
 
 ## Handoff
 
-(to be written by the agent)
+**P1a is implemented** (IPv4 on cables and USB tethering, with I1). P1b (IPv6 link-local), P2 and P3 are not in this round. Branch `agent/m54a-usb-wire`, merged with `integration/g7-g8` (b2d3eba) first.
+
+### What is done, with commits
+
+- `b7a3ce5` strict test fakes (interface listing that hides link-local unless asked, as Dart does; UDP segment with a port per socket and a broadcast flag).
+- `17c5bad` `link_interfaces.dart` (finds 169.254 and tethering interfaces, classifies names, `isLinkScopedHost`) and `link_table.dart` (runtime-only table of contacts seen on a link: unconfirmed until an authenticated probe answer, confirmed entries pinned, bounded).
+- `27c5e05` `iroh_hint_book.dart` (at most 8 hints: fresh hosts newest first with the peer's own Iroh port, then at most 4 stored ones; anything Rust would refuse is left out).
+- `ababfb5` `link_watcher.dart` (one debounced signal; Android's 30 s fallback only while the cable page is open in the foreground, off for good after a USB_STATE or tether broadcast, never after a network callback).
+- `cdded13` `cable_links.dart` (ping on a new cable from its own address, answers on the ping socket's port, probe, confirm, eviction after three failures, hint sources).
+- `39afabb` link-scoped routes left out of what is saved or taken in: `prunePeerEndpointsByKind(dropLinkScoped:)` (off for the vault), `GroupRecord.withoutLinkScopedRoutes`, `isValidLanDirectHost` refuses any zone.
+- `0e9c800` `cableLinksEnabled` in the connectivity preferences (on by default, written only when off).
+- `f550679` switch, eviction, `irohHints`.
+- `aeb8e86` the controller wiring (about 130 lines of hooks and one block of small methods in `messenger_controller.dart`): beacon and ping handling, probe sent over one address only, probe answer confirms, answer over every held address, candidate routes first, Iroh hints, LAN-direct endpoint seeded on confirm and removed on unplug, `linkPorts` in the encrypted route update, first-contact ping, reset and dispose, the five vault writers and the wire readers.
+- `08c5b42`, `f328cad`, `f57d1ba` native: `link.rs` (monitor core with a generation number, fed by netwatch on Linux and Windows), three `conest_link_monitor_*` FFI functions, the per-peer hint cache in `api.rs` (64 peers, 8 addresses, 10 minutes, replaced by every hinted send, an empty list removes it, kept over `network_change`), and the CI-only link-local connect test with a dummy interface step in `rust-tests.yml`.
+- `b0bb987` Dart loop for the native monitor (helper isolate, no polling), Android `LinkEventsPlugin.kt` (network callback, USB_STATE and TETHER_STATE_CHANGED without their sticky delivery, "open tethering settings"), `ACCESS_NETWORK_STATE`.
+- `fcbf5eb` the "Cable and USB" page (canary only), six ARBs and the regenerated l10n, one hook each in `main.dart`.
+
+### How it differs from the design note
+
+- Candidate routes: confirmed entries only, at most 3 entries with TCP and UDP each, placed **first** in `_candidateRoutesForContact` (after a confirmed entry its route also gets a health success, so delivery tries it before an Iroh dial that offline would only time out).
+- The cable ping carries `relayPort` (optional JSON key); `linkPorts` is an optional encrypted key of the route update. No beacon carries Iroh ports. Old peers ignore both.
+- Probes are for contacts only (a probe is a route update, which carries our invite); a group member who is not a contact is not found on the cable. Group members who are contacts use the cable for group sends and group file downloads (they read the same tables). Not done: group-only members.
+- The Android fallback runs while the cable page is open (not also "while a transfer is open"): no hook into the transfer code.
+- A beacon from a known contact that arrives before the first interface listing is dropped (one re-listing is requested); the next ping or beacon is seen.
+
+### Tests, and sabotage checks
+
+New Dart files: `link_interfaces_test`, `link_table_test`, `iroh_hint_book_test`, `link_watcher_test`, `cable_links_test` (25), `link_scoped_routes_test`, `link_monitor_loop_test`, `link_events_test`, `cable_links_panel_test`, and 17 controller tests in `messenger_controller_test.dart` (group "cable links", with the stricter `_InProcessIrohNetwork`: it records every dial hint and refuses more than 8 or one Rust would not parse). Rust: `link.rs` (7), `api.rs` hint cache (4) and dial tests (3), the FFI smoke test, and the ignored link-local connect test run by the new CI step.
+
+Sabotage checks, each seen to fail the test and restored (Dart): listing without `includeLinkLocal`; unconfirmed evicting confirmed; one device on two addresses; hint order swapped; stored hints uncapped; port TTL; zone names allowed; network callback counting as proof; foreground not checked; fallback timer left on dispose; ping socket closed at once (reply lost); unknown devices accepted; probe throttle; broadcast flag not set; no network change on a vanished link; no pingNow gap; own address accepted; Wi-Fi DHCP beacons accepted; relisting unlimited; failing route evicted after one failure; success not resetting the count; setting ignored; stale or unavailable LAN health counted fresh; link-scoped filter removed from the contact writer, the group-member writer and the beacon; candidate routes dropped; Iroh hints hook off; ports not noted; probe answer not routed; reset not clearing; switch not applied; no ping on a new contact; invite readers not stripping (all four sites); no health after confirm; LAN-direct endpoint not seeded; `dropLinkScoped`, `%` rejection and the group strip in the model test; native-loop: first generation reported, native stop not called, zero not ending the loop, timeout reported as change, double start; panel: Wi-Fi also looking, page-open not cleared, USB names not recognised, switch ignored. Rust sabotages run in CI on `sabotage/m54a-*` branches: see the progress log for the runs.
+
+### Known pitfalls 1-20, checked
+
+1. Inbound path: the beacon handler is synchronous (table update); probes and answers are `unawaited`. Met.
+2. Sealing: untouched (hints are a dial parameter; the probe is a normal route update sealed at its turn). Met.
+3. No polling: native waits and Android callbacks are events; the only timer loops are the watcher's 30 s Android fallback (page open, foreground, LAN on, off after a USB or tether event), ping sockets (5 s), and a 500 ms debounce; all cancelled on dispose, setting off, cold mode, vault reset. Met.
+4. Lease: untouched.
+5. Limiter refusal: untouched.
+6. Cleared on dispose and reset: table, hint ports, probes, ping sockets, subscriptions, seeded LAN-direct endpoints (reset clears `_peerLanDirect`), the native monitor handle, the Rust hint cache (on close). Tested.
+7. No hold conditions added.
+8. Confirmation is an authenticated reply to our own probe, not a "stored" answer.
+9. Entries only for contacts that can be written to; unknown device ids change nothing (not even a relisting).
+10. The relisting trigger and the 50 a second limit are shared by the long-lived listener and the ping socket (the ping socket feeds the same handler).
+11. No recursion: link changes go through the debounce.
+12. Bounds: 16 links x 8 entries, 2+2 per device and link, 4 probes in flight, 64 hint peers, Rust cache 64 x 8, ports expire after an hour.
+13. Nothing is stored; one optional bool in the preferences.
+14. No capability needed (optional keys, old peers ignore them).
+15. Only confirmed entries become routes; they rank by existing route health.
+16. Untouched.
+17. A failing confirmed route is evicted after three failures; unconfirmed entries expire after 60 s.
+18. `dropLinkScoped` is off for the vault, so stored routes (including a 169.254 one from today's beacon) load unchanged. Tested.
+19. Nothing is parsed in a build or per item: names classified at listing, hints built per dial from at most a few strings; the page reads cached views.
+20. Tests use injected clocks (`LinkTable`, `IrohHintBook`, `CableLinks`) or a fixed offset.
+
+### Release note (plain text, for the canary)
+
+Contacts on the same cable or USB tethering are now found without a router or internet: plug in a cable, or turn on USB tethering on the phone, and Conest finds your contacts on it by itself. Messages, files and calls use the cable. The new page "Cable and USB" under Settings, Connectivity shows what was found.
+
+### Lab check needed
+
+After the first green debug run: phone 1 to Linux over USB tethering with Wi-Fi off and the internet blocked (a message, a 100 MB file, a call, over LAN-direct and over Iroh, and the throughput of each; if LAN-direct is slower, the seeding in `_onCableLinkConfirmed` is switched off); Linux to Windows over a direct Ethernet cable (APIPA); Linux to Linux with a cable and no DHCP; unplug mid-transfer; tethering and Wi-Fi together; the Windows firewall prompt and whether `255.255.255.255` leaves the bound interface; on the lab phones: do the USB_STATE and TETHER_STATE_CHANGED broadcasts arrive, and are `rndis0` or `ncm0` addresses visible to the app; the old-build peer on DHCP tethering.
+
+### Not done
+
+- P1b (IPv6 link-local), P2 (AOA, Linux first), P3 (serial): per the maintainer's order.
+- Group members who are not contacts are not found on the cable.
+- The Android fallback does not also run while a transfer is open.
+- Not built or run locally (CI only): all Rust, the Kotlin plugin, the Dart FFI against the real library, `debug.yml` (see the progress log for run ids).
 
 ## Progress log
 
