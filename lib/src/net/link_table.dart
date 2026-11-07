@@ -73,6 +73,9 @@ class LinkTable {
     );
   }
 
+  /// Nothing known (no clock read, no expiry: cheap enough for a hot path).
+  bool get isEmpty => _entries.isEmpty;
+
   int get linkCount {
     _expire();
     return _entries.map((entry) => entry.ifIndex).toSet().length;

@@ -491,7 +491,8 @@ class CableLinks {
   /// whose route fails three times in a row is dropped (a beacon or a new
   /// ping brings it back) and its link is pinged again, at most every 30 s.
   void noteRouteOutcome(PeerEndpoint route, bool ok) {
-    if (_disposed || route.kind != PeerRouteKind.lan) return;
+    // Every route outcome of the app comes through here: most have no link.
+    if (_disposed || route.kind != PeerRouteKind.lan || table.isEmpty) return;
     final entries = [
       for (final entry in table.all)
         if (entry.confirmed &&
