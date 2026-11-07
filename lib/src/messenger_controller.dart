@@ -151,6 +151,7 @@ import 'tor_carrier.dart';
 import 'transport.dart';
 import 'transfer/block_sources.dart';
 import 'transfer/gateway_election.dart';
+import 'transfer/own_device_serve_gate.dart';
 import 'transfer/own_device_sync_policy.dart';
 import 'transfer/relay_blobs.dart';
 import 'transfer/route_striper.dart';
@@ -158,6 +159,7 @@ import 'content_routing.dart';
 
 part 'delta_attachments_controller.dart';
 part 'group_call/group_call_controller.dart';
+part 'own_device_sync_controller.dart';
 part 'voice_settings_controller.dart';
 
 /// Receiving in the background on Android: in every build since v0.4.2
@@ -2052,6 +2054,8 @@ class MessengerController extends ChangeNotifier {
         backgroundedAt != null &&
         _now().difference(backgroundedAt) >= const Duration(seconds: 3);
     _appInForeground = value;
+    // Opened: what own devices asked while it was away is served.
+    if (value) _resumeParkedOwnBlocks();
     _appBackgroundedAtUtc = value ? null : _now();
     if (value && hasIdentity && conestActive) {
       _markRuntimeActivity();
@@ -12594,7 +12598,7 @@ class MessengerController extends ChangeNotifier {
     // What went wrong before belongs to the old identity: gone with it.
     _errorHistory?.discard();
     _errorHistory = null;
-    _parkedOwnSync.clear();
+    _clearOwnDeviceSyncState();
     _peerCold.clear();
     _peerColdGone.clear();
     _coldDirectSkipUntil.clear();
@@ -18029,6 +18033,7 @@ class MessengerController extends ChangeNotifier {
         ? NetworkCostClass.metered
         : NetworkCostClass.unmetered;
     _wakeBlobWaiters();
+    _resumeParkedOwnBlocks();
     appendDebugLog(
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
@@ -23151,8 +23156,9 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _serveAttachmentChunkRequest(
     ContactRecord requester,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    bool paced = false,
+  }) async {
     final attachmentId = payload['attachmentId'] as String?;
     final index = payload['index'] as int?;
     if (attachmentId == null || index == null) {
@@ -23228,6 +23234,29 @@ class MessengerController extends ChangeNotifier {
 
     if (index < 0 || index >= state.descriptor.effectiveChunkCount) {
       return;
+    }
+    // Another own device is served at the pace the sync speed allows, and
+    // not at all while paused, on a metered network or (cold) in the
+    // background: not answered, it asks again. A block that has to wait
+    // is let go now and served later, off this path.
+    if (state.servesOwnDevice) {
+      if (!_ownDeviceFilePermission.allowed) {
+        // Kept until it is allowed, so the other device is not left to its
+        // own (slow) retry.
+        _parkOwnDeviceBlock(requester, payload);
+        return;
+      }
+      if (!paced) {
+        final wait = _admitOwnDeviceBlock(
+          requester,
+          state.descriptor.chunkSize,
+        );
+        if (wait == null) return;
+        if (wait > Duration.zero) {
+          _deferOwnDeviceBlock(requester, payload, wait);
+          return;
+        }
+      }
     }
     final irohOnly =
         _outboundDebugAttachmentTests[attachmentId]?.irohOnly == true;
@@ -28502,6 +28531,7 @@ class MessengerController extends ChangeNotifier {
       _snapshot.pendingAckDeliveries,
     );
     final unreachableOwnDevices = <String>{};
+    final syncHeld = _liveSyncHeld;
     for (final entry in pending) {
       if (entry.requiresPeerUpdate) {
         continue;
@@ -28514,6 +28544,8 @@ class MessengerController extends ChangeNotifier {
       if (sync) {
         final target = _contactByDeviceId(entry.targetDeviceId);
         if (target != null && isOwnDeviceUnconfirmed(target)) continue;
+        // Paused: kept, not sent.
+        if (syncHeld) continue;
       }
       // One failed sync send per device per pass: the rest wait with it.
       if (sync && unreachableOwnDevices.contains(entry.targetDeviceId)) {
@@ -30432,7 +30464,10 @@ class MessengerController extends ChangeNotifier {
         (_snapshot.identity?.connectivity.coldWakeMinutes ?? 15) > 0;
     if (automatic &&
         (_snapshot.pendingAckDeliveries.any(
-              (entry) => entry.lastAttemptedAt.isAfter(oldest),
+              // What waits for an own device is no reason to wake.
+              (entry) =>
+                  entry.kind != PendingAckKind.accountSync &&
+                  entry.lastAttemptedAt.isAfter(oldest),
             ) ||
             _snapshot.pendingGroupMembershipDeliveries.any(
               (entry) => entry.lastAttemptedAt.isAfter(oldest),
@@ -30506,6 +30541,9 @@ class MessengerController extends ChangeNotifier {
           );
         }
       }
+      // Power or the energy setting changed: own devices' requests that
+      // were turned away may go now.
+      _resumeParkedOwnBlocks();
     });
     _coldSyncing = next;
     return next;
@@ -38584,6 +38622,10 @@ class MessengerController extends ChangeNotifier {
     final me = identity;
     final list = accountDevices;
     if (me == null || list == null) return;
+    final before = {
+      for (final contact in _snapshot.contacts)
+        if (contact.ownDevice) contact.deviceId,
+    };
     final contacts = <ContactRecord>[
       for (final contact in _snapshot.contacts)
         if (!contact.ownDevice ||
@@ -38630,6 +38672,13 @@ class MessengerController extends ChangeNotifier {
       }
     }
     _snapshot = _snapshot.copyWith(contacts: contacts);
+    // A device that is gone leaves nothing behind.
+    _forgetOwnDevices(
+      before.difference({
+        for (final contact in contacts)
+          if (contact.ownDevice) contact.deviceId,
+      }),
+    );
   }
 
   /// Whether own device [deviceId] may add or remove devices: the device
@@ -38959,6 +39008,8 @@ class MessengerController extends ChangeNotifier {
           (to == null || to(device)),
     );
     if (devices.isEmpty) return;
+    // Paused: what changes is kept for later, not sent (bulk is not kept).
+    final held = _liveSyncHeld;
     final plaintext = jsonEncode({
       'events': [event],
     });
@@ -39032,7 +39083,7 @@ class MessengerController extends ChangeNotifier {
         plaintext: plaintext,
         createdAt: _now().toUtc(),
       );
-      if (isOwnDeviceUnconfirmed(device)) {
+      if (held || isOwnDeviceUnconfirmed(device)) {
         if (bulky) continue;
         _enqueuePendingAckDelivery(
           PendingAckDelivery(
@@ -39084,13 +39135,26 @@ class MessengerController extends ChangeNotifier {
   // Sync between own devices (M33): speed policies, digests of what each
   // device holds, and which device passes a contact's message on (M29d).
 
-  bool _fastSyncConfirmed = false;
-  final SyncPacer _syncPacer = SyncPacer();
+  /// When the user's yes to a fast sync runs out (memory only: a restart
+  /// asks again).
+  DateTime? _fastSyncUntil;
+
+  /// Paces and admits the blocks served to each other own device, and the
+  /// blocks waiting for their turn (see own_device_sync_controller.dart).
+  late final OwnDeviceServeGate _ownServeGate = OwnDeviceServeGate(now: _now);
+  final Map<Timer, _DeferredOwnBlock> _ownServeTimers = {};
+  final List<_ParkedOwnBlock> _parkedOwnBlocks = [];
+  int _ownServeDeferrals = 0;
+  int _steadySyncBytesPerSecond =
+      OwnDeviceSyncPolicy.defaultSteadyBytesPerSecond;
+  int _steadySyncPaths = OwnDeviceSyncPolicy.defaultSteadyPaths;
 
   /// The speed policy for syncing with this account's other devices.
   OwnDeviceSyncPolicy get ownDeviceSyncPolicy => OwnDeviceSyncPolicy(
     speed: _snapshot.identity?.connectivity.syncSpeed ?? SyncSpeed.steady,
-    fastConfirmed: _fastSyncConfirmed,
+    fastConfirmed: _fastSyncConfirmedNow,
+    steadyBytesPerSecond: _steadySyncBytesPerSecond,
+    steadyPaths: _steadySyncPaths,
   );
 
   SyncConditions get _syncConditions {
@@ -39102,6 +39166,8 @@ class MessengerController extends ChangeNotifier {
       metered:
           _networkCostClass == NetworkCostClass.metered ||
           _networkCostClass == NetworkCostClass.roaming,
+      cold: _energyPolicy.isCold,
+      foreground: _appInForeground,
     );
   }
 
@@ -39212,8 +39278,15 @@ class MessengerController extends ChangeNotifier {
     bool confirmFast = false,
   }) async {
     final me = _requireIdentity();
-    _fastSyncConfirmed = speed == SyncSpeed.fast && confirmFast;
+    final wasPaused = me.connectivity.syncSpeed == SyncSpeed.paused;
+    _fastSyncUntil = speed == SyncSpeed.fast && confirmFast
+        ? _now().add(OwnDeviceSyncPolicy.fastConfirmationLasts)
+        : null;
     await updateGlobalConnectivity(me.connectivity.copyWith(syncSpeed: speed));
+    // What was held while paused goes now.
+    if (wasPaused && speed != SyncSpeed.paused) {
+      unawaited(_retryPendingAckDeliveries().catchError((Object _) {}));
+    }
   }
 
   /// The chats' ids in short, for the other devices to compare: recent
@@ -39829,12 +39902,16 @@ class MessengerController extends ChangeNotifier {
     _InboundAttachmentState state,
     ContactRecord device,
   ) {
+    final permission = ownDeviceSyncPermission;
     if (state.finalizing ||
         state.descriptor.sizeBytes < _multiSourceMinBytes ||
         !device.ownDevice ||
         !device.canSendOutbound ||
         isOwnDeviceUnconfirmed(device) ||
-        !ownDeviceSyncPermission.allowed ||
+        !permission.allowed ||
+        // Steady uses a few paths, fast more (the sender counts as one).
+        (!state.sources.contains(BlockSource.peer(device.deviceId)) &&
+            state.sources.sources.length >= permission.maxPaths) ||
         !state.sources.add(BlockSource.peer(device.deviceId))) {
       return;
     }
@@ -40454,7 +40531,10 @@ class MessengerController extends ChangeNotifier {
           },
       };
       // At the pace the speed policy allows.
-      final wait = _syncPacer.reserve(chars, permission.bytesPerSecond);
+      // (Far ahead of the pace: a long wait, not none.)
+      final wait =
+          _ownServeGate.admit(sender.deviceId, chars, permission) ??
+          const Duration(minutes: 3);
       if (wait <= Duration.zero) {
         _syncToOwnDevices(pageEvent, only: sender.deviceId);
       } else {
@@ -43412,6 +43492,7 @@ class MessengerController extends ChangeNotifier {
       timer.cancel();
     }
     _historyTimers.clear();
+    _clearOwnDeviceSyncState();
     _lanAdvertiseTimer?.cancel();
     for (final timer in _lanRecheckTimers) {
       timer.cancel();

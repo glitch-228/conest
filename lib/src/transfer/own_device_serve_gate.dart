@@ -14,7 +14,7 @@ class OwnDeviceServeGate {
   OwnDeviceServeGate({
     DateTime Function()? now,
     this.maxDevices = 16,
-    this.maxWait = const Duration(seconds: 20),
+    this.maxWait = const Duration(minutes: 3),
   }) : _now = now ?? DateTime.now;
 
   final DateTime Function() _now;

@@ -376,5 +376,11 @@ class OwnDeviceFileIndex {
 
   void forgetFile(String attachmentId) => _byFile.remove(attachmentId);
 
+  /// Whether any file is noted for [deviceId].
+  bool holds(String deviceId) =>
+      _byFile.values.any((devices) => devices.contains(deviceId));
+
+  void clear() => _byFile.clear();
+
   int get fileCount => _byFile.length;
 }

@@ -93,8 +93,8 @@ class OwnDeviceSyncPolicy {
   const OwnDeviceSyncPolicy({
     this.speed = SyncSpeed.steady,
     this.fastConfirmed = false,
-    this.steadyBytesPerSecond = 256 * 1024,
-    this.steadyPaths = 2,
+    this.steadyBytesPerSecond = defaultSteadyBytesPerSecond,
+    this.steadyPaths = defaultSteadyPaths,
     this.lowBatteryPercent = 20,
   });
 
@@ -105,6 +105,13 @@ class OwnDeviceSyncPolicy {
   final int steadyBytesPerSecond;
   final int steadyPaths;
   final int lowBatteryPercent;
+
+  /// What steady is by default: 256 KB/s, on two paths.
+  static const int defaultSteadyBytesPerSecond = 256 * 1024;
+  static const int defaultSteadyPaths = 2;
+
+  /// How long the user's yes to a fast sync lasts.
+  static const Duration fastConfirmationLasts = Duration(hours: 6);
 
   /// Backlog over which fast is worth offering.
   static const int fastOfferBytes = 200 * 1024 * 1024;
