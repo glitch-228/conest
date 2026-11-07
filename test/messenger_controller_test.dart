@@ -164,6 +164,7 @@ part 'l10n_controller_cases.dart';
 part 'xmpp_controller_cases.dart';
 part 'telegram_controller_cases.dart';
 part 'discord_controller_cases.dart';
+part 'own_device_sync_p0_cases.dart';
 
 final _unreachableXmppNetwork = XmppNetwork(
   connector: (host, port, {required tls, alpn}) =>
@@ -1869,6 +1870,7 @@ void main() {
   _xmppControllerTests();
   _telegramControllerTests();
   _discordControllerTests();
+  _ownDeviceSyncP0ControllerTests();
   test('a desktop notifies only while Conest is not in front', () async {
     final relay = _FakeRelayClient();
     final recorder = _RecordingPlatformBridge();
@@ -36982,14 +36984,96 @@ class _FakeCarrierNetwork {
     await controller.registerCarrierTransport(carrier);
   }
 
+  /// Limits a real carrier has, all off by default so tests that do not
+  /// care keep their exact frame counts. A frame over [maxFrameBytes] is
+  /// refused (a mail size limit, a Matrix event limit): the send fails and
+  /// nothing is delivered. Frames numbered in [loseFrames] (counted from 1
+  /// over every frame accepted) are accepted and never arrive. With
+  /// [reorderEvery] above 1, that many frames are kept back and handed over
+  /// last to first. With [rateLimitFrames] set, one sender may send that
+  /// many frames per [rateLimitWindow] (by [clock]); the next is refused
+  /// with a slow-down answer that names when to try again.
+  int? maxFrameBytes;
+  final Set<int> loseFrames = {};
+  int reorderEvery = 0;
+  int? rateLimitFrames;
+  Duration rateLimitWindow = const Duration(minutes: 1);
+  DateTime Function() clock = DateTime.now;
+
+  /// What reached an adapter (after loss, holding and reordering).
+  final List<(String, String, Uint8List)> delivered = [];
+  int refusedOversize = 0;
+  int refusedRate = 0;
+  int lost = 0;
+  int _accepted = 0;
+  final List<(String, String, Uint8List)> _reorderBuffer = [];
+  final Map<String, List<DateTime>> _sentAt = {};
+
   void deliver(String fromIdentity, String to, Uint8List frame) {
+    final limit = maxFrameBytes;
+    if (limit != null && frame.length > limit) {
+      refusedOversize++;
+      throw _CarrierRefused('frame of ${frame.length} bytes is over $limit');
+    }
+    final perWindow = rateLimitFrames;
+    if (perWindow != null) {
+      final now = clock();
+      final sent = _sentAt.putIfAbsent(fromIdentity, () => [])
+        ..removeWhere((at) => now.difference(at) >= rateLimitWindow);
+      if (sent.length >= perWindow) {
+        refusedRate++;
+        throw _CarrierRefused(
+          'slow down',
+          retryAfter: rateLimitWindow - now.difference(sent.first),
+        );
+      }
+      sent.add(now);
+    }
     frames.add((fromIdentity, to, frame));
+    _accepted++;
+    if (loseFrames.contains(_accepted)) {
+      lost++;
+      return;
+    }
     if (holdFrom.contains(fromIdentity)) {
       held.add((fromIdentity, to, frame));
       return;
     }
-    _byAddress[to]?.receiveFrame(fromIdentity, frame);
+    if (reorderEvery > 1) {
+      _reorderBuffer.add((fromIdentity, to, frame));
+      if (_reorderBuffer.length < reorderEvery) return;
+      final batch = _reorderBuffer.reversed.toList();
+      _reorderBuffer.clear();
+      for (final (from, address, bytes) in batch) {
+        _handOver(from, address, bytes);
+      }
+      return;
+    }
+    _handOver(fromIdentity, to, frame);
   }
+
+  /// Hands over what [reorderEvery] is still holding back.
+  void flushReordered() {
+    final batch = _reorderBuffer.reversed.toList();
+    _reorderBuffer.clear();
+    for (final (from, address, bytes) in batch) {
+      _handOver(from, address, bytes);
+    }
+  }
+
+  void _handOver(String from, String to, Uint8List frame) {
+    delivered.add((from, to, frame));
+    _byAddress[to]?.receiveFrame(from, frame);
+  }
+}
+
+/// A carrier turning a frame away: too big, or too many too fast.
+class _CarrierRefused implements Exception {
+  _CarrierRefused(this.reason, {this.retryAfter});
+  final String reason;
+  final Duration? retryAfter;
+  @override
+  String toString() => 'Carrier refused a frame: $reason';
 }
 
 class _FakeCarrierChannel implements CarrierChannel {
