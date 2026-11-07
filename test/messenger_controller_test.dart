@@ -37395,6 +37395,7 @@ void _cableLinkControllerTests() {
       bool bobSeesPings = false,
       bool aliceDirect = false,
       bool strictAddresses = false,
+      List<String>? irohAddresses,
     }) async {
       pingsBobSaw = 0;
       aliceClockOffset = Duration.zero;
@@ -37437,7 +37438,8 @@ void _cableLinkControllerTests() {
       ]);
       relay = _FakeRelayClient(failingHosts: failingHosts);
       iroh = _InProcessIrohNetwork()
-        ..directAddresses = ['192.168.1.20:41234', '[fd00::20]:42345'];
+        ..directAddresses =
+            irohAddresses ?? ['192.168.1.20:41234', '[fd00::20]:42345'];
       alice = await _createController(
         relayClient: relay,
         displayName: 'Alice',
@@ -37989,6 +37991,46 @@ void _cableLinkControllerTests() {
       );
       expect(alice.cableLinks!.table.confirmedFor(bobId), isEmpty);
     });
+
+    test('the lines a route test sends the contact name no link-local '
+        'route', () async {
+      await rig(bobAnswers: false);
+      confirmBob();
+      final lines = alice.transportInventoryForTesting(
+        alice.contactByDeviceId(bobId)!,
+      );
+      expect(lines.any((line) => line.startsWith('route ')), isTrue);
+      expect(leaksLinkLocal(lines.join('\n')), isFalse);
+    });
+
+    test('the Iroh port we tell is that of a private address, not of a '
+        'public one a NAT showed', () async {
+      await rig(
+        bobAnswers: false,
+        irohAddresses: [
+          '203.0.113.7:55555',
+          '192.168.1.20:41234',
+          '[fd00::20]:42345',
+        ],
+      );
+      await alice.checkContactRoutes(alice.contactByDeviceId(bobId)!);
+      await bob.pollNow();
+      expect(bob.cableLinks!.hints.portsFor(aliceId)!.iroh4, 41234);
+    });
+
+    test(
+      'what listens for link changes is stopped with the controller',
+      () async {
+        var stopped = 0;
+        final plain = await _createController(
+          relayClient: _FakeRelayClient(),
+          displayName: 'Plain',
+        );
+        plain.attachLinkEvents(() async => stopped++);
+        plain.dispose();
+        expect(stopped, 1);
+      },
+    );
 
     test('switching cable links off forgets what was found and stops the '
         'pings', () async {

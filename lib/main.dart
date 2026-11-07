@@ -498,7 +498,9 @@ Future<void> _runConestWithProfile(
   }
   // Cable and USB links: the platform says when one appears or goes.
   if (controller.cableLinks != null) {
-    LinkEventSources.start(controller.noteLinkEvent);
+    controller.attachLinkEvents(
+      LinkEventSources.start(controller.noteLinkEvent).dispose,
+    );
   }
   // Links are cleaned once the bundled lists are read.
   unawaited(LinkFilters.load());

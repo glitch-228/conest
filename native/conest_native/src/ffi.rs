@@ -1502,8 +1502,18 @@ static LINK_MONITORS: LazyLock<Mutex<HashMap<u64, Arc<crate::link::LinkMonitor>>
 
 /// Starts watching the network interfaces (Linux and Windows; on Android
 /// nothing feeds it, Kotlin sends the events). Returns a handle, 0 on error.
+/// Runs `f`. A panic must not cross the C boundary (it would abort the
+/// whole app): the caller gets `default` instead.
+fn guarded<T>(default: T, f: impl FnOnce() -> T + std::panic::UnwindSafe) -> T {
+    std::panic::catch_unwind(f).unwrap_or(default)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn conest_link_monitor_start() -> u64 {
+    guarded(0, link_monitor_start)
+}
+
+fn link_monitor_start() -> u64 {
     let monitor = crate::link::LinkMonitor::start(&RUNTIME);
     let Ok(mut next) = NEXT_HANDLE.lock() else {
         monitor.stop();
@@ -1529,6 +1539,10 @@ pub extern "C" fn conest_link_monitor_start() -> u64 {
 /// the monitor is stopped or unknown.
 #[unsafe(no_mangle)]
 pub extern "C" fn conest_link_monitor_wait(handle: u64, seen: u64, timeout_ms: u64) -> u64 {
+    guarded(0, move || link_monitor_wait(handle, seen, timeout_ms))
+}
+
+fn link_monitor_wait(handle: u64, seen: u64, timeout_ms: u64) -> u64 {
     // The wait holds its own reference: stopping the monitor meanwhile frees
     // nothing under it.
     let monitor = match LINK_MONITORS.lock() {
@@ -1547,6 +1561,10 @@ pub extern "C" fn conest_link_monitor_wait(handle: u64, seen: u64, timeout_ms: u
 /// Stops the monitor and wakes a wait that is running.
 #[unsafe(no_mangle)]
 pub extern "C" fn conest_link_monitor_stop(handle: u64) {
+    guarded((), move || link_monitor_stop(handle));
+}
+
+fn link_monitor_stop(handle: u64) {
     let monitor = match LINK_MONITORS.lock() {
         Ok(mut monitors) => monitors.remove(&handle),
         Err(_) => None,
@@ -1621,7 +1639,15 @@ mod attachment_crypto_tests {
 
 #[cfg(test)]
 mod link_monitor_tests {
-    use super::{conest_link_monitor_start, conest_link_monitor_stop, conest_link_monitor_wait};
+    use super::{
+        conest_link_monitor_start, conest_link_monitor_stop, conest_link_monitor_wait, guarded,
+    };
+
+    #[test]
+    fn a_panic_does_not_leave_the_ffi_function_it_returns_the_default() {
+        assert_eq!(guarded(7_u64, || 9), 9);
+        assert_eq!(guarded(7_u64, || -> u64 { panic!("a bug inside") }), 7);
+    }
 
     #[test]
     fn a_link_monitor_can_be_started_waited_on_and_stopped() {

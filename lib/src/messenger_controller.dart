@@ -4273,14 +4273,21 @@ class MessengerController extends ChangeNotifier {
           'iroh relay ${connectivity.irohRelayEnabled ? 'on' : 'off'}',
       'network ${_networkCostClass.name}, energy '
           '${_energyPolicy.modeFor(_networkCostClass).name}',
+      // (What goes to the contact names no link-local route: the cable
+      // address means something on one cable only.)
       for (final route in _candidateRoutesForContact(contact).take(24))
-        'route ${route.kind.name} ${route.label}',
+        if (!isLinkScopedHost(route.host))
+          'route ${route.kind.name} ${route.label}',
       for (final kind in _carrierTransports.keys)
         'carrier ${kind.name}'
             '${contact.carrierAddress(kind) == null ? ' (they have none)' : ''}',
       if (contact.irohEndpointId != null) 'their iroh endpoint known',
     ].take(TransportTestSide.maxLines).toList();
   }
+
+  @visibleForTesting
+  List<String> transportInventoryForTesting(ContactRecord contact) =>
+      _transportInventoryFor(contact);
 
   /// The latest errors about [contact] (recorded with its device id, so
   /// nothing about anyone else goes to it).
@@ -43535,6 +43542,11 @@ class MessengerController extends ChangeNotifier {
   /// A platform event about links (the native monitor, Android).
   void noteLinkEvent(LinkEventSource source) => _cable?.note(source);
 
+  Future<void> Function()? _stopLinkEvents;
+
+  /// What listens for link events is stopped with this controller.
+  void attachLinkEvents(Future<void> Function() stop) => _stopLinkEvents = stop;
+
   /// The ports this device tells its contacts, inside an encrypted route
   /// update: Iroh's two (they change at every start) and the LAN-direct
   /// file server's.
@@ -43544,6 +43556,9 @@ class MessengerController extends ChangeNotifier {
     final addresses = adapter is IrohTransportAdapter
         ? adapter.status?.directAddresses ?? const <String>[]
         : const <String>[];
+    // The port of a private or link-local address is the one Iroh listens
+    // on; a public IPv4 address Iroh learned from a server is where a NAT
+    // showed it, with a port of the NAT's own.
     int? irohPort({required bool v6}) {
       for (final value in addresses) {
         final parsed = _parseIrohSocketAddress(value);
@@ -43552,7 +43567,8 @@ class MessengerController extends ChangeNotifier {
             : InternetAddress.tryParse(parsed.host);
         if (parsed != null &&
             address != null &&
-            (address.type == InternetAddressType.IPv6) == v6) {
+            (address.type == InternetAddressType.IPv6) == v6 &&
+            (v6 || isLanDiscoveryAddress(parsed.host))) {
           return parsed.port;
         }
       }
@@ -43722,6 +43738,9 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    final stopLinkEvents = _stopLinkEvents;
+    _stopLinkEvents = null;
+    if (stopLinkEvents != null) unawaited(stopLinkEvents());
     _cable?.dispose();
     _cold.dispose();
     _peerCold.clear();
