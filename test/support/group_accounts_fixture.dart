@@ -218,10 +218,15 @@ class GroupFixture {
     GroupHistoryVisibility? visibility,
     Map<String, GroupHistoryCheckpoint> checkpoints = const {},
     Map<String, GroupMemberProfile> profileOverrides = const {},
+    List<String> removed = const [],
+    String title = 'Group',
   }) async {
     final parentIds = parents.map((parent) => parent.id).toList()..sort();
     final members = <TestDevice>[owner];
-    for (final device in [...deviceOnly, for (final a in accounts) ...a.projected]) {
+    for (final device in [
+      ...deviceOnly,
+      for (final a in accounts) ...a.projected,
+    ]) {
       if (!members.any((m) => m.id == device.id)) members.add(device);
     }
     final adminIds = [...admins];
@@ -236,14 +241,16 @@ class GroupFixture {
               .map((e) => parent.accountAdmission(e))
               .firstOrNull,
       ];
-      final admission = spec.admission ??
+      final admission =
+          spec.admission ??
           (held.isNotEmpty && !held.contains(null) && held.toSet().length == 1
               ? held.first
               : null);
       entries.add(
         GroupAccountMember(
           accountId: spec.account.id,
-          accountKeyBase64: spec.keyOverride ?? spec.account.keys.publicKeyBase64,
+          accountKeyBase64:
+              spec.keyOverride ?? spec.account.keys.publicKeyBase64,
           role: spec.role,
           listVersion: spec.list.version,
           listDigest: digest,
@@ -268,7 +275,9 @@ class GroupFixture {
     }
     final automatic = <String, String?>{};
     for (final member in members) {
-      final earlier = parents.map((parent) => parent.admissions[member.id]).toSet();
+      final earlier = parents
+          .map((parent) => parent.admissions[member.id])
+          .toSet();
       automatic[member.id] =
           parents.isNotEmpty && earlier.length == 1 && !earlier.contains(null)
           ? earlier.single
@@ -276,12 +285,12 @@ class GroupFixture {
     }
     final group = GroupRecord(
       groupId: groupId,
-      title: 'Group',
+      title: title,
       ownerDeviceId: owner.id,
       adminDeviceIds: adminIds,
       moderatorDeviceIds: moderatorIds,
       memberDeviceIds: [for (final m in members) m.id],
-      removedDeviceIds: const [],
+      removedDeviceIds: removed,
       memberProfiles: [
         for (final m in members) profileOverrides[m.id] ?? m.profile(),
       ],

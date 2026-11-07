@@ -4616,6 +4616,7 @@ class MessengerController extends ChangeNotifier {
   final Map<String, DateTime> _siblingAnnounceAt = {};
   final Map<String, GroupResolution> _groupResolutions = {};
   final Map<String, DateTime> _lastOwnerRecordAt = {};
+  final Map<String, DateTime> _lastMergeAt = {};
   final Map<String, Timer> _groupWriterTimers = {};
   final Set<String> _announcing = {};
   final Map<String, Set<String>> _passOnQueue = {};

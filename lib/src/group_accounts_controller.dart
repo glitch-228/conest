@@ -323,6 +323,13 @@ extension GroupAccountsController on MessengerController {
   Future<void> runDeputyForTesting(String groupId) => _runDeputy(groupId);
 
   @visibleForTesting
+  Future<bool> hasMembershipConflictForTesting(String groupId) =>
+      _groupHistory.hasConflict(groupId);
+
+  @visibleForTesting
+  bool mergeDueForTesting(String groupId) => _mergeDue(groupId);
+
+  @visibleForTesting
   Future<void> sendGroupLeaveForTesting(GroupRecord group) =>
       _sendGroupLeave(group);
 
@@ -1445,8 +1452,14 @@ extension GroupAccountsController on MessengerController {
       return;
     }
     // A fork freezes the group: resolving it comes before anything else.
+    // The first merge runs at once; later ones wait for the window like
+    // every owner record.
     if (await _groupHistory.hasConflict(groupId)) {
-      await _mergeFork(groupId);
+      if (_mergeDue(groupId)) {
+        await _mergeFork(groupId);
+      } else {
+        _scheduleOwnerWriter(groupId, after: _ownerRecordWindow);
+      }
       return;
     }
     final signed = group.signedView;
@@ -1534,6 +1547,47 @@ extension GroupAccountsController on MessengerController {
         folds.add(entry.key);
         changed = true;
       }
+    }
+    // Devices a revoked author admitted after its cutoff leave with the
+    // revocation (a stolen admin phone cannot leave an accomplice behind):
+    // whoever they belong to can be added again by someone who looked.
+    final leaving = {
+      for (final id in await _groupHistory.devicesAdmittedByRevoked(groupId))
+        if (id != next.ownerDeviceId && next.hasActiveMember(id)) id,
+    };
+    if (leaving.isNotEmpty) {
+      final goneAccounts = {
+        for (final id in leaving)
+          if (next.memberAccounts.any(
+            (e) => e.accountId == next.memberProfileFor(id)?.accountId,
+          ))
+            next.memberProfileFor(id)!.accountId,
+      };
+      // Devices of an account that stays are projected again by the loop
+      // below when the account's list says so (then under this record).
+      final gone = {
+        ...leaving,
+        for (final p in next.memberProfiles)
+          if (goneAccounts.contains(p.accountId)) p.deviceId,
+      };
+      final stays = {
+        for (final id in leaving)
+          if (next.accountOf(id) != null &&
+              !goneAccounts.contains(next.accountOf(id)!.accountId))
+            id,
+      };
+      next = _withoutDevices(next, gone).copyWith(
+        memberAccounts: [
+          for (final e in next.memberAccounts)
+            if (!goneAccounts.contains(e.accountId)) e,
+        ],
+        removedDeviceIds: [
+          ...next.removedDeviceIds,
+          for (final id in gone)
+            if (!stays.contains(id)) id,
+        ],
+      );
+      changed = true;
     }
     // Re-pins: newer lists, revocations, and the 24 hour wake.
     final entries = <GroupAccountMember>[];
@@ -1691,6 +1745,20 @@ extension GroupAccountsController on MessengerController {
     if (wakeAt != null) {
       _scheduleOwnerWriter(groupId, after: wakeAt.difference(now));
     }
+  }
+
+  /// Whether a merge for [groupId] may run now (and notes that one does).
+  bool _mergeDue(String groupId) {
+    final now = _now().toUtc();
+    final last = _lastMergeAt[groupId];
+    if (last != null && now.difference(last) < _ownerRecordWindow) {
+      return false;
+    }
+    while (_lastMergeAt.length >= 64 && !_lastMergeAt.containsKey(groupId)) {
+      _lastMergeAt.remove(_lastMergeAt.keys.first);
+    }
+    _lastMergeAt[groupId] = now;
+    return true;
   }
 
   /// The owner's app resolves a fork of the signed membership (two records
@@ -2054,6 +2122,8 @@ extension GroupAccountsController on MessengerController {
     GroupRecord? Function(GroupRecord signed) build,
   ) async {
     for (var attempt = 0; attempt < 4; attempt++) {
+      // A leave during a fork is recorded after the merge, not lost.
+      if (await _groupHistory.hasConflict(groupId)) await _mergeFork(groupId);
       final group = _groupById(groupId);
       if (_disposed || group == null) return null;
       final next = build(group.signedView);
@@ -2208,6 +2278,7 @@ extension GroupAccountsController on MessengerController {
     _pendingUpgrades.clear();
     _groupResolutions.clear();
     _lastOwnerRecordAt.clear();
+    _lastMergeAt.clear();
     _announcing.clear();
     _announcedFor.clear();
     _pendingJoins.clear();

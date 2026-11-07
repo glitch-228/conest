@@ -453,6 +453,8 @@ class GroupHistoryCoordinator {
             visibility ??
             (parents.isEmpty
                 ? null
+                : fork
+                ? history.mergedVisibility
                 : history.record(parents.first)?.historyVisibility) ??
             GroupHistoryVisibility.allRetained,
         admissions: {

@@ -865,6 +865,124 @@ void _groupAccountsControllerTests() {
     );
 
     test(
+      'a leave that arrives while the group is forked is recorded after the '
+      'merge, and merges are rate limited',
+      timeout: const Timeout(Duration(minutes: 3)),
+      () async {
+        final t = await joinedPhone(deputyDelay: const Duration(days: 1));
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        final phoneId = t.phone.identity!.deviceId;
+        final carolId = t.carol.identity!.deviceId;
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        t.alice.setOwnerWriterDelayForTesting(const Duration(days: 1));
+        await t.bob.revokeAccountDevice(phoneId);
+        await settle(
+          all,
+          until: () =>
+              !of(t.alice).hasActiveMember(phoneId) &&
+              !of(t.bob).hasActiveMember(phoneId),
+          rounds: 200,
+        );
+        final base = of(t.alice).membershipVersion;
+        final alicePoint = t.alice.identity!.irohEndpointId!;
+        final bobPoint = t.bob.identity!.irohEndpointId!;
+        t.network.blockedPairs
+          ..add((alicePoint, bobPoint))
+          ..add((bobPoint, alicePoint));
+        t.alice.setOwnerWriterDelayForTesting(const Duration(milliseconds: 50));
+        await t.alice.runOwnerWriterForTesting(t.groupId);
+        await t.bob.runDeputyForTesting(t.groupId);
+        // The owner's app is slow to act: a day until its writer runs.
+        t.alice.setOwnerWriterDelayForTesting(const Duration(days: 1));
+        t.network.blockedPairs.clear();
+        for (var i = 0; i < 100; i++) {
+          if (await t.alice.hasMembershipConflictForTesting(t.groupId)) break;
+          await settle(all, rounds: 2);
+        }
+        expect(
+          await t.alice.hasMembershipConflictForTesting(t.groupId),
+          isTrue,
+        );
+        // Carol leaves in the middle of the fork.
+        await t.carol.leaveGroup(t.groupId);
+        await settle(
+          all,
+          until: () => !of(t.alice).hasActiveMember(carolId),
+          rounds: 200,
+        );
+        expect(of(t.alice).hasActiveMember(carolId), isFalse);
+        expect(
+          await t.alice.hasMembershipConflictForTesting(t.groupId),
+          isFalse,
+        );
+        // Merge, then the leave: two records on the two heads.
+        expect(of(t.alice).membershipVersion, base + 3);
+        // A second merge within the window waits; the first one did not.
+        expect(t.alice.mergeDueForTesting('another-group'), isTrue);
+        expect(t.alice.mergeDueForTesting('another-group'), isFalse);
+      },
+    );
+
+    test(
+      'a stolen admin phone admits a thief device and is revoked: the owner\'s '
+      'record for the revocation takes the thief device out too',
+      timeout: const Timeout(Duration(minutes: 4)),
+      () async {
+        final t = await joinedPhone();
+        final all = [t.alice, t.bob, t.carol, t.phone];
+        final phoneId = t.phone.identity!.deviceId;
+        final bobId = t.bob.identity!.deviceId;
+        GroupRecord of(MessengerController c) =>
+            c.groups.firstWhere((g) => g.groupId == t.groupId);
+        final dave = await _createController(
+          relayClient: t.relay,
+          displayName: 'Thief device',
+          transportRegistryFactory: t.network.registry,
+        );
+        addTearDown(dave.dispose);
+        final daveId = dave.identity!.deviceId;
+        // Bob's account is an admin account: his phone can add members.
+        await t.alice.setGroupMemberRole(
+          groupId: t.groupId,
+          memberDeviceId: bobId,
+          role: GroupMemberRole.admin,
+        );
+        await settle(
+          all,
+          until: () => of(t.phone).roleFor(phoneId) == GroupMemberRole.admin,
+          rounds: 200,
+        );
+        expect(of(t.phone).roleFor(phoneId), GroupMemberRole.admin);
+        await _pairControllers(t.phone, dave);
+        // The thief adds a device. The laptop does not hear of it.
+        await t.phone.addGroupMembers(
+          groupId: t.groupId,
+          members: [t.phone.contacts.firstWhere((c) => c.deviceId == daveId)],
+        );
+        await settle(
+          [t.alice, t.carol, t.phone, dave],
+          until: () => of(t.alice).hasActiveMember(daveId),
+          rounds: 200,
+        );
+        expect(of(t.alice).hasActiveMember(daveId), isTrue);
+        // The laptop revokes the phone; the owner pins it.
+        await t.bob.revokeAccountDevice(phoneId);
+        await settle(
+          all,
+          until: () =>
+              !of(t.alice).memberDeviceIds.contains(phoneId) &&
+              !of(t.alice).hasActiveMember(daveId),
+          rounds: 250,
+        );
+        expect(of(t.alice).memberDeviceIds, isNot(contains(phoneId)));
+        expect(of(t.alice).hasActiveMember(daveId), isFalse);
+        expect(of(t.carol).hasActiveMember(daveId), isFalse);
+        expect(of(t.alice).hasActiveMember(bobId), isTrue);
+      },
+    );
+
+    test(
       'a candidate at the head\'s version that is not the head is refused, '
       'the head itself is accepted',
       timeout: const Timeout(Duration(minutes: 3)),

@@ -246,7 +246,10 @@ void main() {
       );
       expect(await history.import(o1), GroupMembershipImport.accepted);
       expect(await history.import(thief), GroupMembershipImport.accepted);
-      expect(history.hasConflict, isTrue);
+      // The thief's branch holds a record of a revoked device: it is no
+      // head that counts, the honest takeover is the group's head.
+      expect(history.hasConflict, isFalse);
+      expect(history.current!.id, o1.id);
       // The thief resolves the fork and gives the group to carol.
       final resolution = await fx.record(
         owner: carol,
@@ -1157,13 +1160,13 @@ void main() {
       final history = fx.history(owner: alice, view: view);
       await importAll(history, [r1, r2, r3]);
       expect(history.current!.id, r3.id);
-      expect(history.admittedByRevokedAuthors(), isEmpty);
+      expect(await history.admittedByRevokedAuthors(), isEmpty);
       // The admin device is revoked by its account: what it admitted waits.
       view.offerVerified(
         await admAcc.list(2, [adm2], revoked: ['adm1']),
         accountKey: admAcc.keys.publicKeyBase64,
       );
-      expect(history.admittedByRevokedAuthors(), {'bob1'});
+      expect(await history.admittedByRevokedAuthors(), {'bob1'});
     });
 
     test('an account id a contact has with another key is flagged', () async {
