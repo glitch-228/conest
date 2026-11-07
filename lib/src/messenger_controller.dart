@@ -39009,7 +39009,9 @@ class MessengerController extends ChangeNotifier {
     );
     if (devices.isEmpty) return;
     // Paused: what changes is kept for later, not sent (bulk is not kept).
-    final held = _liveSyncHeld;
+    // The answer "not now" to a history request still goes: without it the
+    // other device would ask blindly and give up.
+    final held = _liveSyncHeld && event['type'] != 'history_wait';
     final plaintext = jsonEncode({
       'events': [event],
     });
@@ -39145,6 +39147,7 @@ class MessengerController extends ChangeNotifier {
   final Map<Timer, _DeferredOwnBlock> _ownServeTimers = {};
   final List<_ParkedOwnBlock> _parkedOwnBlocks = [];
   int _ownServeDeferrals = 0;
+  int _historyRequestsAnswered = 0;
   int _steadySyncBytesPerSecond =
       OwnDeviceSyncPolicy.defaultSteadyBytesPerSecond;
   int _steadySyncPaths = OwnDeviceSyncPolicy.defaultSteadyPaths;
@@ -40443,6 +40446,7 @@ class MessengerController extends ChangeNotifier {
   /// hour's pages, it is told when to ask again.
   void _answerHistoryRequest(ContactRecord sender, Object? chats) {
     if (chats is! List) return;
+    _historyRequestsAnswered++;
     // Paused, or held up by the battery: asked again later.
     final permission = ownDeviceSyncPermission;
     if (!permission.allowed) {

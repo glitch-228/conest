@@ -105,7 +105,7 @@ extension OwnDeviceSyncController on MessengerController {
       final requester = _contactByDeviceId(parked.deviceId);
       if (requester == null || !requester.ownDevice) continue;
       unawaited(
-        _serveAttachmentChunkRequest(requester, parked.payload).catchError((
+        _handleAttachmentChunkRequest(requester, parked.payload).catchError((
           Object error,
         ) {
           appendDebugLog('A kept block request failed: $error');
@@ -225,6 +225,9 @@ extension OwnDeviceSyncController on MessengerController {
 
   @visibleForTesting
   int get ownServeDeferralsForTesting => _ownServeDeferrals;
+
+  @visibleForTesting
+  int get historyRequestsAnsweredForTesting => _historyRequestsAnswered;
 
   @visibleForTesting
   int get ownServeTimerCountForTesting => _ownServeTimers.length;

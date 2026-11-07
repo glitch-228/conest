@@ -195,6 +195,28 @@ void _ownDeviceSyncP0ControllerTests() {
       },
     );
 
+    test(
+      'a paused device still answers a history request with "not now"',
+      () async {
+        final f = await linked();
+        final phoneId = f.phone.identity!.deviceId;
+        final aliceId = f.alice.identity!.deviceId;
+        await f.alice.setOwnDeviceSyncSpeed(SyncSpeed.paused);
+        f.phone.askHistoryForTesting(aliceId);
+        await pump(f.pollAll, rounds: 25);
+        expect(
+          f.alice.queuedSyncForTesting('history_wait', phoneId),
+          0,
+          reason: 'the refusal was kept back instead of sent',
+        );
+        expect(
+          f.alice.historyRequestsAnsweredForTesting,
+          greaterThanOrEqualTo(1),
+          reason: 'the request never reached the paused device',
+        );
+      },
+    );
+
     test('the conditions reach the permission: cold in the background, '
         'mobile data, charging', () async {
       final power = _MutablePower(
