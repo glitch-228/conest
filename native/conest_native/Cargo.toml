@@ -57,6 +57,10 @@ opus = "0.4"
 sonora = "0.2"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+# Interface and address changes for cable links (link.rs): the monitor Iroh
+# itself uses, so no new code is compiled.
+netwatch = "0.19"
+n0-watcher = "1"
 cpal = "0.18.2"
 nokhwa = { version = "0.10.11", features = ["input-native"] }
 rxing = { version = "0.9.1", default-features = false, features = ["decoders", "encoding_rs", "qrcode"] }

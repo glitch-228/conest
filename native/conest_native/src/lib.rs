@@ -14,6 +14,7 @@ mod ble;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod desktop_camera;
 mod ffi;
+pub mod link;
 pub mod matrix;
 pub mod ratchet;
 mod signing;

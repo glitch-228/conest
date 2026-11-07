@@ -1107,6 +1107,8 @@ dependencies = [
  "matrix-sdk",
  "matrix-sdk-ui",
  "mime",
+ "n0-watcher",
+ "netwatch",
  "nokhwa",
  "opus",
  "rustls",

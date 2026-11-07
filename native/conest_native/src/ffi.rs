@@ -1497,6 +1497,65 @@ pub unsafe extern "C" fn conest_string_free(value: *mut c_char) {
     }
 }
 
+static LINK_MONITORS: LazyLock<Mutex<HashMap<u64, Arc<crate::link::LinkMonitor>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Starts watching the network interfaces (Linux and Windows; on Android
+/// nothing feeds it, Kotlin sends the events). Returns a handle, 0 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_link_monitor_start() -> u64 {
+    let monitor = crate::link::LinkMonitor::start(&RUNTIME);
+    let Ok(mut next) = NEXT_HANDLE.lock() else {
+        monitor.stop();
+        return 0;
+    };
+    let handle = *next;
+    let Some(value) = next.checked_add(1) else {
+        monitor.stop();
+        return 0;
+    };
+    *next = value;
+    let Ok(mut monitors) = LINK_MONITORS.lock() else {
+        monitor.stop();
+        return 0;
+    };
+    monitors.insert(handle, monitor);
+    handle
+}
+
+/// Blocks (call it from a helper isolate) until the interfaces changed since
+/// generation `seen`, the monitor stopped, or `timeout_ms` (at most 60 s)
+/// passed. Returns the generation (`seen` again after a timeout), or 0 once
+/// the monitor is stopped or unknown.
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_link_monitor_wait(handle: u64, seen: u64, timeout_ms: u64) -> u64 {
+    // The wait holds its own reference: stopping the monitor meanwhile frees
+    // nothing under it.
+    let monitor = match LINK_MONITORS.lock() {
+        Ok(monitors) => monitors.get(&handle).cloned(),
+        Err(_) => None,
+    };
+    let Some(monitor) = monitor else {
+        return 0;
+    };
+    let (generation, stopped) = monitor
+        .core
+        .wait(seen, std::time::Duration::from_millis(timeout_ms));
+    if stopped { 0 } else { generation }
+}
+
+/// Stops the monitor and wakes a wait that is running.
+#[unsafe(no_mangle)]
+pub extern "C" fn conest_link_monitor_stop(handle: u64) {
+    let monitor = match LINK_MONITORS.lock() {
+        Ok(mut monitors) => monitors.remove(&handle),
+        Err(_) => None,
+    };
+    if let Some(monitor) = monitor {
+        monitor.stop();
+    }
+}
+
 #[cfg(test)]
 mod attachment_crypto_tests {
     use super::{conest_attachment_decrypt_block, conest_attachment_encrypt_block};
@@ -1557,5 +1616,24 @@ mod attachment_crypto_tests {
             )
         });
         assert!(decrypted.iter().all(|byte| *byte == 0));
+    }
+}
+
+#[cfg(test)]
+mod link_monitor_tests {
+    use super::{conest_link_monitor_start, conest_link_monitor_stop, conest_link_monitor_wait};
+
+    #[test]
+    fn a_link_monitor_can_be_started_waited_on_and_stopped() {
+        let handle = conest_link_monitor_start();
+        assert_ne!(handle, 0);
+        // A wait that times out gives a generation back, not zero (the
+        // interfaces may change meanwhile: any generation but zero).
+        let first = conest_link_monitor_wait(handle, 0, 20);
+        assert_ne!(first, 0);
+        conest_link_monitor_stop(handle);
+        // Stopped, or never known: zero, at once.
+        assert_eq!(conest_link_monitor_wait(handle, first, 30_000), 0);
+        assert_eq!(conest_link_monitor_wait(u64::MAX, 1, 30_000), 0);
     }
 }

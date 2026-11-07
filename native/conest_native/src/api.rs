@@ -5,7 +5,7 @@ use std::{
     net::SocketAddr,
     str::FromStr,
     sync::{Arc, Weak},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -28,6 +28,76 @@ const MAX_INBOUND_STREAMS: usize = 8;
 type ConnectionPool = Arc<Mutex<HashMap<EndpointId, Connection>>>;
 type ConnectLockPool = Arc<Mutex<HashMap<EndpointId, Weak<Mutex<()>>>>>;
 type DatagramDialPool = Arc<Mutex<HashSet<EndpointId>>>;
+
+/// How many peers' dial hints are remembered, and for how long.
+const HINT_CACHE_PEERS: usize = 64;
+const HINT_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// The direct addresses the last hinted send to each peer carried. A call's
+/// media dial has no envelope to carry hints of its own, and offline (no
+/// relay, no discovery) a dial without hints reaches nobody: it uses these.
+///
+/// Bounded (64 peers, 8 addresses each) and expiring (10 minutes, checked
+/// when read). Every hinted send replaces the peer's entry, and an empty
+/// list removes it, so a bad hint does not outlive the retry without hints.
+struct HintCache {
+    max_peers: usize,
+    ttl: Duration,
+    entries: HashMap<EndpointId, (Instant, Vec<SocketAddr>)>,
+}
+
+impl HintCache {
+    fn new(max_peers: usize, ttl: Duration) -> Self {
+        Self {
+            max_peers,
+            ttl,
+            entries: HashMap::new(),
+        }
+    }
+
+    fn replace(&mut self, id: EndpointId, mut addresses: Vec<SocketAddr>, now: Instant) {
+        addresses.truncate(8);
+        if addresses.is_empty() {
+            self.entries.remove(&id);
+            return;
+        }
+        self.entries.insert(id, (now, addresses));
+        while self.entries.len() > self.max_peers {
+            let oldest = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(id, _)| *id);
+            match oldest {
+                Some(oldest) => {
+                    self.entries.remove(&oldest);
+                }
+                None => break,
+            }
+        }
+    }
+
+    fn get(&mut self, id: &EndpointId, now: Instant) -> Vec<SocketAddr> {
+        match self.entries.get(id) {
+            Some((at, addresses)) if now.saturating_duration_since(*at) <= self.ttl => {
+                addresses.clone()
+            }
+            Some(_) => {
+                self.entries.remove(id);
+                Vec::new()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeEndpointStatus {
@@ -77,6 +147,7 @@ pub struct NativeTransport {
     connections: ConnectionPool,
     connect_locks: ConnectLockPool,
     datagram_dials: DatagramDialPool,
+    hint_cache: Arc<std::sync::Mutex<HintCache>>,
     #[cfg(test)]
     connection_attempts: Arc<AtomicUsize>,
     relay_enabled: bool,
@@ -155,6 +226,10 @@ impl NativeTransport {
             connections,
             connect_locks: Arc::new(Mutex::new(HashMap::new())),
             datagram_dials: Arc::new(Mutex::new(HashSet::new())),
+            hint_cache: Arc::new(std::sync::Mutex::new(HintCache::new(
+                HINT_CACHE_PEERS,
+                HINT_CACHE_TTL,
+            ))),
             #[cfg(test)]
             connection_attempts: Arc::new(AtomicUsize::new(0)),
             relay_enabled,
@@ -217,8 +292,29 @@ impl NativeTransport {
     ) -> Result<NativeDeliveryReceipt> {
         let endpoint_id =
             EndpointId::from_str(&remote_endpoint_id).context("parse remote Iroh EndpointId")?;
-        self.send_to_addr_with_policy(EndpointAddr::new(endpoint_id), bytes, allow_relay)
+        self.send_to_addr_with_policy(self.addr_with_cached_hints(endpoint_id), bytes, allow_relay)
             .await
+    }
+
+    /// The peer's address with the direct addresses its last hinted send
+    /// carried (none once they expired).
+    fn addr_with_cached_hints(&self, endpoint_id: EndpointId) -> EndpointAddr {
+        let cached = self
+            .hint_cache
+            .lock()
+            .map(|mut cache| cache.get(&endpoint_id, Instant::now()))
+            .unwrap_or_default();
+        let mut addr = EndpointAddr::new(endpoint_id);
+        for address in cached {
+            addr = addr.with_ip_addr(address);
+        }
+        addr
+    }
+
+    fn remember_hints(&self, endpoint_id: EndpointId, addresses: Vec<SocketAddr>) {
+        if let Ok(mut cache) = self.hint_cache.lock() {
+            cache.replace(endpoint_id, addresses, Instant::now());
+        }
     }
 
     async fn send_to_with_hints(
@@ -233,10 +329,17 @@ impl NativeTransport {
         }
         let endpoint_id =
             EndpointId::from_str(&remote_endpoint_id).context("parse remote Iroh EndpointId")?;
-        let mut remote_addr = EndpointAddr::new(endpoint_id);
+        let mut addresses = Vec::with_capacity(direct_addresses.len());
         for value in direct_addresses {
             let address = SocketAddr::from_str(value.trim())
                 .with_context(|| format!("parse direct Iroh address hint {value}"))?;
+            addresses.push(address);
+        }
+        // A later dial of this peer without an envelope (a call's media)
+        // uses what this one carried; no hints at all forgets them.
+        self.remember_hints(endpoint_id, addresses.clone());
+        let mut remote_addr = EndpointAddr::new(endpoint_id);
+        for address in addresses {
             remote_addr = remote_addr.with_ip_addr(address);
         }
         self.send_to_addr_with_policy(remote_addr, bytes, allow_relay)
@@ -407,6 +510,7 @@ impl NativeTransport {
             return;
         }
         let endpoint = self.endpoint.clone();
+        let remote_addr = self.addr_with_cached_hints(endpoint_id);
         let connections = Arc::clone(&self.connections);
         let connect_locks = Arc::clone(&self.connect_locks);
         let inbox = self.inbox_tx.clone();
@@ -421,7 +525,7 @@ impl NativeTransport {
                 connect_locks,
                 inbox,
                 datagrams,
-                EndpointAddr::new(endpoint_id),
+                remote_addr,
                 #[cfg(test)]
                 connection_attempts,
             )
@@ -446,7 +550,9 @@ impl NativeTransport {
     /// Tells Iroh the network changed (on Android it cannot notice by itself)
     /// so it re-probes its paths, and drops pooled envelope connections that
     /// may still be bound to the old interface. Call datagram dials stay: a
-    /// call in progress migrates with QUIC instead of being cut.
+    /// call in progress migrates with QUIC instead of being cut. The dial
+    /// hints stay as well: Iroh keeps app-supplied paths for as long as its
+    /// peer state lives, and the next hinted send replaces them.
     pub async fn network_change(&self) {
         self.endpoint.network_change().await;
         self.connections.lock().await.clear();
@@ -454,6 +560,9 @@ impl NativeTransport {
 
     #[frb]
     pub async fn close(&self) {
+        if let Ok(mut cache) = self.hint_cache.lock() {
+            cache.clear();
+        }
         self.datagram_dials.lock().await.clear();
         self.connections.lock().await.clear();
         self.endpoint.close().await;
@@ -1027,5 +1136,144 @@ mod tests {
         })
         .await
         .expect("250 MiB direct Iroh certification timed out");
+    }
+
+    fn peer_id(n: u8) -> EndpointId {
+        SecretKey::from_bytes(&[n; 32]).public()
+    }
+
+    fn socket(text: &str) -> SocketAddr {
+        SocketAddr::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn hint_cache_replaces_a_peers_entry_and_an_empty_list_removes_it() {
+        let mut cache = HintCache::new(64, Duration::from_secs(600));
+        let now = Instant::now();
+        let peer = peer_id(1);
+        cache.replace(peer, vec![socket("169.254.1.2:4000")], now);
+        assert_eq!(cache.get(&peer, now), vec![socket("169.254.1.2:4000")]);
+        cache.replace(peer, vec![socket("192.168.5.5:4100")], now);
+        assert_eq!(cache.get(&peer, now), vec![socket("192.168.5.5:4100")]);
+        cache.replace(peer, Vec::new(), now);
+        assert!(cache.get(&peer, now).is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn hint_cache_is_bounded_and_the_oldest_peer_goes() {
+        let mut cache = HintCache::new(64, Duration::from_secs(600));
+        let start = Instant::now();
+        for n in 0..65_u8 {
+            cache.replace(
+                peer_id(n),
+                vec![socket("169.254.1.2:4000")],
+                start + Duration::from_millis(u64::from(n)),
+            );
+        }
+        let now = start + Duration::from_millis(100);
+        assert_eq!(cache.len(), 64);
+        assert!(cache.get(&peer_id(0), now).is_empty());
+        assert!(!cache.get(&peer_id(64), now).is_empty());
+    }
+
+    #[test]
+    fn hint_cache_entries_expire_when_read() {
+        let mut cache = HintCache::new(64, Duration::from_secs(600));
+        let start = Instant::now();
+        let peer = peer_id(1);
+        cache.replace(peer, vec![socket("169.254.1.2:4000")], start);
+        assert!(!cache.get(&peer, start + Duration::from_secs(599)).is_empty());
+        assert!(cache.get(&peer, start + Duration::from_secs(601)).is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn hint_cache_keeps_at_most_eight_addresses_of_a_peer() {
+        let mut cache = HintCache::new(64, Duration::from_secs(600));
+        let now = Instant::now();
+        let many: Vec<SocketAddr> = (1..=12)
+            .map(|n| socket(&format!("169.254.1.{n}:4000")))
+            .collect();
+        cache.replace(peer_id(1), many, now);
+        assert_eq!(cache.get(&peer_id(1), now).len(), 8);
+    }
+
+    #[test]
+    fn a_numeric_scope_id_parses_and_a_zone_name_does_not() {
+        assert!(SocketAddr::from_str("[fe80::1%3]:4000").is_ok());
+        assert!(SocketAddr::from_str("[fe80::1%usb0]:4000").is_err());
+        assert!(SocketAddr::from_str("169.254.1.2:4000").is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_dial_from_a_fresh_sender_succeeds_from_the_hints_alone() {
+        // No relay, no discovery, no earlier connection: the hint is the
+        // only way in.
+        let sender = NativeTransport::start_inner(vec![41; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver = NativeTransport::start_inner(vec![42; 32], false, vec![])
+            .await
+            .unwrap();
+        let receipt = tokio::time::timeout(
+            Duration::from_secs(10),
+            sender.send_to_with_hints(
+                receiver.endpoint.id().to_string(),
+                receiver.status().direct_addresses,
+                b"by hint only".to_vec(),
+                false,
+            ),
+        )
+        .await
+        .expect("hinted dial timed out")
+        .unwrap();
+        assert!(receipt.accepted);
+        assert_eq!(receipt.path, NativePathKind::Direct);
+        let inbound = tokio::time::timeout(Duration::from_secs(2), receiver.next_envelope())
+            .await
+            .expect("receiver inbox timed out")
+            .expect("receiver inbox closed");
+        assert_eq!(inbound.bytes, b"by hint only");
+        sender.close().await;
+        receiver.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_dial_without_hints_uses_what_the_last_hinted_send_carried() {
+        let sender = NativeTransport::start_inner(vec![43; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver = NativeTransport::start_inner(vec![44; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver_id = receiver.endpoint.id();
+        sender
+            .send_to_with_hints(
+                receiver_id.to_string(),
+                receiver.status().direct_addresses,
+                b"first".to_vec(),
+                false,
+            )
+            .await
+            .unwrap();
+        // The connection goes (a network change on the other side, say);
+        // the next dial has no envelope hints of its own.
+        sender.connections.lock().await.clear();
+        assert!(!sender.hint_cache.lock().unwrap().get(&receiver_id, Instant::now()).is_empty());
+        let receipt = tokio::time::timeout(
+            Duration::from_secs(10),
+            sender.send_to(receiver_id.to_string(), b"second".to_vec(), false),
+        )
+        .await
+        .expect("dial from remembered hints timed out")
+        .unwrap();
+        assert!(receipt.accepted);
+        // A network change keeps the hints; close forgets them.
+        sender.network_change().await;
+        assert_eq!(sender.hint_cache.lock().unwrap().len(), 1);
+        sender.close().await;
+        assert_eq!(sender.hint_cache.lock().unwrap().len(), 0);
+        receiver.close().await;
     }
 }
