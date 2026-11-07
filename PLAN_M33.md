@@ -301,3 +301,82 @@ Design note round only (2026-11-07): the note above is ready for the Opus design
 - **Q9:** don't wait for M27a. Reuse `BlockSourceSet`.
 - **Q10:** yes, P0 fixes it for sync events. Seal them at hand-off, using G8's `LazySeal` pattern, and don't encrypt before the limiter.
 - **Product questions:** Q1, Q2, Q3, Q4 and Q7 go to the user. Until they answer, use the note's proposed defaults and keep them configurable.
+
+## User decisions (2026-11-07, product questions)
+
+- **Q1 Deletes:** the user chooses each time, "Delete on this device" or "Delete on all my devices". All-devices deletes are capped at 50 an hour and 200 a day (review M7). No 7-day trash.
+- **Q2 Contacts:** contacts (adds, removes and renames) sync on every linked device, existing ones included, with no card asking first.
+- **Q4 Saved:** Saved follows the mode. In "contacts only" and "independent" it does not sync unless turned on separately.
+- **Q7 Verified:** "verified" syncs between own devices.
+  - Design it so that a device revoked later cannot leave contacts marked verified. Reset the verifications it set, or keep them per device and show which device verified each contact.
+  - If a contact's keys change, the mark clears on every device.
+- **Q3 Numbers:** the note's starting values stand, all configurable.
+
+## Design review (Opus, 2026-11-07): revise first
+
+The inventory checks out. The architecture is sound: push for live changes, pull for the backlog, the trust gate first, the policy table, no new polling, and strict fakes first. Fold the items below into the Design note before any code.
+
+### HIGH
+
+**H1. Deletes don't converge, and deleted messages come back.**
+- **Where:** §6, §9, §11.
+- **Why:**
+  - The ledger hashes the messages a device holds, and the digest leaves deleted ones out, so a local delete makes one day differ forever and it gets re-paged on every touch.
+  - A lost `del` is never repaired.
+  - Tombstones last 60 days while windows reach 90, and `all` has no window.
+  - Contact-early deletes (mc:26892) can push the user's own tombstones out of the 2048-entry cap.
+  - `rev` is undefined.
+- **Fix:**
+  - `rev` is the hash of the converged state: body or `editedAt`, the deleted flag, and the sorted reactions with their clocks.
+  - Tombstoned ids stay in the ledger:
+    - a local-only delete becomes a hidden entry;
+    - an all-devices delete becomes a terminal deleted `rev` that pages carry.
+  - Own tombstones live at least as long as the largest window, plus a per-chat "cleared before T" watermark.
+  - Contact-early deletes are stored separately, with their own cap.
+
+**H2. An own device can rewrite or flood messages without limit.**
+- **Where:** §4, §5.
+- **Fix:**
+  - `mut edit` applies only to `outbound` messages (as `editMessage` already does, mc:18325).
+  - Contact-authored content that arrives from an own device is shown as `viaOwnDevice`, and its previous body is kept.
+  - Edits and contact adds are capped per device per hour and per day. Anything over the cap is parked, like deletes.
+
+**H3. One capability covers phases that ship separately.**
+- **Where:** §3, §4.
+- **Why:** a P3 device would send bulk messages and `history_req2` to a P1/P2 device, which drops them. Envelopes dropped undecrypted can use up Olm's skipped keys (pitfall 2).
+- **Fix:** one capability per wire step, appended in order:
+  - `ownDeviceSyncV2`: `prefs`, `mut`, `contact`, `settings2`;
+  - `ownDeviceSyncBulkV1`: P3;
+  - `ownDeviceFilesV2`: `have_qb`.
+  
+  Senders fall back to the v1 events for a target that lacks a step's capability.
+- **Test:** a P1 build against a P3 build.
+
+### MEDIUM
+
+- **M1. Scope taken from the target's certificate protects nothing yet.** `DeviceCert` has no class or expiry, and every device holds the account private key. So today scope = my prefs ∧ the target's prefs. Write that the M65 temporary profile works only if temporary devices never get the account key and the profile is signed by a non-temporary device that is not the target. Reword test 3 to match.
+- **M2. Reactions are stored per device id** (mc:18387–18395). "My reaction" must mean any of my own device ids, and a toggle clears them all. Check this against M29's account identity.
+- **M3. Settings clocks.**
+  - Use an HLC: max(wall, last seen + 1), with ties going to the higher device id.
+  - Reject future clocks instead of clamping them.
+  - Use the same tiebreak for edits.
+  - A synced setting that weakens protection (app lock, receipts, link previews) is applied only after the receiving device confirms it.
+- **M4. Repair only after 5 min of quiet** (mc:38497).
+  - Attach `dgs` to an outgoing envelope after N events or 30 min of steady contact, with no new timer.
+  - Add a hash of the settings clocks to `dgs`.
+- **M5. Ledger vs `all`.** History older than 90 days has no digest. Add coarse month buckets beyond 90 days, or a one-time sweep driven by a cursor.
+- **M6. Pages on several routes vs Olm's 5 receiving chains.** Bulk envelopes to a target go over one route, the one the request came on. Use `maxPaths` only for file blocks. Add a test with the strict ratchet fake.
+- **M7. Delete cap.** Add a daily cap of 200 (see Q1).
+
+### LOW
+
+- `_hasWorkAwaitingAnswer` (mc:30433): accountSync entries never count.
+- The day index comes from the message's own `createdAt` in UTC.
+- Map the old 3-key settings bundle onto `settings2`. Batch more than 16 keys across several events.
+- Time it: a live `mut` costs a whole-list copy (mc:28321) and a full vault save. Lab check with 500 queued events.
+- More tests:
+  - after a local delete, the second sync touch sends 0 page frames;
+  - a contact's delete flood does not push out own tombstones;
+  - an edit to a contact-authored message is refused or marked.
+
+Per the lane rule this is the one design review round. After the revision, implement P0 without another design review.
