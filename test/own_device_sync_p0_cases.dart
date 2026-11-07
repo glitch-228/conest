@@ -589,8 +589,21 @@ void _ownDeviceSyncP0ControllerTests() {
 
     // ---- files: how many sources a fetch may use ----------------------
 
-    test('steady uses as many sources as its paths allow, and a confirmed '
-        'fast sync uses more', () async {
+    /// The laptop, Bob, the phone and the tablet (the three are one account).
+    /// Bob sent the laptop a 3 MiB file; the phone fetched it from the
+    /// laptop and said it holds it. The tablet, set to wait for the user,
+    /// has the laptop as its source and knows the phone holds the file.
+    Future<
+      ({
+        MessengerController laptop,
+        MessengerController bob,
+        MessengerController phone,
+        MessengerController tablet,
+        Future<void> Function() pollAll,
+        String id,
+      })
+    >
+    tabletKnowsPhoneHoldsIt({int tabletPaths = 2}) async {
       final network = _InProcessIrohNetwork();
       final relay = _FakeRelayClient();
       var now = DateTime.now().toUtc();
@@ -647,8 +660,7 @@ void _ownDeviceSyncP0ControllerTests() {
           ),
         );
       }
-      // The tablet may use one path in steady; fast lifts that.
-      tablet.steadySyncPathsForTesting = 1;
+      tablet.steadySyncPathsForTesting = tabletPaths;
       final bobId = bob.identity!.deviceId;
       final bytes = Uint8List(3 * 1024 * 1024);
       for (var i = 0; i < bytes.length; i += 3) {
@@ -686,10 +698,8 @@ void _ownDeviceSyncP0ControllerTests() {
         reason: 'the phone and the tablet did not hear of the file',
         timeout: const Duration(seconds: 40),
       );
-      final phoneId = phone.identity!.deviceId;
-      final laptopSource = BlockSource.peer(laptop.identity!.deviceId);
-      final phoneSource = BlockSource.peer(phoneId);
       // The phone fetches the file, then says it holds it.
+      final phoneId = phone.identity!.deviceId;
       await phone.acceptIncomingAttachment(id!);
       await _waitForIroh(
         () {
@@ -707,21 +717,78 @@ void _ownDeviceSyncP0ControllerTests() {
         reason: 'the tablet did not hear that the phone holds it',
         timeout: const Duration(seconds: 40),
       );
+      return (
+        laptop: laptop,
+        bob: bob,
+        phone: phone,
+        tablet: tablet,
+        pollAll: pollAll,
+        id: id!,
+      );
+    }
+
+    test('steady uses as many sources as its paths allow, and a confirmed '
+        'fast sync uses more', () async {
+      final s = await tabletKnowsPhoneHoldsIt(tabletPaths: 1);
+      final phoneId = s.phone.identity!.deviceId;
+      final laptopSource = BlockSource.peer(s.laptop.identity!.deviceId);
       expect(
-        tablet.blockSourcesForTesting(id!)!.sources,
+        s.tablet.blockSourcesForTesting(s.id)!.sources,
         [laptopSource],
         reason: 'steady, one path: the phone is known but not used',
       );
-      await tablet.setOwnDeviceSyncSpeed(SyncSpeed.fast, confirmFast: true);
-      tablet.askForOtherSourcesForTesting(id!, forgetDevice: phoneId);
+      await s.tablet.setOwnDeviceSyncSpeed(SyncSpeed.fast, confirmFast: true);
+      s.tablet.askForOtherSourcesForTesting(s.id, forgetDevice: phoneId);
       await _waitForIroh(
         () {
-          unawaited(pollAll());
-          return tablet.blockSourcesForTesting(id!)?.contains(phoneSource) ==
+          unawaited(s.pollAll());
+          return s.tablet
+                  .blockSourcesForTesting(s.id)
+                  ?.contains(BlockSource.peer(phoneId)) ==
               true;
         },
         reason: 'fast did not take the phone as a second source',
         timeout: const Duration(seconds: 40),
+      );
+    }, timeout: const Timeout(Duration(minutes: 4)));
+
+    test('a device removed from the account stops being a source of a '
+        'running fetch', () async {
+      final s = await tabletKnowsPhoneHoldsIt();
+      final phoneSource = BlockSource.peer(s.phone.identity!.deviceId);
+      // Two paths: the tablet takes the phone as a second source.
+      s.tablet.askForOtherSourcesForTesting(
+        s.id,
+        forgetDevice: s.phone.identity!.deviceId,
+      );
+      await _waitForIroh(
+        () {
+          unawaited(s.pollAll());
+          return s.tablet.blockSourcesForTesting(s.id)?.contains(phoneSource) ==
+              true;
+        },
+        reason: 'the tablet did not take the phone as a source',
+        timeout: const Duration(seconds: 40),
+      );
+      await s.laptop.revokeAccountDevice(s.phone.identity!.deviceId);
+      await _waitForIroh(
+        () {
+          unawaited(s.pollAll());
+          return s.tablet.accountDevices!.revoked.containsKey(
+            s.phone.identity!.deviceId,
+          );
+        },
+        reason: 'the tablet did not learn the phone was removed',
+        timeout: const Duration(seconds: 40),
+      );
+      expect(
+        s.tablet.blockSourcesForTesting(s.id)!.contains(phoneSource),
+        isFalse,
+        reason: 'a removed device must not be asked for blocks',
+      );
+      expect(
+        s.tablet.ownDeviceFileHoldersForTesting(s.id),
+        isNot(contains(s.phone.identity!.deviceId)),
       );
     }, timeout: const Timeout(Duration(minutes: 4)));
   });
