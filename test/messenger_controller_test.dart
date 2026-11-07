@@ -37709,24 +37709,96 @@ void _cableLinkControllerTests() {
       expect(alice.peerLanDirectEndpointForTesting(bobId), isNull);
     });
 
-    test('a LAN-direct endpoint on a normal LAN address is not replaced by '
+    /// Alice learns Bob's LAN-direct address from a route update, then a
+    /// probe answer confirms the cable address.
+    void confirmCableAfter(String lanDirectHost) {
+      if (lanDirectHost.isNotEmpty) {
+        alice.cachePeerLanDirectHintForTesting(bobId, {
+          'senderLanDirectPort': 7000,
+          'senderLanAddresses': [lanDirectHost],
+        });
+      }
+      alice.cableLinks!.notePorts(bobId, {'direct': 7667, 'binary': 1});
+      confirmBob();
+    }
+
+    test('a LAN-direct endpoint on one of our own subnets is not replaced by '
         'the cable one', () async {
-      await rig();
-      alice.cachePeerLanDirectHintForTesting(bobId, {
-        'senderLanDirectPort': 7000,
-        'senderLanAddresses': ['192.168.1.30'],
-      });
-      await alice.cableLinks!.pingNow();
-      await foundBob();
-      alice.cableLinks!.notePorts(bobId, {'direct': 7667});
-      alice.cableLinks!.onProbeReply(
-        alice.cableLinks!.pendingProbeIdsForTesting.single,
-        bobId,
-      );
+      await rig(bobAnswers: false);
+      // Alice is on 192.168.1.x: this one is on her network.
+      confirmCableAfter('192.168.1.30');
       expect(
         alice.peerLanDirectEndpointForTesting(bobId)!.host,
         '192.168.1.30',
       );
+    });
+
+    test('an address from another private network does not keep the cable '
+        'endpoint out: Alice cannot reach it', () async {
+      await rig(bobAnswers: false);
+      confirmCableAfter('10.9.9.9');
+      final endpoint = alice.peerLanDirectEndpointForTesting(bobId)!;
+      expect(endpoint.host, '169.254.20.2');
+      expect(endpoint.port, 7667);
+    });
+
+    test('a route update with no address on our subnets does not take the '
+        'cable endpoint back; one with an address on them does', () async {
+      await rig(bobAnswers: false);
+      confirmCableAfter('');
+      expect(
+        alice.peerLanDirectEndpointForTesting(bobId)!.host,
+        '169.254.20.2',
+      );
+      alice.cachePeerLanDirectHintForTesting(bobId, {
+        'senderLanDirectPort': 7000,
+        'senderLanAddresses': ['10.9.9.9'],
+      });
+      expect(
+        alice.peerLanDirectEndpointForTesting(bobId)!.host,
+        '169.254.20.2',
+      );
+      alice.cachePeerLanDirectHintForTesting(bobId, {
+        'senderLanDirectPort': 7000,
+        'senderLanAddresses': ['10.9.9.9', '192.168.1.40'],
+      });
+      expect(
+        alice.peerLanDirectEndpointForTesting(bobId)!.host,
+        '192.168.1.40',
+      );
+    });
+
+    test('a cable endpoint whose entry is gone is replaced by what the '
+        'contact says', () async {
+      await rig(bobAnswers: false);
+      confirmCableAfter('');
+      // The contact has another confirmed address; the one the endpoint
+      // was seeded from is the one that goes.
+      alice.cableLinks!.table.confirm(
+        deviceId: bobId,
+        ifIndex: 7,
+        ifName: 'enp3s0',
+        address: '169.254.20.7',
+        relayPort: 7667,
+      );
+      alice.cableLinks!.table.evict(bobId, '169.254.20.2');
+      alice.cachePeerLanDirectHintForTesting(bobId, {
+        'senderLanDirectPort': 7000,
+        'senderLanAddresses': ['10.9.9.9'],
+      });
+      expect(alice.peerLanDirectEndpointForTesting(bobId)!.host, '10.9.9.9');
+    });
+
+    test('after a connectivity change, which forgets the LAN-direct '
+        'endpoints, the cable one is seeded again', () async {
+      await rig(bobAnswers: false);
+      confirmCableAfter('');
+      expect(alice.peerLanDirectEndpointForTesting(bobId), isNotNull);
+      alice.onConnectivityChanged(interfaceLabel: 'wifi');
+      final endpoint = alice.peerLanDirectEndpointForTesting(bobId);
+      expect(endpoint, isNotNull);
+      expect(endpoint!.host, '169.254.20.2');
+      expect(endpoint.binaryBlockVersion, 1);
     });
 
     test('the probe is answered over the cable, and the answer confirms '

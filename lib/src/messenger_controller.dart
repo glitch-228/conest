@@ -18089,6 +18089,7 @@ class MessengerController extends ChangeNotifier {
     // An address learned on the old interface is no longer trusted as a LAN
     // destination. Both peers exchange fresh, authenticated endpoint hints.
     _peerLanDirect.clear();
+    _reseedCableLanDirect();
     // The routes that worked before may not now (a VPN, another network, a
     // network that blocks some): re-check the usual contacts, quietly.
     _networkRecheckTimer?.cancel();
@@ -34700,19 +34701,17 @@ class MessengerController extends ChangeNotifier {
     }
     final previous = _peerLanDirect[peerDeviceId];
     final hosts = addresses.cast<String>();
-    final localHosts = <String>[
-      ..._localLanAddressesCache,
-      ...?_snapshot.identity?.lanAddresses,
-    ];
-    bool sameSubnet(String host) => localHosts.any((local) {
-      final a = InternetAddress.tryParse(host)?.rawAddress;
-      final b = InternetAddress.tryParse(local)?.rawAddress;
-      return a?.length == 4 &&
-          b?.length == 4 &&
-          a![0] == b![0] &&
-          a[1] == b[1] &&
-          a[2] == b[2];
-    });
+    final sameSubnet = _isOnOwnSubnet;
+    // A cable the contact proved itself on stays the way to its files while
+    // nothing it says can be reached from one of our own subnets: an address
+    // from some other private network is no better.
+    if (previous != null &&
+        isLinkScopedHost(previous.host) &&
+        !hosts.any(sameSubnet) &&
+        (_cable?.isConfirmedAddress(peerDeviceId, previous.host) ?? false)) {
+      previous.cachedAt = DateTime.now().toUtc();
+      return;
+    }
     final host =
         previous != null &&
             previous.port == port &&
@@ -43425,6 +43424,21 @@ class MessengerController extends ChangeNotifier {
     return false;
   }
 
+  /// Whether [host] (IPv4) shares a /24 with an address of this device: on
+  /// the network, a cable or tethering link included.
+  bool _isOnOwnSubnet(String host) {
+    final a = InternetAddress.tryParse(host)?.rawAddress;
+    if (a == null || a.length != 4) return false;
+    return [
+      ..._localLanAddressesCache,
+      ...?_snapshot.identity?.lanAddresses,
+      ...?_cable?.ownV4Addresses,
+    ].any((local) {
+      final b = InternetAddress.tryParse(local)?.rawAddress;
+      return b?.length == 4 && a[0] == b![0] && a[1] == b[1] && a[2] == b[2];
+    });
+  }
+
   /// The contact proved itself at [entry]: files can go over the cable.
   void _onCableLinkConfirmed(LinkEntry entry) {
     // The answer just came by this route: delivery tries it before it waits
@@ -43434,13 +43448,22 @@ class MessengerController extends ChangeNotifier {
       fetch: false,
       latency: const Duration(milliseconds: 5),
     );
+    _seedCableLanDirect(entry);
+    _flushContactSoon(entry.deviceId);
+  }
+
+  /// The cable as the LAN-direct file endpoint of the contact, unless it
+  /// already has one on a network of ours (one on another private network,
+  /// which we cannot reach, does not count).
+  void _seedCableLanDirect(LinkEntry entry) {
     final ports = _cable?.hints.portsFor(entry.deviceId);
     final direct = ports?.direct;
     final existing = _peerLanDirect[entry.deviceId];
     final haveLanAddress =
         existing != null &&
         _lanDirectEndpointUsable(existing) &&
-        !isLinkScopedHost(existing.host);
+        !isLinkScopedHost(existing.host) &&
+        _isOnOwnSubnet(existing.host);
     if (direct != null && !haveLanAddress) {
       _peerLanDirect[entry.deviceId] = LanDirectEndpoint(
         host: entry.address,
@@ -43454,7 +43477,6 @@ class MessengerController extends ChangeNotifier {
       );
       _resumeTransfersForLanEndpoint(entry.deviceId);
     }
-    _flushContactSoon(entry.deviceId);
   }
 
   /// A cable went (or its route kept failing): what was seeded from it
@@ -43483,6 +43505,18 @@ class MessengerController extends ChangeNotifier {
   Future<void> _cableNetworkChanged() async {
     final iroh = _transportRegistry?.adapterFor(TransportKind.iroh);
     if (iroh is IrohTransportAdapter) await iroh.networkChanged();
+  }
+
+  /// A connectivity change forgot every LAN-direct endpoint; the cables the
+  /// contacts proved themselves on are still there. Seeded again at once, and
+  /// each is asked again (an answer renews its route health).
+  void _reseedCableLanDirect() {
+    final cable = _cable;
+    if (cable == null) return;
+    for (final entry in cable.confirmedEntries) {
+      _seedCableLanDirect(entry);
+    }
+    cable.reprobeConfirmed();
   }
 
   /// Turns the whole thing on or off with the setting, LAN and cold mode.

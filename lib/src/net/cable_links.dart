@@ -395,6 +395,30 @@ class CableLinks {
     return true;
   }
 
+  /// The IPv4 addresses of this device on the listed links.
+  List<String> get ownV4Addresses => [
+    for (final link in _links.values) ...link.v4,
+  ];
+
+  /// Whether [address] is a confirmed address of [deviceId].
+  bool isConfirmedAddress(String deviceId, String address) => table
+      .confirmedFor(deviceId)
+      .any((entry) => entry.address == address);
+
+  List<LinkEntry> get confirmedEntries => [
+    for (final entry in table.all)
+      if (entry.confirmed) entry,
+  ];
+
+  /// Asks every confirmed entry again (one probe each, at most one in 30 s
+  /// per entry): after a change of network their route health is gone.
+  void reprobeConfirmed() {
+    if (_disposed || !_enabled()) return;
+    for (final entry in confirmedEntries) {
+      _probe(entry);
+    }
+  }
+
   /// Whether [address] is one of this device's own on a listed link.
   bool ownsAddress(String address) =>
       _links.values.any((link) => link.v4.contains(address));
