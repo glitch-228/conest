@@ -895,7 +895,30 @@ Future<String> runDebugRequest(
           .messagesFor(contact.deviceId)
           .any((m) => !m.outbound && m.body == doneBody),
     );
-    while (!allDone() && DateTime.now().isBefore(lingerUntil)) {
+    // And until this device's own messages are confirmed: a paced carrier
+    // (mail, 50 a minute) is still sending when the others say "done", and
+    // stopping then counted queued messages as lost (gate, build 312).
+    bool unconfirmed(DeliveryState state) =>
+        state == DeliveryState.pending ||
+        state == DeliveryState.local ||
+        state == DeliveryState.relayed;
+    bool ownPending() =>
+        _contacts(controller).any(
+          (contact) => controller
+              .messagesFor(contact.deviceId)
+              .any((m) => m.outbound && unconfirmed(m.state)),
+        ) ||
+        _labGroups(controller).any(
+          (group) => controller
+              .messagesForGroup(group.groupId)
+              .any(
+                (m) =>
+                    m.outbound &&
+                    m.recipientStates.values.any(unconfirmed),
+              ),
+        );
+    while ((!allDone() || ownPending()) &&
+        DateTime.now().isBefore(lingerUntil)) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
     // Still in a group call (the others left): leave it, and write down
