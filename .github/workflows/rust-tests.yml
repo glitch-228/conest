@@ -36,6 +36,19 @@ jobs:
         with:
           key: rust-tests
       - run: cargo test --workspace --locked --no-fail-fast
+      - name: Link-local dial (a dummy interface with a 169.254 address)
+        run: |
+          sudo ip link add cn0 type dummy
+          sudo ip link set cn0 up
+          sudo ip addr add 169.254.77.1/16 dev cn0
+          sleep 3
+          export CONEST_TEST_LL_V4=169.254.77.1
+          v6=$(ip -6 -o addr show dev cn0 scope link | awk '{print $4}' | cut -d/ -f1 | head -n1)
+          if [ -n "$v6" ]; then
+            export CONEST_TEST_LL_V6="$v6"
+            export CONEST_TEST_LL_INDEX="$(cat /sys/class/net/cn0/ifindex)"
+          fi
+          cargo test --locked -p conest_native --lib endpoints_with_relays_off_connect_by_a_link_local_address -- --ignored --nocapture
       - name: Bluetooth hostile-input sabotage checks
         run: python3 tool/m37_rust_sabotage.py
       - name: M36 audio behavior negative checks

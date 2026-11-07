@@ -1276,4 +1276,79 @@ mod tests {
         assert_eq!(sender.hint_cache.lock().unwrap().len(), 0);
         receiver.close().await;
     }
+
+    /// Run by the "Link-local dial" step of rust-tests.yml, which makes a
+    /// dummy interface with a 169.254 address (and reads its fe80 address).
+    /// Two endpoints with relays and discovery off connect by the hint alone.
+    #[tokio::test]
+    #[ignore = "Needs the dummy interface the Rust tests workflow creates"]
+    async fn endpoints_with_relays_off_connect_by_a_link_local_address() {
+        let v4 = std::env::var("CONEST_TEST_LL_V4")
+            .expect("CONEST_TEST_LL_V4: the dummy interface's 169.254 address");
+        let receiver = NativeTransport::start_inner(vec![51; 32], false, vec![])
+            .await
+            .unwrap();
+        let listening: Vec<SocketAddr> = receiver
+            .status()
+            .direct_addresses
+            .iter()
+            .filter_map(|address| SocketAddr::from_str(address).ok())
+            .collect();
+        let port4 = listening
+            .iter()
+            .find(|address| address.is_ipv4())
+            .map(SocketAddr::port)
+            .expect("the receiver listens on IPv4");
+        let sender = NativeTransport::start_inner(vec![52; 32], false, vec![])
+            .await
+            .unwrap();
+        let receipt = tokio::time::timeout(
+            Duration::from_secs(10),
+            sender.send_to_with_hints(
+                receiver.endpoint.id().to_string(),
+                vec![format!("{v4}:{port4}")],
+                b"over 169.254".to_vec(),
+                false,
+            ),
+        )
+        .await
+        .expect("dial by a 169.254 hint timed out")
+        .unwrap();
+        assert!(receipt.accepted);
+        assert_eq!(receipt.path, NativePathKind::Direct);
+        let inbound = tokio::time::timeout(Duration::from_secs(2), receiver.next_envelope())
+            .await
+            .expect("receiver inbox timed out")
+            .expect("receiver inbox closed");
+        assert_eq!(inbound.bytes, b"over 169.254");
+
+        // IPv6 link-local with a numeric zone, where the machine has it.
+        let v6 = std::env::var("CONEST_TEST_LL_V6");
+        let index = std::env::var("CONEST_TEST_LL_INDEX");
+        let port6 = listening
+            .iter()
+            .find(|address| address.is_ipv6())
+            .map(SocketAddr::port);
+        if let (Ok(v6), Ok(index), Some(port6)) = (v6, index, port6) {
+            let sender6 = NativeTransport::start_inner(vec![53; 32], false, vec![])
+                .await
+                .unwrap();
+            let receipt = tokio::time::timeout(
+                Duration::from_secs(10),
+                sender6.send_to_with_hints(
+                    receiver.endpoint.id().to_string(),
+                    vec![format!("[{v6}%{index}]:{port6}")],
+                    b"over fe80".to_vec(),
+                    false,
+                ),
+            )
+            .await
+            .expect("dial by an fe80 hint timed out")
+            .unwrap();
+            assert!(receipt.accepted);
+            sender6.close().await;
+        }
+        sender.close().await;
+        receiver.close().await;
+    }
 }
