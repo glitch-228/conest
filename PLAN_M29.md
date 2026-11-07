@@ -228,3 +228,4 @@ When a device is removed from a person's account, devices that it added to a gro
 
 ## Progress log, round 3
 - 2026-11-07: pulled the round 3 findings; verified each in the code; rewrote the fork logic around effective heads and a field merge; made the H2 rule async with the chain check; tests first, sabotage checks as listed (history level: 10 variants, controller level: 3). The full suite and the debug run are recorded below.
+- 2026-11-07: full suite on 7f01dd0: 2326 passed, 24 skipped, 1 failed (the known native Iroh test). `flutter analyze`: 28 issues (the base). Debug run 42360564850: the first attempt failed one test in the Linux bundle ("Iroh group history crosses partitions through a group-only carrier", a 30 s timeout; it passed in 13 s in the round 2 run and passes locally 9 of 9 times, in the full suite too); rerunning only the failed job passed, so the run is green. Treat it as a timing flake of that CI step, and look at it again if it returns.
