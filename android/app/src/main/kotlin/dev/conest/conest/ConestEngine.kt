@@ -50,6 +50,7 @@ object ConestEngine {
         val messenger = engine.dartExecutor.binaryMessenger
         RadioLinkPlugin(context.applicationContext, messenger)
         BitchatBlePlugin(context.applicationContext, messenger)
+        LinkEventsPlugin(context.applicationContext, messenger)
     }
 
     /// The system channel without a screen: what needs no activity.
