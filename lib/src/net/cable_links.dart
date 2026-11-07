@@ -207,6 +207,11 @@ class CableLinks {
   final Map<int, Timer> _pingTimers = {};
   final Map<String, _PendingProbe> _pending = {};
   final Map<String, DateTime> _probedAt = {};
+
+  /// Entries that found no room for their probe: asked when a place frees.
+  final List<LinkEntry> _waiting = [];
+  bool _draining = false;
+  static const int _maxWaiting = 8;
   DateTime? _lastPingNowAt;
   DateTime? _lastRelistAt;
   bool _disposed = false;
@@ -401,9 +406,8 @@ class CableLinks {
   ];
 
   /// Whether [address] is a confirmed address of [deviceId].
-  bool isConfirmedAddress(String deviceId, String address) => table
-      .confirmedFor(deviceId)
-      .any((entry) => entry.address == address);
+  bool isConfirmedAddress(String deviceId, String address) =>
+      table.confirmedFor(deviceId).any((entry) => entry.address == address);
 
   List<LinkEntry> get confirmedEntries => [
     for (final entry in table.all)
@@ -445,7 +449,15 @@ class CableLinks {
     final key = '${entry.deviceId}|${entry.address}';
     final last = _probedAt[key];
     if (last != null && now.difference(last) < _probeGap) return;
-    if (_pending.length >= _maxProbes) return;
+    if (_pending.length >= _maxProbes) {
+      // No room now: asked when an answer, a failure or an expiry makes some.
+      final queued = _waiting.any(
+        (other) =>
+            other.deviceId == entry.deviceId && other.address == entry.address,
+      );
+      if (!queued && _waiting.length < _maxWaiting) _waiting.add(entry);
+      return;
+    }
     _probedAt[key] = now;
     if (_probedAt.length > 64) {
       _probedAt.removeWhere((_, at) => now.difference(at) > _probeLife);
@@ -455,13 +467,36 @@ class CableLinks {
     unawaited(
       _sendProbe(entry, id).then(
         (sent) {
-          if (!sent) _pending.remove(id);
+          if (!sent) {
+            _pending.remove(id);
+            _drainWaiting();
+          }
         },
         onError: (Object _) {
           _pending.remove(id);
+          _drainWaiting();
         },
       ),
     );
+  }
+
+  /// Asks the entries that waited for a place, while there is one. An entry
+  /// that expired or was confirmed meanwhile is skipped.
+  void _drainWaiting() {
+    if (_draining || _disposed) return;
+    _draining = true;
+    try {
+      _expirePending();
+      while (_waiting.isNotEmpty && _pending.length < _maxProbes) {
+        final entry = _waiting.removeAt(0);
+        final live = table
+            .unconfirmedFor(entry.deviceId)
+            .any((other) => other.address == entry.address);
+        if (live) _probe(entry);
+      }
+    } finally {
+      _draining = false;
+    }
   }
 
   /// The authenticated answer to probe [probeId] came from [deviceId]:
@@ -473,6 +508,7 @@ class CableLinks {
     final pending = _pending[probeId];
     if (pending == null || pending.entry.deviceId != deviceId) return false;
     _pending.remove(probeId);
+    _drainWaiting();
     final entry = table.confirm(
       deviceId: deviceId,
       ifIndex: pending.entry.ifIndex,
@@ -613,6 +649,7 @@ class CableLinks {
     table.clear();
     hints.clear();
     _pending.clear();
+    _waiting.clear();
     _probedAt.clear();
     _failures.clear();
     _evictedPingAt.clear();
@@ -631,6 +668,7 @@ class CableLinks {
     table.clear();
     hints.clear();
     _pending.clear();
+    _waiting.clear();
     _probedAt.clear();
     revision.dispose();
   }

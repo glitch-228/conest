@@ -102,9 +102,23 @@ class LinkTable {
     return null;
   }
 
-  bool _addressTakenByOther(String deviceId, String address) => _entries.any(
-    (entry) => entry.address == address && entry.deviceId != deviceId,
-  );
+  /// A holder of an address that was not heard of for this long has lost it
+  /// (a lease that moved on to another device).
+  static const Duration _staleHolder = Duration(minutes: 10);
+
+  bool _addressTakenByOther(String deviceId, String address) {
+    final holders = [
+      for (final entry in _entries)
+        if (entry.address == address && entry.deviceId != deviceId) entry,
+    ];
+    if (holders.isEmpty) return false;
+    final now = _now();
+    if (holders.every((entry) => now.difference(entry.seenAt) > _staleHolder)) {
+      _entries.removeWhere(holders.contains);
+      return false;
+    }
+    return true;
+  }
 
   /// Room for a new entry on [ifIndex] (null when the link is new and the
   /// table is full of other links, which cannot happen for [force]).

@@ -772,4 +772,86 @@ void main() {
       rig.links.dispose();
     });
   });
+
+  group('probes that found no room', () {
+    testWidgets('wait and go when an answer frees a place', (tester) async {
+      await rig.links.onLinksChanged();
+      await tester.pump(const Duration(seconds: 6));
+      rig.probes.clear();
+      for (final id in ['a', 'b', 'c', 'd', 'e', 'f']) {
+        rig.knownDevices.add('dev-$id');
+      }
+      var forged = 0;
+      for (final id in ['a', 'b', 'c', 'd', 'e', 'f']) {
+        rig.links.observeBeacon(
+          deviceId: 'dev-$id',
+          address: '169.254.40.${forged++}',
+          relayPort: 7667,
+          ifIndex: 7,
+        );
+      }
+      expect(rig.probes, hasLength(4));
+      expect(rig.links.probesInFlight, 4);
+      // One answer frees a place: a waiting one is asked now.
+      rig.links.onProbeReply(rig.probes.first.$3, rig.probes.first.$1);
+      expect(rig.probes, hasLength(5));
+      expect(rig.links.probesInFlight, 4);
+      await tester.pump(const Duration(seconds: 6));
+      rig.links.dispose();
+    });
+
+    testWidgets('a probe that could not be sent frees its place for the '
+        'next', (tester) async {
+      await rig.links.onLinksChanged();
+      await tester.pump(const Duration(seconds: 6));
+      rig.probes.clear();
+      for (final id in ['a', 'b', 'c', 'd', 'e']) {
+        rig.knownDevices.add('dev-$id');
+      }
+      rig.probeAnswer = false;
+      var forged = 0;
+      for (final id in ['a', 'b', 'c', 'd', 'e']) {
+        rig.links.observeBeacon(
+          deviceId: 'dev-$id',
+          address: '169.254.41.${forged++}',
+          relayPort: 7667,
+          ifIndex: 7,
+        );
+      }
+      await tester.pump(const Duration(milliseconds: 50));
+      // Every send failed: each place was freed in turn, so all five were
+      // tried, not only the first four.
+      expect(rig.probes, hasLength(5));
+      expect(rig.links.probesInFlight, 0);
+      await tester.pump(const Duration(seconds: 6));
+      rig.links.dispose();
+    });
+
+    testWidgets('are not kept for ever: an entry that is gone when a place '
+        'frees is skipped', (tester) async {
+      await rig.links.onLinksChanged();
+      await tester.pump(const Duration(seconds: 6));
+      rig.probes.clear();
+      for (final id in ['a', 'b', 'c', 'd', 'e']) {
+        rig.knownDevices.add('dev-$id');
+      }
+      var forged = 0;
+      for (final id in ['a', 'b', 'c', 'd', 'e']) {
+        rig.links.observeBeacon(
+          deviceId: 'dev-$id',
+          address: '169.254.42.${forged++}',
+          relayPort: 7667,
+          ifIndex: 7,
+        );
+      }
+      expect(rig.probes, hasLength(4));
+      // The fifth waits; its entry goes (its route failed, say) before a
+      // place is free: nobody is asked for it.
+      rig.links.table.evict('dev-e', '169.254.42.4');
+      rig.links.onProbeReply(rig.probes.first.$3, rig.probes.first.$1);
+      expect(rig.probes, hasLength(4));
+      await tester.pump(const Duration(seconds: 6));
+      rig.links.dispose();
+    });
+  });
 }

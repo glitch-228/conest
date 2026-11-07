@@ -115,6 +115,20 @@ void main() {
       expect(table.entriesOnLink(7).length, lessThanOrEqualTo(8));
     });
 
+    test('a confirmed address now leased to another device: refused while '
+        'the old holder was heard of lately, taken over after 10 minutes', () {
+      observe('dev-a', '169.254.1.2');
+      confirm('dev-a', '169.254.1.2');
+      now = now.add(const Duration(minutes: 5));
+      expect(observe('dev-b', '169.254.1.2'), isNull);
+      now = now.add(const Duration(minutes: 6));
+      final entry = observe('dev-b', '169.254.1.2');
+      expect(entry, isNotNull);
+      expect(entry!.confirmed, isFalse);
+      expect(table.confirmedFor('dev-a'), isEmpty);
+      expect(table.unconfirmedFor('dev-b').single.address, '169.254.1.2');
+    });
+
     test('a confirmed address cannot be claimed by another device', () {
       observe('dev-a', '169.254.1.2');
       confirm('dev-a', '169.254.1.2');
