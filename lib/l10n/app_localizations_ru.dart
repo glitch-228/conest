@@ -6832,4 +6832,55 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get reportProblemSaveTitle => 'Сохранить отчёт';
+
+  @override
+  String get cableLinksTitle => 'Кабель и USB';
+
+  @override
+  String get cableLinksSwitchTitle => 'Искать по кабелю и USB';
+
+  @override
+  String get cableLinksSwitchHint =>
+      'Находить контакты по кабелю или USB-модему, без роутера и без интернета.';
+
+  @override
+  String get cableLinksNone => 'Кабель или USB-соединение не найдены.';
+
+  @override
+  String get cableLinksKindUsb => 'USB-модем';
+
+  @override
+  String get cableLinksKindCable => 'Кабель Ethernet';
+
+  @override
+  String get cableLinksKindWifi => 'Wi-Fi';
+
+  @override
+  String get cableLinksKindOther => 'Сетевое соединение';
+
+  @override
+  String cableLinksContacts(String names) {
+    return 'Доступны: $names';
+  }
+
+  @override
+  String get cableLinksLooking => 'Ищем контакты';
+
+  @override
+  String get cableLinksOpenTethering => 'Открыть настройки модема';
+
+  @override
+  String get cableLinksHelpPlug =>
+      'Подключите кабель или включите USB-модем. Conest сам найдёт контакты, без роутера и без интернета.';
+
+  @override
+  String get cableLinksHelpLinux =>
+      'В Linux без роутера включите «Только локальная связь» (link-local) в сетевых настройках на обоих концах.';
+
+  @override
+  String get cableLinksHelpWindows =>
+      'Windows может спросить, разрешить ли Conest в этой сети: выберите «Да».';
+
+  @override
+  String get cableLinksOff => 'Выключено';
 }

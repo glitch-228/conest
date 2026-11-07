@@ -74,7 +74,9 @@ import 'src/activity_counters.dart';
 import 'src/crash_catcher.dart';
 import 'src/native_crash_reports.dart';
 import 'src/ui/matrix_account_panel.dart';
+import 'src/net/link_events.dart';
 import 'src/ui/bitchat_carrier_panel.dart';
+import 'src/ui/cable_links_panel.dart';
 import 'src/ui/email_carrier_panel.dart';
 import 'src/ui/meshcore_carrier_panel.dart';
 import 'src/ui/meshtastic_carrier_panel.dart';
@@ -493,6 +495,10 @@ Future<void> _runConestWithProfile(
     );
   } catch (error) {
     controller.appendDebugLog('connectivity_plus listener unavailable: $error');
+  }
+  // Cable and USB links: the platform says when one appears or goes.
+  if (controller.cableLinks != null) {
+    LinkEventSources.start(controller.noteLinkEvent);
   }
   // Links are cleaned once the bundled lists are read.
   unawaited(LinkFilters.load());
@@ -16317,6 +16323,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             if (widget.controller.matrixCarrierAvailable)
                               MatrixAccountPanel(controller: widget.controller),
                             const SizedBox(height: 12),
+                            CableLinksPanel(controller: widget.controller),
                             NostrCarrierPanel(controller: widget.controller),
                             const SizedBox(height: 12),
                             NostrDirectPanel(controller: widget.controller),

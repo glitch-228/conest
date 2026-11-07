@@ -6698,4 +6698,55 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get reportProblemSaveTitle => 'Save the report';
+
+  @override
+  String get cableLinksTitle => 'Cable and USB';
+
+  @override
+  String get cableLinksSwitchTitle => 'Use cable and USB links';
+
+  @override
+  String get cableLinksSwitchHint =>
+      'Find your contacts on a cable or USB tethering, with no router and no internet.';
+
+  @override
+  String get cableLinksNone => 'No cable or USB link found.';
+
+  @override
+  String get cableLinksKindUsb => 'USB tethering';
+
+  @override
+  String get cableLinksKindCable => 'Ethernet cable';
+
+  @override
+  String get cableLinksKindWifi => 'Wi-Fi';
+
+  @override
+  String get cableLinksKindOther => 'Network link';
+
+  @override
+  String cableLinksContacts(String names) {
+    return 'Reachable: $names';
+  }
+
+  @override
+  String get cableLinksLooking => 'Looking for contacts';
+
+  @override
+  String get cableLinksOpenTethering => 'Open tethering settings';
+
+  @override
+  String get cableLinksHelpPlug =>
+      'Plug in a cable or turn on USB tethering. Conest finds your contacts on it by itself, with no router and no internet.';
+
+  @override
+  String get cableLinksHelpLinux =>
+      'On Linux with no router, set \"Link-local only\" in the network settings of both ends.';
+
+  @override
+  String get cableLinksHelpWindows =>
+      'Windows may ask to allow Conest on this network: choose yes.';
+
+  @override
+  String get cableLinksOff => 'Off';
 }

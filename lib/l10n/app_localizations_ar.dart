@@ -6823,4 +6823,55 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get reportProblemSaveTitle => 'حفظ التقرير';
+
+  @override
+  String get cableLinksTitle => 'الكابل وUSB';
+
+  @override
+  String get cableLinksSwitchTitle => 'استخدام وصلات الكابل وUSB';
+
+  @override
+  String get cableLinksSwitchHint =>
+      'اعثر على جهات اتصالك عبر كابل أو مشاركة الإنترنت عبر USB، دون راوتر ودون إنترنت.';
+
+  @override
+  String get cableLinksNone => 'لم يتم العثور على وصلة كابل أو USB.';
+
+  @override
+  String get cableLinksKindUsb => 'مشاركة الإنترنت عبر USB';
+
+  @override
+  String get cableLinksKindCable => 'كابل إيثرنت';
+
+  @override
+  String get cableLinksKindWifi => 'Wi-Fi';
+
+  @override
+  String get cableLinksKindOther => 'وصلة شبكة';
+
+  @override
+  String cableLinksContacts(String names) {
+    return 'يمكن الوصول إلى: $names';
+  }
+
+  @override
+  String get cableLinksLooking => 'جارٍ البحث عن جهات الاتصال';
+
+  @override
+  String get cableLinksOpenTethering => 'فتح إعدادات المشاركة';
+
+  @override
+  String get cableLinksHelpPlug =>
+      'وصّل كابلاً أو شغّل مشاركة الإنترنت عبر USB. يعثر Conest على جهات اتصالك بنفسه، دون راوتر ودون إنترنت.';
+
+  @override
+  String get cableLinksHelpLinux =>
+      'في Linux بدون راوتر، اختر «محلي الوصلة فقط» في إعدادات الشبكة على الطرفين.';
+
+  @override
+  String get cableLinksHelpWindows =>
+      'قد يسأل Windows إن كان يُسمح لـ Conest باستخدام هذه الشبكة: اختر نعم.';
+
+  @override
+  String get cableLinksOff => 'متوقف';
 }

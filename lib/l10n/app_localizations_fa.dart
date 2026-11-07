@@ -6700,4 +6700,55 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get reportProblemSaveTitle => 'ذخیرهٔ گزارش';
+
+  @override
+  String get cableLinksTitle => 'کابل و USB';
+
+  @override
+  String get cableLinksSwitchTitle => 'استفاده از اتصال کابل و USB';
+
+  @override
+  String get cableLinksSwitchHint =>
+      'مخاطبان خود را از طریق کابل یا اشتراک اینترنت با USB پیدا کنید، بدون مسیریاب و بدون اینترنت.';
+
+  @override
+  String get cableLinksNone => 'اتصال کابل یا USB پیدا نشد.';
+
+  @override
+  String get cableLinksKindUsb => 'اشتراک اینترنت با USB';
+
+  @override
+  String get cableLinksKindCable => 'کابل اترنت';
+
+  @override
+  String get cableLinksKindWifi => 'Wi-Fi';
+
+  @override
+  String get cableLinksKindOther => 'اتصال شبکه';
+
+  @override
+  String cableLinksContacts(String names) {
+    return 'در دسترس: $names';
+  }
+
+  @override
+  String get cableLinksLooking => 'در حال جست‌وجوی مخاطبان';
+
+  @override
+  String get cableLinksOpenTethering => 'باز کردن تنظیمات اشتراک‌گذاری';
+
+  @override
+  String get cableLinksHelpPlug =>
+      'کابلی وصل کنید یا اشتراک اینترنت با USB را روشن کنید. Conest مخاطبان شما را خودش پیدا می‌کند، بدون مسیریاب و بدون اینترنت.';
+
+  @override
+  String get cableLinksHelpLinux =>
+      'در لینوکس بدون مسیریاب، در تنظیمات شبکهٔ هر دو سر «فقط پیوند محلی» را انتخاب کنید.';
+
+  @override
+  String get cableLinksHelpWindows =>
+      'ویندوز ممکن است بپرسد آیا Conest در این شبکه مجاز است: «بله» را بزنید.';
+
+  @override
+  String get cableLinksOff => 'خاموش';
 }

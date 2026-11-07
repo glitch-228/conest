@@ -1783,5 +1783,20 @@
   "reportProblemNote": "分享前请先阅读。其中不含消息和密钥，名称已被替换，但错误行仍可能提到未能识别的内容。",
   "reportProblemBuilding": "正在准备报告…",
   "reportProblemCopied": "已复制报告。",
-  "reportProblemSaveTitle": "保存报告"
+  "reportProblemSaveTitle": "保存报告",
+  "cableLinksTitle": "网线和 USB",
+  "cableLinksSwitchTitle": "使用网线和 USB 连接",
+  "cableLinksSwitchHint": "通过网线或 USB 共享网络找到联系人，无需路由器和互联网。",
+  "cableLinksNone": "未找到网线或 USB 连接。",
+  "cableLinksKindUsb": "USB 共享网络",
+  "cableLinksKindCable": "以太网线",
+  "cableLinksKindWifi": "Wi-Fi",
+  "cableLinksKindOther": "网络连接",
+  "cableLinksContacts": "可达：{names}",
+  "cableLinksLooking": "正在查找联系人",
+  "cableLinksOpenTethering": "打开网络共享设置",
+  "cableLinksHelpPlug": "插上网线或开启 USB 共享网络。Conest 会自动找到联系人，无需路由器和互联网。",
+  "cableLinksHelpLinux": "在没有路由器的 Linux 上，请在两端的网络设置中选择“仅本地链路”。",
+  "cableLinksHelpWindows": "Windows 可能会询问是否允许 Conest 使用此网络：请选择“是”。",
+  "cableLinksOff": "关闭"
 }

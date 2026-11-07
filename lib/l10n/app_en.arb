@@ -9843,5 +9843,71 @@
   "reportProblemSaveTitle": "Save the report",
   "@reportProblemSaveTitle": {
     "description": "File picker title when saving the problem report"
+  },
+  "cableLinksTitle": "Cable and USB",
+  "@cableLinksTitle": {
+    "description": "Settings → Connectivity: page for contacts reached over a cable or USB tethering."
+  },
+  "cableLinksSwitchTitle": "Use cable and USB links",
+  "@cableLinksSwitchTitle": {
+    "description": "Cable and USB page: the on/off switch."
+  },
+  "cableLinksSwitchHint": "Find your contacts on a cable or USB tethering, with no router and no internet.",
+  "@cableLinksSwitchHint": {
+    "description": "Under the cable and USB switch."
+  },
+  "cableLinksNone": "No cable or USB link found.",
+  "@cableLinksNone": {
+    "description": "Cable and USB page: no link is up."
+  },
+  "cableLinksKindUsb": "USB tethering",
+  "@cableLinksKindUsb": {
+    "description": "Cable and USB page: a link made by USB tethering."
+  },
+  "cableLinksKindCable": "Ethernet cable",
+  "@cableLinksKindCable": {
+    "description": "Cable and USB page: a link made by an Ethernet cable."
+  },
+  "cableLinksKindWifi": "Wi-Fi",
+  "@cableLinksKindWifi": {
+    "description": "Cable and USB page: a Wi-Fi link."
+  },
+  "cableLinksKindOther": "Network link",
+  "@cableLinksKindOther": {
+    "description": "Cable and USB page: any other network link."
+  },
+  "cableLinksContacts": "Reachable: {names}",
+  "@cableLinksContacts": {
+    "description": "Cable and USB page: the contacts that answered on a link. {names} is a comma-separated list of contact names.",
+    "placeholders": {
+      "names": {
+        "type": "String",
+        "description": "Comma-separated contact names; keep as is."
+      }
+    }
+  },
+  "cableLinksLooking": "Looking for contacts",
+  "@cableLinksLooking": {
+    "description": "Cable and USB page: a link where no contact answered yet."
+  },
+  "cableLinksOpenTethering": "Open tethering settings",
+  "@cableLinksOpenTethering": {
+    "description": "Cable and USB page, Android: opens the system page where USB tethering is switched on."
+  },
+  "cableLinksHelpPlug": "Plug in a cable or turn on USB tethering. Conest finds your contacts on it by itself, with no router and no internet.",
+  "@cableLinksHelpPlug": {
+    "description": "Cable and USB page: short help."
+  },
+  "cableLinksHelpLinux": "On Linux with no router, set \"Link-local only\" in the network settings of both ends.",
+  "@cableLinksHelpLinux": {
+    "description": "Cable and USB page: help shown on Linux. \"Link-local only\" is the name of the setting in NetworkManager."
+  },
+  "cableLinksHelpWindows": "Windows may ask to allow Conest on this network: choose yes.",
+  "@cableLinksHelpWindows": {
+    "description": "Cable and USB page: help shown on Windows."
+  },
+  "cableLinksOff": "Off",
+  "@cableLinksOff": {
+    "description": "Cable and USB page: the switch is off."
   }
 }

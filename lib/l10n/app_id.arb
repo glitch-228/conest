@@ -1783,5 +1783,20 @@
   "reportProblemNote": "Baca sebelum Anda membagikannya. Tidak berisi pesan maupun kunci, dan nama diganti, tetapi baris galat masih bisa menyebut sesuatu yang tidak dikenali.",
   "reportProblemBuilding": "Menyiapkan laporan…",
   "reportProblemCopied": "Laporan disalin.",
-  "reportProblemSaveTitle": "Simpan laporan"
+  "reportProblemSaveTitle": "Simpan laporan",
+  "cableLinksTitle": "Kabel dan USB",
+  "cableLinksSwitchTitle": "Gunakan tautan kabel dan USB",
+  "cableLinksSwitchHint": "Temukan kontak lewat kabel atau tethering USB, tanpa router dan tanpa internet.",
+  "cableLinksNone": "Tidak ada tautan kabel atau USB.",
+  "cableLinksKindUsb": "Tethering USB",
+  "cableLinksKindCable": "Kabel Ethernet",
+  "cableLinksKindWifi": "Wi-Fi",
+  "cableLinksKindOther": "Tautan jaringan",
+  "cableLinksContacts": "Terjangkau: {names}",
+  "cableLinksLooking": "Mencari kontak",
+  "cableLinksOpenTethering": "Buka pengaturan tethering",
+  "cableLinksHelpPlug": "Colokkan kabel atau aktifkan tethering USB. Conest menemukan kontak Anda sendiri, tanpa router dan tanpa internet.",
+  "cableLinksHelpLinux": "Di Linux tanpa router, pilih \"Hanya link-local\" di pengaturan jaringan kedua ujung.",
+  "cableLinksHelpWindows": "Windows mungkin menanyakan apakah Conest boleh memakai jaringan ini: pilih ya.",
+  "cableLinksOff": "Mati"
 }

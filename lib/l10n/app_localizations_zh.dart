@@ -6410,4 +6410,52 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get reportProblemSaveTitle => '保存报告';
+
+  @override
+  String get cableLinksTitle => '网线和 USB';
+
+  @override
+  String get cableLinksSwitchTitle => '使用网线和 USB 连接';
+
+  @override
+  String get cableLinksSwitchHint => '通过网线或 USB 共享网络找到联系人，无需路由器和互联网。';
+
+  @override
+  String get cableLinksNone => '未找到网线或 USB 连接。';
+
+  @override
+  String get cableLinksKindUsb => 'USB 共享网络';
+
+  @override
+  String get cableLinksKindCable => '以太网线';
+
+  @override
+  String get cableLinksKindWifi => 'Wi-Fi';
+
+  @override
+  String get cableLinksKindOther => '网络连接';
+
+  @override
+  String cableLinksContacts(String names) {
+    return '可达：$names';
+  }
+
+  @override
+  String get cableLinksLooking => '正在查找联系人';
+
+  @override
+  String get cableLinksOpenTethering => '打开网络共享设置';
+
+  @override
+  String get cableLinksHelpPlug =>
+      '插上网线或开启 USB 共享网络。Conest 会自动找到联系人，无需路由器和互联网。';
+
+  @override
+  String get cableLinksHelpLinux => '在没有路由器的 Linux 上，请在两端的网络设置中选择“仅本地链路”。';
+
+  @override
+  String get cableLinksHelpWindows => 'Windows 可能会询问是否允许 Conest 使用此网络：请选择“是”。';
+
+  @override
+  String get cableLinksOff => '关闭';
 }

@@ -1783,5 +1783,20 @@
   "reportProblemNote": "پیش از اشتراک‌گذاری آن را بخوانید. پیام و کلیدی در آن نیست و نام‌ها جایگزین می‌شوند، اما ممکن است یک خط خطا چیزی را که شناخته نشده ذکر کند.",
   "reportProblemBuilding": "در حال آماده‌سازی گزارش…",
   "reportProblemCopied": "گزارش کپی شد.",
-  "reportProblemSaveTitle": "ذخیرهٔ گزارش"
+  "reportProblemSaveTitle": "ذخیرهٔ گزارش",
+  "cableLinksTitle": "کابل و USB",
+  "cableLinksSwitchTitle": "استفاده از اتصال کابل و USB",
+  "cableLinksSwitchHint": "مخاطبان خود را از طریق کابل یا اشتراک اینترنت با USB پیدا کنید، بدون مسیریاب و بدون اینترنت.",
+  "cableLinksNone": "اتصال کابل یا USB پیدا نشد.",
+  "cableLinksKindUsb": "اشتراک اینترنت با USB",
+  "cableLinksKindCable": "کابل اترنت",
+  "cableLinksKindWifi": "Wi-Fi",
+  "cableLinksKindOther": "اتصال شبکه",
+  "cableLinksContacts": "در دسترس: {names}",
+  "cableLinksLooking": "در حال جست‌وجوی مخاطبان",
+  "cableLinksOpenTethering": "باز کردن تنظیمات اشتراک‌گذاری",
+  "cableLinksHelpPlug": "کابلی وصل کنید یا اشتراک اینترنت با USB را روشن کنید. Conest مخاطبان شما را خودش پیدا می‌کند، بدون مسیریاب و بدون اینترنت.",
+  "cableLinksHelpLinux": "در لینوکس بدون مسیریاب، در تنظیمات شبکهٔ هر دو سر «فقط پیوند محلی» را انتخاب کنید.",
+  "cableLinksHelpWindows": "ویندوز ممکن است بپرسد آیا Conest در این شبکه مجاز است: «بله» را بزنید.",
+  "cableLinksOff": "خاموش"
 }

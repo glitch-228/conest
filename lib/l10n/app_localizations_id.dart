@@ -6695,4 +6695,55 @@ class AppLocalizationsId extends AppLocalizations {
 
   @override
   String get reportProblemSaveTitle => 'Simpan laporan';
+
+  @override
+  String get cableLinksTitle => 'Kabel dan USB';
+
+  @override
+  String get cableLinksSwitchTitle => 'Gunakan tautan kabel dan USB';
+
+  @override
+  String get cableLinksSwitchHint =>
+      'Temukan kontak lewat kabel atau tethering USB, tanpa router dan tanpa internet.';
+
+  @override
+  String get cableLinksNone => 'Tidak ada tautan kabel atau USB.';
+
+  @override
+  String get cableLinksKindUsb => 'Tethering USB';
+
+  @override
+  String get cableLinksKindCable => 'Kabel Ethernet';
+
+  @override
+  String get cableLinksKindWifi => 'Wi-Fi';
+
+  @override
+  String get cableLinksKindOther => 'Tautan jaringan';
+
+  @override
+  String cableLinksContacts(String names) {
+    return 'Terjangkau: $names';
+  }
+
+  @override
+  String get cableLinksLooking => 'Mencari kontak';
+
+  @override
+  String get cableLinksOpenTethering => 'Buka pengaturan tethering';
+
+  @override
+  String get cableLinksHelpPlug =>
+      'Colokkan kabel atau aktifkan tethering USB. Conest menemukan kontak Anda sendiri, tanpa router dan tanpa internet.';
+
+  @override
+  String get cableLinksHelpLinux =>
+      'Di Linux tanpa router, pilih \"Hanya link-local\" di pengaturan jaringan kedua ujung.';
+
+  @override
+  String get cableLinksHelpWindows =>
+      'Windows mungkin menanyakan apakah Conest boleh memakai jaringan ini: pilih ya.';
+
+  @override
+  String get cableLinksOff => 'Mati';
 }

@@ -1783,5 +1783,20 @@
   "reportProblemNote": "اقرأه قبل مشاركته. لا يحتوي على رسائل ولا مفاتيح، وتُستبدل الأسماء، لكن قد يذكر سطر خطأ شيئًا لم يُتعرَّف عليه.",
   "reportProblemBuilding": "جارٍ إعداد التقرير…",
   "reportProblemCopied": "تم نسخ التقرير.",
-  "reportProblemSaveTitle": "حفظ التقرير"
+  "reportProblemSaveTitle": "حفظ التقرير",
+  "cableLinksTitle": "الكابل وUSB",
+  "cableLinksSwitchTitle": "استخدام وصلات الكابل وUSB",
+  "cableLinksSwitchHint": "اعثر على جهات اتصالك عبر كابل أو مشاركة الإنترنت عبر USB، دون راوتر ودون إنترنت.",
+  "cableLinksNone": "لم يتم العثور على وصلة كابل أو USB.",
+  "cableLinksKindUsb": "مشاركة الإنترنت عبر USB",
+  "cableLinksKindCable": "كابل إيثرنت",
+  "cableLinksKindWifi": "Wi-Fi",
+  "cableLinksKindOther": "وصلة شبكة",
+  "cableLinksContacts": "يمكن الوصول إلى: {names}",
+  "cableLinksLooking": "جارٍ البحث عن جهات الاتصال",
+  "cableLinksOpenTethering": "فتح إعدادات المشاركة",
+  "cableLinksHelpPlug": "وصّل كابلاً أو شغّل مشاركة الإنترنت عبر USB. يعثر Conest على جهات اتصالك بنفسه، دون راوتر ودون إنترنت.",
+  "cableLinksHelpLinux": "في Linux بدون راوتر، اختر «محلي الوصلة فقط» في إعدادات الشبكة على الطرفين.",
+  "cableLinksHelpWindows": "قد يسأل Windows إن كان يُسمح لـ Conest باستخدام هذه الشبكة: اختر نعم.",
+  "cableLinksOff": "متوقف"
 }

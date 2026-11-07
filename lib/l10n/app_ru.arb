@@ -1783,5 +1783,20 @@
   "reportProblemNote": "Прочитайте перед отправкой. В нём нет сообщений и ключей, имена заменены, но строка с ошибкой всё же может упоминать то, что не удалось распознать.",
   "reportProblemBuilding": "Готовим отчёт…",
   "reportProblemCopied": "Отчёт скопирован.",
-  "reportProblemSaveTitle": "Сохранить отчёт"
+  "reportProblemSaveTitle": "Сохранить отчёт",
+  "cableLinksTitle": "Кабель и USB",
+  "cableLinksSwitchTitle": "Искать по кабелю и USB",
+  "cableLinksSwitchHint": "Находить контакты по кабелю или USB-модему, без роутера и без интернета.",
+  "cableLinksNone": "Кабель или USB-соединение не найдены.",
+  "cableLinksKindUsb": "USB-модем",
+  "cableLinksKindCable": "Кабель Ethernet",
+  "cableLinksKindWifi": "Wi-Fi",
+  "cableLinksKindOther": "Сетевое соединение",
+  "cableLinksContacts": "Доступны: {names}",
+  "cableLinksLooking": "Ищем контакты",
+  "cableLinksOpenTethering": "Открыть настройки модема",
+  "cableLinksHelpPlug": "Подключите кабель или включите USB-модем. Conest сам найдёт контакты, без роутера и без интернета.",
+  "cableLinksHelpLinux": "В Linux без роутера включите «Только локальная связь» (link-local) в сетевых настройках на обоих концах.",
+  "cableLinksHelpWindows": "Windows может спросить, разрешить ли Conest в этой сети: выберите «Да».",
+  "cableLinksOff": "Выключено"
 }

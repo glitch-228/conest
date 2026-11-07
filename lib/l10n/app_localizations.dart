@@ -10826,6 +10826,96 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Save the report'**
   String get reportProblemSaveTitle;
+
+  /// Settings → Connectivity: page for contacts reached over a cable or USB tethering.
+  ///
+  /// In en, this message translates to:
+  /// **'Cable and USB'**
+  String get cableLinksTitle;
+
+  /// Cable and USB page: the on/off switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Use cable and USB links'**
+  String get cableLinksSwitchTitle;
+
+  /// Under the cable and USB switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Find your contacts on a cable or USB tethering, with no router and no internet.'**
+  String get cableLinksSwitchHint;
+
+  /// Cable and USB page: no link is up.
+  ///
+  /// In en, this message translates to:
+  /// **'No cable or USB link found.'**
+  String get cableLinksNone;
+
+  /// Cable and USB page: a link made by USB tethering.
+  ///
+  /// In en, this message translates to:
+  /// **'USB tethering'**
+  String get cableLinksKindUsb;
+
+  /// Cable and USB page: a link made by an Ethernet cable.
+  ///
+  /// In en, this message translates to:
+  /// **'Ethernet cable'**
+  String get cableLinksKindCable;
+
+  /// Cable and USB page: a Wi-Fi link.
+  ///
+  /// In en, this message translates to:
+  /// **'Wi-Fi'**
+  String get cableLinksKindWifi;
+
+  /// Cable and USB page: any other network link.
+  ///
+  /// In en, this message translates to:
+  /// **'Network link'**
+  String get cableLinksKindOther;
+
+  /// Cable and USB page: the contacts that answered on a link. {names} is a comma-separated list of contact names.
+  ///
+  /// In en, this message translates to:
+  /// **'Reachable: {names}'**
+  String cableLinksContacts(String names);
+
+  /// Cable and USB page: a link where no contact answered yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Looking for contacts'**
+  String get cableLinksLooking;
+
+  /// Cable and USB page, Android: opens the system page where USB tethering is switched on.
+  ///
+  /// In en, this message translates to:
+  /// **'Open tethering settings'**
+  String get cableLinksOpenTethering;
+
+  /// Cable and USB page: short help.
+  ///
+  /// In en, this message translates to:
+  /// **'Plug in a cable or turn on USB tethering. Conest finds your contacts on it by itself, with no router and no internet.'**
+  String get cableLinksHelpPlug;
+
+  /// Cable and USB page: help shown on Linux. "Link-local only" is the name of the setting in NetworkManager.
+  ///
+  /// In en, this message translates to:
+  /// **'On Linux with no router, set \"Link-local only\" in the network settings of both ends.'**
+  String get cableLinksHelpLinux;
+
+  /// Cable and USB page: help shown on Windows.
+  ///
+  /// In en, this message translates to:
+  /// **'Windows may ask to allow Conest on this network: choose yes.'**
+  String get cableLinksHelpWindows;
+
+  /// Cable and USB page: the switch is off.
+  ///
+  /// In en, this message translates to:
+  /// **'Off'**
+  String get cableLinksOff;
 }
 
 class _AppLocalizationsDelegate
