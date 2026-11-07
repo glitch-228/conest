@@ -292,3 +292,12 @@ Design note round only (2026-11-07): the note above is ready for the Opus design
 ## Progress log
 
 - 2026-11-07: read PLAN_AGENTS.md, this file, the maintainer's plan sections (M33, M29e parts B and C, Group 1 items 2 and 3, D1, D2, D4, M65, the M50 side answer), PLAN_M29.md (design sections 7-9 and handoff) and PLAN_M27.md (handoff). Inventoried own-device sync in `messenger_controller.dart`, `transfer/`, `models.dart`, `energy_policy.dart`, `cold_mode.dart`, `devices_panel.dart` and the tests at base d794362 (evidence in section 1). Found that `OwnDeviceSyncPreferences` and the `prefs` event do not exist, edits/deletes/reactions do not sync between own devices, `_locallyDeletedMessageIds` is memory only, and the speed policy is enforced for history pages only. Wrote the design note; no code changed. An API session limit interrupted the first pass; resumed from the link grant onward.
+
+## Maintainer's answers to the technical open questions (2026-11-07)
+
+- **Q5:** only Conest's own app settings sync in M33: appearance, privacy, notifications, voice and composer. Transport settings belong to M45. System settings (Wi-Fi and similar) belong to M63.
+- **Q6:** yes, add a new `account_sync_bulk` kind.
+- **Q8:** yes. Group attachment sync waits for the M29 merge, so merge M29 into this branch when the main session says so.
+- **Q9:** don't wait for M27a. Reuse `BlockSourceSet`.
+- **Q10:** yes, P0 fixes it for sync events. Seal them at hand-off, using G8's `LazySeal` pattern, and don't encrypt before the limiter.
+- **Product questions:** Q1, Q2, Q3, Q4 and Q7 go to the user. Until they answer, use the note's proposed defaults and keep them configurable.
