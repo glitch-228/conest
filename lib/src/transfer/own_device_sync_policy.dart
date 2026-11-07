@@ -17,6 +17,22 @@ enum SyncSpeed {
   paused,
 }
 
+/// What is asking to sync. Not persisted.
+enum SyncTraffic {
+  /// One small event for one change (a sent message, a read position).
+  /// Held while paused, otherwise never paced or refused.
+  live,
+
+  /// Pages of history, digests, answers to "do you have it": work that
+  /// stops for a low battery, for saver, and in the background of a cold
+  /// device.
+  bulk,
+
+  /// The bytes of a file, served to another own device or fetched from
+  /// one (beyond the sender): bulk, and not over a metered network.
+  files,
+}
+
 /// What a sync may use right now.
 class SyncPermission {
   const SyncPermission({
@@ -25,9 +41,14 @@ class SyncPermission {
     this.maxPaths = 2,
     this.reason,
     this.speed = SyncSpeed.steady,
+    this.hold = false,
   });
 
   final bool allowed;
+
+  /// Not allowed now, and not to be dropped: kept queued until it is
+  /// (only live events, while paused).
+  final bool hold;
 
   /// Null: no cap.
   final int? bytesPerSecond;
@@ -49,6 +70,8 @@ class SyncConditions {
     this.charging = false,
     this.batterySaver = false,
     this.metered = false,
+    this.cold = false,
+    this.foreground = true,
   });
 
   /// Null when unknown (a desktop without a battery).
@@ -56,6 +79,13 @@ class SyncConditions {
   final bool charging;
   final bool batterySaver;
   final bool metered;
+
+  /// Cold mode is on (the energy setting, or Automatic on a phone or on a
+  /// laptop running on battery).
+  final bool cold;
+
+  /// The app is open in front of the user.
+  final bool foreground;
 }
 
 /// The speed policies (M33): steady, fast, paused.
@@ -89,12 +119,54 @@ class OwnDeviceSyncPolicy {
         lowBatteryPercent: lowBatteryPercent,
       );
 
-  SyncPermission permit(SyncConditions now) {
+  /// What [traffic] may do now. Live events (one small event for a
+  /// change) are held while paused and otherwise always go; they never
+  /// wake more than any send does. Bulk and file bytes follow the speed
+  /// policy, and also wait for the app to be open or the device to charge
+  /// on an unmetered network while cold mode is on; file bytes also stay
+  /// off a metered network.
+  SyncPermission permitFor(SyncTraffic traffic, SyncConditions now) {
+    if (traffic == SyncTraffic.live) {
+      if (speed == SyncSpeed.paused) {
+        return const SyncPermission(
+          allowed: false,
+          hold: true,
+          reason: 'Sync is paused.',
+          speed: SyncSpeed.paused,
+        );
+      }
+      return SyncPermission(allowed: true, maxPaths: steadyPaths, speed: speed);
+    }
+    final bulk = _permitBulk(now);
+    if (!bulk.allowed || traffic == SyncTraffic.bulk) return bulk;
+    if (now.metered) {
+      return SyncPermission(
+        allowed: false,
+        reason: 'Files wait for an unmetered network.',
+        speed: bulk.speed,
+      );
+    }
+    return bulk;
+  }
+
+  /// The answer for bulk work: what [permit] has always been.
+  SyncPermission permit(SyncConditions now) => permitFor(SyncTraffic.bulk, now);
+
+  SyncPermission _permitBulk(SyncConditions now) {
     if (speed == SyncSpeed.paused) {
       return const SyncPermission(
         allowed: false,
         reason: 'Sync is paused.',
         speed: SyncSpeed.paused,
+      );
+    }
+    if (now.cold && !now.foreground && !(now.charging && !now.metered)) {
+      return SyncPermission(
+        allowed: false,
+        reason:
+            'Cold mode: syncing waits until the app is open, or the device '
+            'charges on an unmetered network.',
+        speed: speed,
       );
     }
     final low =
