@@ -117,7 +117,7 @@ impl LinkMonitor {
                 *feed = Some(task);
             }
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let _ = runtime;
         monitor
     }

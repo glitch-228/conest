@@ -94,6 +94,7 @@ impl HintCache {
         self.entries.clear();
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.entries.len()
     }
