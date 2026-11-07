@@ -124,7 +124,7 @@ Groups with several-device members recover by themselves when two devices change
 
 ## Progress log, round 2
 - 2026-11-06: read the rules and the review. Tests first, one finding at a time, each with a sabotage check (listed above). Found on the way: raw admission compare in the validator (fixed with H1); `parents.first` on an empty list in the first draft of `prepareMembership` (caught by the existing controller tests).
-- 2026-11-06: analyzer back to the base's 28 issues. Full suite and debug run: see below.
+- 2026-11-06: analyzer back to the base's 28 issues. Full suite: 2315 passed, 24 skipped, 2 failed: the known Iroh test and "relay blobs ... a tampered blob is refused" (a 1:1 file-transfer test that passes alone, a timing flake under the parallel load of other agents' suites). Debug run 42228020317 on b6d1166: green (all 13 jobs).
 
 ## Review round 3 (Opus check of f4b63f3, f27317e, 6a6869d; 2026-11-07): fix first
 
@@ -189,3 +189,42 @@ Same as round 2:
 - tests first, and a sabotage check for each fix;
 - the full suite, analyze, push and `debug.yml`;
 - update the Handoff.
+
+## Handoff, review round 3 (2026-11-07, base b6d1166)
+
+Commit 7f01dd0 (one commit: the pieces share the history changes). Every finding was checked against the code first; all were real.
+
+**R3-H1 fixed.**
+- The owner's record for a revocation takes out the devices a revoked author admitted after its cutoff (`_runOwnerWriter`, from `devicesAdmittedByRevoked`). A device-only member leaves; an account leaves whole (entry and devices); devices of an account that stays are projected again by the writer's own loop when the account's list says so (then under the owner's record). Decision for review: with no cutoff known at all, the devices count as admitted after it (fail closed), so a legitimately admitted member of that admin goes too and the owner adds them again. The owner's own journal head in its pin is not a cutoff for this purpose, because it covers the thief's records the owner already holds.
+- `_answeredByOwner`: only an owner record strictly after a record that pins the revocation (first pin on its branch) counts. The pin itself does not.
+- `_signedBeforeCutoff` (now async, so `admittedByRevokedAuthors` returns a Future): the cutoff is the earlier of the DAG checkpoint and the sibling-signed one, and the record must pass `_onChain` (the chain walked from the cutoff event), never a sequence compare. With no chain oracle or no cutoff the device waits.
+- Taint covers the branch: a head is untrusted when any record since the fork point (ancestors of the head that are not ancestors of every head) is signed by a revoked or compromised author, by the union of the DAG facts of all heads or the local view.
+- Tests (group_accounts_review2_test.dart, H2 group): cutoff releases, cutoff below the record does not, a record off the author's chain (backdated) does not, the earlier cutoff wins over the owner's checkpoint, the owner's own pin is no answer while a later owner record is; controller test "a stolen admin phone admits a thief device and is revoked" (the owner's record for the revocation takes the thief device out; the laptop's cutoff is below the add). Sabotage: taint on the head only, sequence-only compare, the DAG cutoff winning, the pin answering, the drop in the writer disabled; each fails its test.
+- "Live sends stop": the H2 rule (no new message to such a device) is unchanged and tested; the new part is that the owner's record removes the device, so sends stop for good.
+
+**R3-H2 fixed.** `GroupMembershipHistory.heads/current/hasConflict` work on effective heads: a head whose branch holds a record of a revoked device (union of the DAG facts, or the local view) is kept but does not count, so one effective head is `current` and the group keeps working. `heads` is capped at 16 (newest first) for a merge record; the members of a merge record are capped at 16 (later additions wait). Merges are rate limited (`_mergeDue`, per group, the owner's record window; the first runs at once; the map is bounded and cleared on dispose). Tests: twenty records of a revoked device on old parents leave one effective head and the owner's next record is taken; an honest record on top of a thief record does not count; a revoked device seen only in the view counts the same and stops counting when the view changes; 17 effective heads merge in two records; the member cap; the rate limit (controller test). Sabotage: taint off, cap raised, member cap removed, rate limit removed. Behaviour change worth knowing: the old test "a thief owner revoked in the ancestry" now sees no fork (the thief's branch is no head); its resolution is still refused (N1).
+
+**MEDIUM merge by field fixed.** `mergedHeads` merges against the common ancestor: members and roles added or changed on any branch are kept unless another branch removed the member; `removedDeviceIds` follows what each branch changed since the base (a member removed before the fork and added on one branch stays); account entries merge role (a changed role from the latest head), newest list, union of approved and excluded; title and the history setting (`mergedVisibility`) come from the latest head by lamport that changed them. A projected device has its account's role. Tests: the combined merge (additions, role change, title, removal) and the re-added member; both with the frozen old-validator pair kept from round 2. Sabotage: re-add rule, role pick, title pick.
+
+**MEDIUM leave during a fork fixed.** `_commitFromHead` (the leave writer) merges a fork first, then builds the leave from the new head. Controller test: carol leaves in the middle of a fork, version base + 3 (merge, leave), no fork left. Sabotage: the merge before the leave removed.
+
+**LOW.** The designated deputy (smallest projected, non-revoked, non-owner device of the account) may be offline for a long time; then the pin waits for the owner's app. A fallback to the next device after N hours is not done: the validator would have to name a time-dependent signer, which it cannot know, so it needs a design note (for example a second signer allowed after a signed delay record).
+
+### Not done (all rounds)
+- `_rebuildDeviceListViews` digests and verification marks; the repeating no-op owner record; a sibling of the owner's account cannot leave; a fork whose heads disagree on the owner (not merged); the owner's own account is never folded by the app; the fallback signer above.
+- A fork whose effective heads are all tainted stays a fork (all heads kept) and is not merged.
+
+### Pitfalls (round 3)
+1 the merge and the drop run in the owner's writer, not on the inbound path; the leave writer runs off it. 3 no new timers beyond the existing debounced writer. 6 `_lastMergeAt` is cleared with the other owner state and bounded to 64 groups; the effective-head cache is per history instance. 9 the owner's drop uses facts and cutoffs, nothing is dropped on a claim. 12 bounded: 16 parents, 16 members, 4 leave tries, merges per window. 14 the merge stays owner-signed multi-parent (old validators accept it, tested with the frozen validator). 17 the leave retry has a cap. 19 the effective-head computation is cached per (heads, view epoch); `admittedByRevokedAuthors` is cached per (head, epoch).
+
+### Performance
+`GroupHistoryReplica.membership` still forks the index on each access; `hasConflict`, `mergeCandidate` and `_reduce` use it. The effective-head computation walks the branches of the heads, only when there are two or more heads, and is cached.
+
+### Lab check needed
+As in round 2, plus: a stolen admin phone that adds a device, then is revoked from the laptop while the owner's app is online (the thief device must leave in the owner's record); a revoked device that keeps sending membership records while offline devices come back.
+
+### Release-note lines (draft, plain text)
+When a device is removed from a person's account, devices that it added to a group in the meantime leave the group too; the group owner can add them again.
+
+## Progress log, round 3
+- 2026-11-07: pulled the round 3 findings; verified each in the code; rewrote the fork logic around effective heads and a field merge; made the H2 rule async with the chain check; tests first, sabotage checks as listed (history level: 10 variants, controller level: 3). The full suite and the debug run are recorded below.
