@@ -414,3 +414,44 @@ The review's verdict was "revise first". Both HIGH findings need small changes t
   - test: dispose while a wait is running.
 - **First contact over a cable:** when a contact or group member is added, send a ping on the cable links already present.
 - **Privacy:** state in the note that `irohPort4`/`irohPort6` go out in the cleartext beacon unless quiet LAN is on, and that cable pings broadcast the deviceId. This is the same exposure as the existing `checkContactRoutes` pings.
+
+## Code review (Opus, 2026-11-07, b2d3eba..cecc47f): merge; follow-ups
+
+No HIGH or data-loss findings. Do these follow-ups in one round:
+- M1 before cable links leave canary.
+- M2 before the cable file lab.
+
+### MEDIUM
+
+**M1. The probe proves the contact's keys, but not the address it was sent to.**
+- **The attack:** someone on the segment forges B's beacon from address X. They pass the encrypted probe on to B, by proxying to B's relay or depositing it at a relay B polls. B answers, and X becomes confirmed, pinned, ranked first, and its route health reset on every fake `stored=true`. Messages are black-holed on the LAN path, though not readable.
+- **Where:** `cable_links.dart` ~439–455 and the controller ~26312.
+- **Fix:**
+  - put `probedAddress` inside the encrypted `cable_probe`;
+  - the answering side sets `cableProbeOk` only when that address is one of its own interface addresses;
+  - the prober confirms only replies that carry the flag. Old peers stay unconfirmed, as the design accepts.
+- **Tests:**
+  - a forged beacon from another address, with a relay that does not reach Bob, stays unconfirmed;
+  - a proxied probe is refused.
+  - The shared `_FakeRelayClient` delivers whatever host a store was sent to, so the tests need a fake that delivers only to the addressed host.
+
+**M2. The LAN-direct endpoint for the cable is skipped or replaced in common cases.**
+- **Where:** controller ~43410 (`haveLanAddress`) and ~26234.
+- **What happens:**
+  - when the contact advertises any RFC1918 address, the cable endpoint is never seeded;
+  - `_cachePeerLanDirectFromPayload` later overwrites a cable-seeded endpoint with `hosts.first`;
+  - `onConnectivityChanged` clears `_peerLanDirect`, and an entry already confirmed is never seeded again.
+- **Fix:**
+  - count `existing` as usable only when it is on one of our own subnets;
+  - never replace a link-scoped endpoint that still has a confirmed entry with a payload that has no host on our own subnet;
+  - seed again from the confirmed entries after a connectivity change.
+- **Tests:** fix the test "a LAN-direct endpoint on a normal LAN address is not replaced", which locks in the wrong behaviour.
+
+### LOW (fix if cheap)
+
+- **L1.** `_transportInventoryFor` (~4277) and the route lines in `testContactRoutes` can send our cable route to the contact. Filter them with `isLinkScopedHost`.
+- **L2.** `_addressTakenByOther` (`link_table.dart` ~165): a confirmed entry on an address now leased to another device blocks discovery. When the holding entry is stale (more than about 10 min), still allow an unconfirmed entry and a probe.
+- **L3.** Probes in flight (`cable_links.dart` ~417): a dropped probe gets one retry when there is room.
+- **L4.** The advertised Iroh v4 port should come from a private or link-local address, not a NAT-reflexive one (~43481).
+- **L5.** Add `catch_unwind` to the `conest_link_monitor_*` FFI functions.
+- **L6.** Keep the result of `LinkEventSources.start` (`main.dart` ~500) and dispose it.
