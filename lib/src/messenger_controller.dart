@@ -65,6 +65,11 @@ import 'attachment_block_worker.dart';
 import 'iroh_transport.dart';
 import 'lan_direct.dart';
 import 'local_relay_node.dart';
+import 'net/cable_links.dart';
+import 'net/iroh_hint_book.dart';
+import 'net/link_interfaces.dart';
+import 'net/link_table.dart';
+import 'net/link_watcher.dart';
 import 'matrix_carrier.dart';
 import 'matrix_client.dart';
 import 'matrix_native.dart';
@@ -607,6 +612,7 @@ class MessengerController extends ChangeNotifier {
     StorageCapacityProvider? storageCapacityProvider,
     bool enableLongPoll = true,
     bool enablePairingBeacon = true,
+    CableLinkEnvironment? cableLinkEnvironment,
     LanDirectChannel? lanDirectChannel,
     NativeAttachmentCrypto? attachmentCrypto,
     String? debugBuildId,
@@ -682,6 +688,13 @@ class MessengerController extends ChangeNotifier {
            storageCapacityProvider ?? defaultStorageCapacityProvider,
        _longPollEnabled = enableLongPoll,
        _pairingBeaconEnabled = enablePairingBeacon,
+       _cableLinkEnvironment =
+           cableLinkEnvironment ??
+           (enablePairingBeacon && !kIsWeb
+               ? CableLinkEnvironment(
+                   androidFallback: Platform.isAndroid,
+                 )
+               : null),
        _lanDirectChannel = lanDirectChannel,
        _nativeAttachmentCrypto =
            attachmentCrypto ?? NativeAttachmentCrypto.tryCreate(),
@@ -755,11 +768,14 @@ class MessengerController extends ChangeNotifier {
       nowProvider: _now,
     );
     _routeHealthTracker = RouteHealthTracker(nowProvider: _now)
-      ..onOutcome = ((route, ok, error) =>
-          _noteRouteOutcome(_historyRouteOf(route), ok, error))
+      ..onOutcome = ((route, ok, error) {
+        _cable?.noteRouteOutcome(route, ok);
+        _noteRouteOutcome(_historyRouteOf(route), ok, error);
+      })
       ..rateLimitedUntil = ((route) => (_relayClient as _ScoringRelayClient)
           .rateLimitedUntil(route.host, route.port));
     _localRelayNode.onEnvelopeStored = _handleLocalEnvelopeStored;
+    _cable = _createCableLinks();
   }
 
   final VaultStore _vaultStore;
@@ -858,6 +874,7 @@ class MessengerController extends ChangeNotifier {
     await _refreshLanAddresses(persist: false);
     await _ensureLocalRelayRunning();
     await _ensurePairingBeaconRunning();
+    _syncCableLinks();
     _applyAndroidBackgroundPreference();
     for (final contact in _snapshot.contacts) {
       _pumpOutboundQueue(contact);
@@ -883,6 +900,7 @@ class MessengerController extends ChangeNotifier {
     _scheduledMessageTimer = null;
     unawaited(_platformBridge.scheduleAndroidScheduledMessageWakeup(null));
     await _stopPairingBeacon();
+    _syncCableLinks();
     await _detachMatrixTransport();
     _closeBitchatGateway();
     await _stopNostrDirect();
@@ -911,6 +929,12 @@ class MessengerController extends ChangeNotifier {
   Timer? _transferNotificationTimer;
   final bool _longPollEnabled;
   final bool _pairingBeaconEnabled;
+  final CableLinkEnvironment? _cableLinkEnvironment;
+
+  /// Contacts found on cables and USB tethering links (null where there is
+  /// no such thing: the web, and tests that do not ask for it).
+  CableLinks? _cable;
+  CableLinks? get cableLinks => _cable;
   bool _longPollRunning = false;
   // Reference count: while > 0, `notifyListeners` defers and sets the
   // pending flag instead of dispatching. The last `_processEnvelopes` to
@@ -2052,6 +2076,7 @@ class MessengerController extends ChangeNotifier {
         backgroundedAt != null &&
         _now().difference(backgroundedAt) >= const Duration(seconds: 3);
     _appInForeground = value;
+    _cable?.watcher.setForeground(value);
     _appBackgroundedAtUtc = value ? null : _now();
     if (value && hasIdentity && conestActive) {
       _markRuntimeActivity();
@@ -11953,6 +11978,7 @@ class MessengerController extends ChangeNotifier {
       await _stopTransportRegistry();
     }
     await _applyGlobalConnectivityState();
+    _syncCableLinks();
     // That started everything the flags allow: cold mode stops what it
     // should again.
     _cold.markAllUp();
@@ -12714,6 +12740,7 @@ class MessengerController extends ChangeNotifier {
     _fastOutboundTimers.clear();
     _outboundRetryTimers.clear();
     _peerLanDirect.clear();
+    _cable?.reset();
     notifyListeners();
     if (onPostReset != null) {
       try {
@@ -13142,7 +13169,10 @@ class MessengerController extends ChangeNotifier {
       bio: invite.bio,
       relayCapable: invite.relayCapable,
       publicKeyBase64: isPending ? '' : invite.publicKeyBase64,
-      routeHints: prunePeerEndpointsByKind(invite.routeHints),
+      routeHints: prunePeerEndpointsByKind(
+        invite.routeHints,
+        dropLinkScoped: true,
+      ),
       safetyNumber: safetyNumber,
       trustedAt: _now(),
       pendingVerification: isPending,
@@ -13333,7 +13363,10 @@ class MessengerController extends ChangeNotifier {
           : retired,
       alias: alias.trim().isEmpty ? null : alias.trim(),
       displayName: invite.displayName,
-      routeHints: prunePeerEndpointsByKind(invite.routeHints),
+      routeHints: prunePeerEndpointsByKind(
+        invite.routeHints,
+        dropLinkScoped: true,
+      ),
       clearRemoteRemovedAt: true,
       pairingState: approvalGranted
           ? ContactPairingState.accepted
@@ -13666,7 +13699,10 @@ class MessengerController extends ChangeNotifier {
         bio: invite.bio,
         relayCapable: invite.relayCapable,
         publicKeyBase64: invite.publicKeyBase64,
-        routeHints: prunePeerEndpointsByKind(invite.routeHints),
+        routeHints: prunePeerEndpointsByKind(
+          invite.routeHints,
+          dropLinkScoped: true,
+        ),
         safetyNumber: await _crypto.deriveSafetyNumber([
           base64Decode(me.publicKeyBase64),
           base64Decode(invite.publicKeyBase64),
@@ -18032,6 +18068,7 @@ class MessengerController extends ChangeNotifier {
       'Connectivity changed ($label) — kicking active transfers + polling.',
     );
     unawaited(noteNetwork(label));
+    _cable?.note(LinkEventSource.connectivity);
     _routeHealthTracker.clearBackoffWindows();
     _irohSkipUntil.clear();
     if (_transportRegistry?.adapterFor(TransportKind.iroh)
@@ -19088,6 +19125,7 @@ class MessengerController extends ChangeNotifier {
         'coldAwake': _coldAwakeNames(),
       },
       ..._localLanDirectHintPayload(contact),
+      ..._linkPortsPayload(),
     };
     if (effectiveProbeId != null) {
       routeUpdatePayload['probeId'] = effectiveProbeId;
@@ -20741,11 +20779,11 @@ class MessengerController extends ChangeNotifier {
 
   /// A beacon datagram: the old cleartext form is handled as before; a
   /// sealed one (M38-C) is opened first, at most 50 a second.
-  void _onPairingBeaconDatagram(Datagram datagram) {
+  void _onPairingBeaconDatagram(Datagram datagram, {int? viaLink}) {
     final data = datagram.data;
     if (data.isEmpty || data.length > LanBeaconCodec.maxDatagramBytes) return;
     if (data[0] == 0x7b) {
-      _handlePairingBeaconDatagram(datagram);
+      _handlePairingBeaconDatagram(datagram, viaLink: viaLink);
       return;
     }
     final window = _now().millisecondsSinceEpoch ~/ 1000;
@@ -20763,6 +20801,7 @@ class MessengerController extends ChangeNotifier {
             datagram.address,
             datagram.port,
           ),
+          viaLink: viaLink,
         );
       }),
     );
@@ -20776,7 +20815,7 @@ class MessengerController extends ChangeNotifier {
     return [sealed, Uint8List.fromList(utf8.encode(jsonEncode(message)))];
   }
 
-  void _handlePairingBeaconDatagram(Datagram datagram) {
+  void _handlePairingBeaconDatagram(Datagram datagram, {int? viaLink}) {
     try {
       final decoded = jsonDecode(utf8.decode(datagram.data));
       if (decoded is! Map<String, dynamic>) {
@@ -20798,6 +20837,17 @@ class MessengerController extends ChangeNotifier {
             targetPort: datagram.port,
           ),
         );
+        // A cable ping says where its sender is and which relay port to
+        // use (an older build's ping has no port: nothing to note).
+        final pingPort = decoded['relayPort'];
+        if (senderDeviceId != null && pingPort is int) {
+          _cable?.observeBeacon(
+            deviceId: senderDeviceId,
+            address: datagram.address.address,
+            relayPort: pingPort,
+            ifIndex: viaLink,
+          );
+        }
         return;
       }
       if (kind != 'pairing_route') {
@@ -20810,6 +20860,16 @@ class MessengerController extends ChangeNotifier {
       final host = datagram.address.address;
       if (!_isUsableLanBeaconHost(host)) {
         return;
+      }
+      if (senderDeviceId != null) {
+        // On a cable or a link-local address this makes a candidate that
+        // a probe has to confirm (never a saved route: see below).
+        _cable?.observeBeacon(
+          deviceId: senderDeviceId,
+          address: host,
+          relayPort: port,
+          ifIndex: viaLink,
+        );
       }
       final routes = <PeerEndpoint>[
         PeerEndpoint(kind: PeerRouteKind.lan, host: host, port: port),
@@ -20826,7 +20886,9 @@ class MessengerController extends ChangeNotifier {
           route: route,
           seenAt: seenAt,
         );
-        if (senderDeviceId != null) {
+        // A link-local address means something on one cable only: it is
+        // not saved as a contact's route.
+        if (senderDeviceId != null && !isLinkScopedHost(host)) {
           unawaited(
             _rememberContactLanRouteFromBeacon(
               deviceId: senderDeviceId,
@@ -26035,6 +26097,8 @@ class MessengerController extends ChangeNotifier {
 
   /// Releases what waited for [contact] to accept.
   void _contactAccepted(ContactRecord contact) {
+    // A cable may be plugged in already: look for the new contact on it.
+    unawaited(_cable?.pingNow());
     _dropPendingRequestsFrom(contact.deviceId);
     if (_outboundQueueByContact[contact.deviceId]?.isNotEmpty ?? false) {
       _pumpOutboundQueue(contact);
@@ -26168,6 +26232,8 @@ class MessengerController extends ChangeNotifier {
     }
     if (routePayload != null) {
       _cachePeerLanDirectFromPayload(sender.deviceId, routePayload);
+      // Encrypted and from this contact: its Iroh and LAN-direct ports.
+      _cable?.notePorts(sender.deviceId, routePayload['linkPorts']);
       _notePeerCold(
         sender.deviceId,
         routePayload['cold'],
@@ -26242,6 +26308,10 @@ class MessengerController extends ChangeNotifier {
       final pendingKey = _pendingRouteUpdateProbeKey(sender.deviceId, probeId);
       final pending = _pendingRouteUpdateProbes.remove(pendingKey);
       if (pending != null) {
+        // The authenticated answer to a cable probe proves the address.
+        if (pending.reason == 'cable_probe') {
+          _cable?.onProbeReply(probeId, sender.deviceId);
+        }
         if (pending.reason == 'heartbeat' || pending.reason == 'chat_resume') {
           _reachability.noteHeartbeatReply(
             sender.deviceId,
@@ -26262,6 +26332,21 @@ class MessengerController extends ChangeNotifier {
       final replySentAt = sentAt ?? envelope.createdAt;
       unawaited(
         () async {
+          // A cable probe is answered on every address held for the sender
+          // first: offline there is no other way back.
+          final cableRoutes = reason == 'cable_probe'
+              ? _cable?.replyRoutes(sender.deviceId) ?? const <PeerEndpoint>[]
+              : const <PeerEndpoint>[];
+          if (cableRoutes.isNotEmpty) {
+            await _sendRouteUpdate(
+              replyContact,
+              requestReply: false,
+              reason: reason,
+              probeId: probeId,
+              sentAt: replySentAt,
+              routes: cableRoutes,
+            ).catchError((Object _) => false);
+          }
           await _refreshLanAddresses(persist: false, advertise: false);
           await _sendRouteUpdate(
             replyContact,
@@ -26376,7 +26461,7 @@ class MessengerController extends ChangeNotifier {
     }
     final incoming = GroupRecord.fromJson(
       Map<String, dynamic>.of(groupPayload)..remove('mirroredVia'),
-    );
+    ).withoutLinkScopedRoutes();
     for (final profile in incoming.memberProfiles) {
       final signingKey = profile.signingPublicKeyBase64;
       final endpoint = profile.irohEndpointId;
@@ -26769,7 +26854,10 @@ class MessengerController extends ChangeNotifier {
       displayName: invite.displayName,
       bio: invite.bio.isEmpty ? existing.bio : invite.bio,
       relayCapable: invite.relayCapable,
-      routeHints: prunePeerEndpointsByKind(invite.routeHints),
+      routeHints: prunePeerEndpointsByKind(
+        invite.routeHints,
+        dropLinkScoped: true,
+      ),
       signingPublicKeyBase64: invite.signingPublicKeyBase64,
       irohEndpointId: invite.irohEndpointId,
       capabilities: invite.capabilities,
@@ -30482,6 +30570,7 @@ class MessengerController extends ChangeNotifier {
         wakeMinutes: me?.connectivity.coldWakeMinutes ?? defaultColdWakeMinutes,
       );
       if (was != _cold.active) {
+        _syncCableLinks();
         _reschedulePolling();
         // One relay subscription while cold (also in the background), the
         // usual ones otherwise.
@@ -31920,6 +32009,7 @@ class MessengerController extends ChangeNotifier {
     }
     final deliveredEndpoint = result.endpoint;
     if (deliveredEndpoint?.kind == PeerRouteKind.lan) {
+      _cable?.touch(contact.deviceId, deliveredEndpoint!.host);
       await _rememberLanRoutesForContact(
         deviceId: contact.deviceId,
         routes: [deliveredEndpoint!],
@@ -32749,12 +32839,19 @@ class MessengerController extends ChangeNotifier {
       deviceId: contact.deviceId,
       transportIdentity: contact.irohEndpointId,
       identityPinned: contact.hasPinnedIrohIdentity,
-      directAddresses: contact.directInternetRouteHints
-          .where((route) => route.protocol == PeerRouteProtocol.udp)
-          .map(_irohSocketAddressForRoute)
-          .nonNulls
-          .take(8)
-          .toList(growable: false),
+      directAddresses: _cable != null && _cableLinksActive
+          ? _cable!.irohHints(
+              deviceId: contact.deviceId,
+              stored: contact.directInternetRouteHints,
+              lanHints: contact.lanRouteHints,
+              healthOf: routeHealthFor,
+            )
+          : contact.directInternetRouteHints
+                .where((route) => route.protocol == PeerRouteProtocol.udp)
+                .map(_irohSocketAddressForRoute)
+                .nonNulls
+                .take(8)
+                .toList(growable: false),
       allowRelay:
           allowRelay &&
           (global?.irohRelayEnabled ?? false) &&
@@ -33911,6 +34008,8 @@ class MessengerController extends ChangeNotifier {
   List<PeerEndpoint> _candidateRoutesForContact(ContactRecord contact) {
     return _withRelayScoringTieBreak(
       dedupePeerEndpoints([
+        // A cable the contact proved itself on is the most direct way.
+        ...?_cable?.candidateRoutes(contact.deviceId),
         ...contact.prioritizedRouteHints,
         ..._lanRediscoveryRoutesForContact(contact),
       ]),
@@ -34244,7 +34343,10 @@ class MessengerController extends ChangeNotifier {
     required Iterable<PeerEndpoint> routes,
   }) async {
     final lanRoutes = dedupePeerEndpoints(
-      routes.where((route) => route.kind == PeerRouteKind.lan),
+      routes.where(
+        (route) =>
+            route.kind == PeerRouteKind.lan && !isLinkScopedHost(route.host),
+      ),
     );
     if (lanRoutes.isEmpty) {
       return;
@@ -34276,7 +34378,10 @@ class MessengerController extends ChangeNotifier {
     required Iterable<PeerEndpoint> routes,
   }) async {
     final lanRoutes = dedupePeerEndpoints(
-      routes.where((route) => route.kind == PeerRouteKind.lan),
+      routes.where(
+        (route) =>
+            route.kind == PeerRouteKind.lan && !isLinkScopedHost(route.host),
+      ),
     );
     if (lanRoutes.isEmpty) {
       return;
@@ -40019,7 +40124,7 @@ class MessengerController extends ChangeNotifier {
     if (me == null || raw is! Map<String, dynamic>) return false;
     final GroupRecord incoming;
     try {
-      incoming = GroupRecord.fromJson(raw);
+      incoming = GroupRecord.fromJson(raw).withoutLinkScopedRoutes();
     } catch (_) {
       return false;
     }
@@ -43215,6 +43320,198 @@ class MessengerController extends ChangeNotifier {
   /// this helper instead so the cryptographic randomness avoids that.
   String newAlbumId() => _randomId('alb');
 
+  // ---- Cable and USB links (M54a) ----
+
+  CableLinks? _createCableLinks() {
+    final environment = _cableLinkEnvironment;
+    if (environment == null || kIsWeb) return null;
+    final links = CableLinks(
+      now: _now,
+      interfaceSource: environment.interfaceSource,
+      pingSockets: environment.pingSockets,
+      androidFallback: environment.androidFallback,
+      pingListens: environment.pingListens,
+      enabled: () => _cableLinksActive,
+      isKnownDevice: _isCableContact,
+      buildPing: _cablePingPayloads,
+      feedBeacon: (datagram, ifIndex) =>
+          _onPairingBeaconDatagram(datagram, viaLink: ifIndex),
+      sendProbe: _sendCableProbe,
+      newProbeId: () => _randomId('cable'),
+      onConfirmed: _onCableLinkConfirmed,
+      onDropped: _onCableLinksDropped,
+      networkChanged: _cableNetworkChanged,
+      log: appendDebugLog,
+    );
+    links.watcher.setForeground(_appInForeground);
+    return links;
+  }
+
+  /// Cable links run while the setting is on, LAN is on, and Conest is
+  /// neither dormant nor asleep (cold mode).
+  bool get _cableLinksActive {
+    final connectivity = _snapshot.identity?.connectivity;
+    return !_disposed &&
+        conestActive &&
+        connectivity != null &&
+        connectivity.lanEnabled &&
+        connectivity.cableLinksEnabled &&
+        !_cold.isCold(TransportKind.lan.name);
+  }
+
+  /// Only contacts count: the probe is a route update, which carries this
+  /// device's invite, and a group member who is no contact must not get it.
+  bool _isCableContact(String deviceId) {
+    if (deviceId == _snapshot.identity?.deviceId) return false;
+    final contact = _contactByDeviceId(deviceId);
+    return contact != null && contact.canSendOutbound;
+  }
+
+  /// A cable ping: the old discovery ping, with the relay port added so the
+  /// answer can come back to this device.
+  Future<List<Uint8List>> _cablePingPayloads() async {
+    final me = _snapshot.identity;
+    if (me == null || !_localRelayNode.isRunning) return const <Uint8List>[];
+    return _beaconPayloads({
+      'app': 'conest',
+      'kind': 'pairing_ping',
+      'version': 1,
+      'deviceId': me.deviceId,
+      'relayPort': me.localRelayPort,
+    });
+  }
+
+  /// One route update to the contact, over this address alone, asking for
+  /// an answer. Not sent to anyone else.
+  Future<bool> _sendCableProbe(LinkEntry entry, String probeId) async {
+    final contact = _contactByDeviceId(entry.deviceId);
+    if (contact == null) return false;
+    return _sendRouteUpdate(
+      contact,
+      requestReply: true,
+      reason: 'cable_probe',
+      routes: [entry.route],
+      probeId: probeId,
+    );
+  }
+
+  /// The contact proved itself at [entry]: files can go over the cable.
+  void _onCableLinkConfirmed(LinkEntry entry) {
+    // The answer just came by this route: delivery tries it before it waits
+    // for an Iroh dial that offline would only time out.
+    _routeHealthTracker.recordSuccess(
+      entry.route,
+      fetch: false,
+      latency: const Duration(milliseconds: 5),
+    );
+    final ports = _cable?.hints.portsFor(entry.deviceId);
+    final direct = ports?.direct;
+    final existing = _peerLanDirect[entry.deviceId];
+    final haveLanAddress =
+        existing != null &&
+        _lanDirectEndpointUsable(existing) &&
+        !isLinkScopedHost(existing.host);
+    if (direct != null && !haveLanAddress) {
+      _peerLanDirect[entry.deviceId] = LanDirectEndpoint(
+        host: entry.address,
+        port: direct,
+        cachedAt: DateTime.now().toUtc(),
+        binaryBlockVersion: ports?.binary ?? 0,
+      );
+      appendDebugLog(
+        'Cable LAN-direct endpoint for ${entry.deviceId}: '
+        '${entry.address}:$direct.',
+      );
+      _resumeTransfersForLanEndpoint(entry.deviceId);
+    }
+    _flushContactSoon(entry.deviceId);
+  }
+
+  /// A cable went (or its route kept failing): what was seeded from it
+  /// goes, and a transfer that only had it waits for another way.
+  void _onCableLinksDropped(List<LinkEntry> removed) {
+    for (final entry in removed) {
+      final endpoint = _peerLanDirect[entry.deviceId];
+      if (endpoint != null && endpoint.host == entry.address) {
+        _peerLanDirect.remove(entry.deviceId);
+      }
+    }
+    for (final state in _outboundAttachments.values.where(
+      (entry) => entry.requiresLan,
+    )) {
+      final peer = _contactByDeviceId(state.peerDeviceId);
+      if (peer == null || !_hasUsableLargeDirectTransport(peer)) {
+        _setTransferSessionState(
+          state.descriptor.id,
+          TransferState.waitingForLan,
+          error: 'Waiting for a direct route after the cable was removed.',
+        );
+      }
+    }
+  }
+
+  Future<void> _cableNetworkChanged() async {
+    final iroh = _transportRegistry?.adapterFor(TransportKind.iroh);
+    if (iroh is IrohTransportAdapter) await iroh.networkChanged();
+  }
+
+  /// Turns the whole thing on or off with the setting, LAN and cold mode.
+  void _syncCableLinks() {
+    final cable = _cable;
+    if (cable == null || _disposed) return;
+    final active = _cableLinksActive;
+    cable.watcher.setEnabled(active);
+    if (active) {
+      cable.note(LinkEventSource.manual);
+    } else {
+      cable.reset();
+    }
+  }
+
+  /// A platform event about links (the native monitor, Android).
+  void noteLinkEvent(LinkEventSource source) => _cable?.note(source);
+
+  /// The ports this device tells its contacts, inside an encrypted route
+  /// update: Iroh's two (they change at every start) and the LAN-direct
+  /// file server's.
+  Map<String, dynamic> _linkPortsPayload() {
+    if (_cable == null || !_cableLinksActive) return const {};
+    final adapter = _transportRegistry?.adapterFor(TransportKind.iroh);
+    final addresses = adapter is IrohTransportAdapter
+        ? adapter.status?.directAddresses ?? const <String>[]
+        : const <String>[];
+    int? irohPort({required bool v6}) {
+      for (final value in addresses) {
+        final parsed = _parseIrohSocketAddress(value);
+        final address = parsed == null
+            ? null
+            : InternetAddress.tryParse(parsed.host);
+        if (parsed != null &&
+            address != null &&
+            (address.type == InternetAddressType.IPv6) == v6) {
+          return parsed.port;
+        }
+      }
+      return null;
+    }
+
+    final direct =
+        _localRelayNode.attachmentIngressPort ?? _lanDirectChannel?.localPort;
+    final ports = LinkPorts(
+      iroh4: irohPort(v6: false),
+      iroh6: irohPort(v6: true),
+      direct: direct,
+      binary: direct == null
+          ? null
+          : (_lanDirectChannel is BinaryLanDirectChannel ? 1 : 0),
+    );
+    return ports.isEmpty ? const {} : {'linkPorts': ports.toJson()};
+  }
+
+  @visibleForTesting
+  TransportPeer transportPeerForTesting(ContactRecord contact) =>
+      _transportPeerForContact(contact, allowRelay: false);
+
   void _handleLocalEnvelopeStored(
     String recipientDeviceId,
     RelayEnvelope envelope,
@@ -43361,6 +43658,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _cable?.dispose();
     _cold.dispose();
     _peerCold.clear();
     _peerColdGone.clear();

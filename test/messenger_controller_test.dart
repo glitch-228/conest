@@ -68,6 +68,10 @@ import 'support/fake_call_network.dart' show FakeCallMedia;
 import 'package:conest/src/group_file_download.dart';
 import 'package:conest/src/group_history_event.dart';
 import 'package:conest/src/iroh_ffi_bridge.dart';
+import 'package:conest/src/net/cable_links.dart';
+import 'package:conest/src/net/link_interfaces.dart';
+import 'package:conest/src/net/link_table.dart';
+import 'support/strict_link_fakes.dart';
 import 'package:conest/src/iroh_transport.dart';
 import 'package:conest/src/lan_direct.dart';
 import 'package:conest/src/local_relay_node.dart';
@@ -1410,6 +1414,7 @@ Future<MessengerController> _createController({
   Future<Directory> Function()? telegramDirectory,
   Future<Directory> Function()? dataRoot,
   Future<Directory> Function()? legacyAttachmentRoot,
+  CableLinkEnvironment? cableLinkEnvironment,
 }) async {
   Directory? attachmentBase;
   final controller = MessengerController(
@@ -1442,6 +1447,7 @@ Future<MessengerController> _createController({
     signedRelayDefaultsLoader: signedRelayDefaultsLoader,
     enableLongPoll: enableLongPoll,
     enablePairingBeacon: false,
+    cableLinkEnvironment: cableLinkEnvironment,
     platformBridge: platformBridge,
     groupCallMedia: groupCallMedia,
     lanDirectChannel: lanDirectChannel,
@@ -1611,6 +1617,22 @@ class _InProcessIrohNetwork {
   /// Every envelope send tried over this network, delivered or not.
   final sendAttempts = <String, int>{};
 
+  /// The direct addresses an endpoint reports about itself (its status):
+  /// per endpoint, else [directAddresses].
+  final directAddressesOf = <String, List<String>>{};
+  List<String> directAddresses = const [];
+
+  /// The dial hints of every envelope send: (sender, recipient, hints).
+  final hintsSent = <(String, String, List<String>)>[];
+
+  /// Hints Rust would refuse (more than 8, or not a socket address with a
+  /// numeric zone at most). One of those fails the whole send there.
+  final refusedHints = <String>[];
+
+  static final _rustSocketAddress = RegExp(
+    r'^(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-fA-F:.]+(%\d+)?\]):\d{1,5}$',
+  );
+
   Future<TransportRegistry?> registry(IdentityRecord identity) async {
     final bridge = _InProcessIrohBridge(this, identity.irohEndpointId!);
     bridges[bridge.endpointId] = bridge;
@@ -1658,7 +1680,8 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
     required List<String> relayUrls,
   }) async => IrohBridgeStatus(
     endpointId: endpointId,
-    directAddresses: const [],
+    directAddresses:
+        network.directAddressesOf[endpointId] ?? network.directAddresses,
     relayEnabled: relayEnabled,
   );
   @override
@@ -1697,6 +1720,22 @@ class _InProcessIrohBridge implements NativeIrohDatagramBridge {
   }) async {
     network.sendAttempts[endpointId] =
         (network.sendAttempts[endpointId] ?? 0) + 1;
+    network.hintsSent.add((
+      endpointId,
+      remoteEndpointId,
+      List.of(directAddresses),
+    ));
+    // As strict as Rust: one hint it cannot read fails the whole send.
+    if (directAddresses.length > 8) {
+      network.refusedHints.add('more than eight hints');
+      throw StateError('at most eight direct Iroh address hints');
+    }
+    for (final hint in directAddresses) {
+      if (!_InProcessIrohNetwork._rustSocketAddress.hasMatch(hint)) {
+        network.refusedHints.add(hint);
+        throw StateError('parse direct Iroh address hint $hint');
+      }
+    }
     if (!network.bridges.containsKey(endpointId)) {
       throw StateError('Sender offline');
     }
@@ -1869,6 +1908,7 @@ void main() {
   _xmppControllerTests();
   _telegramControllerTests();
   _discordControllerTests();
+  _cableLinkControllerTests();
   test('a desktop notifies only while Conest is not in front', () async {
     final relay = _FakeRelayClient();
     final recorder = _RecordingPlatformBridge();
@@ -37293,3 +37333,521 @@ DeliveryState? onPhoneState(MessengerController phone, String groupId) => phone
     .where((message) => message.body == 'from phone')
     .firstOrNull
     ?.state;
+
+/// Contacts found on a cable (M54a): a beacon is only a candidate until the
+/// contact answers a probe, the cable address is used for delivery, Iroh
+/// hints and LAN-direct files, and it never reaches the vault, an invite or
+/// a message to a contact.
+void _cableLinkControllerTests() {
+  group('cable links', () {
+    late StrictBeaconNetwork cable;
+    late StrictHost aliceHost;
+    late StrictHost bobHost;
+    late StrictInterfaceSource aliceInterfaces;
+    late StrictInterfaceSource bobInterfaces;
+    late _FakeRelayClient relay;
+    late _InProcessIrohNetwork iroh;
+    late MessengerController alice;
+    late MessengerController bob;
+    late String bobId;
+    late String aliceId;
+    var pingsBobSaw = 0;
+    var aliceClockOffset = Duration.zero;
+
+    /// Starts Alice (on the cable at 169.254.10.1) and Bob (169.254.20.2)
+    /// and pairs them. Bob's side answers a cable ping as an old build does,
+    /// with a route beacon to the ping's own address and port, unless
+    /// [bobAnswers] is false; with [bobSeesPings] he is also told of the
+    /// ping, as his own listener would be.
+    Future<void> rig({
+      Set<String> failingHosts = const {},
+      bool bobAnswers = true,
+      bool bobSeesPings = false,
+      bool aliceDirect = false,
+    }) async {
+      pingsBobSaw = 0;
+      aliceClockOffset = Duration.zero;
+      cable = StrictBeaconNetwork();
+      aliceHost = cable.addHost('169.254.10.1');
+      bobHost = cable.addHost(
+        '169.254.20.2',
+        onListenerDatagram: (host, data, from, fromPort) {
+          final message = jsonDecode(utf8.decode(data)) as Map<String, dynamic>;
+          if (message['kind'] != 'pairing_ping') return;
+          pingsBobSaw++;
+          if (bobSeesPings) {
+            bob.receivePairingBeaconForTesting(
+              Datagram(data, InternetAddress(from), fromPort),
+            );
+          }
+          if (!bobAnswers) return;
+          host.bind(host.address)
+            ..send(
+              utf8.encode(
+                jsonEncode({
+                  'app': 'conest',
+                  'kind': 'pairing_route',
+                  'version': 2,
+                  'deviceId': bobId,
+                  'relayPort': bob.identity!.localRelayPort,
+                }),
+              ),
+              from,
+              fromPort,
+            )
+            ..close();
+        },
+      );
+      aliceInterfaces = StrictInterfaceSource([
+        RawInterface(name: 'enp3s0', index: 7, addresses: ['169.254.10.1']),
+      ]);
+      bobInterfaces = StrictInterfaceSource([
+        RawInterface(name: 'enp4s0', index: 8, addresses: ['169.254.20.2']),
+      ]);
+      relay = _FakeRelayClient(failingHosts: failingHosts);
+      iroh = _InProcessIrohNetwork()
+        ..directAddresses = ['192.168.1.20:41234', '[fd00::20]:42345'];
+      alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+        nowProvider: () => DateTime.now().add(aliceClockOffset),
+        transportRegistryFactory: iroh.registry,
+        lanDirectChannel: aliceDirect
+            ? _InProcessLanDirectChannel(host: '192.168.1.20')
+            : null,
+        cableLinkEnvironment: CableLinkEnvironment(
+          interfaceSource: aliceInterfaces.call,
+          pingSockets: (local) async => aliceHost.bind(local),
+          pingListens: const Duration(milliseconds: 300),
+        ),
+      );
+      bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+        transportRegistryFactory: iroh.registry,
+        cableLinkEnvironment: CableLinkEnvironment(
+          interfaceSource: bobInterfaces.call,
+          pingSockets: (local) async => bobHost.bind(local),
+          pingListens: const Duration(milliseconds: 300),
+        ),
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      bobId = bob.identity!.deviceId;
+      aliceId = alice.identity!.deviceId;
+      await _pairControllers(alice, bob);
+    }
+
+    /// Everything the cable address could be found in: contacts, groups,
+    /// the identity (invites are built from it).
+    String savedState() => jsonEncode({
+      'contacts': [for (final c in alice.contacts) c.toJson()],
+      'groups': [for (final g in alice.groups) g.toJson()],
+      'identity': alice.identity!.toJson(),
+    });
+
+    bool leaksLinkLocal(String text) =>
+        text.contains('169.254') ||
+        text.contains('fe80') ||
+        text.contains('%25') ||
+        RegExp(r'"host":"[^"]*%').hasMatch(text);
+
+    /// What a probe answer does: the entry is confirmed and the controller
+    /// hears of it.
+    LinkEntry confirmBob() {
+      final entry = alice.cableLinks!.table.confirm(
+        deviceId: bobId,
+        ifIndex: 7,
+        ifName: 'enp3s0',
+        address: '169.254.20.2',
+        relayPort: 7667,
+      );
+      alice.cableLinks!.onConfirmed?.call(entry);
+      return entry;
+    }
+
+    Future<void> foundBob() => _waitForIroh(
+      () => alice.cableLinks!.table.all.any((e) => e.deviceId == bobId),
+      reason: 'the ping was answered',
+    );
+
+    test('a contact on the cable is found by a ping; its beacon is only a '
+        'candidate: no saved route, one probe to that address alone', () async {
+      await rig();
+      await alice.cableLinks!.pingNow();
+      await foundBob();
+      final bobPort = bob.identity!.localRelayPort;
+      await _waitForIroh(
+        () => relay.storeAttempts.contains('169.254.20.2:$bobPort'),
+        reason: 'the probe went to the cable address',
+      );
+      final entry = alice.cableLinks!.table.unconfirmedFor(bobId).single;
+      expect(entry.address, '169.254.20.2');
+      expect(alice.cableLinks!.candidateRoutes(bobId), isEmpty);
+      expect(leaksLinkLocal(savedState()), isFalse);
+      // The only thing sent to that address is the probe.
+      expect(
+        relay.storeAttempts.where((a) => a.startsWith('169.254.')),
+        hasLength(1),
+      );
+    });
+
+    test('a device that is no contact changes nothing', () async {
+      await rig();
+      await alice.cableLinks!.pingNow();
+      await foundBob();
+      final before = alice.cableLinks!.table.all.length;
+      alice.receivePairingBeaconForTesting(
+        Datagram(
+          utf8.encode(
+            jsonEncode({
+              'app': 'conest',
+              'kind': 'pairing_route',
+              'deviceId': 'dev-stranger',
+              'relayPort': 7667,
+            }),
+          ),
+          InternetAddress('169.254.99.9'),
+          7668,
+        ),
+      );
+      expect(alice.cableLinks!.table.all.length, before);
+    });
+
+    test('a link-local beacon is never saved as a contact route; a DHCP '
+        'address keeps the route it always made', () async {
+      await rig(bobAnswers: false);
+      Datagram beacon(String from) => Datagram(
+        utf8.encode(
+          jsonEncode({
+            'app': 'conest',
+            'kind': 'pairing_route',
+            'deviceId': bobId,
+            'relayPort': 7667,
+          }),
+        ),
+        InternetAddress(from),
+        7668,
+      );
+      // The DHCP address first: once it is saved, the beacon path has run
+      // and nothing else is still rewriting the contact.
+      alice.receivePairingBeaconForTesting(beacon('192.168.77.5'));
+      await _waitForIroh(
+        () => alice
+            .contactByDeviceId(bobId)!
+            .routeHints
+            .any((r) => r.host == '192.168.77.5'),
+        reason: 'a DHCP address is saved as it always was',
+      );
+      alice.receivePairingBeaconForTesting(beacon('169.254.20.3'));
+      // Saved at once or not at all (a later route update may rewrite the
+      // contact's routes either way: look now, and later).
+      expect(
+        alice.contactByDeviceId(bobId)!.routeHints.map((r) => r.host),
+        isNot(contains('169.254.20.3')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(
+        alice.contactByDeviceId(bobId)!.routeHints.map((r) => r.host),
+        isNot(contains('169.254.20.3')),
+      );
+      expect(leaksLinkLocal(savedState()), isFalse);
+    });
+
+    test('a confirmed cable route is tried first and delivers; nothing '
+        'link-local is saved after it did', () async {
+      await rig(bobAnswers: false);
+      confirmBob();
+      // Iroh cannot reach Bob here: the message has to go over LAN routes.
+      iroh.blockedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      relay.storeAttempts.clear();
+      await alice.sendMessage(
+        contact: alice.contactByDeviceId(bobId)!,
+        body: 'over the cable',
+      );
+      expect(relay.storeAttempts, isNotEmpty);
+      expect(relay.storeAttempts.first, '169.254.20.2:7667');
+      expect(
+        relay.storedEnvelopes.any((e) => e.kind == 'direct_message'),
+        isTrue,
+      );
+      expect(leaksLinkLocal(savedState()), isFalse);
+    });
+
+    test('the Iroh dial carries the cable address first, with the port the '
+        'contact told us, and the stored hints behind', () async {
+      await rig(bobAnswers: false, failingHosts: {'169.254.20.2:7667'});
+      confirmBob();
+      alice.cableLinks!.notePorts(bobId, {'iroh4': 41234});
+      iroh.hintsSent.clear();
+      await alice.sendMessage(
+        contact: alice.contactByDeviceId(bobId)!,
+        body: 'over Iroh on the cable',
+      );
+      final aliceEndpoint = alice.identity!.irohEndpointId;
+      await _waitForIroh(
+        () => iroh.hintsSent.any(
+          (sent) => sent.$1 == aliceEndpoint && sent.$3.isNotEmpty,
+        ),
+        reason: 'an Iroh send with hints',
+      );
+      final hints = iroh.hintsSent
+          .where((sent) => sent.$1 == aliceEndpoint && sent.$3.isNotEmpty)
+          .first
+          .$3;
+      expect(hints.first, '169.254.20.2:41234');
+      // Bob's own address is behind it, as the invite gave it.
+      expect(hints, contains('192.168.1.20:41234'));
+      expect(hints.length, lessThanOrEqualTo(8));
+      expect(iroh.refusedHints, isEmpty);
+      expect(leaksLinkLocal(savedState()), isFalse);
+    });
+
+    test(
+      'with nothing found on a cable the Iroh hints are as they were',
+      () async {
+        await rig(bobAnswers: false);
+        final peer = alice.transportPeerForTesting(
+          alice.contactByDeviceId(bobId)!,
+        );
+        expect(peer.directAddresses, [
+          '192.168.1.20:41234',
+          '[fd00::20]:42345',
+        ]);
+      },
+    );
+
+    test('an invite and a route update carry nothing link-local while a '
+        'cable is up', () async {
+      await rig(bobAnswers: false);
+      confirmBob();
+      final invite = await alice.buildInvite();
+      expect(leaksLinkLocal(jsonEncode(invite.toJson())), isFalse);
+      await alice.checkContactRoutes(alice.contactByDeviceId(bobId)!);
+      await bob.pollNow();
+      expect(
+        leaksLinkLocal(jsonEncode(bob.contactByDeviceId(aliceId)!.toJson())),
+        isFalse,
+      );
+    });
+
+    test('a route update tells the contact our ports, encrypted; both '
+        'sides keep each other\'s', () async {
+      await rig(bobAnswers: false, aliceDirect: true);
+      await alice.checkContactRoutes(alice.contactByDeviceId(bobId)!);
+      await bob.pollNow();
+      final ports = bob.cableLinks!.hints.portsFor(aliceId);
+      expect(ports, isNotNull);
+      expect(ports!.iroh4, 41234);
+      expect(ports.iroh6, 42345);
+      expect(ports.direct, isNotNull);
+      expect(ports.binary, 1);
+    });
+
+    test('an authenticated answer to the probe confirms the entry, makes it '
+        'a route and seeds the LAN-direct endpoint; unplugging removes '
+        'both', () async {
+      await rig();
+      await alice.cableLinks!.pingNow();
+      await foundBob();
+      alice.cableLinks!.notePorts(bobId, {'direct': 7667, 'binary': 1});
+      final probeId = alice.cableLinks!.pendingProbeIdsForTesting.single;
+      expect(alice.cableLinks!.onProbeReply(probeId, bobId), isTrue);
+      expect(
+        alice.cableLinks!.candidateRoutes(bobId).first.host,
+        '169.254.20.2',
+      );
+      final endpoint = alice.peerLanDirectEndpointForTesting(bobId);
+      expect(endpoint, isNotNull);
+      expect(endpoint!.host, '169.254.20.2');
+      expect(endpoint.port, 7667);
+      expect(endpoint.binaryBlockVersion, 1);
+      aliceInterfaces.interfaces = [];
+      await alice.cableLinks!.onLinksChanged();
+      expect(alice.cableLinks!.candidateRoutes(bobId), isEmpty);
+      expect(alice.peerLanDirectEndpointForTesting(bobId), isNull);
+    });
+
+    test('a LAN-direct endpoint on a normal LAN address is not replaced by '
+        'the cable one', () async {
+      await rig();
+      alice.cachePeerLanDirectHintForTesting(bobId, {
+        'senderLanDirectPort': 7000,
+        'senderLanAddresses': ['192.168.1.30'],
+      });
+      await alice.cableLinks!.pingNow();
+      await foundBob();
+      alice.cableLinks!.notePorts(bobId, {'direct': 7667});
+      alice.cableLinks!.onProbeReply(
+        alice.cableLinks!.pendingProbeIdsForTesting.single,
+        bobId,
+      );
+      expect(
+        alice.peerLanDirectEndpointForTesting(bobId)!.host,
+        '192.168.1.30',
+      );
+    });
+
+    test('the probe is answered over the cable, and the answer confirms '
+        'both sides', () async {
+      await rig(bobSeesPings: true);
+      // Both have listed their cable (the first listing follows the start).
+      await _waitForIroh(
+        () =>
+            alice.cableLinks!.links.isNotEmpty &&
+            bob.cableLinks!.links.isNotEmpty,
+        reason: 'both cables listed',
+      );
+      // The pings of the start are over: look again, Bob is told of it.
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      aliceClockOffset = const Duration(seconds: 30);
+      await alice.cableLinks!.pingNow();
+      await _waitForIroh(
+        () => alice.cableLinks!.table.unconfirmedFor(bobId).isNotEmpty,
+        reason: 'found',
+      );
+      // Alice's probe waits in the relay for Bob; his answer goes to the
+      // address he heard Alice's ping from.
+      for (var i = 0; i < 100; i++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        if (alice.cableLinks!.candidateRoutes(bobId).isNotEmpty &&
+            bob.cableLinks!.candidateRoutes(aliceId).isNotEmpty) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(alice.cableLinks!.candidateRoutes(bobId), isNotEmpty);
+      expect(bob.cableLinks!.candidateRoutes(aliceId), isNotEmpty);
+      expect(leaksLinkLocal(savedState()), isFalse);
+      // Each side sent its own probe and an answer to the other's probe to
+      // the other's cable address: two stores each way, nothing more needed.
+      final toBob = relay.storeAttempts
+          .where((a) => a.startsWith('169.254.20.2:'))
+          .length;
+      final toAlice = relay.storeAttempts
+          .where((a) => a.startsWith('169.254.10.1:'))
+          .length;
+      expect(toBob, greaterThanOrEqualTo(2));
+      expect(toAlice, greaterThanOrEqualTo(2));
+    });
+
+    test(
+      'a contact\'s invite with link-local hints does not bring them in',
+      () async {
+        await rig(bobAnswers: false);
+        final invite = ContactInvite(
+          version: 4,
+          accountId: 'acc-carol',
+          deviceId: 'dev-carol',
+          displayName: 'Carol',
+          bio: '',
+          pairingNonce: 'carol-nonce',
+          pairingEpochMs: 1760000000000,
+          relayCapable: true,
+          publicKeyBase64: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=',
+          routeHints: const <PeerEndpoint>[
+            PeerEndpoint(
+              kind: PeerRouteKind.lan,
+              host: '169.254.9.9',
+              port: 7667,
+            ),
+            PeerEndpoint(kind: PeerRouteKind.lan, host: 'fe80::5', port: 7667),
+            PeerEndpoint(
+              kind: PeerRouteKind.lan,
+              host: '192.168.1.99',
+              port: 7667,
+            ),
+          ],
+        );
+        await alice.addContactFromInvite(
+          alias: 'Carol',
+          payload: invite.encodePayload(),
+          codephrase: '',
+        );
+        final carol = alice.contactByDeviceId('dev-carol')!;
+        expect(carol.routeHints.map((r) => r.host), ['192.168.1.99']);
+      },
+    );
+
+    test('a group member reached over the cable is not given a link-local '
+        'route in the group record', () async {
+      await rig(bobAnswers: false);
+      confirmBob();
+      iroh.blockedPairs.add((
+        alice.identity!.irohEndpointId!,
+        bob.identity!.irohEndpointId!,
+      ));
+      final group = await alice.createGroup(
+        title: 'Cable group',
+        members: alice.contacts,
+      );
+      relay.storeAttempts.clear();
+      await alice.sendGroupMessage(groupId: group.groupId, body: 'over it');
+      await _waitForIroh(
+        () => relay.storedEnvelopes.any((e) => e.kind == 'group_message'),
+        reason: 'the group message was stored somewhere',
+      );
+      expect(relay.storeAttempts, contains('169.254.20.2:7667'));
+      expect(leaksLinkLocal(savedState()), isFalse);
+    });
+
+    test('switching cable links off forgets what was found and stops the '
+        'pings', () async {
+      await rig();
+      await alice.cableLinks!.pingNow();
+      await foundBob();
+      final pings = pingsBobSaw;
+      await alice.updateGlobalConnectivity(
+        alice.identity!.connectivity.copyWith(cableLinksEnabled: false),
+      );
+      expect(alice.cableLinks!.table.all, isEmpty);
+      await alice.cableLinks!.onLinksChanged();
+      await alice.cableLinks!.pingNow();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(pingsBobSaw, pings);
+    });
+
+    test('a new contact gets a ping on the cable that is already up', () async {
+      await rig(bobAnswers: false);
+      await alice.cableLinks!.onLinksChanged();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final carol = await _createController(
+        relayClient: relay,
+        displayName: 'Carol',
+      );
+      addTearDown(carol.dispose);
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      final before = pingsBobSaw;
+      // The gap between two pings is over after a while; a contact added
+      // after that is looked for at once.
+      aliceClockOffset = const Duration(seconds: 30);
+      await _pairControllers(alice, carol);
+      await _waitForIroh(
+        () => pingsBobSaw > before,
+        reason: 'a ping after the new contact was accepted',
+      );
+    });
+
+    test('a vault reset forgets the table and the ports', () async {
+      await rig(bobAnswers: false);
+      confirmBob();
+      alice.cableLinks!.notePorts(bobId, {'iroh4': 1234});
+      await alice.resetIdentity();
+      expect(alice.cableLinks!.table.all, isEmpty);
+      expect(alice.cableLinks!.hints.portsFor(bobId), isNull);
+    });
+
+    test('a controller that was not given cable links has none', () async {
+      final plain = await _createController(
+        relayClient: _FakeRelayClient(),
+        displayName: 'Plain',
+      );
+      addTearDown(plain.dispose);
+      expect(plain.cableLinks, isNull);
+    });
+  });
+}

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show ValueNotifier;
+import 'package:flutter/foundation.dart' show ValueNotifier, visibleForTesting;
 
 import '../models.dart';
 import 'iroh_hint_book.dart';
@@ -89,6 +89,26 @@ class CableLinkView {
   final bool pingable;
 }
 
+/// What a controller needs to run cable links for real; tests give their
+/// own sockets and interface listing.
+class CableLinkEnvironment {
+  const CableLinkEnvironment({
+    this.interfaceSource = systemInterfaceSource,
+    this.pingSockets = RawPingSocket.bind,
+    this.androidFallback = false,
+    this.pingListens = const Duration(seconds: 5),
+  });
+
+  final RawInterfaceSource interfaceSource;
+  final PingSocketFactory pingSockets;
+
+  /// Android only: the bounded fallback look while the page is open.
+  final bool androidFallback;
+
+  /// How long a ping socket listens for answers.
+  final Duration pingListens;
+}
+
 class _PendingProbe {
   _PendingProbe(this.entry, this.at);
   final LinkEntry entry;
@@ -119,7 +139,9 @@ class CableLinks {
     this.networkChanged,
     this.log,
     bool androidFallback = false,
+    Duration pingListens = const Duration(seconds: 5),
   }) : _now = now,
+       _pingListens = pingListens,
        _source = interfaceSource,
        _pingSockets = pingSockets,
        _buildPing = buildPing,
@@ -138,6 +160,9 @@ class CableLinks {
   }
 
   final DateTime Function() _now;
+
+  /// How long a ping socket stays open for the answers.
+  final Duration _pingListens;
   final RawInterfaceSource _source;
   final PingSocketFactory _pingSockets;
   final Future<List<Uint8List>> Function() _buildPing;
@@ -168,7 +193,6 @@ class CableLinks {
   final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
   static const int _beaconPort = 7668;
-  static const Duration _pingListens = Duration(seconds: 5);
   static const Duration _pingNowGap = Duration(seconds: 10);
   static const Duration _relistGap = Duration(seconds: 10);
   static const Duration _probeGap = Duration(seconds: 30);
@@ -186,6 +210,9 @@ class CableLinks {
   DateTime? _lastPingNowAt;
   DateTime? _lastRelistAt;
   bool _disposed = false;
+
+  @visibleForTesting
+  List<String> get pendingProbeIdsForTesting => _pending.keys.toList();
 
   int get probesInFlight {
     _expirePending();
