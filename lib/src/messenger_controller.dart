@@ -8814,7 +8814,8 @@ class MessengerController extends ChangeNotifier {
         smtpPort: smtpPort,
         mailboxKey: EmailCarrierConfig.newMailboxKey(),
         chatmail:
-            chatmail || defaultChatmailDomains.contains(imapHost.trim()),
+            chatmail ||
+            defaultChatmailDomains.contains(imapHost.trim().toLowerCase()),
         // The user gave this account: it is never moved to another server.
         serverPicked: false,
       ),

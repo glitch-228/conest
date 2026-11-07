@@ -144,9 +144,11 @@ class CrashCatcher {
   /// Writes it down at once (a crash may be next), and passes it on to the
   /// error history once that is open.
   void record(String kind, String error, StackTrace? stack, {String? context}) {
+    // The error first: the problem report keeps only a record's first line
+    // (the context may name files or people).
     var text = [
-      if (context != null && context.isNotEmpty) context,
       error,
+      if (context != null && context.isNotEmpty) context,
       if (stack != null) '$stack',
     ].join('\n');
     if (text.length > maxTextChars) {

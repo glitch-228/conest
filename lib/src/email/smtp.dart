@@ -13,7 +13,15 @@ class SmtpException implements Exception, ServerSlowDown {
   bool get temporary => code >= 400 && code < 500;
 
   static final RegExp _slowDown = RegExp(
-    r'too (much|many)|rate|limit|slow down|throttl|quota',
+    r'too (much|many)|\brate\b|rate.?limit|\blimit|slow down|throttl|quota',
+    caseSensitive: false,
+  );
+
+  /// A refusal about the recipient (a full mailbox, an unknown user:
+  /// enhanced codes 4.1.x and 4.2.x) is that contact's, not this account's
+  /// pace: it stays a failing attempt with its back-off.
+  static final RegExp _recipientSide = RegExp(
+    r'\b4\.[12]\.\d+\b|mailbox|recipient',
     caseSensitive: false,
   );
 
@@ -23,7 +31,11 @@ class SmtpException implements Exception, ServerSlowDown {
   /// ([NetworkLimiter.pushedBack]) and the mail is sent again later.
   @override
   Duration? get slowDownFor =>
-      temporary && _slowDown.hasMatch(message) ? Duration.zero : null;
+      temporary &&
+          _slowDown.hasMatch(message) &&
+          !_recipientSide.hasMatch(message)
+      ? Duration.zero
+      : null;
 
   @override
   String toString() => 'SMTP $code: $message';

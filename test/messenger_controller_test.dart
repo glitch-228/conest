@@ -28468,7 +28468,10 @@ void main() {
       'Route failed: ${const SocketException('Connection refused', address: null)} '
           'to 203.0.113.77:4433',
     );
-    final crashes = CrashCatcher(now: () => DateTime.utc(2026, 11, 3));
+    // The error history above is stamped by the real clock, so the report
+    // is built at the real time too (a fixed date expires).
+    final reportTime = DateTime.now().toUtc();
+    final crashes = CrashCatcher(now: () => reportTime);
     crashes.record(
       'zone',
       'Bad state while sending to Bob Zebrowski',
@@ -28488,7 +28491,7 @@ void main() {
       updateChannel: 'canary',
       crashes: crashes,
       controller: alice,
-      now: DateTime.utc(2026, 11, 3),
+      now: reportTime,
     );
     final report = await tester.runAsync(
       () => buildProblemReportOffMain(inputs),

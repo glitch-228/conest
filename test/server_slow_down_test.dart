@@ -65,6 +65,24 @@ void main() {
     });
   }
 
+  test('a recipient\'s full mailbox or a word containing "rate" is not '
+      'the account\'s pace', () {
+    for (final refusal in const [
+      SmtpException(452, '4.2.2 Quota exceeded (mailbox for user is full)'),
+      SmtpException(450, '4.1.1 Recipient address temporarily unavailable'),
+      SmtpException(451, '4.3.0 Message generated a separate error'),
+    ]) {
+      expect(refusal.slowDownFor, isNull, reason: refusal.message);
+    }
+    for (final refusal in const [
+      SmtpException(450, '4.7.1: Too much mail from <a@example.org>'),
+      SmtpException(421, '4.7.0 Rate limit exceeded, try again later'),
+      SmtpException(452, '4.5.3 Sending quota exceeded for this hour'),
+    ]) {
+      expect(refusal.slowDownFor, Duration.zero, reason: refusal.message);
+    }
+  });
+
   test('a refusal that names its wait passes it on', () async {
     final (registry, _) = await registryThatThrows(
       refusals.values.elementAt(1),
