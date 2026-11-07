@@ -1241,11 +1241,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_dial_without_hints_uses_what_the_last_hinted_send_carried() {
+    async fn a_dial_without_hints_uses_what_a_hinted_send_carried() {
+        // A fresh sender: Iroh has no memory of the receiver (it keeps the
+        // paths it was given for a minute after a connection), so only the
+        // remembered hints can get this dial through with relays off.
         let sender = NativeTransport::start_inner(vec![43; 32], false, vec![])
             .await
             .unwrap();
         let receiver = NativeTransport::start_inner(vec![44; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver_id = receiver.endpoint.id();
+        let addresses: Vec<SocketAddr> = receiver
+            .status()
+            .direct_addresses
+            .iter()
+            .filter_map(|address| SocketAddr::from_str(address).ok())
+            .collect();
+        assert!(!addresses.is_empty());
+        sender.remember_hints(receiver_id, addresses);
+        let receipt = tokio::time::timeout(
+            Duration::from_secs(10),
+            sender.send_to(receiver_id.to_string(), b"no hints given".to_vec(), false),
+        )
+        .await
+        .expect("dial from remembered hints timed out")
+        .unwrap();
+        assert!(receipt.accepted);
+        assert_eq!(receipt.path, NativePathKind::Direct);
+        // A network change keeps the hints; close forgets them.
+        sender.network_change().await;
+        assert_eq!(sender.hint_cache.lock().unwrap().len(), 1);
+        sender.close().await;
+        assert_eq!(sender.hint_cache.lock().unwrap().len(), 0);
+        receiver.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_hinted_send_is_remembered_and_a_send_without_hints_forgets_them() {
+        let sender = NativeTransport::start_inner(vec![45; 32], false, vec![])
+            .await
+            .unwrap();
+        let receiver = NativeTransport::start_inner(vec![46; 32], false, vec![])
             .await
             .unwrap();
         let receiver_id = receiver.endpoint.id();
@@ -1258,23 +1295,27 @@ mod tests {
             )
             .await
             .unwrap();
-        // The connection goes (a network change on the other side, say);
-        // the next dial has no envelope hints of its own.
-        sender.connections.lock().await.clear();
-        assert!(!sender.hint_cache.lock().unwrap().get(&receiver_id, Instant::now()).is_empty());
-        let receipt = tokio::time::timeout(
-            Duration::from_secs(10),
-            sender.send_to(receiver_id.to_string(), b"second".to_vec(), false),
-        )
-        .await
-        .expect("dial from remembered hints timed out")
-        .unwrap();
-        assert!(receipt.accepted);
-        // A network change keeps the hints; close forgets them.
-        sender.network_change().await;
-        assert_eq!(sender.hint_cache.lock().unwrap().len(), 1);
-        sender.close().await;
+        assert!(
+            !sender
+                .hint_cache
+                .lock()
+                .unwrap()
+                .get(&receiver_id, Instant::now())
+                .is_empty()
+        );
+        // The retry without hints (after a failed hinted attempt) clears
+        // what was remembered; the pooled connection still carries it.
+        sender
+            .send_to_with_hints(
+                receiver_id.to_string(),
+                Vec::new(),
+                b"second".to_vec(),
+                false,
+            )
+            .await
+            .unwrap();
         assert_eq!(sender.hint_cache.lock().unwrap().len(), 0);
+        sender.close().await;
         receiver.close().await;
     }
 
