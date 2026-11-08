@@ -511,3 +511,44 @@ Per the lane rule this is the one design review round. After the revision, imple
   - **Per-chat `clearedBefore` watermark:** yes, as review H1 asks.
   - **A contact removed on another device:** archive it, don't erase it. The contact leaves the list, and its chat and history are kept under archived contacts. Erasing stays a local, explicit action.
 - **Next:** P1 starts after the Opus code review of P0.
+
+## Code review of P0 (Opus, 2026-11-08): fix first
+
+### HIGH (data loss)
+
+**A pause drops group mirror events, and long pauses expire held events with no repair afterwards.**
+- **Where:** `messenger_controller.dart` ~39085: `if (held || isOwnDeviceUnconfirmed(device)) { if (bulky) continue; …`.
+- **What goes wrong:**
+  - `bulky` includes `group_message` and `tgx`, so a pause drops group mirror events. Before M29 they are the only way a mirrored device sees groups.
+  - Held `sent` and `rx` events skip expiry only while paused (~28544). On the first pass after resume, anything older than 14 days is cleared without being sent.
+  - The 500-per-device cap drops events during a long, busy pause.
+  - The digest covers only 7 days and 200 ids per chat (~39303). It runs only after 5 min of quiet.
+  - `_sendSyncStatusTo` returns early while paused (~39331), yet `inTouchAt` is still updated (~38545), so reconnecting during a pause uses up the trigger.
+- **Fix:**
+  - The bulky drop applies only to unconfirmed devices. While paused, keep `group_message` and `tgx`; still drop `history_page`, `have` and `have_q`.
+  - Paused-held entries don't expire: count their lifetime from resume.
+  - On resume, send `_sendSyncStatusTo` to every own device.
+  - Raise the cap to cover a busy pause, or replace overflow with a "digest needed" flag.
+- **Tests:** a pause of several days with group traffic, then resume, delivers everything. Held 1:1 events older than 14 days at resume are still sent.
+
+### MEDIUM (fix now: 1 and 2; in P1: 3 and 4)
+
+1. **The pace is charged before a block can be deferred or served.**
+   - **Where:** ~23251; `own_device_sync_controller.dart` ~55.
+   - **Fix:** run the duplicate, bound and `requiresLan` checks before `admit`, or give the time back when nothing is served.
+2. **The gate, `fastUntil` and the parking lifetime use the wall clock.**
+   - **Where:** `own_device_serve_gate.dart` ~34–45.
+   - **Fix:** use a monotonic `Stopwatch`, or cap `_freeAt` at now + `maxWait`.
+3. **The requesting side ignores the file rules:**
+   - `_useOwnDeviceAsSource` (~39908) and `_fetchFileFromOwnDevice` (~40709, 40930, 41000) use the bulk permission, which allows metered networks;
+   - use the files permission there too.
+4. **The strict carrier fake is never switched on in the controller tests.**
+   - Run "paused holds and flushes" and "steady spaces blocks" with loss and reordering on.
+   - Turn `_CarrierRefused.retryAfter` into a type production code can obey.
+   - Needed before P3.
+
+### LOW
+
+- A deferred serve skips the `_servingAttachmentBlocks` guard (`own_device_sync_controller.dart` ~67), so a block can be sent twice.
+- History pages are sent from an untracked timer (~40541). Track it, and recheck the pause when it fires.
+- `_forgetOwnDevices`: a fetch whose main peer was the removed device stops silently (~24896). Fail it visibly, or move it to another source (pitfall 17).
