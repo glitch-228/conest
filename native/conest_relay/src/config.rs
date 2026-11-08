@@ -156,6 +156,70 @@ pub(crate) struct ExtConfig {
     pub(crate) borrow_bind: Option<String>,
     pub(crate) borrow_site: Option<String>,
     pub(crate) borrow_sni: Option<String>,
+    /// The address (an IPv4 or IPv6 literal) clients are told to reach the
+    /// borrowed-handshake layer by, so they need not look up the relay's
+    /// own name before the disguised handshake (default: `public_host`).
+    pub(crate) borrow_address: Option<String>,
+    /// Whether the plain TCP port (7667: v1 JSON, the HTTP API, `CNS2`) is
+    /// public, on loopback only, or not served (M38 S2).
+    pub(crate) plain: PlainMode,
+    /// Where UDP listens when it is not where the plain port is: with
+    /// `plain = loopback`, public UDP needs its own address.
+    pub(crate) udp_bind: Option<String>,
+    /// Whether cleartext UDP requests are answered (sealed ones always
+    /// are): off, anything that does not open as a sealed one gets silence.
+    pub(crate) udp_cleartext: bool,
+    /// A plain WebSocket layer for a relay behind the operator's web
+    /// server (M38 S3), on loopback unless `ws_bind_public`.
+    pub(crate) ws_bind: Option<String>,
+    pub(crate) ws_bind_public: bool,
+}
+
+/// Who may reach the plain port (7667).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlainMode {
+    /// Everyone (today's behaviour).
+    Public,
+    /// This host only (an installer's health check, a local web server).
+    Loopback,
+    /// Not served at all.
+    Off,
+}
+
+impl PlainMode {
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "public" => Ok(Self::Public),
+            "loopback" => Ok(Self::Loopback),
+            "off" => Ok(Self::Off),
+            other => Err(format!(
+                "--plain takes public, loopback or off, not {other:?}"
+            )),
+        }
+    }
+}
+
+/// [bind] with its host replaced by the IPv4 loopback address (the port
+/// stays).
+pub(crate) fn loopback_of(bind: &str) -> String {
+    let port = bind
+        .rsplit_once(':')
+        .map(|(_, port)| port)
+        .filter(|port| !port.is_empty())
+        .unwrap_or("7667");
+    format!("127.0.0.1:{port}")
+}
+
+/// Whether [bind] (`host:port`) names this host only.
+pub(crate) fn is_loopback_bind(bind: &str) -> bool {
+    let Some((host, _)) = bind.rsplit_once(':') else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 impl Default for ExtConfig {
@@ -193,6 +257,12 @@ impl Default for ExtConfig {
             borrow_bind: None,
             borrow_site: None,
             borrow_sni: None,
+            borrow_address: None,
+            plain: PlainMode::Public,
+            udp_bind: None,
+            udp_cleartext: true,
+            ws_bind: None,
+            ws_bind_public: false,
         }
     }
 }
@@ -287,6 +357,28 @@ pub(crate) fn parse_config_text(text: &str) -> Result<Vec<String>, String> {
 }
 
 impl RelayConfig {
+    /// Where the plain TCP port listens: `bind`, its loopback form, or
+    /// nowhere.
+    pub(crate) fn plain_tcp_bind(&self) -> Option<String> {
+        match self.ext.plain {
+            PlainMode::Public => Some(self.bind.clone()),
+            PlainMode::Loopback => Some(loopback_of(&self.bind)),
+            PlainMode::Off => None,
+        }
+    }
+
+    /// Where UDP listens: `udp-bind` when set, otherwise wherever the plain
+    /// port is (so `plain = loopback` alone leaves no public UDP).
+    pub(crate) fn udp_bind_address(&self) -> Option<String> {
+        self.ext.udp_bind.clone().or_else(|| self.plain_tcp_bind())
+    }
+
+    /// Whether health may announce sealed UDP: UDP is meant to be reached
+    /// (the plain port is public, or `udp-bind` names an address).
+    pub(crate) fn udp_announced(&self) -> bool {
+        self.ext.plain == PlainMode::Public || self.ext.udp_bind.is_some()
+    }
+
     pub(crate) fn from_env_and_args() -> Result<Self, String> {
         let mut config = Self {
             bind: env::var("CONEST_RELAY_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_owned()),
@@ -487,6 +579,32 @@ impl RelayConfig {
                 "--borrow-sni" => {
                     config.ext.borrow_sni = Some(parse_next_string(&mut args, &arg)?);
                 }
+                "--borrow-address" => {
+                    config.ext.borrow_address = Some(parse_next_string(&mut args, &arg)?);
+                }
+                "--plain" => {
+                    config.ext.plain = PlainMode::parse(&parse_next_string(&mut args, &arg)?)?;
+                }
+                "--udp-bind" => {
+                    config.ext.udp_bind = Some(parse_next_string(&mut args, &arg)?);
+                }
+                "--udp-cleartext" => {
+                    // `on` in a config file arrives as a bare flag.
+                    let next = args.peek().filter(|value| !value.starts_with("--")).cloned();
+                    config.ext.udp_cleartext = match next {
+                        Some(value) => {
+                            args.next();
+                            parse_on_off(&value, &arg)?
+                        }
+                        None => true,
+                    };
+                }
+                "--ws-bind" => {
+                    config.ext.ws_bind = Some(parse_next_string(&mut args, &arg)?);
+                }
+                "--ws-bind-public" => {
+                    config.ext.ws_bind_public = true;
+                }
                 "--decoy-proxy" => {
                     config.ext.decoy_proxy = Some(parse_next_string(&mut args, &arg)?);
                 }
@@ -573,6 +691,19 @@ impl RelayConfig {
         }
         if config.ext.borrow_bind.is_some() && config.ext.borrow_site.is_none() {
             return Err("--borrow-bind needs --borrow-site (the real site to play)".to_owned());
+        }
+        if let Some(address) = &config.ext.borrow_address
+            && address.parse::<std::net::IpAddr>().is_err()
+        {
+            return Err("--borrow-address must be an IPv4 or IPv6 literal (not a name)".to_owned());
+        }
+        if let Some(bind) = &config.ext.ws_bind {
+            validate_ws_bind(bind, config.ext.ws_bind_public)?;
+        } else if config.ext.ws_bind_public {
+            return Err("--ws-bind-public needs --ws-bind".to_owned());
+        }
+        if config.ext.legacy_threads && config.ext.plain != PlainMode::Public {
+            return Err("--plain needs the tokio server: drop --legacy-threads".to_owned());
         }
         if let Some(path) = &config.ext.ws_path {
             let path = path.trim_start_matches('/');
@@ -673,6 +804,30 @@ where
         .ok_or_else(|| format!("{name} requires a non-empty value"))
 }
 
+/// `on` / `off` (also true, false, yes, no) for a flag that takes a word.
+pub(crate) fn parse_on_off(text: &str, name: &str) -> Result<bool, String> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" => Ok(true),
+        "off" | "false" | "no" => Ok(false),
+        other => Err(format!("{name} takes on or off, not {other:?}")),
+    }
+}
+
+/// A `--ws-bind` address must be this host's own unless the operator said
+/// `--ws-bind-public`: the layer trusts a front's X-Forwarded-For.
+pub(crate) fn validate_ws_bind(bind: &str, public_ok: bool) -> Result<(), String> {
+    if !bind.contains(':') {
+        return Err("--ws-bind takes HOST:PORT".to_owned());
+    }
+    if !public_ok && !is_loopback_bind(bind) {
+        return Err(
+            "--ws-bind must be a loopback address (127.0.0.1 or [::1]) unless --ws-bind-public is set"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn usage() -> String {
     format!(
         "Usage: conest_relay [BIND] [options]\n\n\
@@ -723,6 +878,14 @@ pub(crate) fn usage() -> String {
                                   play a real site's TLS handshake on ADDR\n\
                                   (forwarded to it); Conest clients prove\n\
                                   themselves right after it\n\
+           --borrow-address IP    the IPv4/IPv6 literal clients are told for the\n\
+                                  borrowed layer (no lookup of the relay's name)\n\
+           --plain public|loopback|off  who reaches the plain port (default public)\n\
+           --udp-bind ADDR        where UDP listens (default: with the plain port)\n\
+           --udp-cleartext on|off answer cleartext UDP (default on; sealed always)\n\
+           --ws-bind ADDR         a plain WebSocket on the secret path, for a relay\n\
+                                  behind nginx or Caddy (loopback unless\n\
+                                  --ws-bind-public)\n\
            --public-host NAME     the TLS port's name; clients in a session learn\n\
                                   the hidden address wss://NAME/<path>\n\n\
          Admin: conest_relay admin [--database-path PATH] invite create|invite list|\n\
@@ -739,4 +902,88 @@ pub(crate) fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parity_tests::parity_config;
+
+    fn config(bind: &str, plain: PlainMode) -> RelayConfig {
+        let mut config = parity_config();
+        config.bind = bind.to_owned();
+        config.ext.plain = plain;
+        config
+    }
+
+    #[test]
+    fn the_plain_port_is_public_on_loopback_or_not_served() {
+        let public = config("0.0.0.0:7667", PlainMode::Public);
+        assert_eq!(public.plain_tcp_bind().as_deref(), Some("0.0.0.0:7667"));
+        let loopback = config("0.0.0.0:7667", PlainMode::Loopback);
+        assert_eq!(loopback.plain_tcp_bind().as_deref(), Some("127.0.0.1:7667"));
+        let v6 = config("[::]:9000", PlainMode::Loopback);
+        assert_eq!(v6.plain_tcp_bind().as_deref(), Some("127.0.0.1:9000"));
+        assert_eq!(config("0.0.0.0:7667", PlainMode::Off).plain_tcp_bind(), None);
+    }
+
+    #[test]
+    fn udp_follows_the_plain_port_unless_it_has_its_own_address() {
+        let mut loopback = config("0.0.0.0:7667", PlainMode::Loopback);
+        // Loopback alone leaves no public UDP, and health must not offer it.
+        assert_eq!(loopback.udp_bind_address().as_deref(), Some("127.0.0.1:7667"));
+        assert!(!loopback.udp_announced());
+        loopback.ext.udp_bind = Some("0.0.0.0:7667".to_owned());
+        assert_eq!(loopback.udp_bind_address().as_deref(), Some("0.0.0.0:7667"));
+        assert!(loopback.udp_announced());
+        let off = config("0.0.0.0:7667", PlainMode::Off);
+        assert_eq!(off.udp_bind_address(), None);
+        assert!(!off.udp_announced());
+        // Today's behaviour: the same address, announced.
+        let public = config("0.0.0.0:7667", PlainMode::Public);
+        assert_eq!(public.udp_bind_address().as_deref(), Some("0.0.0.0:7667"));
+        assert!(public.udp_announced());
+    }
+
+    #[test]
+    fn the_new_words_are_checked() {
+        assert_eq!(PlainMode::parse("Loopback"), Ok(PlainMode::Loopback));
+        assert!(PlainMode::parse("closed").is_err());
+        assert_eq!(parse_on_off("off", "--udp-cleartext"), Ok(false));
+        assert_eq!(parse_on_off("ON", "--udp-cleartext"), Ok(true));
+        assert!(parse_on_off("maybe", "--udp-cleartext").is_err());
+    }
+
+    #[test]
+    fn a_ws_bind_is_loopback_unless_the_operator_says_public() {
+        assert!(validate_ws_bind("127.0.0.1:8081", false).is_ok());
+        assert!(validate_ws_bind("[::1]:8081", false).is_ok());
+        assert!(validate_ws_bind("localhost:8081", false).is_ok());
+        assert!(validate_ws_bind("0.0.0.0:8081", false).is_err());
+        assert!(validate_ws_bind("192.0.2.7:8081", false).is_err());
+        assert!(validate_ws_bind("0.0.0.0:8081", true).is_ok());
+        assert!(validate_ws_bind("8081", true).is_err());
+    }
+
+    #[test]
+    fn a_config_file_can_set_the_new_options() {
+        let args = parse_config_text(
+            "plain = loopback\nudp-cleartext = off\nws-bind = 127.0.0.1:8081\nws-bind-public\nborrow-address = 203.0.113.7\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            args,
+            vec![
+                "--plain",
+                "loopback",
+                "--udp-cleartext",
+                "off",
+                "--ws-bind",
+                "127.0.0.1:8081",
+                "--ws-bind-public",
+                "--borrow-address",
+                "203.0.113.7",
+            ]
+        );
+    }
 }

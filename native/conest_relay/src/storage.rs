@@ -770,16 +770,21 @@ impl RelayState {
         if !self.config.ext.sessions_enabled() {
             return None;
         }
-        Some(serde_json::json!({
+        let mut info = serde_json::json!({
             "sessions": 1,
             "noise": crate::session::NOISE_PARAMS,
             "noise_key": BASE64_STANDARD.encode(self.identity.noise_public),
             "noise_key_sig": BASE64_STANDARD.encode(self.identity.noise_key_signature),
             "mailbox_auth": 1,
-            // UDP datagrams may be sealed under the session key (M38-C).
-            "udp_sealed": 1,
             "policy": self.policy_info(),
-        }))
+        });
+        // UDP datagrams may be sealed under the session key (M38-C); a
+        // relay that hides its UDP (M38 S2) does not offer it, so apps do
+        // not try a dead route.
+        if self.config.udp_announced() {
+            info["udp_sealed"] = serde_json::json!(1);
+        }
+        Some(info)
     }
 
     /// Runs [work] on a blocking thread (the database is synchronous).

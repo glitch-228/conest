@@ -231,6 +231,12 @@ pub(crate) fn answer_datagram(
         return None;
     }
     let sealed = open_request(datagram, &state.identity);
+    // With cleartext off (M38 S2), only a datagram that opened as a sealed
+    // request is answered: anything else gets silence, as refused
+    // datagrams do.
+    if sealed.is_none() && !state.config.ext.udp_cleartext {
+        return None;
+    }
     let response: Value = match &sealed {
         // The wire length counts for the cookie and size rules.
         Some((request, _)) => handle_udp_datagram(request, datagram.len(), state, peer),

@@ -206,6 +206,70 @@ fn server_hello_random(record: &[u8]) -> Option<[u8; 32]> {
     (random != HELLO_RETRY).then_some(random)
 }
 
+static LAST_SITE_WARNING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Says in the operator's log (at most every five minutes) that the site
+/// this layer plays cannot be reached: clients get nothing until it can.
+fn warn_site_down(site: &str) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let now = crate::config::now_millis();
+    let last = LAST_SITE_WARNING.load(Relaxed);
+    if now.saturating_sub(last) >= 300_000
+        && LAST_SITE_WARNING
+            .compare_exchange(last, now, Relaxed, Relaxed)
+            .is_ok()
+    {
+        eprintln!(
+            "borrowed handshake: the site {site} is not reachable from this relay; clients on this address get nothing until it is"
+        );
+    }
+}
+
+/// Whether two addresses are in one network of the size a hosting provider
+/// owns (the same IPv4 /16, or IPv6 /32).
+pub(crate) fn same_network(a: std::net::IpAddr, b: std::net::IpAddr) -> bool {
+    match (a, b) {
+        (std::net::IpAddr::V4(a), std::net::IpAddr::V4(b)) => a.octets()[..2] == b.octets()[..2],
+        (std::net::IpAddr::V6(a), std::net::IpAddr::V6(b)) => a.octets()[..4] == b.octets()[..4],
+        _ => false,
+    }
+}
+
+/// A note for the operator's log at start when the borrowed site is
+/// unreachable from here, or (given the relay's own [relay_address]) does
+/// not live in the relay's network, which a censor that checks an address
+/// against a name can see. `None`: nothing to say.
+pub(crate) fn site_note(site: &str, relay_address: Option<&str>) -> Option<String> {
+    use std::net::ToSocketAddrs;
+    let addresses: Vec<std::net::SocketAddr> = match site.to_socket_addrs() {
+        Ok(found) => found.collect(),
+        Err(error) => {
+            return Some(format!(
+                "the borrowed site {site} does not resolve here ({error}); clients get nothing until it does"
+            ));
+        }
+    };
+    let Some(first) = addresses.first() else {
+        return Some(format!(
+            "the borrowed site {site} has no address; clients get nothing until it does"
+        ));
+    };
+    if std::net::TcpStream::connect_timeout(first, Duration::from_secs(5)).is_err() {
+        return Some(format!(
+            "the borrowed site {site} is not reachable from this host; clients get nothing until it is"
+        ));
+    }
+    let relay: Option<std::net::IpAddr> = relay_address.and_then(|address| address.parse().ok());
+    if let Some(relay) = relay
+        && !addresses.iter().any(|found| same_network(found.ip(), relay))
+    {
+        return Some(format!(
+            "the borrowed site {site} is outside this relay's network ({relay}): a censor that compares an address with the name sees it; a relay inside the site's network does not have this tell"
+        ));
+    }
+    None
+}
+
 /// The layer: forward to the real site until a client proves itself.
 pub(crate) struct BorrowedLayer {
     site: String,
@@ -242,7 +306,10 @@ impl OuterLayer for BorrowedLayer {
             let upstream = match timeout(CONNECT_LIMIT, TcpStream::connect(&site)).await {
                 Ok(Ok(stream)) => stream,
                 // The real site is out of reach: nothing to play.
-                _ => return Ok(None),
+                _ => {
+                    warn_site_down(&site);
+                    return Ok(None);
+                }
             };
             let _ = upstream.set_nodelay(true);
             run(client, upstream, secret, public, idle).await
@@ -287,27 +354,13 @@ async fn run(
                             continue;
                         }
                         buffer.extend_from_slice(&chunk[..read]);
-                        loop {
-                            match take_record(&mut buffer) {
-                                Ok(Some(record)) => {
-                                    if let Some(found) = server_hello_random(&record) {
-                                        let mut slot = random.lock().expect("random lock");
-                                        slot.get_or_insert(found);
-                                    }
-                                    if client_write.write_all(&record).await.is_err() {
-                                        return None;
-                                    }
-                                }
-                                Ok(None) => break,
-                                Err(()) => {
-                                    raw = true;
-                                    let rest = std::mem::take(&mut buffer);
-                                    if client_write.write_all(&rest).await.is_err() {
-                                        return None;
-                                    }
-                                    break;
-                                }
-                            }
+                        // What one read from the site brought goes out in
+                        // one write, as the site sent it: a record at a
+                        // time would re-cut its first flight into small
+                        // segments no web server sends.
+                        let out = forward_downstream(&mut buffer, &mut raw, &random);
+                        if !out.is_empty() && client_write.write_all(&out).await.is_err() {
+                            return None;
                         }
                     }
                 }
@@ -380,6 +433,40 @@ async fn run(
             }
         }
     }
+}
+
+/// What to send the client for what the site just sent: its whole records
+/// (one buffer, so one write), noting the ServerHello random on the way;
+/// once the stream is no TLS, everything as it comes. Incomplete records
+/// stay in [buffer].
+fn forward_downstream(
+    buffer: &mut Vec<u8>,
+    raw: &mut bool,
+    random: &Mutex<Option<[u8; 32]>>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    if *raw {
+        out.append(buffer);
+        return out;
+    }
+    loop {
+        match take_record(buffer) {
+            Ok(Some(record)) => {
+                if let Some(found) = server_hello_random(&record) {
+                    let mut slot = random.lock().expect("random lock");
+                    slot.get_or_insert(found);
+                }
+                out.extend_from_slice(&record);
+            }
+            Ok(None) => break,
+            Err(()) => {
+                *raw = true;
+                out.append(buffer);
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// The exchange key, when [payload] is a valid marker for this connection.
@@ -763,6 +850,26 @@ mod tests {
     }
 
     #[test]
+    fn the_borrowed_address_is_an_ip_literal_when_the_operator_gives_one() {
+        let identity = RelayIdentity::from_seed_bytes([7_u8; 32]);
+        let mut config = parity_config();
+        config.ext.borrow_bind = Some("0.0.0.0:443".to_owned());
+        config.ext.borrow_site = Some("www.example.com:443".to_owned());
+        config.ext.public_host = Some("relay.example.org".to_owned());
+        config.ext.borrow_address = Some("203.0.113.7".to_owned());
+        let state = RelayState::new(config.clone(), identity.clone());
+        // The relay's own name is not what clients look up for this layer.
+        assert_eq!(
+            state.borrowed_info().expect("info"),
+            serde_json::json!({"host": "203.0.113.7", "port": 443, "sni": "www.example.com"})
+        );
+        // An address is enough: no public host is needed to tell it.
+        config.ext.public_host = None;
+        let alone = RelayState::new(config, identity);
+        assert_eq!(alone.borrowed_info().expect("info")["host"], "203.0.113.7");
+    }
+
+    #[test]
     fn an_idle_unproven_connection_is_closed_like_a_web_server_would() {
         let (site, _) = start_site();
         let identity = RelayIdentity::from_seed_bytes([7_u8; 32]);
@@ -819,6 +926,98 @@ mod tests {
             !buckets.contains_key("203.0.113.9"),
             "the client's own X-Forwarded-For was believed"
         );
+    }
+
+    #[test]
+    fn what_the_site_sends_in_one_read_leaves_in_one_write() {
+        // The site's first flight as one read: ServerHello, a change-cipher
+        // record and three big encrypted ones.
+        let mut flight = server_hello([4; 32]);
+        flight.extend(record(0x14, &[1]));
+        flight.extend(record(0x17, &[0xA1; 2000]));
+        flight.extend(record(0x17, &[0xA2; 3000]));
+        flight.extend(record(0x17, &[0xA3; 900]));
+        let random = Mutex::new(None);
+        let mut raw = false;
+        let mut buffer = flight.clone();
+        let out = forward_downstream(&mut buffer, &mut raw, &random);
+        // One buffer, so one write: the same bytes, not cut per record.
+        assert_eq!(out, flight);
+        assert!(buffer.is_empty() && !raw);
+        assert_eq!(*random.lock().unwrap(), Some([4; 32]));
+        // A record cut by the read waits for the rest, then goes out.
+        let mut buffer = flight[..flight.len() - 10].to_vec();
+        let first = forward_downstream(&mut buffer, &mut raw, &random);
+        assert!(first.len() < flight.len() - 900);
+        buffer.extend_from_slice(&flight[flight.len() - 10..]);
+        let second = forward_downstream(&mut buffer, &mut raw, &random);
+        assert_eq!([first, second].concat(), flight);
+        // Not TLS: everything as it comes.
+        let mut buffer = b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec();
+        let out = forward_downstream(&mut buffer, &mut raw, &random);
+        assert_eq!(out, b"HTTP/1.1 400 Bad Request\r\n\r\n");
+        assert!(raw && buffer.is_empty());
+    }
+
+    #[test]
+    fn a_recorded_marker_replayed_on_a_new_connection_goes_to_the_site() {
+        let (site, received) = start_site();
+        let (address, public) = start_relay(&site);
+        // A real client gets in, through the first connection (random 1)...
+        let mut first = connect(address);
+        first.write_all(&handshake_prefix()).expect("write");
+        read_records(&mut first, 3);
+        let (recorded, key) = marker(&public, &[1; 32]);
+        first.write_all(&recorded).expect("write");
+        let ack = read_records(&mut first, 1).remove(0);
+        assert_eq!(
+            &ack[HEADER..HEADER + TAG],
+            &server_ack(&key, &[1; 32], &client_tag(&key, &[1; 32]))
+        );
+        // ...and a censor that recorded the marker plays it on a second one
+        // (the site's random there is 2): it is no client's, so it goes to
+        // the site like any record, and no acknowledgement comes back.
+        let mut second = connect(address);
+        second.write_all(&handshake_prefix()).expect("write");
+        let flight = read_records(&mut second, 3);
+        assert_eq!(flight[0], server_hello([2; 32]));
+        second.write_all(&recorded).expect("write");
+        let sent = [handshake_prefix(), recorded].concat();
+        assert_eq!(wait_for(&received, 1, sent.len()), sent);
+        second
+            .set_read_timeout(Some(Duration::from_millis(400)))
+            .expect("timeout");
+        let mut chunk = [0_u8; 64];
+        assert!(
+            second.read(&mut chunk).is_err(),
+            "nothing came back: no acknowledgement for a replayed marker"
+        );
+    }
+
+    #[test]
+    fn same_network_means_a_hosting_providers_block() {
+        let ip = |text: &str| text.parse::<std::net::IpAddr>().unwrap();
+        assert!(same_network(ip("20.50.1.2"), ip("20.50.200.3")));
+        assert!(!same_network(ip("20.50.1.2"), ip("20.51.1.2")));
+        assert!(same_network(ip("2001:db8:1::1"), ip("2001:db8:ffff::2")));
+        assert!(!same_network(ip("2001:db8::1"), ip("2001:db9::1")));
+        assert!(!same_network(ip("20.50.1.2"), ip("2001:db8::1")));
+    }
+
+    #[test]
+    fn the_operator_is_told_when_the_site_is_out_of_reach_or_far_away() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let site = listener.local_addr().expect("address").to_string();
+        // Reachable, and in the relay's own network: nothing to say.
+        assert_eq!(site_note(&site, Some("127.0.0.2")), None);
+        assert_eq!(site_note(&site, None), None);
+        // Reachable, but the relay is elsewhere: the address-versus-name tell.
+        let far = site_note(&site, Some("203.0.113.7")).expect("a note");
+        assert!(far.contains("outside this relay's network"), "{far}");
+        // Not reachable at all.
+        drop(listener);
+        let gone = site_note(&site, Some("127.0.0.2")).expect("a note");
+        assert!(gone.contains("not reachable"), "{gone}");
     }
 
     #[test]

@@ -166,7 +166,7 @@ pub(crate) struct Head {
 }
 
 impl Head {
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
@@ -203,7 +203,7 @@ pub(crate) fn parse_head(bytes: &[u8]) -> Option<Head> {
 
 /// Reads a request head (to its blank line) by [deadline]: the head's
 /// length when one came, and everything read.
-async fn read_head<S: AsyncRead + Unpin>(
+pub(crate) async fn read_head<S: AsyncRead + Unpin>(
     stream: &mut S,
     deadline: Instant,
 ) -> (Option<usize>, Vec<u8>) {
@@ -231,7 +231,7 @@ async fn read_head_from<S: AsyncRead + Unpin>(
     }
 }
 
-fn websocket_accept(key: &str) -> String {
+pub(crate) fn websocket_accept(key: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(key.as_bytes());
     hasher.update(WS_GUID.as_bytes());
@@ -356,7 +356,7 @@ pub(crate) fn ws_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
 
 /// The relay's byte stream inside a WebSocket: binary frames in and out.
 /// [initial] is what came after the upgrade request.
-fn websocket_bridge<S>(stream: S, initial: Vec<u8>) -> DuplexStream
+pub(crate) fn websocket_bridge<S>(stream: S, initial: Vec<u8>) -> DuplexStream
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -748,7 +748,12 @@ impl RelayState {
     /// and a public host is set: told to clients inside sessions only.
     pub(crate) fn borrowed_info(&self) -> Option<serde_json::Value> {
         let ext = &self.config.ext;
-        let host = ext.public_host.as_deref()?;
+        // An address literal when the operator gave one (no lookup of the
+        // relay's own name before the disguised handshake), else its name.
+        let host = ext
+            .borrow_address
+            .as_deref()
+            .or(ext.public_host.as_deref())?;
         let port = ext.borrow_bind.as_deref()?.rsplit(':').next()?.parse::<u16>().ok()?;
         let site = ext.borrow_site.as_deref()?;
         let sni = ext
@@ -763,8 +768,15 @@ impl RelayState {
     pub(crate) fn hidden_address(&self) -> Option<String> {
         let ext = &self.config.ext;
         let host = ext.public_host.as_deref()?;
-        let bind = ext.tls_bind.as_deref()?;
-        let port = bind.rsplit(':').next()?.parse::<u16>().ok()?;
+        // Behind the operator's web server (`ws-bind`) the public port is
+        // the front's: 443.
+        let port = match ext.tls_bind.as_deref() {
+            Some(bind) => bind.rsplit(':').next()?.parse::<u16>().ok()?,
+            None => {
+                ext.ws_bind.as_deref()?;
+                443
+            }
+        };
         let path = self.ws_path().ok()?;
         Some(if port == 443 {
             format!("wss://{host}{path}")
@@ -827,8 +839,15 @@ mod tests {
     }
 
     fn start_tls(decoy: Decoy) -> (SocketAddr, RelayState) {
+        start_tls_with(decoy, parity_config())
+    }
+
+    fn start_tls_with(
+        decoy: Decoy,
+        config: crate::config::RelayConfig,
+    ) -> (SocketAddr, RelayState) {
         let state = RelayState::new(
-            parity_config(),
+            config,
             crate::identity::RelayIdentity::from_seed_bytes([7_u8; 32]),
         );
         let config = tls_config(&fixture("cert.pem"), &fixture("key.pem")).expect("tls config");
@@ -1011,6 +1030,100 @@ mod tests {
             b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
         );
         assert!(String::from_utf8_lossy(&front).contains("Welcome to nginx!"));
+    }
+
+    /// A TLS client that speaks TLS 1.2 only (old clients and scanners do).
+    fn tls12_client(
+        address: SocketAddr,
+    ) -> rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream> {
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(CertificateDer::from_pem_file(fixture("ca.pem")).expect("ca"))
+            .expect("root");
+        let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS12])
+        .expect("versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        let name = rustls_pki_types::ServerName::try_from("localhost").expect("name");
+        let connection = rustls::ClientConnection::new(Arc::new(config), name).expect("client");
+        let tcp = std::net::TcpStream::connect(address).expect("connect");
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("timeout");
+        rustls::StreamOwned::new(connection, tcp)
+    }
+
+    #[test]
+    fn bad_upgrades_and_odd_clients_get_the_decoy_too() {
+        // The prober corpus (M38): shapes a scanner sends that are close to
+        // the secret path's, answered byte for byte as the real site is.
+        let upstream = start_upstream();
+        let (address, _) = start_tls(Decoy::Proxy(upstream));
+        let long_key = "a".repeat(65);
+        for probe in [
+            // An upgrade on the secret path with a key too long to be one.
+            format!(
+                "GET {SECRET} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {long_key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            ),
+            // The wrong WebSocket version, and no key.
+            format!(
+                "GET {SECRET} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nSec-WebSocket-Key: abc\r\nSec-WebSocket-Version: 12\r\n\r\n"
+            ),
+            format!(
+                "GET {SECRET} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            ),
+            // A valid upgrade by the wrong method.
+            format!(
+                "POST {SECRET} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nSec-WebSocket-Key: abc\r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\n\r\n"
+            ),
+            // The HTTP/2 preface, and bytes that are no request.
+            "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_owned(),
+            "\u{1}\u{2}binary junk that is no request\r\n\r\n".to_owned(),
+        ] {
+            assert_eq!(exchange(address, probe.as_bytes()), UPSTREAM, "{probe:?}");
+        }
+    }
+
+    #[test]
+    fn a_tls12_only_client_is_served_the_decoy_like_any_other() {
+        let (address, _) = start_tls(Decoy::Builtin);
+        let mut tls = tls12_client(address);
+        tls.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .expect("send");
+        let mut answer = Vec::new();
+        let _ = tls.read_to_end(&mut answer);
+        assert!(String::from_utf8_lossy(&answer).contains("Welcome to nginx!"));
+    }
+
+    #[test]
+    fn a_hello_that_stalls_and_a_plain_relay_line_get_nothing_of_the_relay() {
+        let mut config = parity_config();
+        config.ext.read_deadline = std::time::Duration::from_millis(800);
+        let (address, _) = start_tls_with(Decoy::Builtin, config);
+        // A ClientHello record header and then silence: the relay waits no
+        // longer than its deadline and says nothing relay-like.
+        let mut stalled = std::net::TcpStream::connect(address).expect("connect");
+        stalled
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("timeout");
+        stalled
+            .write_all(&[0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00])
+            .expect("send");
+        let mut answer = Vec::new();
+        let _ = stalled.read_to_end(&mut answer);
+        assert!(!answer.contains(&b'{'), "{answer:?}");
+        // A relay line sent to the TLS port as it would be to 7667: a TLS
+        // port's reply (an alert, if anything), never the relay's JSON.
+        let mut line = std::net::TcpStream::connect(address).expect("connect");
+        line.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("timeout");
+        line.write_all(b"{\"action\":\"health\"}\n").expect("send");
+        let mut answer = Vec::new();
+        let _ = line.read_to_end(&mut answer);
+        let text = String::from_utf8_lossy(&answer);
+        assert!(!text.contains("\"ok\"") && !text.contains("relay"), "{text}");
     }
 
     #[test]

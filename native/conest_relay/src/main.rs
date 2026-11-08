@@ -20,6 +20,7 @@ mod session;
 mod storage;
 mod udp_sealed;
 mod v1;
+mod ws_front;
 
 #[cfg(test)]
 mod parity_tests;
@@ -110,8 +111,16 @@ fn main() -> std::io::Result<()> {
             std::process::exit(2);
         }
     };
-    let listener = std::net::TcpListener::bind(&config.bind)?;
-    let udp_socket = std::net::UdpSocket::bind(&config.bind)?;
+    // The plain port and UDP bind where `plain`, `udp-bind` say (M38 S2):
+    // public as before, loopback only, or not at all.
+    let listener = match config.plain_tcp_bind() {
+        Some(bind) => Some(std::net::TcpListener::bind(&bind)?),
+        None => None,
+    };
+    let udp_socket = match config.udp_bind_address() {
+        Some(bind) => Some(std::net::UdpSocket::bind(&bind)?),
+        None => None,
+    };
     let identity_public_key = identity.public_key_b64.clone();
     let state = match RelayState::try_new(config.clone(), identity) {
         Ok(state) => state,
@@ -121,8 +130,9 @@ fn main() -> std::io::Result<()> {
         }
     };
     println!(
-        "conest relay listening on tcp+udp {} id={} ttl={}s max_queue={} max_fetch={} max_envelope={}B max_rate={}/min identity_pub={} server={}",
-        config.bind,
+        "conest relay listening on tcp {} udp {} id={} ttl={}s max_queue={} max_fetch={} max_envelope={}B max_rate={}/min identity_pub={} server={}",
+        config.plain_tcp_bind().as_deref().unwrap_or("(off)"),
+        config.udp_bind_address().as_deref().unwrap_or("(off)"),
         config.relay_id,
         config.ttl.as_secs(),
         config.max_queue_per_mailbox,
@@ -137,17 +147,24 @@ fn main() -> std::io::Result<()> {
         },
     );
 
-    {
+    if let Some(udp_socket) = udp_socket {
         let state = state.clone();
         let config = config.clone();
         thread::spawn(move || serve_udp(udp_socket, state, config));
     }
 
     if config.ext.legacy_threads {
-        if config.ext.tls_bind.is_some() || config.ext.borrow_bind.is_some() {
+        if config.ext.tls_bind.is_some()
+            || config.ext.borrow_bind.is_some()
+            || config.ext.ws_bind.is_some()
+        {
             eprintln!("TLS needs the tokio server: drop --legacy-threads");
             std::process::exit(2);
         }
+        let Some(listener) = listener else {
+            eprintln!("--plain off needs the tokio server: drop --legacy-threads");
+            std::process::exit(2);
+        };
         return legacy::run(listener, state);
     }
     let tls = match &config.ext.tls_bind {
@@ -181,11 +198,32 @@ fn main() -> std::io::Result<()> {
             let (secret, public) =
                 borrowed::key_pair_from_seed(&state.identity.signing_key.to_bytes());
             let layer = borrowed::BorrowedLayer::new(site.clone(), secret, public);
+            if let Some(note) = borrowed::site_note(site, config.ext.borrow_address.as_deref()) {
+                eprintln!("conest relay: {note}");
+            }
             Some((listener, layer))
         }
         _ => None,
     };
-    listener.set_nonblocking(true)?;
+    let ws_front = match &config.ext.ws_bind {
+        Some(bind) => {
+            let front_listener = std::net::TcpListener::bind(bind)?;
+            front_listener.set_nonblocking(true)?;
+            let path = match state.ws_path() {
+                Ok(path) => path,
+                Err(message) => {
+                    eprintln!("WebSocket path setup failed: {message}");
+                    std::process::exit(2);
+                }
+            };
+            println!("conest relay WebSocket (behind a front) on {bind}, path {path}");
+            Some((front_listener, path))
+        }
+        None => None,
+    };
+    if let Some(listener) = &listener {
+        listener.set_nonblocking(true)?;
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -212,8 +250,23 @@ fn main() -> std::io::Result<()> {
                 }
             });
         }
-        let listener = tokio::net::TcpListener::from_std(listener)?;
-        server::serve(listener, state).await
+        if let Some((front_listener, path)) = ws_front {
+            let front_listener = tokio::net::TcpListener::from_std(front_listener)?;
+            let state = state.clone();
+            tokio::spawn(async move {
+                if let Err(error) = ws_front::serve_front(front_listener, state, path).await {
+                    eprintln!("relay WebSocket listener stopped: {error}");
+                }
+            });
+        }
+        match listener {
+            Some(listener) => {
+                let listener = tokio::net::TcpListener::from_std(listener)?;
+                server::serve(listener, state).await
+            }
+            // No plain port: the other listeners carry on.
+            None => std::future::pending::<std::io::Result<()>>().await,
+        }
     })
 }
 
