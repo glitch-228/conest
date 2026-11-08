@@ -387,3 +387,19 @@ Pitfalls 1-20 are checked against the design in section 5 (none unsatisfiable on
   exists, so M38 is scoped to reach, fidelity, hiding 7667, automatic scoped choice, and measurement; QUIC, SSH,
   ECH and fake-packet splitting go to M57; the fingerprint item is gated on a measurement and a build spike.
 - No code, no CI runs this round.
+
+## Maintainer's answers and user decisions (2026-11-08)
+
+1. **S7b (SOCKS5/CONNECT bring-your-own-tunnel):** yes, in Phase 3. It is cheap and covers users who already have a proxy or VPN.
+2. **Plain port 7667 on new relay installs** (user): it stays open by default until the next stable release ships. After that, the installer default switches to hidden (`loopback`) once 443/borrowed passes its self-test. Operators can close the port earlier.
+3. **wss everywhere:** yes, if P0 measures at most 2 RTT extra per pooled session and no jank. Otherwise wss is used only when blocked.
+4. **Native BoringSSL fingerprint client:** goes to M57. M38 keeps only the P0 capture of Dart's ClientHello, so the gap is known.
+5. **Secret-path enumeration from shared links:** accepted for now. Path rotation and distribution are covered by M52.
+6. **Borrowed site** (user):
+   - Pick a large, ordinary HTTPS site that is reachable from China, Russia and Iran, such as bing.com or github.com.
+   - It should preferably be hosted near the relay's network.
+   - The agent proposes the site for the lab relay with a short reachability argument, and the maintainer confirms it before it is set. Keep it a relay config option, not a code constant.
+7. **LAN beacon becomes sealed-only:** one stable release after the sealed beacon first ships in a stable.
+8. **DoH endpoints:** add Quad9, Mullvad and AdGuard next to Cloudflare and Google, plus the user-set URL (S5).
+
+The lab is unavailable for now. Lab checks L1–L6 wait.
