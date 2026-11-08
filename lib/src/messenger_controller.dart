@@ -23140,15 +23140,16 @@ class MessengerController extends ChangeNotifier {
 
   Future<void> _handleAttachmentChunkRequest(
     ContactRecord requester,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    bool paced = false,
+  }) async {
     final id = payload['attachmentId'];
     final index = payload['index'];
     if (id is! String || index is! int) return;
     final key = '${requester.deviceId}|$id|$index';
     if (!_servingAttachmentBlocks.add(key)) return;
     try {
-      await _serveAttachmentChunkRequest(requester, payload);
+      await _serveAttachmentChunkRequest(requester, payload, paced: paced);
     } finally {
       _servingAttachmentBlocks.remove(key);
     }
@@ -23246,17 +23247,8 @@ class MessengerController extends ChangeNotifier {
         _parkOwnDeviceBlock(requester, payload);
         return;
       }
-      if (!paced) {
-        final wait = _admitOwnDeviceBlock(
-          requester,
-          state.descriptor.chunkSize,
-        );
-        if (wait == null) return;
-        if (wait > Duration.zero) {
-          _deferOwnDeviceBlock(requester, payload, wait);
-          return;
-        }
-      }
+      // Already waiting for its turn: not asked for twice.
+      if (!paced && _ownBlockWaiting(requester, payload)) return;
     }
     final irohOnly =
         _outboundDebugAttachmentTests[attachmentId]?.irohOnly == true;
@@ -23274,6 +23266,19 @@ class MessengerController extends ChangeNotifier {
         error: 'Waiting for LAN or direct Iroh; relay use is not automatic.',
       );
       return;
+    }
+    // The pace is spent here, where the block is about to be read and sent,
+    // not before checks that may send nothing; what a deferral cannot keep
+    // is given back.
+    if (state.servesOwnDevice && !paced) {
+      final wait = _admitOwnDeviceBlock(requester, state.descriptor.chunkSize);
+      if (wait == null) return;
+      if (wait > Duration.zero) {
+        if (!_deferOwnDeviceBlock(requester, payload, wait)) {
+          _refundOwnDeviceBlock(requester, state.descriptor.chunkSize);
+        }
+        return;
+      }
     }
     final Uint8List chunkBytes;
     try {
@@ -39085,8 +39090,17 @@ class MessengerController extends ChangeNotifier {
         plaintext: plaintext,
         createdAt: _now().toUtc(),
       );
-      if (held || isOwnDeviceUnconfirmed(device)) {
-        if (bulky) continue;
+      final unconfirmed = isOwnDeviceUnconfirmed(device);
+      if (held || unconfirmed) {
+        // A device out of touch gets no bulk; while paused only what is
+        // pointless later (pages, "have") is dropped, and the mirror's group
+        // messages and the Telegram bridge are kept.
+        final dropped = unconfirmed
+            ? bulky
+            : OwnDeviceSyncController._droppedWhilePaused.contains(
+                event['type'],
+              );
+        if (dropped) continue;
         _enqueuePendingAckDelivery(
           PendingAckDelivery(
             targetDeviceId: device.deviceId,
@@ -39148,6 +39162,7 @@ class MessengerController extends ChangeNotifier {
   final List<_ParkedOwnBlock> _parkedOwnBlocks = [];
   int _ownServeDeferrals = 0;
   int _historyRequestsAnswered = 0;
+  final Map<Timer, String> _historyPageTimers = {};
   int _steadySyncBytesPerSecond =
       OwnDeviceSyncPolicy.defaultSteadyBytesPerSecond;
   int _steadySyncPaths = OwnDeviceSyncPolicy.defaultSteadyPaths;
@@ -39287,9 +39302,7 @@ class MessengerController extends ChangeNotifier {
         : null;
     await updateGlobalConnectivity(me.connectivity.copyWith(syncSpeed: speed));
     // What was held while paused goes now.
-    if (wasPaused && speed != SyncSpeed.paused) {
-      unawaited(_retryPendingAckDeliveries().catchError((Object _) {}));
-    }
+    if (wasPaused && speed != SyncSpeed.paused) _resumeOwnDeviceSync();
   }
 
   /// The chats' ids in short, for the other devices to compare: recent
@@ -40542,9 +40555,7 @@ class MessengerController extends ChangeNotifier {
       if (wait <= Duration.zero) {
         _syncToOwnDevices(pageEvent, only: sender.deviceId);
       } else {
-        Timer(wait, () {
-          if (!_disposed) _syncToOwnDevices(pageEvent, only: sender.deviceId);
-        });
+        _sendHistoryPageLater(sender.deviceId, chat, pageEvent, wait);
       }
     }
     _historyPagesServed[sender.deviceId] = served;

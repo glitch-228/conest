@@ -195,6 +195,158 @@ void _ownDeviceSyncP0ControllerTests() {
       },
     );
 
+    test('paused keeps the mirror\'s group messages and the bridge, and '
+        'drops pages and answers', () async {
+      final f = await linked();
+      final phoneId = f.phone.identity!.deviceId;
+      final group = await f.alice.createGroup(
+        title: 'G',
+        members: [f.alice.contacts.single],
+      );
+      await _waitForIroh(() {
+        unawaited(f.pollAll());
+        return f.phone.groups.any((g) => g.groupId == group.groupId) &&
+            f.bob.groups.any((g) => g.groupId == group.groupId);
+      }, reason: 'the group did not reach the phone and Bob');
+      await f.alice.setOwnDeviceSyncSpeed(SyncSpeed.paused);
+      await f.bob.sendGroupMessage(
+        groupId: group.groupId,
+        body: 'while paused',
+      );
+      await _waitForIroh(() {
+        unawaited(f.pollAll());
+        return f.alice
+            .messagesForGroup(group.groupId)
+            .any((m) => m.body == 'while paused');
+      }, reason: 'the laptop did not get the group message');
+      expect(
+        f.alice.queuedSyncForTesting('group_message', phoneId),
+        1,
+        reason: 'the only way the phone sees the group was dropped',
+      );
+      f.alice.syncToOwnDevicesForTesting({
+        'type': 'tgx',
+        'chat': 'bridge',
+      }, only: phoneId);
+      f.alice.syncToOwnDevicesForTesting({
+        'type': 'history_page',
+        'chat': 'saved',
+        'messages': const <String>[],
+        'more': false,
+      }, only: phoneId);
+      f.alice.syncToOwnDevicesForTesting({
+        'type': 'have',
+        'id': 'some-file',
+      }, only: phoneId);
+      expect(f.alice.queuedSyncForTesting('tgx', phoneId), 1);
+      expect(f.alice.queuedSyncForTesting('history_page', phoneId), 0);
+      expect(f.alice.queuedSyncForTesting('have', phoneId), 0);
+      await f.alice.setOwnDeviceSyncSpeed(SyncSpeed.steady);
+      await _waitForIroh(
+        () {
+          unawaited(f.phone.pollNow());
+          return f.phone
+              .messagesForGroup(group.groupId)
+              .any((m) => m.body == 'while paused');
+        },
+        reason: 'the phone never saw the group message',
+        timeout: const Duration(seconds: 6),
+      );
+    });
+
+    test('events held for longer than they live are still sent when '
+        'resumed', () async {
+      final f = await linked();
+      final aliceId = f.alice.identity!.deviceId;
+      final bobId = f.bob.identity!.deviceId;
+      await f.alice.setOwnDeviceSyncSpeed(SyncSpeed.paused);
+      await f.alice.sendMessage(contact: f.alice.contacts.single, body: 'old');
+      expect(
+        f.alice.queuedSyncForTesting('sent', f.phone.identity!.deviceId),
+        1,
+      );
+      // A fortnight and more, the phone heard from now and then (so it
+      // stays one of the laptop's devices).
+      for (var i = 0; i < 3; i++) {
+        f.advance(const Duration(days: 5));
+        await f.phone.sendAccountSyncForTesting(aliceId, {
+          'type': 'reach',
+          'heard': <String, int>{'round-$i': 30},
+        });
+        await _waitForIroh(() {
+          unawaited(f.alice.pollNow());
+          return f.alice
+                  .ownReachForTesting(f.phone.identity!.deviceId)
+                  ?.containsKey('round-$i') ==
+              true;
+        }, reason: 'the laptop did not hear the phone');
+      }
+      // The user confirms the laptop on the phone (it heard nothing meanwhile).
+      await f.phone.confirmOwnDevice(aliceId);
+      await f.alice.setOwnDeviceSyncSpeed(SyncSpeed.steady);
+      await _waitForIroh(
+        () {
+          unawaited(f.phone.pollNow());
+          return f.phone.messagesFor(bobId).any((m) => m.body == 'old');
+        },
+        reason: 'what was held for over fourteen days was thrown away',
+        timeout: const Duration(seconds: 6),
+      );
+    });
+
+    test('resuming tells every own device what this one holds, so what a '
+        'full queue dropped is asked for again', () async {
+      final f = await linked();
+      final phoneId = f.phone.identity!.deviceId;
+      final bobId = f.bob.identity!.deviceId;
+      await f.alice.setOwnDeviceSyncSpeed(SyncSpeed.paused);
+      await f.alice.sendMessage(contact: f.alice.contacts.single, body: 'lost');
+      f.alice.dropQueuedSyncForTesting(phoneId);
+      expect(f.alice.queuedSyncForTesting('sent', phoneId), 0);
+      await f.alice.setOwnDeviceSyncSpeed(SyncSpeed.steady);
+      await _waitForIroh(
+        () {
+          unawaited(f.pollAll());
+          return f.phone.messagesFor(bobId).any((m) => m.body == 'lost');
+        },
+        reason: 'the dropped message was never asked for again',
+        timeout: const Duration(seconds: 20),
+      );
+    });
+
+    test('history pages waiting for their pace are tracked and go with the '
+        'device', () async {
+      final f = await linked();
+      final phoneId = f.phone.identity!.deviceId;
+      final aliceId = f.alice.identity!.deviceId;
+      await f.alice.sendMessage(contact: f.alice.contacts.single, body: 'a');
+      await f.alice.sendMessage(
+        contact: f.alice.savedMessagesContact!,
+        body: 'b',
+      );
+      // Ten bytes a second: a page waits more than a minute.
+      f.alice.steadySyncBytesPerSecondForTesting = 10;
+      f.phone.askHistoryForTesting(aliceId);
+      await _waitForIroh(
+        () {
+          unawaited(f.pollAll());
+          return f.alice.historyPageTimerCountForTesting >= 1;
+        },
+        reason: 'no page was left waiting for its pace',
+        timeout: const Duration(seconds: 15),
+      );
+      await f.alice.revokeAccountDevice(phoneId);
+      expect(f.alice.historyPageTimerCountForTesting, 0);
+    });
+
+    test('a clock set back does not stretch a confirmed fast sync', () async {
+      final f = await linked();
+      await f.alice.setOwnDeviceSyncSpeed(SyncSpeed.fast, confirmFast: true);
+      expect(f.alice.ownDeviceSyncPolicy.fastConfirmed, isTrue);
+      f.advance(const Duration(hours: -2));
+      expect(f.alice.ownDeviceSyncPolicy.fastConfirmed, isFalse);
+    });
+
     test(
       'a paused device still answers a history request with "not now"',
       () async {
@@ -363,6 +515,13 @@ void _ownDeviceSyncP0ControllerTests() {
         reason: 'the laptop did not hear of the phone\'s file',
         timeout: const Duration(seconds: 40),
       );
+      // The phone has the file ready to serve to its own devices.
+      final aliceId = f.alice.identity!.deviceId;
+      for (var i = 0; i < 100; i++) {
+        if (await f.phone.ownDeviceServesForTesting(aliceId, id!)) break;
+        await f.pollAll();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
       return (id: id!, ranges: f.network.attachmentRanges, bytes: bytes);
     }
 
@@ -567,6 +726,48 @@ void _ownDeviceSyncP0ControllerTests() {
         },
       );
     }
+
+    test(
+      'a request for a block that is already waiting spends no pace',
+      () async {
+        final f = await linked();
+        final aliceId = f.alice.identity!.deviceId;
+        // Four seconds a block.
+        f.phone.steadySyncBytesPerSecondForTesting = 1024 * 1024;
+        final file = await phoneFileLaptopWaiting(f, megabytes: 9);
+        Map<String, dynamic> ask(int index) => {
+          'attachmentId': file.id,
+          'index': index,
+        };
+        await f.phone.serveOwnBlockForTesting(aliceId, ask(0));
+        expect(f.phone.ownServeTimerCountForTesting, 0, reason: 'at once');
+        await f.phone.serveOwnBlockForTesting(aliceId, ask(1));
+        expect(f.phone.ownServeTimerCountForTesting, 1, reason: 'waits');
+        final busy = f.phone.ownServeBusyUntilForTesting(aliceId);
+        await f.phone.serveOwnBlockForTesting(aliceId, ask(1));
+        expect(f.phone.ownServeTimerCountForTesting, 1);
+        expect(
+          f.phone.ownServeBusyUntilForTesting(aliceId),
+          busy,
+          reason: 'the second ask for the same block spent pace again',
+        );
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
+
+    test('a file that came from a device that is removed is shown as '
+        'failed, not left waiting', () async {
+      final f = await linked();
+      final file = await phoneFileLaptopWaiting(f);
+      expect(
+        f.alice.transferStateForTesting(file.id)?.state,
+        isNot(TransferState.failed),
+      );
+      await f.alice.revokeAccountDevice(f.phone.identity!.deviceId);
+      final after = f.alice.transferStateForTesting(file.id);
+      expect(after?.state, TransferState.failed);
+      expect(after?.error, contains('removed'));
+    }, timeout: const Timeout(Duration(minutes: 3)));
 
     test('removing an own device clears everything kept for it', () async {
       final f = await linked();

@@ -4938,6 +4938,7 @@ class PendingAckDelivery {
     DateTime? lastAttemptedAt,
     int? attempts,
     bool? requiresPeerUpdate,
+    QueuedEnvelopePayload? payload,
   }) {
     return PendingAckDelivery(
       targetDeviceId: targetDeviceId,
@@ -4947,7 +4948,7 @@ class PendingAckDelivery {
       lastAttemptedAt: lastAttemptedAt ?? this.lastAttemptedAt,
       attempts: attempts ?? this.attempts,
       envelopeJson: envelopeJson,
-      payload: payload,
+      payload: payload ?? this.payload,
       requiresPeerUpdate: requiresPeerUpdate ?? this.requiresPeerUpdate,
     );
   }

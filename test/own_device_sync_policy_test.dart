@@ -277,17 +277,18 @@ void main() {
       ]) {
         final a = policy.permit(now);
         final b = policy.permitFor(SyncTraffic.bulk, now);
-        expect((a.allowed, a.bytesPerSecond, a.maxPaths, a.speed), (
-          b.allowed,
-          b.bytesPerSecond,
-          b.maxPaths,
-          b.speed,
-        ));
+        expect(
+          (a.allowed, a.bytesPerSecond, a.maxPaths, a.speed),
+          (b.allowed, b.bytesPerSecond, b.maxPaths, b.speed),
+        );
       }
     });
 
     test('steady files carry the cap and two paths; fast files neither', () {
-      final steady = policy.permitFor(SyncTraffic.files, const SyncConditions());
+      final steady = policy.permitFor(
+        SyncTraffic.files,
+        const SyncConditions(),
+      );
       expect(steady.bytesPerSecond, 256 * 1024);
       expect(steady.maxPaths, 2);
       final fast = confirmed
@@ -345,6 +346,51 @@ void main() {
       // gone (4 s), the next is not held up by them.
       now = now.add(const Duration(seconds: 4));
       expect(gate.admit('phone', block, allowed), Duration.zero);
+    });
+
+    test('what was spent for a block that was not served is given back', () {
+      final start = DateTime.utc(2026);
+      final gate = OwnDeviceServeGate(now: () => start);
+      expect(gate.admit('phone', block, allowed), Duration.zero);
+      expect(gate.admit('phone', block, allowed), const Duration(seconds: 1));
+      gate.refund('phone', block, allowed);
+      expect(gate.busyUntil('phone'), start.add(const Duration(seconds: 1)));
+      expect(gate.admit('phone', block, allowed), const Duration(seconds: 1));
+      // Giving back more than was spent never goes before now.
+      gate.refund('phone', 10 * block, allowed);
+      expect(gate.busyUntil('phone'), start);
+    });
+
+    test('a clock set back does not leave hours of debt', () {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      final gate = OwnDeviceServeGate(now: () => now);
+      for (var i = 0; i < 3; i++) {
+        gate.admit('phone', block, allowed);
+      }
+      now = now.subtract(const Duration(hours: 1));
+      expect(
+        gate.admit('phone', block, allowed),
+        Duration.zero,
+        reason: 'held off for an hour by a clock jump',
+      );
+    });
+
+    test('a time ahead of now does not count as recent', () {
+      final now = DateTime.utc(2026, 1, 1, 12);
+      const lifetime = Duration(minutes: 10);
+      expect(
+        isFresh(now.subtract(const Duration(minutes: 9)), now, lifetime),
+        isTrue,
+      );
+      expect(
+        isFresh(now.subtract(const Duration(minutes: 11)), now, lifetime),
+        isFalse,
+      );
+      expect(
+        isFresh(now.add(const Duration(minutes: 1)), now, lifetime),
+        isFalse,
+      );
+      expect(isFresh(now, now, lifetime), isTrue);
     });
 
     test('it is bounded in devices, and forgets one on request', () {
