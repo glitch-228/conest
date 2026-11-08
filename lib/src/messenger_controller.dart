@@ -144,6 +144,7 @@ import 'relay_client.dart';
 import 'relay_v2/session.dart' show RelayV2Unavailable;
 import 'relay_v2/subscription_backoff.dart';
 import 'relay_link.dart';
+import 'stealth/hidden_routes.dart';
 import 'relay_defaults.dart';
 import 'route_health_tracker.dart';
 import 'storage.dart';
@@ -691,6 +692,7 @@ class MessengerController extends ChangeNotifier {
            : null,
        _keepErrorHistory = keepErrorHistory,
        _transportRegistryFactory = transportRegistryFactory {
+    RelayClient.useRegistry(_relayRegistry);
     _relayClient = _ScoringRelayClient(
       inner: relayClient,
       onAttempt: _recordRelayAttemptFromShim,
@@ -766,6 +768,10 @@ class MessengerController extends ChangeNotifier {
   final VaultStore _vaultStore;
   final StorageCapacityProvider _storageCapacityProvider;
   late final RelayClient _relayClient;
+
+  /// What the relay client has learned and been told about relays: owned
+  /// here, emptied on a vault reset and when this controller goes (M38 S0).
+  final RelayRegistry _relayRegistry = RelayRegistry();
   late final CryptoService _crypto;
   final RatchetEngine? _ratchetEngine;
   final bool _matrixCarrierEnabled;
@@ -12237,7 +12243,28 @@ class MessengerController extends ChangeNotifier {
         link.relayId: link.identityKeyBase64,
       },
     );
-    await addRelay(host: link.host, port: link.port);
+    // A relay with no public plain port (the link says `plain=none`) is
+    // reached by its other addresses only.
+    if (link.hasPlainPort) {
+      await addRelay(host: link.host, port: link.port);
+    }
+    // Its borrowed-handshake address, when the link carries one (M38 S1):
+    // pinned to the link's identity before it is ever dialled, like the
+    // hidden one, so a first contact needs no plain port.
+    if (link.borrowedAddress case final borrowed?) {
+      final route = PeerEndpoint.normalized(
+        kind: PeerRouteKind.relay,
+        host: borrowed,
+        port: 443,
+      );
+      _snapshot = _snapshot.copyWith(
+        pinnedRelayIdentityKeys: {
+          ..._snapshot.pinnedRelayIdentityKeys,
+          route.routeKey: link.identityKeyBase64,
+        },
+      );
+      await addRelay(host: borrowed, port: 443);
+    }
     // Its hidden address too, when the link carries one (M38-A).
     if (link.hiddenAddress case final hidden?) {
       // Pinned to the link's identity before it is ever dialled.
@@ -12607,6 +12634,8 @@ class MessengerController extends ChangeNotifier {
     _meshHeardAt.clear();
     _transferMovedAt = null;
     _coldRetryRound = 0;
+    // The old identity's relay paths, keys and sessions go with it.
+    unawaited(_relayRegistry.clear());
 
     _scheduledMessageTimer?.cancel();
     _scheduledMessageTimer = null;
@@ -33516,12 +33545,28 @@ class MessengerController extends ChangeNotifier {
     } on ArgumentError {
       return;
     }
-    if (me.configuredRelays.any((relay) => relay.routeKey == wss.routeKey)) {
+    // A path the relay rotated replaces the one it had (M38 S0).
+    final replaced = replacedHiddenRoute(
+      relays: me.configuredRelays,
+      announced: wss,
+      identityKey: key,
+      pins: _snapshot.pinnedRelayIdentityKeys,
+    );
+    final known = me.configuredRelays.any(
+      (relay) => relay.routeKey == wss.routeKey,
+    );
+    if (known && replaced == null) {
       return;
     }
-    RelayClient.registerWssPath(wss.host, wss.port, wss.path!);
+    RelayClient.registerWssPath(wss.host, wss.port, wss.path!, identity: key);
+    final relays = [
+      for (final relay in me.configuredRelays)
+        if (identical(relay, replaced)) wss else relay,
+    ];
     _snapshot = _snapshot.copyWith(
-      identity: me.copyWith(configuredRelays: [wss, ...me.configuredRelays]),
+      identity: me.copyWith(
+        configuredRelays: known ? relays : [wss, ...relays],
+      ),
       pinnedRelayIdentityKeys: {
         ..._snapshot.pinnedRelayIdentityKeys,
         wss.routeKey: key,
@@ -33559,17 +33604,35 @@ class MessengerController extends ChangeNotifier {
     } on ArgumentError {
       return;
     }
-    if (me.configuredRelays.any(
+    // A site the relay changed replaces the one it had (M38 S0).
+    final replaced = replacedHiddenRoute(
+      relays: me.configuredRelays,
+      announced: address,
+      identityKey: key,
+      pins: _snapshot.pinnedRelayIdentityKeys,
+    );
+    final known = me.configuredRelays.any(
       (relay) => relay.routeKey == address.routeKey,
-    )) {
+    );
+    if (known && replaced == null) {
       return;
     }
-    RelayClient.registerBorrowedSite(address.host, address.port, borrowed.sni);
-    final relays = [...me.configuredRelays];
-    final firstPlain = relays.indexWhere(
-      (relay) => !isHiddenRouteProtocol(relay.protocol),
+    RelayClient.registerBorrowedSite(
+      address.host,
+      address.port,
+      borrowed.sni,
+      identity: key,
     );
-    relays.insert(firstPlain < 0 ? relays.length : firstPlain, address);
+    final relays = [
+      for (final relay in me.configuredRelays)
+        if (identical(relay, replaced)) address else relay,
+    ];
+    if (!known) {
+      final firstPlain = relays.indexWhere(
+        (relay) => !isHiddenRouteProtocol(relay.protocol),
+      );
+      relays.insert(firstPlain < 0 ? relays.length : firstPlain, address);
+    }
     _snapshot = _snapshot.copyWith(
       identity: me.copyWith(configuredRelays: relays),
       pinnedRelayIdentityKeys: {
@@ -33590,10 +33653,21 @@ class MessengerController extends ChangeNotifier {
   void _registerHiddenRoute(PeerEndpoint route) {
     final path = route.path;
     if (path == null) return;
+    final pinned = _pinnedIdentityKeyForRoute(route);
     if (route.protocol == PeerRouteProtocol.wss) {
-      RelayClient.registerWssPath(route.host, route.port, path);
+      RelayClient.registerWssPath(
+        route.host,
+        route.port,
+        path,
+        identity: pinned,
+      );
     } else if (route.protocol == PeerRouteProtocol.borrowed) {
-      RelayClient.registerBorrowedSite(route.host, route.port, path);
+      RelayClient.registerBorrowedSite(
+        route.host,
+        route.port,
+        path,
+        identity: pinned,
+      );
     }
   }
 
@@ -43370,6 +43444,7 @@ class MessengerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    RelayClient.releaseRegistry(_relayRegistry);
     _cold.dispose();
     _peerCold.clear();
     _peerColdGone.clear();

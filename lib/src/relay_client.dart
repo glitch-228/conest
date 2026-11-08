@@ -16,6 +16,8 @@ import 'relay_v2/session.dart';
 import 'relay_v2/udp_seal.dart';
 import 'relay_v2/websocket_channel.dart';
 
+part 'relay_registry.dart';
+
 class RelayHealthInfo {
   const RelayHealthInfo({
     required this.ok,
@@ -127,21 +129,42 @@ final List<int> relayV2BindingLabel = utf8.encode('conest-relay-noise-key-v1');
 class RelayClient {
   const RelayClient();
 
+  /// What this app has learned and been told about relays: owned by the
+  /// controller (M38 S0), cleared on a vault reset and when the controller
+  /// goes. The statics below are views of the one in use.
+  static RelayRegistry registry = RelayRegistry();
+
+  /// Makes [next] the registry in use (a controller does, for its own).
+  static void useRegistry(RelayRegistry next) {
+    registry = next;
+  }
+
+  /// Ends [owned]'s use: it is emptied, its sessions closed, and when it is
+  /// the one in use a fresh one takes its place.
+  static void releaseRegistry(RelayRegistry owned) {
+    if (identical(registry, owned)) registry = RelayRegistry();
+    unawaited(owned.clear());
+  }
+
   /// Sessions shared by every client (tests may swap it).
-  static RelayV2Pool v2Pool = RelayV2Pool.shared;
+  static RelayV2Pool get v2Pool => registry.v2Pool;
+  static set v2Pool(RelayV2Pool pool) {
+    registry.v2Pool = pool;
+  }
 
   /// What each relay (by host and port) said about sessions, learned from
-  /// its health answers.
-  static final Map<String, RelayV2Info> _v2Known = {};
-  static final Set<String> _v2Learning = {};
+  /// its health answers (each entry names the identity that signed it, and
+  /// is only used for that one).
+  static Map<String, RelayV2Info> get _v2Known => registry.v2Known;
+  static Set<String> get _v2Learning => registry.v2Learning;
 
   /// How long a relay without sessions is not asked again.
   static const Duration _v2RecheckAfter = Duration(minutes: 30);
 
   /// The secret each of this app's mailboxes derives its owner keys from
   /// (by mailbox: several identities can share a process in tests).
-  static final Map<String, List<int>> _mailboxSecrets = {};
-  static final Map<String, SimpleKeyPair> _authKeys = {};
+  static Map<String, List<int>> get _mailboxSecrets => registry.mailboxSecrets;
+  static Map<String, SimpleKeyPair> get _authKeys => registry.authKeys;
 
   /// Blob requests (M27): only ever inside an encrypted session.
   static const Set<String> _blobActions = {
@@ -372,7 +395,7 @@ class RelayClient {
   }
 
   /// Registration tokens, by relay identity (from the vault).
-  static final Map<String, String> _tokens = {};
+  static Map<String, String> get _tokens => registry.tokens;
 
   /// Sets the tokens stores carry (inside sessions only, never in the
   /// clear) to relays that take messages from registered accounts only.
@@ -460,17 +483,7 @@ class RelayClient {
   }
 
   /// Forgets what relays said about sessions and closes them (tests).
-  static Future<void> resetSessionsForTesting() async {
-    _v2Known.clear();
-    _v2Learning.clear();
-    _mailboxSecrets.clear();
-    _authKeys.clear();
-    _tokens.clear();
-    _wssPaths.clear();
-    _borrowedSites.clear();
-    _tlsCerts.clear();
-    await v2Pool.closeAll();
-  }
+  static Future<void> resetSessionsForTesting() => registry.clear();
 
   /// Marks [host]:[port] as a relay that keeps mailbox owners (tests).
   @visibleForTesting
@@ -1182,18 +1195,20 @@ class RelayClient {
     return known.sessions ? known : null;
   }
 
-  String _sessionKey(String host, int port, RelayV2Info known) =>
-      '${_wssPaths.containsKey('$host:$port')
-          ? 'wss'
-          : _borrowedSites.containsKey('$host:$port')
-          ? 'borrowed'
-          : 'tcp'}:$host:$port:'
-      '${base64Encode(known.noiseKey!)}';
+  String _sessionKey(String host, int port, RelayV2Info known) {
+    final identity = known.identityPublicKeyBase64;
+    return '${registry.pathFor(identity, host, port) != null
+            ? 'wss'
+            : registry.siteFor(identity, host, port) != null
+            ? 'borrowed'
+            : 'tcp'}:$host:$port:'
+        '${base64Encode(known.noiseKey!)}';
+  }
 
   /// The TLS certificate hashes relays' identities signed (learned inside
   /// sessions), by identity key: the only self-signed certificates a hidden
   /// address is trusted with.
-  static final Map<String, List<int>> _tlsCerts = {};
+  static Map<String, List<int>> get _tlsCerts => registry.tlsCerts;
 
   /// Teaches the client a certificate hash for [identity] (tests; the
   /// client learns it from a trusted session's health answer).
@@ -1204,13 +1219,20 @@ class RelayClient {
     List<int> sha256,
   ) => _tlsCerts['$identity|$host'] = sha256;
 
-  /// Borrowed-handshake relay addresses: the site they play, by host and
-  /// port (M38-D).
-  static final Map<String, String> _borrowedSites = {};
+  /// Borrowed-handshake relay addresses: the site they play, by the
+  /// identity they are pinned to and their address (M38-D, S0).
+  static Map<String, String> get _borrowedSites => registry.borrowedSites;
 
-  /// Tells the client that [host]:[port] plays the handshake of [sni].
-  static void registerBorrowedSite(String host, int port, String sni) {
-    final key = '$host:$port';
+  /// Tells the client that [host]:[port], pinned to [identity], plays the
+  /// handshake of [sni]. A route pinned to another identity at the same
+  /// address is another entry: it cannot change this one.
+  static void registerBorrowedSite(
+    String host,
+    int port,
+    String sni, {
+    String? identity,
+  }) {
+    final key = RelayRegistry.hiddenKey(identity, host, port);
     if (_borrowedSites[key] == sni) return;
     if (_borrowedSites.length >= 64 && !_borrowedSites.containsKey(key)) {
       _borrowedSites.remove(_borrowedSites.keys.first);
@@ -1218,13 +1240,20 @@ class RelayClient {
     _borrowedSites[key] = sni;
   }
 
-  /// Hidden (wss) relay addresses: their secret paths, by host and port.
-  static final Map<String, String> _wssPaths = {};
+  /// Hidden (wss) relay addresses: their secret paths, by the identity they
+  /// are pinned to and their address.
+  static Map<String, String> get _wssPaths => registry.wssPaths;
 
   /// Tells the client the secret path of the wss relay at [host]:[port]
-  /// (the controller does, from its configured routes).
-  static void registerWssPath(String host, int port, String path) {
-    final key = '$host:$port';
+  /// pinned to [identity] (the controller does, from its configured
+  /// routes).
+  static void registerWssPath(
+    String host,
+    int port,
+    String path, {
+    String? identity,
+  }) {
+    final key = RelayRegistry.hiddenKey(identity, host, port);
     if (_wssPaths[key] == path) return;
     if (_wssPaths.length >= 64 && !_wssPaths.containsKey(key)) {
       _wssPaths.remove(_wssPaths.keys.first);
@@ -1243,8 +1272,8 @@ class RelayClient {
     required bool pinned,
     String? identity,
   }) async {
-    final path = _wssPaths['$host:$port'];
-    final site = _borrowedSites['$host:$port'];
+    final path = registry.pathFor(identity, host, port);
+    final site = registry.siteFor(identity, host, port);
     if (path == null && site != null) {
       if (identity == null) {
         throw StateError(
@@ -1306,8 +1335,8 @@ class RelayClient {
     required bool pinned,
     String? identity,
   }) async {
-    if (!_wssPaths.containsKey('$host:$port') &&
-        !_borrowedSites.containsKey('$host:$port')) {
+    if (registry.pathFor(identity, host, port) == null &&
+        registry.siteFor(identity, host, port) == null) {
       throw StateError('The hidden relay address has no path.');
     }
     final channel = await _channelTo(
@@ -1832,7 +1861,7 @@ class RelayClient {
   /// Cookies UDP relays gave (by host:port): over UDP a relay answers at
   /// length only a request carrying the cookie it sent to that address,
   /// so a forged source cannot aim its answers at someone.
-  static final Map<String, String> _udpCookies = <String, String>{};
+  static Map<String, String> get _udpCookies => registry.udpCookies;
 
   /// The session key to seal UDP datagrams to [host]:[port] under (M38-C):
   /// known only for a relay whose pinned identity signed it and that said

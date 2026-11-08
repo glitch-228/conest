@@ -14855,6 +14855,95 @@ void main() {
     expect(alice.pinnedRelayIdentityKeys[wss.routeKey], key);
   });
 
+  test('a borrowed address from a relay link is pinned to the link key, and a '
+      'link with no plain port adds no plain route (M38 S1)', () async {
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+    final key = base64Encode(List<int>.filled(32, 7));
+    const borrowed = 'borrowed://203.0.113.7:443/www.bing.com';
+    await alice.addRelayFromLink(
+      'conest-relay://relay.link.test:7667?id=relay-1&key='
+      '${Uri.encodeQueryComponent(key)}&plain=none'
+      '&borrowed=${Uri.encodeQueryComponent(borrowed)}',
+    );
+    final relays = alice.identity!.configuredRelays;
+    final route = relays.singleWhere(
+      (route) => route.protocol == PeerRouteProtocol.borrowed,
+    );
+    expect(route.host, '203.0.113.7');
+    expect(route.port, 443);
+    expect(route.path, 'www.bing.com');
+    // Pinned to the link's key before anything is dialled.
+    expect(alice.pinnedRelayIdentityKeys[route.routeKey], key);
+    // The host the link only names is no plain route.
+    expect(relays.where((route) => route.host == 'relay.link.test'), isEmpty);
+    // A link with a plain port still adds it, with the borrowed route too.
+    final bob = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Bob',
+    );
+    addTearDown(bob.dispose);
+    await bob.addRelayFromLink(
+      'conest-relay://relay.link.test:7667?id=relay-1&key='
+      '${Uri.encodeQueryComponent(key)}'
+      '&borrowed=${Uri.encodeQueryComponent(borrowed)}',
+    );
+    final bobRelays = bob.identity!.configuredRelays;
+    expect(bobRelays.any((route) => route.host == 'relay.link.test'), isTrue);
+    expect(
+      bobRelays.any((route) => route.protocol == PeerRouteProtocol.borrowed),
+      isTrue,
+    );
+  });
+
+  test('a vault reset forgets the relay paths and keys the client learned '
+      '(M38 S0)', () async {
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+    );
+    addTearDown(alice.dispose);
+    const real = 'REAL-IDENTITY-KEY';
+    RelayClient.registerWssPath(
+      'relay.example.org',
+      443,
+      '/s3cret-path_1',
+      identity: real,
+    );
+    RelayClient.registerBorrowedSite(
+      '203.0.113.7',
+      443,
+      'www.bing.com',
+      identity: real,
+    );
+    final registry = RelayClient.registry;
+    expect(registry.pathFor(real, 'relay.example.org', 443), isNotNull);
+    await alice.resetIdentity();
+    await Future<void>.delayed(Duration.zero);
+    expect(registry.pathFor(real, 'relay.example.org', 443), isNull);
+    expect(registry.siteFor(real, '203.0.113.7', 443), isNull);
+  });
+
+  test('a controller that goes takes its registry with it (M38 S0)', () async {
+    final alice = await _createController(
+      relayClient: _FakeRelayClient(),
+      displayName: 'Alice',
+    );
+    final inUse = RelayClient.registry;
+    RelayClient.registerWssPath(
+      'relay.example.org',
+      443,
+      '/s3cret-path_1',
+      identity: 'K',
+    );
+    alice.dispose();
+    expect(identical(RelayClient.registry, inUse), isFalse);
+    expect(inUse.wssPaths, isEmpty);
+  });
+
   test('a relay whose mailbox for a contact belongs to another key is not '
       'used for that contact', () async {
     final relay = _OwnerFakeRelayClient();

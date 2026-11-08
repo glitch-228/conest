@@ -1652,6 +1652,39 @@ mod tests {
     }
 
     #[test]
+    fn with_cleartext_udp_off_only_sealed_requests_are_answered() {
+        let peer: SocketAddr = "198.51.100.60:5000".parse().unwrap();
+        let padded = json!({"action": "health", "pad": "x".repeat(UDP_COOKIE_REQUEST_MIN_BYTES)})
+            .to_string();
+        // Today's behaviour: a cleartext request is answered.
+        let open = test_state();
+        assert!(crate::udp_sealed::answer_datagram(padded.as_bytes(), &open, peer).is_some());
+        // Cleartext off: silence for it, and for junk; sealed ones as before.
+        let mut config = test_config();
+        config.ext.udp_cleartext = false;
+        let sealed_only = RelayState::new(config, test_identity());
+        assert!(
+            crate::udp_sealed::answer_datagram(padded.as_bytes(), &sealed_only, peer).is_none()
+        );
+        assert!(crate::udp_sealed::answer_datagram(&[0x55; 200], &sealed_only, peer).is_none());
+        let sealed = sealed_exchange(&sealed_only, peer, &json!({"action": "health"}), 80);
+        assert!(sealed.is_some(), "a sealed request is still answered");
+    }
+
+    #[test]
+    fn health_offers_sealed_udp_only_where_udp_is_served() {
+        assert_eq!(test_state().v2_info().expect("v2")["udp_sealed"], 1);
+        let mut config = test_config();
+        config.ext.plain = PlainMode::Loopback;
+        let hidden = RelayState::new(config.clone(), test_identity());
+        assert!(hidden.v2_info().expect("v2").get("udp_sealed").is_none());
+        // Public UDP on its own address is offered again.
+        config.ext.udp_bind = Some("0.0.0.0:7667".to_owned());
+        let with_udp = RelayState::new(config, test_identity());
+        assert_eq!(with_udp.v2_info().expect("v2")["udp_sealed"], 1);
+    }
+
+    #[test]
     fn a_sealed_cookie_reply_is_never_longer_than_its_request() {
         use crate::udp_sealed::client_for_tests::seal_request;
         let state = test_state();

@@ -358,9 +358,10 @@ async fn run(
                         // one write, as the site sent it: a record at a
                         // time would re-cut its first flight into small
                         // segments no web server sends.
-                        let out = forward_downstream(&mut buffer, &mut raw, &random);
-                        if !out.is_empty() && client_write.write_all(&out).await.is_err() {
-                            return None;
+                        for write in forward_downstream(&mut buffer, &mut raw, &random) {
+                            if client_write.write_all(&write).await.is_err() {
+                                return None;
+                            }
                         }
                     }
                 }
@@ -435,19 +436,19 @@ async fn run(
     }
 }
 
-/// What to send the client for what the site just sent: its whole records
-/// (one buffer, so one write), noting the ServerHello random on the way;
-/// once the stream is no TLS, everything as it comes. Incomplete records
-/// stay in [buffer].
+/// The writes to make to the client for what the site just sent: its whole
+/// records in one write (none when nothing is complete), noting the
+/// ServerHello random on the way; once the stream is no TLS, everything as
+/// it comes. Incomplete records stay in [buffer].
 fn forward_downstream(
     buffer: &mut Vec<u8>,
     raw: &mut bool,
     random: &Mutex<Option<[u8; 32]>>,
-) -> Vec<u8> {
+) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     if *raw {
         out.append(buffer);
-        return out;
+        return if out.is_empty() { Vec::new() } else { vec![out] };
     }
     loop {
         match take_record(buffer) {
@@ -466,7 +467,7 @@ fn forward_downstream(
             }
         }
     }
-    out
+    if out.is_empty() { Vec::new() } else { vec![out] }
 }
 
 /// The exchange key, when [payload] is a valid marker for this connection.
@@ -940,22 +941,27 @@ mod tests {
         let random = Mutex::new(None);
         let mut raw = false;
         let mut buffer = flight.clone();
-        let out = forward_downstream(&mut buffer, &mut raw, &random);
-        // One buffer, so one write: the same bytes, not cut per record.
-        assert_eq!(out, flight);
+        let writes = forward_downstream(&mut buffer, &mut raw, &random);
+        // One write: the same bytes, not cut per record.
+        assert_eq!(writes, vec![flight.clone()]);
         assert!(buffer.is_empty() && !raw);
         assert_eq!(*random.lock().unwrap(), Some([4; 32]));
         // A record cut by the read waits for the rest, then goes out.
         let mut buffer = flight[..flight.len() - 10].to_vec();
         let first = forward_downstream(&mut buffer, &mut raw, &random);
-        assert!(first.len() < flight.len() - 900);
+        assert_eq!(first.len(), 1, "the records that are whole, in one write");
+        assert!(first[0].len() < flight.len() - 900);
         buffer.extend_from_slice(&flight[flight.len() - 10..]);
         let second = forward_downstream(&mut buffer, &mut raw, &random);
-        assert_eq!([first, second].concat(), flight);
+        assert_eq!(second.len(), 1);
+        assert_eq!([first[0].clone(), second[0].clone()].concat(), flight);
+        // Nothing complete yet: no write at all.
+        let mut partial = flight[..3].to_vec();
+        assert!(forward_downstream(&mut partial, &mut raw, &random).is_empty());
         // Not TLS: everything as it comes.
         let mut buffer = b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec();
-        let out = forward_downstream(&mut buffer, &mut raw, &random);
-        assert_eq!(out, b"HTTP/1.1 400 Bad Request\r\n\r\n");
+        let writes = forward_downstream(&mut buffer, &mut raw, &random);
+        assert_eq!(writes, vec![b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec()]);
         assert!(raw && buffer.is_empty());
     }
 
