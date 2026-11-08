@@ -37,6 +37,13 @@ DOMAIN=""
 TLS_CERT=""
 TLS_KEY=""
 NO_HIDDEN=0
+# Borrowed handshake (M38 S1): 443 plays a real site's TLS handshake instead
+# of serving a web site of its own (one or the other on 443).
+BORROW=""
+BORROW_ADDRESS=""
+# Who reaches the plain port (7667): public (today's behaviour), or loopback
+# once 443 works (M38 S2).
+PLAIN="public"
 BLOBS=""
 WS_PATH=""
 ASSUME_YES=0
@@ -68,6 +75,20 @@ Conest relay installer
   --cert PEM --key PEM  the certificate and key for that domain (default:
                         Let's Encrypt's /etc/letsencrypt/live/NAME)
   --no-hidden           keep 7667 only
+  --borrow SITE         play the TLS handshake of a real site (SITE or
+                        SITE:PORT, say www.bing.com) on 443 instead: a
+                        censor or a prober sees that site; Conest clients
+                        prove themselves right after it. Not together with
+                        --domain. Pick a large TLS 1.3 site, in your hosting
+                        provider's network if there is one.
+  --borrow-address IP   the IPv4 or IPv6 address clients are told for it, so
+                        they never look up this server's name (default: this
+                        server's public address)
+  --plain public|loopback  who may reach the plain port 7667 (default
+                        public). loopback closes it to the world once 443 or
+                        --borrow works: apps from before the hidden
+                        addresses (stable v0.4.2 and older) then cannot use
+                        this relay
   --blobs               let the relay hold encrypted file blocks (uses disk;
                         off by default)
   --tag TAG             a specific release instead of the newest
@@ -93,6 +114,9 @@ while [ $# -gt 0 ]; do
   --cert) TLS_CERT="${2:?}"; shift ;;
   --key) TLS_KEY="${2:?}"; shift ;;
   --no-hidden) NO_HIDDEN=1 ;;
+  --borrow) BORROW="${2:?}"; shift ;;
+  --borrow-address) BORROW_ADDRESS="${2:?}"; shift ;;
+  --plain) PLAIN="${2:?}"; shift ;;
   --blobs) BLOBS=1 ;;
   --uninstall) MODE="uninstall" ;;
   --help | -h)
@@ -318,6 +342,10 @@ if [ "$ASSUME_YES" -eq 0 ]; then
   BIND_HOST=$(ask_value "Address to listen on (0.0.0.0 = all)" "$BIND_HOST")
 fi
 valid_port "$PORT" || die "not a port: $PORT"
+case "$PLAIN" in
+public | loopback) ;;
+*) die "--plain takes public or loopback, not $PLAIN" ;;
+esac
 
 # --- Hidden address on 443 ------------------------------------------------------
 # On when a domain with a certificate is at hand: the relay then also answers
@@ -325,7 +353,7 @@ valid_port "$PORT" || die "not a port: $PORT"
 # on a secret path (blocking it means blocking a web site).
 HIDDEN=0
 if [ "$NO_HIDDEN" -eq 0 ]; then
-  if [ -z "$DOMAIN" ] && [ "$ASSUME_YES" -eq 0 ]; then
+  if [ -z "$DOMAIN" ] && [ "$ASSUME_YES" -eq 0 ] && [ -z "$BORROW" ]; then
     DOMAIN=$(ask_value "Domain name of this server, to also serve on 443 hidden as a web site (empty = skip)" "")
   fi
   if [ -n "$DOMAIN" ]; then
@@ -354,6 +382,44 @@ if [ "$NO_HIDDEN" -eq 0 ]; then
       say "(or --cert FULLCHAIN.pem --key PRIVKEY.pem)."
     fi
   fi
+fi
+
+# --- Borrowed handshake on 443 ----------------------------------------------------
+# 443 plays the TLS handshake of a real site: the relay forwards every
+# connection to it, and only a client that knows the relay's key is let in
+# (a prober sees the site). Its address is an IP literal, so no lookup of
+# this server's own name comes before the disguised handshake.
+BORROWED=0
+BORROW_SITE=""
+BORROW_HOST=""
+if [ -n "$BORROW" ]; then
+  [ "$HIDDEN" -eq 0 ] || die "443 is either a hidden web site (--domain) or a borrowed handshake (--borrow), not both"
+  case "$BORROW" in
+  *[!A-Za-z0-9.:-]* | "" | .* | *..*) die "not a site name: $BORROW" ;;
+  esac
+  case "$BORROW" in
+  *:*) BORROW_SITE="$BORROW" ;;
+  *) BORROW_SITE="$BORROW:443" ;;
+  esac
+  BORROW_HOST="${BORROW_SITE%:*}"
+  case "$BORROW_HOST" in
+  *.*) ;;
+  *) die "the borrowed site needs a dotted name, like www.example.com: $BORROW_HOST" ;;
+  esac
+  if [ -z "$BORROW_ADDRESS" ] && need curl; then
+    BORROW_ADDRESS=$(curl -fsS https://api.ipify.org 2>/dev/null || true)
+  fi
+  [ -n "$BORROW_ADDRESS" ] || BORROW_ADDRESS=$(ask_value "This server's public IP address (IPv4 or IPv6), told to Conest clients" "")
+  case "$BORROW_ADDRESS" in
+  "" | *[!0-9A-Fa-f:.]*) die "the address for --borrow must be an IPv4 or IPv6 literal, not a name: $BORROW_ADDRESS" ;;
+  esac
+  safe_value "$DATA_DIR" || die "the data directory may only use letters, digits and . _ / @ : + -"
+  BORROWED=1
+fi
+PORT443=0
+if [ "$HIDDEN" -eq 1 ] || [ "$BORROWED" -eq 1 ]; then PORT443=1; fi
+if [ "$PLAIN" = loopback ] && [ "$PORT443" -eq 0 ]; then
+  die "--plain loopback needs 443 first (--domain with a certificate, or --borrow)"
 fi
 
 # --- File blobs -----------------------------------------------------------------
@@ -435,23 +501,42 @@ CONF
   say "Hidden address on 443 set up for $DOMAIN (settings in $CONF)."
 fi
 
+if [ "$BORROWED" -eq 1 ]; then
+  CERT_OWNER=root
+  [ "$USE_ACCOUNT" -eq 1 ] && CERT_OWNER="$SERVICE_USER"
+  CONF="$DATA_DIR/relay.conf"
+  if ! as_root test -f "$CONF" || ! as_root grep -q '^borrow-bind' "$CONF"; then
+    as_root tee -a "$CONF" >/dev/null <<CONF
+borrow-bind = 0.0.0.0:443
+borrow-site = $BORROW_SITE
+borrow-address = $BORROW_ADDRESS
+CONF
+  fi
+  as_root chown "$CERT_OWNER:$CERT_OWNER" "$CONF" 2>/dev/null || as_root chown "$CERT_OWNER" "$CONF"
+  say "Borrowed handshake on 443 set up: it plays $BORROW_SITE (settings in $CONF)."
+fi
+
 # --- Firewall -----------------------------------------------------------------
 if need ufw && as_root ufw status 2>/dev/null | grep -q 'Status: active'; then
   if ask "Open port $PORT (TCP and UDP) in ufw?" y; then
-    as_root ufw allow "$PORT/tcp"
-    as_root ufw allow "$PORT/udp"
-    if [ "$HIDDEN" -eq 1 ]; then as_root ufw allow 443/tcp; fi
+    if [ "$PLAIN" = public ]; then
+      as_root ufw allow "$PORT/tcp"
+      as_root ufw allow "$PORT/udp"
+    fi
+    if [ "$PORT443" -eq 1 ]; then as_root ufw allow 443/tcp; fi
   fi
 elif need firewall-cmd && as_root firewall-cmd --state >/dev/null 2>&1; then
   if ask "Open port $PORT (TCP and UDP) in firewalld?" y; then
-    as_root firewall-cmd --permanent --add-port="$PORT/tcp"
-    as_root firewall-cmd --permanent --add-port="$PORT/udp"
-    if [ "$HIDDEN" -eq 1 ]; then as_root firewall-cmd --permanent --add-port=443/tcp; fi
+    if [ "$PLAIN" = public ]; then
+      as_root firewall-cmd --permanent --add-port="$PORT/tcp"
+      as_root firewall-cmd --permanent --add-port="$PORT/udp"
+    fi
+    if [ "$PORT443" -eq 1 ]; then as_root firewall-cmd --permanent --add-port=443/tcp; fi
     as_root firewall-cmd --reload
   fi
 else
   say "No ufw or firewalld running: make sure port $PORT (TCP and UDP) is reachable, including in your provider's firewall."
-  if [ "$HIDDEN" -eq 1 ]; then say "Also 443 (TCP), for the hidden address."; fi
+  if [ "$PORT443" -eq 1 ]; then say "Also 443 (TCP), for the hidden address."; fi
 fi
 
 # --- Service --------------------------------------------------------------------
@@ -491,7 +576,7 @@ ProtectHome=yes
 PrivateTmp=yes
 ReadWritePaths=$DATA_DIR"
   # The right to bind 443 only when the relay serves TLS there.
-  [ "$HIDDEN" -eq 1 ] && UNIT_USER="$UNIT_USER
+  [ "$PORT443" -eq 1 ] && UNIT_USER="$UNIT_USER
 AmbientCapabilities=CAP_NET_BIND_SERVICE"
   as_root tee /etc/systemd/system/conest-relay.service >/dev/null <<EOF
 [Unit]
@@ -531,8 +616,45 @@ KEY=$(printf '%s' "$HEALTH" | sed -n 's/.*"identity_public_key": *"\([^"]*\)".*/
 ID=$(printf '%s' "$HEALTH" | sed -n 's/.*"relay_id": *"\([^"]*\)".*/\1/p')
 VERSION=$(printf '%s' "$HEALTH" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
 
+# --- The plain port, closed to the world (M38 S2) ---------------------------------
+# Only after 443 is seen to answer here: a relay whose only way in is broken
+# is of no use. The relay keeps the port on loopback (this check, a local web
+# server); everything else reaches it through 443.
+PLAIN_NONE=0
+if [ "$PLAIN" = loopback ]; then
+  TESTED=1
+  if [ "$BORROWED" -eq 1 ]; then
+    if need openssl; then
+      printf '' | openssl s_client -connect 127.0.0.1:443 -servername "$BORROW_HOST" 2>/dev/null |
+        grep -q 'BEGIN CERTIFICATE' || TESTED=0
+    else
+      TESTED=2
+    fi
+  else
+    if need curl; then
+      curl -ksS -o /dev/null --max-time 10 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/" 2>/dev/null || TESTED=0
+    else
+      TESTED=2
+    fi
+  fi
+  if [ "$TESTED" -eq 1 ]; then
+    CONF="$DATA_DIR/relay.conf"
+    if ! as_root grep -q '^plain' "$CONF"; then
+      printf 'plain = loopback\n' | as_root tee -a "$CONF" >/dev/null
+    fi
+    as_root systemctl restart conest-relay.service
+    sleep 2
+    PLAIN_NONE=1
+    say "The plain port $PORT is now open to this server only; 443 answers."
+  elif [ "$TESTED" -eq 2 ]; then
+    say "Cannot check 443 here (no openssl or curl): the plain port stays public. Add 'plain = loopback' to $DATA_DIR/relay.conf yourself once 443 works, and restart."
+  else
+    say "443 did not answer on this server: the plain port stays public. Fix 443 (see: journalctl -u conest-relay), then run this installer again with --plain loopback."
+  fi
+fi
+
 ADDRESS=$(ask_value "This server's public address or domain (as Conest should reach it)" \
-  "$( (need curl && curl -fsS https://api.ipify.org 2>/dev/null) || hostname -f 2>/dev/null || hostname)")
+  "$( [ -n "$BORROW_ADDRESS" ] && printf '%s' "$BORROW_ADDRESS" || ( (need curl && curl -fsS https://api.ipify.org 2>/dev/null) || hostname -f 2>/dev/null || hostname))")
 LINK="conest-relay://$ADDRESS:$PORT?id=$ID&key=$(printf '%s' "$KEY" | sed 's/+/%2B/g; s#/#%2F#g; s/=/%3D/g')"
 
 step "Done"
@@ -553,6 +675,17 @@ if [ "$HIDDEN" -eq 1 ]; then
     say "                journalctl -u conest-relay | grep 'WebSocket path')"
   fi
 fi
+if [ "$BORROWED" -eq 1 ]; then
+  case "$BORROW_ADDRESS" in
+  *:*) BORROW_URL="borrowed://[$BORROW_ADDRESS]:443/$BORROW_HOST" ;;
+  *) BORROW_URL="borrowed://$BORROW_ADDRESS:443/$BORROW_HOST" ;;
+  esac
+  LINK="$LINK&borrowed=$(printf '%s' "$BORROW_URL" | sed 's#:#%3A#g; s#/#%2F#g; s#\[#%5B#g; s#\]#%5D#g')"
+  say "  Borrowed:     $BORROW_URL"
+  say "                (on 443 the relay plays $BORROW_HOST; it works for people"
+  say "                 who have the relay's key from this link)"
+fi
+[ "$PLAIN_NONE" -eq 1 ] && LINK="$LINK&plain=none"
 say "In Conest: Settings > Relays > Add from link, and paste:"
 say "  $LINK"
 if need qrencode; then

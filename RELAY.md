@@ -15,7 +15,8 @@ supervisor (which keeps it updated from signed releases).
   neither mailbox ids nor tokens, many requests share the connection, and
   new messages are pushed to the device instead of long polls.
 - **443 (or any port), TLS** (optional): the relay looks like an ordinary
-  web site. See below.
+  web site. See below. Once 443 works, 7667 can be closed to the world
+  (`plain = loopback`, see "Closing the plain port").
 
 ## Configuration
 
@@ -236,6 +237,113 @@ Clients learn the address inside an encrypted session and prefer it.
 Limits: the relay's IP address is not the site's (a censor that checks IP
 against SNI sees it), and the client's TLS hello is its library's, not a
 browser's. Pick a site that is large and popular in the censor's country.
+
+### Choosing the site, and its address
+
+- Pick a large, ordinary HTTPS site that speaks TLS 1.3, is reachable from
+  where your users are, and, if you can, lives in your hosting provider's
+  network (a censor that compares an address with a name then sees nothing
+  odd). On start the relay says in its log when the site cannot be reached
+  from the server or resolves outside the relay's network, and it repeats
+  a warning (at most every five minutes) when connections to the site fail
+  later. Check the site first from the server:
+  `openssl s_client -connect www.example.com:443 -servername www.example.com -tls1_3`.
+- `borrow-address = <IPv4 or IPv6 address>`: what clients are told to
+  connect to for this layer. Give the server's public address, not its
+  name: with a name, the app would first look the name up, and that lookup
+  (and the certificate transparency log entry of a certificate issued for
+  that name) is a link between the relay and its disguise. Without it the
+  relay tells `public-host`. The installer finds the address itself
+  (`install_relay.sh --borrow www.example.com`, optionally
+  `--borrow-address IP`) and prints a link that carries it
+  (`&borrowed=borrowed://IP:443/www.example.com`), so a first contact needs
+  no plain port at all.
+- `borrow-bind` and `tls-bind` cannot share a port: 443 is either a web site
+  of yours with the relay hidden on a secret path, or a borrowed handshake.
+  (A relay behind your own web server, below, shares 443 with a real site.)
+- If you change the site, restart the relay: apps are told the new name
+  inside their next session and follow it.
+
+## Closing the plain port
+
+Port 7667 (v1 JSON, the HTTP API with its open CORS header, the `CNS2`
+session magic, cleartext UDP) is what tells a watcher that this is a Conest
+relay. Once 443 works, you can stop showing it:
+
+```
+# relay.conf
+plain = loopback              # public (the default), loopback, or off
+udp-bind = 0.0.0.0:7667       # (optional) UDP on its own address
+udp-cleartext = off           # sealed requests only (on by default)
+```
+
+- `plain = loopback`: 7667 listens on 127.0.0.1 only. This is what the
+  installer's own health check (`http://127.0.0.1:7667/health`) and a web
+  server on the same host reach; the hidden and borrowed listeners need
+  nothing from it. `off` does not listen at all (not with `--legacy-threads`).
+- UDP follows the plain port: with `plain = loopback` and no `udp-bind`,
+  there is no public UDP, and health stops offering sealed UDP, so apps do
+  not try a dead route. With `udp-bind` the relay answers sealed datagrams
+  there (a request sealed under the relay's session key); with
+  `udp-cleartext = off` anything else gets silence, as a refused datagram
+  does. An open UDP port that never answers junk is a weaker tell than 7667,
+  not none.
+- Who can still use the relay: only apps that know its hidden or borrowed
+  address (from a relay link, or learned in an earlier session), which means
+  builds with those features. Stable v0.4.2 and older cannot. Share the link
+  the installer prints (`&plain=none` tells the app that the plain port is
+  closed, so it adds no plain route for it). The installer does this with
+  `--plain loopback`, after it has seen 443 answer on the server; its default
+  stays `public` until the next stable release has shipped, after which it
+  will close the plain port when 443 works.
+- Close it early only if you accept that.
+
+## Behind your own web server
+
+If 443 already serves your web site (nginx, Caddy), let it keep the real
+certificate, HTTP/2 and renewal, and hand the relay only its secret path.
+Then a probe meets your web server's TLS, not the relay's:
+
+```
+# relay.conf (no tls-bind, no certificate)
+ws-bind = 127.0.0.1:8081
+ws-path = <8..64 letters, digits, - or _>
+public-host = relay.example.org       # so clients are told wss://relay.example.org/<path>
+```
+
+```
+# nginx, in the server block of relay.example.org (tested with nginx 1.x)
+error_page 404 /404.html;                      # your site's 404, as it is
+location = /<the ws-path> {
+    if ($http_upgrade != "websocket") { return 404; }
+    proxy_pass http://127.0.0.1:8081;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header X-Forwarded-For $remote_addr;   # overwrite, not append
+    proxy_read_timeout 3600s;
+    # Whatever the relay refuses, and a relay that is down, look like the
+    # site's own 404 and never a 502:
+    proxy_intercept_errors on;
+    error_page 400 404 500 502 504 =404 /404.html;
+}
+```
+
+- The layer is a plain WebSocket on the secret path and nothing else: it
+  answers anything that is not a valid upgrade there with an empty 404 and
+  has no decoy of its own (the front is the decoy). `ws-bind` must be a
+  loopback address; the relay refuses another unless `ws-bind-public` is also
+  set, because it believes the front's `X-Forwarded-For` to tell clients
+  apart (only from a connection that comes from this host, and only when the
+  entry is an IP address; otherwise all such connections share one key and
+  its connection slots, so a front that does not set it makes the relay look
+  like one busy client).
+- Per-address limits then count each client by the address nginx saw
+  (`$remote_addr`), as for any other layer. Connections from the front are
+  not counted against one address.
+- `tls-bind` and `ws-bind` may both be on (different ports); the path is the
+  same. The hidden address clients are told is on 443 when only `ws-bind`
+  is set.
 
 ## Rolling back
 

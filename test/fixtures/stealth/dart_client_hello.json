@@ -1,0 +1,23 @@
+{
+ "note": "pins of what Dart's TLS library sends, per platform and hello (M38 P0). Add an entry when a change is reviewed; the newest entry of a platform is the one compared.",
+ "pins": [
+  {
+   "platform": "linux",
+   "dart": "3.12.1 (Flutter 3.44.1)",
+   "hellos": {
+    "relay-wss": {
+     "ja3": "c38fd2ef2e433bf382d6510bf8c311a6",
+     "ja4": "t13d1712h1_5b57614c22b0_ef7df7f74e48"
+    },
+    "borrowed-tap": {
+     "ja3": "c38fd2ef2e433bf382d6510bf8c311a6",
+     "ja4": "t13d1712h2_5b57614c22b0_ef7df7f74e48"
+    },
+    "doh-by-ip": {
+     "ja3": "203503b7023848ab87b9836c336b8e81",
+     "ja4": "t13d171000_5b57614c22b0_78e6aca7449b"
+    }
+   }
+  }
+ ]
+}
