@@ -354,7 +354,13 @@ mod tests {
             stream.write_all(request.as_bytes()).expect("send");
             let mut answer = Vec::new();
             let _ = stream.read_to_end(&mut answer);
-            assert_eq!(answer, NOT_FOUND, "{request:?}");
+            // The literal bytes, not the constant: what a prober behind the
+            // front is shown is an empty 404 and nothing else.
+            assert_eq!(
+                answer,
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "{request:?}"
+            );
         }
         // Not HTTP at all: closed without a word.
         let mut stream = connect(address);
