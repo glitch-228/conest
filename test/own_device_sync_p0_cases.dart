@@ -769,6 +769,26 @@ void _ownDeviceSyncP0ControllerTests() {
       expect(after?.error, contains('removed'));
     }, timeout: const Timeout(Duration(minutes: 3)));
 
+    test('a file that moved since it was looked up is still served: the '
+        'lookup is made again once', () async {
+      final f = await linked();
+      final aliceId = f.alice.identity!.deviceId;
+      final file = await phoneFileLaptopWaiting(f);
+      // The send to Bob finished and moved the file after the phone's first
+      // look at it for the laptop.
+      f.phone.staleOwnServingForTesting(aliceId, file.id);
+      await f.alice.acceptIncomingAttachment(file.id);
+      // Well inside the laptop's own retry delay (30 s or more).
+      await _waitForIroh(
+        () {
+          unawaited(f.pollAll());
+          return f.alice.attachmentAvailableLocally(file.id);
+        },
+        reason: 'the block was lost to a stale path, silently',
+        timeout: const Duration(seconds: 15),
+      );
+    }, timeout: const Timeout(Duration(minutes: 3)));
+
     test('removing an own device clears everything kept for it', () async {
       final f = await linked();
       final phoneId = f.phone.identity!.deviceId;

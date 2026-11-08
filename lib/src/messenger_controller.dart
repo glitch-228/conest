@@ -23159,6 +23159,7 @@ class MessengerController extends ChangeNotifier {
     ContactRecord requester,
     Map<String, dynamic> payload, {
     bool paced = false,
+    bool retried = false,
   }) async {
     final attachmentId = payload['attachmentId'] as String?;
     final index = payload['index'] as int?;
@@ -23287,8 +23288,20 @@ class MessengerController extends ChangeNotifier {
       if (!stillActive()) return;
       if (state.servesOwnDevice) {
         // The file is gone or changed: asked about again, it is looked for
-        // again.
+        // again. A file whose send has just finished has moved from its
+        // spool to the cache, so what was found a moment ago is out of date:
+        // looked up once more now (not left to the other device's retry,
+        // which waits half a minute or more).
         _dropOwnDeviceServing(requester.deviceId, attachmentId);
+        if (!retried) {
+          await _serveAttachmentChunkRequest(
+            requester,
+            payload,
+            paced: true,
+            retried: true,
+          );
+          return;
+        }
       }
       setSession(TransferState.failed, error: error.toString());
       if (!state.servesOwnDevice) {

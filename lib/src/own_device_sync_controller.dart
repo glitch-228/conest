@@ -378,6 +378,24 @@ extension OwnDeviceSyncController on MessengerController {
     }
   }
 
+  /// As if the file served to [deviceId] had moved since it was looked up:
+  /// the serving state points at a path that is gone.
+  @visibleForTesting
+  void staleOwnServingForTesting(String deviceId, String attachmentId) {
+    final key = MessengerController._ownServingKey(deviceId, attachmentId);
+    final held = _ownServing[key];
+    if (held == null) return;
+    _ownServing[key] = _OutboundAttachmentState(
+      messageId: held.messageId,
+      peerDeviceId: held.peerDeviceId,
+      sourcePath: '/nonexistent/spool.bin',
+      sourceKind: held.sourceKind,
+      descriptor: held.descriptor,
+      requiresLan: held.requiresLan,
+      chatDeviceId: held.chatDeviceId,
+    );
+  }
+
   @visibleForTesting
   DateTime? ownServeBusyUntilForTesting(String deviceId) =>
       _ownServeGate.busyUntil(deviceId);
