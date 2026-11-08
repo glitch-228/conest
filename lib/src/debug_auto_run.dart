@@ -986,6 +986,7 @@ Future<String> runDebugRequest(
     'performance': {
       'frames': frames.toJson(),
       'handling': controller.envelopeHandling.toJson(),
+      'handlingByKind': controller.envelopeKindTimings.toJson(),
     },
     // Timers, wakeups, sockets, rebuilds and log lines: what the app does
     // while idle (the whole run; the idle minutes alone under "idle").

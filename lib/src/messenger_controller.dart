@@ -75,6 +75,7 @@ import 'email_carrier.dart';
 import 'meshtastic_carrier.dart';
 import 'meshcore_carrier.dart';
 import 'models.dart';
+import 'envelope_timing.dart';
 import 'performance_samples.dart';
 import 'reticulum/identity.dart';
 import 'reticulum/rnode_interface.dart';
@@ -21190,6 +21191,9 @@ class MessengerController extends ChangeNotifier {
   /// microseconds (the latest [DurationSamples.capacity]).
   final DurationSamples envelopeHandling = DurationSamples();
 
+  /// The same, per kind of envelope (the gate's report names the slow one).
+  final EnvelopeKindTimings envelopeKindTimings = EnvelopeKindTimings();
+
   static const Set<String> _highFrequencyTransferEnvelopeKinds = <String>{
     'attachment_chunk_request',
     'attachment_chunk',
@@ -21211,7 +21215,10 @@ class MessengerController extends ChangeNotifier {
     var failed = 0;
     var parked = 0;
     final orderedEnvelopes = _orderForProcessing(envelopes);
+    // Which kind of envelope takes the time (the gate's report).
+    final slices = envelopeKindTimings.slices();
     for (final envelope in orderedEnvelopes) {
+      slices.next(envelope.kind);
       if (!_isValidInboundEnvelope(envelope)) {
         appendDebugLog(
           'Rejected malformed or incompatible envelope '
@@ -21655,6 +21662,7 @@ class MessengerController extends ChangeNotifier {
         }
       }
     }
+    slices.finish();
     return _EnvelopeProcessingOutcome(
       processed: processed,
       failed: failed,

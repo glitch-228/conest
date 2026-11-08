@@ -20956,6 +20956,11 @@ void main() {
       final budget = second.limiterForTesting(TransportKind.deltaChat)!.budget;
       expect(budget.window, const Duration(minutes: 1));
       expect(budget.quota, lessThanOrEqualTo(60));
+      // The report says which kind of envelope the handling time went to.
+      final report =
+          jsonDecode(File('${root.path}/first.json').readAsStringSync())
+              as Map<String, dynamic>;
+      expect(report['performance']['handlingByKind'], isA<Map>());
       // Files the lab kept before this field existed still work.
       expect(
         DebugRunRequest.fromArgs([
@@ -22016,6 +22021,40 @@ void main() {
       );
       // It was not sent again to the store: held there, not forgotten.
       expect(keeper.stored.where((stored) => stored == id), hasLength(1));
+    });
+
+    test('the time spent on incoming envelopes is kept per kind, for the '
+        'gate\'s report', () async {
+      // Linux batches took up to 35 s on the gate and nothing said which
+      // handler held them.
+      final relay = _FakeRelayClient();
+      final alice = await _createController(
+        relayClient: relay,
+        displayName: 'Alice',
+      );
+      final bob = await _createController(
+        relayClient: relay,
+        displayName: 'Bob',
+      );
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+      await _pairControllers(alice, bob);
+      await alice.sendMessage(contact: alice.contacts.single, body: 'timed');
+      for (var i = 0; i < 20; i++) {
+        await bob.pollNow();
+        await alice.pollNow();
+        if (bob.messagesFor(alice.identity!.deviceId).isNotEmpty) break;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final kinds = bob.envelopeKindTimings.toJson(top: 64);
+      expect(kinds, contains('direct_message'));
+      expect((kinds['direct_message']! as Map)['count'], greaterThan(0));
+      expect(
+        bob.envelopeKindTimings.slowestMicros,
+        greaterThanOrEqualTo(0),
+        reason: 'the slowest envelope is named',
+      );
+      expect(bob.envelopeKindTimings.slowestKind, isNotNull);
     });
 
     test('a group message stored on a relay still goes on to a route that '
