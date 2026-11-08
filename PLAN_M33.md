@@ -315,9 +315,95 @@ Remaining for the maintainer:
 
 ## Handoff
 
-Design note round only (2026-11-07): the note above is ready for the Opus design review. No code, no tests run, nothing built. Implement only after the review passes and the open questions in section 14 are answered. Pitfalls 1-20 are checked in section 10 against the design, not yet against code.
+### Design note (2026-11-07)
+
+Rev 2 is above (sections 0-15), reviewed once by Opus; this round folded in its findings, the maintainer's answers and the user's decisions.
+
+### P0: the speed policy on every path (2026-11-07, base d794362, branch `agent/m33-own-device-sync`)
+
+**Commits** (each ends with the Co-Authored-By line)
+- ff45aeb the strict carrier fake (own commit, first)
+- 076d4ef the pure policy (live / bulk / files, cold mode) and the serve gate
+- 0e18a92 the controller side: held live events, gated and paced block serving, kept requests, `maxPaths`, `fastUntil`, cold wake, cleanup on removal, reset and dispose
+- 61a41ee "not now" still goes while paused
+- 410a994 test for a removed device as a source of a running fetch
+- design note commits: 7a009bd, 9af72f1
+
+**What changed for users** (no wire change, no capability)
+- Paused now holds what changes: sent messages, read marks and the like wait and are sent when you resume (before, only history and files were gated). The answer "not now" to a history request still goes.
+- File bytes between own devices stop on mobile data; while the device is in cold mode (Automatic on a phone, or a laptop on battery) and the app is in the background, history pages, "do you have it" answers and file blocks wait until the app opens or the device charges on an unmetered network. History requests get `history_wait`; block requests are kept (<= 64, 10 min) and served as soon as conditions allow, not left to the other device's retry (30 s to 10 min).
+- Blocks served to another own device are spaced to the steady cap (256 KB/s per device) with no wait on the inbound path; fast has no cap. Steady uses at most two sources for a file (the sender counts as one), fast more.
+- A confirmed fast sync lasts six hours (`fastUntil`, memory only); after that it is steady until asked again.
+- Events queued for an absent own device no longer keep a cold device waking.
+- Removing an own device clears what was kept for it (queue, reach, file index, serving, kept requests, running fetch sources). A vault reset now clears all own-device sync state (before it cleared only the parked envelopes) and dispose cancels the new timers.
+
+**Files:** `lib/src/transfer/own_device_sync_policy.dart` (`SyncTraffic`, `permitFor`, `SyncConditions.cold/foreground`, `SyncPermission.hold`), `lib/src/transfer/own_device_serve_gate.dart` (new), `lib/src/own_device_sync_controller.dart` (new, `part of` the controller, an extension), `lib/src/transfer/block_sources.dart` (`holds`, `clear`), small hooks in `messenger_controller.dart` (fields, `_syncConditions`, `_syncToOwnDevices`, the retry pass, `_hasWorkAwaitingAnswer`, `_serveAttachmentChunkRequest`, `_useOwnDeviceAsSource`, `_reconcileOwnDevices`, `setOwnDeviceSyncSpeed`, `setAppForegroundState`, `onConnectivityChanged`, `syncColdMode`, dispose, reset). `fmt_mine` was not run on the big file; long lines wrapped by hand.
+
+**Differences from the design note** (decided while building; reasons in the progress log)
+1. Block requests turned away by the policy are kept and resumed (added): the requester's own retry is too slow, and sync would otherwise look broken after a pause.
+2. The gate's `maxWait` is 3 minutes and deferrals are bounded per device (8) and in all (64), because refusing a block "too far ahead" made large blocks (4 MiB at 256 KB/s = 16 s each) fail.
+3. `history_wait` is exempt from the pause hold.
+4. The explicit resume call in `setOwnDeviceSyncSpeed` was dropped: `updateGlobalConnectivity` already calls `syncColdMode`, whose tail resumes kept requests (a sabotage showed the extra call was dead).
+5. Q10: sync envelopes were already lazy-sealed; pinned by a test instead of changed.
+6. The single shared `SyncPacer` is gone; history pages use the per-device gate.
+
+**Tests** (all new; the suite is below)
+- `test/messenger_controller_test.dart` group "strict fakes for own-device sync" (5): carrier frame cap, loss, reordering, per-sender rate with a retry hint, defaults unchanged.
+- `test/own_device_sync_policy_test.dart` (12 new): the policy table (paused, battery, saver, cold, metered, fast), the old `permit` equals bulk, the serve gate (denied spends nothing, pacing per device, no cap, too far ahead, bounds).
+- `test/sync_envelope_seal_test.dart` (2): a sync event is sealed when a transport takes it, shared by copies; `account_sync` is a session kind.
+- Controller group "own-device sync obeys the policy on every path (M33 P0)" in `test/own_device_sync_p0_cases.dart` (17): paused holds and flushes; "not now" still goes; conditions reach the permission (mobile, cold in the background, charging); fast lasts six hours; a cold device is not kept awake; a paused device serves no blocks and serves after resuming; steady spaces blocks, fast does not (9 MiB, three blocks); kept requests are served on resuming and on three triggers (app opened, network not metered, plugged in); dispose cancels timers; removal clears everything kept; reset clears it; steady uses as many sources as its paths allow and fast more; a removed device stops being a source of a running fetch.
+
+**Sabotage checks** (each: break, see the test fail, restore): cold rule, files on metered, paused live hold, a denied permission spending, no max wait (policy tests); sealed at queue time, `account_sync` not a session kind (seal test); frame cap, reordering (fake tests); live events not held, retry pass sending held events, no flush on resume, cold and foreground not inputs, fast never expiring, sync entries waking a cold device, serving ignoring the policy, no pacing, refused request not kept, no resume on app open / network change / power change, `maxPaths` ignored (twice), nothing forgotten on removal and each of its parts (reach, file index, kept requests, timers, queued events), removed device staying a source, reset keeping state, dispose keeping timers, "not now" held while paused. Not sabotage-covered: the duplicate guard on resume (`_handleAttachmentChunkRequest` instead of the bare serve; the probe still passed) and the per-device and total bounds on deferred blocks (the gate's own device bound is tested).
+
+**Pitfalls 1-20 for P0**
+1. The inbound path awaits nothing new: a refused block is kept and returned from, a paced one is deferred by a timer, resumes are `unawaited`. (The serve itself awaits its own sends as before.)
+2. Pinned by the seal test; waiting requests hold plaintext requests, blocks are read and sealed when served.
+3. New timers: deferred blocks only (<= 64), cancelled on dispose, reset and removal; none poll or reschedule.
+4. n/a.
+5. A policy refusal returns before any route or limiter is touched; it cools nothing.
+6. `_clearOwnDeviceSyncState` on dispose and reset (a gap found: reset cleared one map), `_forgetOwnDevices` per device.
+7. Kept requests expire after 10 min; fast after 6 h; nothing holds a transport.
+8. n/a. 9. Parking and deferral happen only after `_ownDeviceServingState` has authorised the requester and the file; resumes re-run it.
+10. Pacing is charged in one place (the serve function, every route) and for history pages through the same gate.
+11. Resume goes through an async handler that awaits before it reaches the gate; no synchronous recursion.
+12. Kept <= 64, deferred <= 8 per device and 64 in all, gate <= 16 devices.
+13. Nothing new is stored in the vault. 14. No wire change; old devices see no difference (an old requester is refused as a new one is).
+15, 16. n/a. 17. A refusal blocks nothing; held events keep the existing per-device cap (500); kept and deferred work is bounded.
+18. No migration; the held events and queue are untouched. 19. `_liveSyncHeld` builds a small value per sync event and per retry pass; nothing is decoded.
+20. Policy and gate tests use fixed dates; controller tests use the controller's injected clock; the pacing test uses real timers for its waits only.
+
+**Behaviour changes to confirm** (they follow section 7, but they are visible): a phone in Automatic (cold) in the background no longer serves history or file blocks to its other devices until opened or charging on Wi-Fi; paused now also holds live events.
+
+**Not done in P0 (by design or found):** the relay fake's lease expiry and redelivery (needed from P3); a "Sync now" action (P5); a progress line (P3/P5); the history-page pacing timer is still not cancelled on dispose (it checks `_disposed`; existing); M27's open item that a compromised own device can serve AEAD-valid blocks (needs per-block hashes, a wire change).
+
+**Performance risk:** none measured; per sync event and per served block the added work is O(1) (a small condition value, one gate lookup); the deferral scan is over <= 64 entries; `_forgetOwnDevices` runs only when a device is removed and is O(queue). The lab should still time 500 queued events with live `mut` later (P2).
+
+**Release-note line (draft):** Syncing between your own devices now follows Paused, mobile data and battery: while paused, changes wait and are sent when you resume; files between your devices are not sent over mobile data; and a device in power-saving mode in the background syncs history and files only when you open the app or it charges on Wi-Fi.
+
+**Lab check needed** (delivery and energy):
+1. Phone in the background (cold, on battery), laptop asks for a file: nothing until the phone is opened or charging on Wi-Fi; then it arrives without waiting minutes.
+2. Phone on mobile data: no file bytes between the phone and the laptop; messages still sync.
+3. Pause the laptop, send messages and read some on the phone, resume: they arrive.
+4. A 100 MB file between laptop and phone in steady: about 256 KB/s, phone battery and CPU while it runs; fast after confirming.
+5. Revoke a device during a transfer: it stops being asked.
+6. A cold phone with an absent own device: idle wakeups not above the last build's.
+
+**Device checks:** the five lab items above need real phones; nothing else.
+
+**Full suite and CI** (head 410a994)
+- Full `flutter test` under the lock (`flock lock timeout 90m`, log `m33-p0-full-suite.log` in the worktree, not committed): 2386 passed, 24 skipped, 2 failed. The failures: the known local-only "native Iroh direct contact adding works without LAN or any relay", and "a lab burst sends twenty to each chat and group, and files, timed" (a timing failure under load: a 64 KiB file between two contacts stalled; it passes alone 4 of 4 times and together with the other lab tests, involves no own device, and other agents' full runs show different timing flakes each time).
+- `flutter analyze`: 28 issues, the base's.
+- `debug.yml`: run 42407501125 on 0e18a92 green; run 42460377499 on the head 410a994 green (all jobs).
+- `cp ~/conest-lab/pubspec.lock.mine pubspec.lock` was done after the suite; `git status` is clean apart from this file.
+
+**Blocked:** nothing. (Found, not mine: the shared test lock was held for a long time by another session's run, and a `flutter_tester` orphan (pid 1441880) has been using a full core for 10 hours; I did not touch either.)
 
 ## Progress log
+
+- 2026-11-07/08 (P0): wrote the tests before the code each time (the pure policy and gate tests were red on compile first; the controller tests referenced hooks that did not exist). Order: fakes (ff45aeb), pure policy and gate (076d4ef), controller side (0e18a92), follow-ups (61a41ee, 410a994). Sabotage checks as listed in the Handoff; two sabotages passed at first and led to changes: (a) "no flush on resume" did not fail because the test polled the laptop too, so the test now polls only the phone with a 4 s limit; (b) the explicit resume call in `setOwnDeviceSyncSpeed` could not be made to matter (`updateGlobalConnectivity` reaches `syncColdMode`), so it was removed.
+- Decisions made on the way: block requests turned away by the policy are kept and resumed (the requester's own retry is `transferRetryDelay`: 30 s, and up to 10 min for 4 MiB blocks); the gate no longer refuses a block that is far ahead of the pace (large blocks at 256 KB/s are 16 s each), it defers, bounded per device (8) and in all (64); `history_wait` is exempt from the pause hold, or the other device asks blindly and gives up after three tries; sources are counted with the sender for `maxPaths`; `OwnDeviceFileIndex` got `holds` and `clear`.
+- Findings: `resetIdentity` cleared only `_parkedOwnSync` of all own-device sync state (pitfall 6); `account_sync` was already lazy-sealed (Q10 asked for it; now pinned); `timeout 90m flock ...` counts the waiting for the lock, so the suite was started as `flock lock timeout 90m flutter test` (same protection against a hung run); the previous session's suite was cut off at 26 min (2242 passed, only the Iroh failure) and was run again from scratch.
+- Suite and CI: see the Handoff ("Full suite and CI").
 
 - 2026-11-07: read PLAN_AGENTS.md, this file, the maintainer's plan sections (M33, M29e parts B and C, Group 1 items 2 and 3, D1, D2, D4, M65, the M50 side answer), PLAN_M29.md (design sections 7-9 and handoff) and PLAN_M27.md (handoff). Inventoried own-device sync in `messenger_controller.dart`, `transfer/`, `models.dart`, `energy_policy.dart`, `cold_mode.dart`, `devices_panel.dart` and the tests at base d794362 (evidence in section 1). Found that `OwnDeviceSyncPreferences` and the `prefs` event do not exist, edits/deletes/reactions do not sync between own devices, `_locallyDeletedMessageIds` is memory only, and the speed policy is enforced for history pages only. Wrote the design note; no code changed. An API session limit interrupted the first pass; resumed from the link grant onward.
 
