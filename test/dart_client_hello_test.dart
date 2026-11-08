@@ -34,11 +34,11 @@ Future<List<int>> _captureHello(
     final bytes = BytesBuilder();
     client.listen((chunk) {
       bytes.add(chunk);
-      final so_far = bytes.toBytes();
-      if (so_far.length >= 5) {
-        final need = 5 + ((so_far[3] << 8) | so_far[4]);
-        if (so_far.length >= need && !seen.isCompleted) {
-          seen.complete(so_far.sublist(0, need));
+      final soFar = bytes.toBytes();
+      if (soFar.length >= 5) {
+        final need = 5 + ((soFar[3] << 8) | soFar[4]);
+        if (soFar.length >= need && !seen.isCompleted) {
+          seen.complete(soFar.sublist(0, need));
           client.destroy();
         }
       }
