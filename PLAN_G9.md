@@ -179,3 +179,44 @@ Nothing. No separate reviewer agent was run from this session (the changes are b
   - "the problem report built from a controller holds no message text...": fails alone and on the base f389855 too (checked in a temporary worktree, removed): the crash-record line for the fixed 2026-11-03 clock is not shown with today's date (pitfall 20, a date bomb in that test). Not touched.
   - "network_limiter_test: a rest does not hand out the whole burst when it ends": mine. It asserted 2 s between four turns (three gaps of the old 1 s). Now judged against the budget's own gap (3 gaps), so it still fails if the burst is handed out at once. Green now (39 pass in that file); pubspec.lock restored from `pubspec.lock.mine`.
 - CI: `debug.yml` run 42224604300 on agent/g9-gate-308 (head before the limiter-test commit): all jobs green, including the real Synapse and the real mail server carrier jobs, Android, Linux and Windows builds.
+
+
+## Handoff, round 2: Linux handling p95 on builds 312 to 316
+
+Read-only analysis of the existing reports (`20261104T182952Z`, `T183742Z` as the 308 base; `20261107T091425Z`, `T092350Z`, `T111903Z`, `T112650Z`, `T191029Z`, `T192434Z`, and the Iroh run `T194221Z`). No lab run was started. Head after merging `origin/integration/g7-g8` (04d70fb): db7d366.
+
+### What the reports show
+
+1. **Not the Matrix budget.** In every one of these runs, the 308 base included, all three devices report `matrix NOT READY` at start and end and no message used a Matrix route. The Matrix adapter, its limiter and `NetworkBudgets.matrix` are never reached, so the 1 s to 200 ms change adds no inbound work on Linux.
+2. **Linux only.** Same runs, same builds: Windows handling p95 23 to 40 ms, Android 179 to 414 ms. Linux: 243 / 68 ms (308), 4375 / 8339 (312), 1323 / 2915 (315), 11472 / 1593 (316).
+3. **The batches wait, they do not compute.** The median stays 16 to 55 ms (112 ms in the 312 reverse run), and the 100 ms periodic Bitchat timer fires at the same rate in good and bad runs (9.5 to 9.8 a second), so the main isolate was not blocked: some handler awaits something.
+4. **It shows in the arrivals.** Linux's inbound messages have gaps of 12.8 s and 15.8 s in the middle of the burst on 312 and 12.8 s on 316, against at most 4.4 s on 308.
+5. **The Linux to Windows pair is where it goes wrong (316 all-normal, the worst run).**
+   - Windows sent its first offer bundle at 19:16:28; Linux handled it at 19:17:07 (39 s).
+   - Linux logged `started O9HFbTnb` but no `sending answer bundle` until 19:20:13, 185 s after the offer: the last step of the answer's retry schedule (5, 15, 45 s, 2 min), or the answer was skipped without a log; Linux's log has no send error and no "not sent" line in between.
+   - Windows sent a further offer and three resets in that time (19:17:07, 19:17:09, 19:18:10, 19:18:11); Linux only handled the one at 19:20:13. Windows logged 418 `no session` lines (0 to 9 on the other runs) and dropped Linux's messages as undecryptable.
+   - Linux to Windows direct messages: transit 140 to 212 s, median confirmation 178 s, 9 never confirmed (308: median 256 ms). This is also why "message fast" was missed.
+   - The Iroh run on the same build has the same pair: contact p95 99 s (deadline 15 s), `contact_exchange to lab-windows ... TimeoutException`, `Rejected non-pairing Iroh traffic before contact approval` on Windows, three `Dropped ratchet_hello`. Its messages were fine (p95 0.6 s).
+6. **What the G9 round changed on all three devices, in these runs.** The kept lab accounts now count as chatmail, so the email carrier carries real traffic in all-normal runs. Mail socket timers per run: Linux 14 (308) to 299 to 780, Android 0 to 92 (308) to 194 to 368, Windows 13 to 23 (308) to 95 to 252 (one run 0). In 308 Windows and Android sent every message on LAN only (copies on other routes about zero); from 312 they also send copies over email (11 to 46 a run), Nostr, the relay and Iroh (Windows 312: email 11, Nostr 42, relay 44, Iroh 45). First-contact bundles can now go by mail too: the 39 s first-offer delay is the size of an IMAP poll. This is an inference from counts, not proven.
+7. **The Linux device is this shared machine.** The 316 runs overlap a full test run of the m54a agent (19:06 to 19:45 UTC in `~/conest-lab/m54a-*.log`), and 312 all-normal overlaps `int-probreport` (09:14 to 09:15). The 312 and later folders have no `energy-linux.csv`, so no load was recorded. Linux's higher median on 312 reverse fits contention. Not proven either.
+
+### What I could not establish
+
+Which handler holds the batches. The report has the batch total only (`performance.handling`); nothing in it, in `activity`, or in `linux.log` names a kind of envelope. I did not guess a fix for one.
+
+### Change (diagnostics, so the next gate answers it)
+
+- `lib/src/envelope_timing.dart` (new): `EnvelopeKindTimings` keeps the time from the start of one envelope's processing to the start of the next (its handler's awaits) per kind: at most 48 kinds (the rest as `other`, names cut to 40 characters), 256 samples per kind. Hooks in `_processEnvelopesInternal` (3 lines: `slices`, `slices.next(envelope.kind)`, `slices.finish()`), a field next to `envelopeHandling`, and `performance.handlingByKind` in the lab report (top 8 kinds by slowest envelope, with count, p50, p95, max).
+- Tests: `test/envelope_timing_test.dart` (3: per kind and slowest named, batch ending early, bounded kinds), a controller test (a message between two controllers shows up under `direct_message`; sabotage: removing the `slices.next` hook gives `{}`, red), and the lab report test checks the key.
+- Full suite and CI: see the Progress log below.
+
+### What the lab should do next
+
+1. Run all-normal on the current head with `ENERGY=1`, record `uptime` and `vmstat 5` on the Linux host for the run, and keep other agents' test suites off the machine meanwhile. Then read `performance.handlingByKind` in `linux.json`: the slowest kind is the handler.
+2. Once, run all-normal with `CARRIERS=nostr,tor,bitchat,reticulum` (no email). If Linux's p95 and the Linux to Windows bring-up return to the 308 values, email as a route for first-contact control traffic is the cause.
+3. In the logs, look for `sending answer bundle` within a second of `started ... to` for each pair. A gap is the answer being skipped or held.
+4. Suggested, not done: log why `_sendRatchetBundle` returns early (capability check) so a skipped answer is visible; prefer LAN, Iroh and the relay for session control and keep carriers as copies only.
+
+### Iroh files (13/36 on 04d70fb, 15/34 at the last pass)
+
+Looked at `20261107T194221Z`. Every device received all three files from each peer (received file counts 3, 3, 3), and the texts were fine (message fast p95 0.6 s). The lower "complete" share is senders' files not confirmed: Android to Linux had one file still pending, and "file 1 MB fast" has a `never` in its p95. The same Linux to Windows contact stall as above (contact p95 99 s) is in that run, so I read the file figure as the same bring-up problem, with the base's 14/30 and the last pass's 15/34 in the same noise band. Not fixed.
