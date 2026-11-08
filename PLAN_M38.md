@@ -403,3 +403,60 @@ Pitfalls 1-20 are checked against the design in section 5 (none unsatisfiable on
 8. **DoH endpoints:** add Quad9, Mullvad and AdGuard next to Cloudflare and Google, plus the user-set URL (S5).
 
 The lab is unavailable for now. Lab checks L1–L6 wait.
+
+## Design review (Opus, 2026-11-08): revise first
+
+The inventory checks out. There is no open-proxy path in the existing code, and replay of the borrowed marker fails as designed. Fold all of the following into the Design note.
+
+### HIGH
+
+**H1. S4(d) "permanent errors never retry on other layers" makes the relay go dark on networks that intercept TLS.**
+- **What goes wrong:** a national CA, corporate inspection or a captive portal fails the wss pin, while plain or borrowed would still work. A censor can also inject garbage on 7667 to produce "bad identity" and kill every layer.
+- **Change:**
+  - A pin or identity mismatch is permanent for that endpoint and layer only.
+  - Record it as tampering seen on this network, and keep trying the other layers.
+  - Stop all layers only when signed health inside a completed session shows a different key.
+- **Test:** a fake MITM on wss, while plain still works.
+
+### MEDIUM
+
+- **M1. S3 ws-bind.**
+  - `serve_outer` takes `connection_slot` by TCP peer at accept (outer.rs ~681–684). Behind nginx every peer is 127.0.0.1, so all clients share 16 slots. For ws-bind, take the slot after parsing the upgrade head.
+  - `forwarded_peer` (limits.rs ~101–112) falls back to the raw string. Accept the last XFF entry only if it is an IP; otherwise use one shared "front" key or refuse.
+  - The nginx snippet sets `proxy_set_header X-Forwarded-For $remote_addr`, and the inner `trust_forwarded_for` stays false.
+- **M2. S2 `plain=loopback` would drop sealed UDP**, because it shares the 7667 socket (main.rs ~113–114). Add a separate `udp-bind`, or a sealed-only public mode with cleartext UDP off. State which UDP features a hidden relay keeps.
+- **M3. Static relay maps** in relay_client.dart (~135–144, 375, 1209–1235, 1835):
+  - Besides the listed ones, `_v2Known`, `_mailboxSecrets`, `_authKeys`, `_tokens`, `_udpCookies` and `v2Pool` are static too.
+  - `_borrowedSites` and `_wssPaths` are keyed by host:port. A shared link pinned to an attacker's key can overwrite a real relay's SNI.
+  - Key every map by `identity|host:port`.
+  - Move all the statics into a controller-owned instance that is cleared on vault reset.
+  - Do this in Phase 1, before links can carry borrowed.
+- **M4. S5 last-known-good (LKG) addresses are kept per network,** so the list is empty on a first visit to a censored network. Keep LKG global, with caps, and use it only for TLS-verified or pinned connections.
+- **M5. S4 per-network memory:** the network id is sha(kind|vpn|subnets) (network_history.dart ~256–260).
+  - Cellular subnets change on every attach, and Wi-Fis that share 192.168.1.0/24 share memory.
+  - Backoff beats recency, and a success clears backoff.
+  - Use hysteresis: N failures in the window to judge "blocking", M successes to clear it.
+  - Define the cellular key, or a prior carried over from the last blocked network.
+- **M6. Borrowed mode encrypts in pure Dart on the main isolate** (borrowed_tls.dart ~25, plus the Noise cipher). Set the bar now:
+  - no frame over 16 ms during a 10 MB blob on the lab phone;
+  - a stated MB/s floor.
+  
+  If borrowed mode misses the bar, sealing moves to an isolate before S4 ships.
+- **M7. S7d moves to M57.** It is a security-sensitive parser on 443, of mostly regional value, and it ties the borrowed IP to the relay's domain through DNS and CT logs.
+- **M8. S1:** `borrowed://hostname` costs a DNS lookup of the relay's name before the disguised handshake. The installer prints IP literals (v4 and v6) for borrowed, and the docs say why.
+
+### LOW
+
+- **L1. Prober corpus:**
+  - connection lifetime and idle limits versus the real site (borrowed.rs ~68–71: IDLE_LIMIT 120 s, FORWARD_LIMIT 600 s);
+  - the relay's re-framing versus the site's own TCP segmentation;
+  - a non-upgrade or bad-key request on the secret path behind the S3 front must look like a wrong path (no 502).
+- **L2. DoH:**
+  - check that Mullvad's and AdGuard's certificates cover their IPs;
+  - stagger the endpoints in order, rather than all of them with A+AAAA at once.
+- **L3. Links:**
+  - `RelayLink` requires a plain host (relay_link.dart ~39), so define how a `plain=loopback` relay's link marks plain as absent;
+  - check the 512-character cap with a long SNI.
+- **L4. Scoped activation:** a relay-cap close looks like a reset (outer.rs ~679). Require two confirmations before marking that DoH or splitting helped, or let the mark expire.
+
+The lane allows one design review round. After the revision, implement P0 and Phase 1 without another design review.
