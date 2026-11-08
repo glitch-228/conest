@@ -496,3 +496,18 @@ The inventory checks out. The architecture is sound: push for live changes, pull
   - an edit to a contact-authored message is refused or marked.
 
 Per the lane rule this is the one design review round. After the revision, implement P0 without another design review.
+
+## Maintainer (2026-11-08): P0 decisions and section 14
+
+- **P0 "Decisions to confirm":** all accepted.
+  - The cold-mode phone holds history and files.
+  - Pause also holds live events.
+  - Refused block requests are parked.
+  - The gate defers instead of refusing.
+  - `history_wait` is exempt from the pause hold.
+  - The explicit resume call is dropped.
+- **Section 14:**
+  - **"Mark as verified":** yes, an explicit action on the contact's safety-number screen. It writes an attestation that syncs (Q7).
+  - **Per-chat `clearedBefore` watermark:** yes, as review H1 asks.
+  - **A contact removed on another device:** archive it, don't erase it. The contact leaves the list, and its chat and history are kept under archived contacts. Erasing stays a local, explicit action.
+- **Next:** P1 starts after the Opus code review of P0.
