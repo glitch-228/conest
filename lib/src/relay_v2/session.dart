@@ -552,7 +552,12 @@ class RelayV2Session {
     _closed = true;
     _keepaliveTimer?.cancel();
     for (final pending in _pending.values) {
-      if (!pending.isCompleted) pending.completeError(error);
+      if (pending.isCompleted) continue;
+      // A request nobody awaits any more (its caller went with a controller
+      // that was disposed) must not make the end of the session an
+      // uncaught error; whoever does await still gets the error.
+      unawaited(pending.future.then<void>((_) {}, onError: (Object _) {}));
+      pending.completeError(error);
     }
     _pending.clear();
     _limits.clear();
