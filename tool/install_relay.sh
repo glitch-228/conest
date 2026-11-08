@@ -653,8 +653,11 @@ if [ "$PLAIN" = loopback ]; then
   fi
 fi
 
-ADDRESS=$(ask_value "This server's public address or domain (as Conest should reach it)" \
-  "$( [ -n "$BORROW_ADDRESS" ] && printf '%s' "$BORROW_ADDRESS" || ( (need curl && curl -fsS https://api.ipify.org 2>/dev/null) || hostname -f 2>/dev/null || hostname))")
+DEFAULT_ADDRESS="$BORROW_ADDRESS"
+if [ -z "$DEFAULT_ADDRESS" ]; then
+  DEFAULT_ADDRESS=$( (need curl && curl -fsS https://api.ipify.org 2>/dev/null) || hostname -f 2>/dev/null || hostname)
+fi
+ADDRESS=$(ask_value "This server's public address or domain (as Conest should reach it)" "$DEFAULT_ADDRESS")
 LINK="conest-relay://$ADDRESS:$PORT?id=$ID&key=$(printf '%s' "$KEY" | sed 's/+/%2B/g; s#/#%2F#g; s/=/%3D/g')"
 
 step "Done"
