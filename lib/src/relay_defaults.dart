@@ -165,13 +165,20 @@ SignedRelayDefaults? _decodeManifestJson(String manifestJson) {
       protocol = peerRouteProtocolFromString(protocolRaw);
     }
     final path = raw['path'];
+    // A wss entry's path is a secret path; a borrowed entry's is the site
+    // name its handshake plays (M38 S1).
+    final validPath =
+        path is String &&
+        (protocol == PeerRouteProtocol.borrowed
+            ? isValidBorrowedSni(path)
+            : isValidRelaySecretPath(path));
     endpoints.add(
       DefaultRelayEndpointSpec(
         kind: kind,
         host: host,
         port: port,
         protocol: protocol,
-        path: path is String && isValidRelaySecretPath(path) ? path : null,
+        path: validPath ? path : null,
       ),
     );
   }
