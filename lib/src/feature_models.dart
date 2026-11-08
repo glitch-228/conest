@@ -83,6 +83,12 @@ enum ApplicationCapability {
   /// instead of resending the same bytes, so a receiver need not reset its
   /// session over a late copy.
   freshRetriesV1,
+
+  /// Own devices tell each other what they want to sync (`prefs`), mirror
+  /// edits, reactions and deletes (`mut`), contacts (`contact`) and the
+  /// verified mark (`verify`), and share settings key by key (`settings2`)
+  /// (own devices only; M33). Advertised only by a build that does all of it.
+  ownDeviceSyncV2,
 }
 
 /// Upper bound on an advertised capability list. Newer builds may advertise

@@ -14,6 +14,7 @@ import 'energy_budget_setting.dart';
 import 'feature_models.dart';
 import 'group_call/group_call_models.dart';
 import 'content_routing.dart';
+import 'sync/sync_prefs.dart';
 import 'transfer/own_device_sync_policy.dart' show SyncSpeed;
 import 'voice_settings.dart';
 import 'notification_rules.dart';
@@ -760,6 +761,8 @@ class GlobalConnectivityPreferences {
     this.coldTransportModes = const {},
     this.shareSettings = false,
     this.settingsChangedAt,
+    this.ownDeviceSyncChoice,
+    this.settingsClocks = const {},
     this.transportPolicies = const {
       TransportKind.lan: TransportPolicy.automatic,
       TransportKind.iroh: TransportPolicy.automatic,
@@ -827,6 +830,18 @@ class GlobalConnectivityPreferences {
   /// When the shared settings last changed (here, or on a device that
   /// shared them).
   final DateTime? settingsChangedAt;
+
+  /// What this device syncs with the account's other devices, when the user
+  /// (or a link) chose; null is what the app did before (see
+  /// [OwnDeviceSyncPrefs.legacy]).
+  final OwnDeviceSyncPrefs? ownDeviceSyncChoice;
+  OwnDeviceSyncPrefs get ownDeviceSync =>
+      ownDeviceSyncChoice ?? OwnDeviceSyncPrefs.legacy;
+
+  /// When each shared setting was last written, and by which device: the
+  /// key, then `milliseconds|deviceId` (a hybrid clock, see
+  /// `own_device_sync_controller.dart`).
+  final Map<String, String> settingsClocks;
   final Map<TransportKind, TransportPolicy> transportPolicies;
 
   bool get anyEnabled => lanEnabled || onlineEnabled;
@@ -858,10 +873,14 @@ class GlobalConnectivityPreferences {
     Map<String, ColdTransportMode>? coldTransportModes,
     bool? shareSettings,
     DateTime? settingsChangedAt,
+    OwnDeviceSyncPrefs? ownDeviceSync,
+    Map<String, String>? settingsClocks,
     Map<TransportKind, TransportPolicy>? transportPolicies,
     CircumventionPreferences? circumvention,
   }) {
     return GlobalConnectivityPreferences(
+      ownDeviceSyncChoice: ownDeviceSync ?? ownDeviceSyncChoice,
+      settingsClocks: settingsClocks ?? this.settingsClocks,
       circumvention: circumvention ?? this.circumvention,
       shareSettings: shareSettings ?? this.shareSettings,
       settingsChangedAt: settingsChangedAt ?? this.settingsChangedAt,
@@ -915,6 +934,8 @@ class GlobalConnectivityPreferences {
     if (shareSettings) 'shareSettings': true,
     if (settingsChangedAt != null)
       'settingsChangedAt': settingsChangedAt!.toUtc().toIso8601String(),
+    'ownDeviceSync': ?ownDeviceSyncChoice?.toJson(),
+    if (settingsClocks.isNotEmpty) 'settingsClocks': settingsClocks,
     'transportPolicies': transportPoliciesToJson(transportPolicies),
     'transportPolicyVersion': currentTransportPolicyVersion,
   };
@@ -940,6 +961,15 @@ class GlobalConnectivityPreferences {
       settingsChangedAt: DateTime.tryParse(
         json['settingsChangedAt'] as String? ?? '',
       )?.toUtc(),
+      ownDeviceSyncChoice: OwnDeviceSyncPrefs.fromJson(json['ownDeviceSync']),
+      settingsClocks: {
+        if (json['settingsClocks'] case final Map<String, dynamic> clocks)
+          for (final entry in clocks.entries.take(32))
+            if (entry.key.length <= 40 &&
+                entry.value is String &&
+                (entry.value as String).length <= 200)
+              entry.key: entry.value as String,
+      },
       syncSpeed: SyncSpeed.values.firstWhere(
         (value) => value.name == json['syncSpeed'],
         orElse: () => SyncSpeed.steady,

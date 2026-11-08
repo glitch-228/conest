@@ -214,6 +214,11 @@ extension OwnDeviceSyncController on MessengerController {
   void _forgetOwnDevices(Iterable<String> deviceIds) {
     for (final id in deviceIds) {
       _ownReach.remove(id);
+      _ownDevicePrefs.remove(id);
+      _prefsAnnounced.remove(id);
+      _settingsRepairAt.remove(id);
+      _eventsSinceStatus.remove(id);
+      _statusSentAt.remove(id);
       _historyQueue.remove(id);
       _historyAsked.remove(id);
       _historyAskedAt.remove(id);
@@ -296,6 +301,13 @@ extension OwnDeviceSyncController on MessengerController {
     _ownServeGate.clear();
     _fastSyncUntil = null;
     _ownReach.clear();
+    _ownDevicePrefs.clear();
+    _prefsAnnounced.clear();
+    _pendingSharedSettings.clear();
+    _stampedSettingKeys = const {};
+    _settingsRepairAt.clear();
+    _eventsSinceStatus.clear();
+    _statusSentAt.clear();
     _reachSentAt = null;
     for (final timer in _historyTimers.values) {
       timer.cancel();
@@ -344,6 +356,9 @@ extension OwnDeviceSyncController on MessengerController {
 
   @visibleForTesting
   int get historyRequestsAnsweredForTesting => _historyRequestsAnswered;
+
+  @visibleForTesting
+  int get historyMessagesServedForTesting => _historyMessagesServed;
 
   @visibleForTesting
   int get ownServeTimerCountForTesting => _ownServeTimers.length;
@@ -450,6 +465,7 @@ extension OwnDeviceSyncController on MessengerController {
   @visibleForTesting
   int ownDeviceSyncStateSizeForTesting(String deviceId) =>
       (_ownReach.containsKey(deviceId) ? 1 : 0) +
+      (_ownDevicePrefs.containsKey(deviceId) ? 1 : 0) +
       (_historyQueue.containsKey(deviceId) ? 1 : 0) +
       (_historyAsked.containsKey(deviceId) ? 1 : 0) +
       (_historyAskedAt.containsKey(deviceId) ? 1 : 0) +

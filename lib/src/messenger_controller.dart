@@ -151,6 +151,8 @@ import 'tor_carrier.dart';
 import 'transport.dart';
 import 'transfer/block_sources.dart';
 import 'transfer/gateway_election.dart';
+import 'sync/hybrid_clock.dart';
+import 'sync/sync_prefs.dart';
 import 'transfer/own_device_serve_gate.dart';
 import 'transfer/own_device_sync_policy.dart';
 import 'transfer/relay_blobs.dart';
@@ -159,6 +161,8 @@ import 'content_routing.dart';
 
 part 'delta_attachments_controller.dart';
 part 'group_call/group_call_controller.dart';
+part 'own_device_prefs_controller.dart';
+part 'own_device_settings_controller.dart';
 part 'own_device_sync_controller.dart';
 part 'voice_settings_controller.dart';
 
@@ -11927,6 +11931,7 @@ class MessengerController extends ChangeNotifier {
           ? 'Read confirmations disabled on this debug build. Only delivery acknowledgements will be sent.'
           : 'Read confirmations enabled on this debug build.',
     );
+    unawaited(_sharedIdentitySettingChanged('suppressReadReceipts'));
   }
 
   Future<void> updateGlobalConnectivity(
@@ -11951,7 +11956,12 @@ class MessengerController extends ChangeNotifier {
         me.connectivity.contentRefusals != prefs.contentRefusals;
     // The settings shared with own devices: a change here is told to them.
     final tellSettings = _sharedSettingsChanged(me.connectivity, prefs);
-    if (tellSettings) prefs = prefs.copyWith(settingsChangedAt: _now().toUtc());
+    if (tellSettings) {
+      prefs = _stampSharedSettings(
+        me.connectivity,
+        prefs.copyWith(settingsChangedAt: _now().toUtc()),
+      );
+    }
     _snapshot = _snapshot.copyWith(identity: me.copyWith(connectivity: prefs));
     if (tellSettings) _tellSharedSettings(prefs);
     if (restartNative) {
@@ -39023,7 +39033,9 @@ class MessengerController extends ChangeNotifier {
       (device) =>
           device.canSendOutbound &&
           (only == null || device.deviceId == only) &&
-          (to == null || to(device)),
+          (to == null || to(device)) &&
+          // What the two do not both want to sync is not queued at all.
+          _eventInScope(device, event),
     );
     if (devices.isEmpty) return;
     // Paused: what changes is kept for later, not sent (bulk is not kept).
@@ -39037,7 +39049,13 @@ class MessengerController extends ChangeNotifier {
         queued['type'] == event['type'] &&
         queued['chat'] == event['chat'] &&
         switch (event['type']) {
-          'read' || 'group_state' || 'digest' || 'reach' || 'settings' => true,
+          'read' ||
+          'group_state' ||
+          'digest' ||
+          'reach' ||
+          'settings' ||
+          'dgs' ||
+          'prefs' => true,
           'state' ||
           'group_message' ||
           'have' ||
@@ -39138,6 +39156,10 @@ class MessengerController extends ChangeNotifier {
         ).catchError((Object _) {}),
       );
     }
+    // After enough events or enough time, each is told what this one holds.
+    for (final device in devices) {
+      _noteSyncEventSent(device, event);
+    }
   }
 
   /// A message this device sent (or saved), a file with it, shows on the
@@ -39171,10 +39193,30 @@ class MessengerController extends ChangeNotifier {
   /// Paces and admits the blocks served to each other own device, and the
   /// blocks waiting for their turn (see own_device_sync_controller.dart).
   late final OwnDeviceServeGate _ownServeGate = OwnDeviceServeGate(now: _now);
+  /// What each other own device said it wants to sync (memory only: they
+  /// say it again when in touch), and whom this device told since it
+  /// started (see own_device_prefs_controller.dart).
+  final Map<String, OwnDeviceSyncPrefs> _ownDevicePrefs = {};
+  final Set<String> _prefsAnnounced = {};
+
+  /// Shared settings from another device that wait for the user (they
+  /// lower protection), the keys just stamped with this device's clock,
+  /// when each device was last sent all the settings, and how many events
+  /// and when since each was last told what this device holds (see
+  /// own_device_settings_controller.dart).
+  final Map<String, ({Object value, HybridClock clock, String deviceId})>
+  _pendingSharedSettings = {};
+  Set<String> _stampedSettingKeys = const {};
+  final Map<String, DateTime> _settingsRepairAt = {};
+  final Map<String, int> _eventsSinceStatus = {};
+  final Map<String, DateTime> _statusSentAt = {};
+  int _statusSentCount = 0;
+  bool _advertiseOwnDeviceSyncV2 = false;
   final Map<Timer, _DeferredOwnBlock> _ownServeTimers = {};
   final List<_ParkedOwnBlock> _parkedOwnBlocks = [];
   int _ownServeDeferrals = 0;
   int _historyRequestsAnswered = 0;
+  int _historyMessagesServed = 0;
   final Map<Timer, String> _historyPageTimers = {};
   int _steadySyncBytesPerSecond =
       OwnDeviceSyncPolicy.defaultSteadyBytesPerSecond;
@@ -39233,11 +39275,14 @@ class MessengerController extends ChangeNotifier {
           !mapEquals(_sharedSettingsOf(before), _sharedSettingsOf(after)));
 
   void _tellSharedSettings(GlobalConnectivityPreferences prefs) {
+    // Devices that take settings key by key are told that way; the others
+    // get the whole bundle, as before.
     _syncToOwnDevices({
       'type': 'settings',
       'at': prefs.settingsChangedAt!.toIso8601String(),
       'values': _sharedSettingsOf(prefs),
-    });
+    }, to: (device) => !_speaksSyncV2(device));
+    _tellSharedSettingsV2(prefs);
   }
 
   /// Settings another own device shared: taken when this device shares too,
@@ -39354,15 +39399,25 @@ class MessengerController extends ChangeNotifier {
   /// Tells [deviceId] what this device holds (digests), and which contacts
   /// it hears (reach), when syncing is allowed.
   void _sendSyncStatusTo(String deviceId) {
+    _eventsSinceStatus[deviceId] = 0;
+    _statusSentAt[deviceId] = _now();
+    _statusSentCount++;
+    final device = _contactByDeviceId(deviceId);
+    if (device != null) _sendPrefsTo(device);
     if (!ownDeviceSyncPermission.allowed) return;
     final digests = _chatDigests();
-    if (digests.isNotEmpty) {
+    final chats = {
+      for (final entry in digests.entries) entry.key: entry.value.toJson(),
+    };
+    if (device != null && _speaksSyncV2(device)) {
+      // What is held, and a hash of the settings' clocks, in one event.
       _syncToOwnDevices({
-        'type': 'digest',
-        'chats': {
-          for (final entry in digests.entries) entry.key: entry.value.toJson(),
-        },
+        'type': 'dgs',
+        'chats': chats,
+        'settings': _settingsClockHash(),
       }, only: deviceId);
+    } else if (digests.isNotEmpty) {
+      _syncToOwnDevices({'type': 'digest', 'chats': chats}, only: deviceId);
     }
     _sendReach(only: deviceId);
   }
@@ -39383,7 +39438,7 @@ class MessengerController extends ChangeNotifier {
         parsed[entry.key as String] = digest;
       }
     }
-    final shown = _historyChats.toSet();
+    final shown = _wantedHistoryChats.toSet();
     final ask = [
       for (final chat in chatsToAsk(mine, parsed))
         if (shown.contains(chat)) chat,
@@ -39536,6 +39591,7 @@ class MessengerController extends ChangeNotifier {
       // A device long out of touch gets it when the user confirms it (its
       // read marks and history come then too), not a queue meanwhile.
       if (isOwnDeviceUnconfirmed(device)) continue;
+      if (!_scopeFor(device).allows(SyncCategory.messages)) continue;
       _makeRoomForReceived(device.deviceId, plaintext.length);
       final envelopeId = _randomId('sync');
       _enqueuePendingAckDelivery(
@@ -39855,7 +39911,9 @@ class MessengerController extends ChangeNotifier {
       message: message,
       descriptor: descriptor,
       fromOwnDevice: true,
-      detailsOnly: detailsOnly,
+      // On a metered network, or cold in the background, the bytes wait for
+      // the user.
+      detailsOnly: detailsOnly || !_ownDeviceFilePermission.allowed,
     );
   }
 
@@ -39931,7 +39989,8 @@ class MessengerController extends ChangeNotifier {
     _InboundAttachmentState state,
     ContactRecord device,
   ) {
-    final permission = ownDeviceSyncPermission;
+    // Bytes from one more device: the file rules (not a metered network).
+    final permission = _ownDeviceFilePermission;
     if (state.finalizing ||
         state.descriptor.sizeBytes < _multiSourceMinBytes ||
         !device.ownDevice ||
@@ -40322,7 +40381,6 @@ class MessengerController extends ChangeNotifier {
   static int historyPageMessages = 50;
   static const int _historyMaxPerChat = 500;
   static const int _historyMaxSaved = 5000;
-  static const Duration _historyWindow = Duration(days: 30);
   static const int _historyPageChars = 48 * 1024;
   @visibleForTesting
   static int historyPagesPerHour = 300;
@@ -40373,7 +40431,7 @@ class MessengerController extends ChangeNotifier {
 
   /// Asks [deviceId] for the recent history of every chat shown here.
   void _requestHistoryFrom(String deviceId) {
-    _historyQueue[deviceId] = _historyChats;
+    _historyQueue[deviceId] = _wantedHistoryChats;
     _historyAsked[deviceId] = {};
     _pumpHistory(deviceId);
   }
@@ -40499,7 +40557,13 @@ class MessengerController extends ChangeNotifier {
       }
       final chat = item['chat'];
       if (chat is! String || chat.isEmpty || chat.length > 170) continue;
-      final held = _historyMessages(chat);
+      final category = chat == 'saved'
+          ? SyncCategory.saved
+          : SyncCategory.messages;
+      final scope = _scopeFor(sender);
+      // What the two do not both want to sync is not served: the same empty
+      // last page as for a chat not held.
+      final held = scope.allows(category) ? _historyMessages(chat) : null;
       if (held == null) {
         // Nothing for that chat here: an empty last page ends the asking.
         served.add(now);
@@ -40518,7 +40582,8 @@ class MessengerController extends ChangeNotifier {
       final beforeId = cursor is Map && cursor['id'] is String
           ? cursor['id'] as String
           : '';
-      final oldest = chat == 'saved' ? null : now.subtract(_historyWindow);
+      final window = scope.windowFor(category);
+      final oldest = window == null ? null : now.subtract(window);
       final candidates = [
         for (final message in held)
           if (message.groupFile == null &&
@@ -40549,6 +40614,7 @@ class MessengerController extends ChangeNotifier {
         last = message;
       }
       served.add(now);
+      _historyMessagesServed += page.length;
       final pageEvent = <String, Object?>{
         'type': 'history_page',
         'chat': chat,
@@ -40831,12 +40897,26 @@ class MessengerController extends ChangeNotifier {
     var changed = false;
     for (final event in events.take(_maxSyncEvents)) {
       if (event is! Map<String, dynamic>) continue;
+      if (event['type'] == 'prefs') {
+        _takeOwnDevicePrefs(sender, event);
+        continue;
+      }
+      // What this device does not want to sync is dropped on arrival.
+      if (!_acceptOwnDeviceEvent(sender, event)) continue;
       if (event['type'] == 'seen') {
         _dropQueuedReceived(sender.deviceId, event['ids']);
         continue;
       }
       if (event['type'] == 'settings') {
         await _takeSharedSettings(sender, event);
+        continue;
+      }
+      if (event['type'] == 'settings2') {
+        await _takeSharedSettingsV2(sender, event);
+        continue;
+      }
+      if (event['type'] == 'dgs') {
+        _takeStatus(sender, event);
         continue;
       }
       if (event['type'] == 'reach') {
@@ -41801,6 +41881,7 @@ class MessengerController extends ChangeNotifier {
       ApplicationCapability.relayBlobAttachmentsV1,
       ApplicationCapability.batchedAcksV1,
       ApplicationCapability.freshRetriesV1,
+      if (_advertiseOwnDeviceSyncV2) ApplicationCapability.ownDeviceSyncV2,
       if (_platformBridge.supportsVoiceCallMedia &&
           me?.experimentalVoiceCallsEnabled == true)
         ApplicationCapability.voiceCallsV1,

@@ -83,6 +83,8 @@ import 'package:conest/src/attachment_safety.dart';
 import 'package:conest/src/link/link_archive.dart';
 import 'package:conest/src/ui/link_archive_screen.dart';
 import 'package:conest/src/link/link_choice.dart';
+import 'package:conest/src/sync/sync_prefs.dart';
+import 'package:conest/src/sync/hybrid_clock.dart';
 import 'package:conest/src/messenger_controller.dart';
 import 'package:conest/src/delta_chats.dart';
 import 'package:conest/src/email/delta_mail.dart';
@@ -165,6 +167,7 @@ part 'xmpp_controller_cases.dart';
 part 'telegram_controller_cases.dart';
 part 'discord_controller_cases.dart';
 part 'own_device_sync_p0_cases.dart';
+part 'own_device_sync_p1_cases.dart';
 
 final _unreachableXmppNetwork = XmppNetwork(
   connector: (host, port, {required tls, alpn}) =>
@@ -1871,6 +1874,7 @@ void main() {
   _telegramControllerTests();
   _discordControllerTests();
   _ownDeviceSyncP0ControllerTests();
+  _ownDeviceSyncP1ControllerTests();
   test('a desktop notifies only while Conest is not in front', () async {
     final relay = _FakeRelayClient();
     final recorder = _RecordingPlatformBridge();
