@@ -518,3 +518,14 @@ The inventory checks out. There is no open-proxy path in the existing code, and 
 - **L4. Scoped activation:** a relay-cap close looks like a reset (outer.rs ~679). Require two confirmations before marking that DoH or splitting helped, or let the mark expire.
 
 The lane allows one design review round. After the revision, implement P0 and Phase 1 without another design review.
+
+## User decision (2026-11-08): borrowed site
+
+The lab relay borrows `www.bing.com:443`, with `www.microsoft.com:443` as the alternate.
+
+Setting it on the relay waits for the lab to be available. Before it is set, check from the relay host that `openssl s_client -tls1_3` to `www.bing.com:443` works. The relay config is:
+- `borrow-bind = 0.0.0.0:443`
+- `borrow-site = www.bing.com:443`
+- `borrow-address = <the relay's public IPv4>`
+
+The main session does this, not the agent.
